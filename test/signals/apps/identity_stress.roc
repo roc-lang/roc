@@ -1,8 +1,10 @@
 app [main] { pf: platform "../platform/main.roc" }
 
-import pf.Elem
+import pf.Elem exposing [Elem]
+import pf.Html
 import pf.NodeValue exposing [NodeValue]
-import pf.Reactive
+import pf.Signal
+import pf.Ui
 
 Row := { id : Str, label : Str }.{
 	make : Str, Str -> Row
@@ -35,7 +37,32 @@ concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
 row_label : Str, I64 -> Str
 row_label = |label, count| concat3(label, " detail count: ", count.to_str())
 
-main : {} -> Elem.Elem
+render_row : Str, Signal.Signal(Row) -> Elem
+render_row = |label, _row_signal| {
+	Ui.state(
+		0,
+		|count| {
+			count_signal = count.signal()
+			count_label = Signal.map(count_signal, |n| row_label(label, n))
+			has_count = Signal.map(count_signal, |n| n > 0)
+
+			Html.section(
+				label,
+				[],
+				[
+					Html.button(Str.concat("Bump ", label), count.on_unit(|n| n + 1)),
+					Ui.when(
+						has_count,
+						|_| Html.div([], [Html.text_s(count_label)]),
+						|_| Html.paragraph(Str.concat(label, " waiting")),
+					),
+				],
+			)
+		},
+	)
+}
+
+main : {} -> Elem
 main = |_| {
 	row_a = Row.make("a", "Alpha")
 	row_b = Row.make("b", "Beta")
@@ -43,82 +70,56 @@ main = |_| {
 	initial_rows = [row_a, row_b, row_c]
 	reordered_rows = [row_c, row_a, row_b]
 
-	{ sender: reorder_send, receiver: reorder_clicks } = Reactive.Event.unit_channel("identity_reorder_click")
-	reordered : Reactive.Event(List(Row))
-	reordered = Reactive.Event.map(reorder_clicks, |_| reordered_rows)
-	rows : Reactive.Signal(List(Row))
-	rows = Reactive.Signal.fold(
-		"identity_rows",
-		initial_rows,
-		reordered,
-		|_current, next| next,
-	)
+	initial_reordered : Bool
+	initial_reordered = False
 
-	panel_visible : Reactive.Signal(Bool)
-	panel_visible = Reactive.Signal.const_bool(True)
-
-	render_row = |row| {
-		{ sender: bump_send, receiver: bump_clicks } = Reactive.Event.unit_channel(Str.concat("identity_bump:", row.label))
-		bump_deltas : Reactive.Event(I64)
-		bump_deltas = Reactive.Event.map_unit_i64_const(bump_clicks, 1)
-		count : Reactive.Signal(I64)
-		count = Reactive.Signal.fold_i64(Str.concat("identity_count:", row.label), 0, bump_deltas, |current, delta| current + delta)
-		count_label = Reactive.Signal.map_i64_str_keyed(Str.concat("identity_count_label:", row.label), count, |n| row_label(row.label, n))
-		has_count = Reactive.Signal.map_keyed(Str.concat("identity_has_count:", row.label), count, |n| n > 0)
-
-		Elem.section(
-			row.label,
-			[
-				Elem.action_button(
-					{
-						on_click: bump_send,
-						label: Reactive.Signal.const_str(Str.concat("Bump ", row.label)),
-						disabled: Reactive.Signal.const_bool(False),
+	Ui.state(
+		initial_reordered,
+		|reordered| {
+			rows =
+				Signal.map(
+					reordered.signal(),
+					|is_reordered| if is_reordered {
+						reordered_rows
+					} else {
+						initial_rows
 					},
-				),
-				Elem.when(
-					has_count,
-					Elem.div(
+				)
+
+			Html.div(
+				[],
+				[
+					Html.heading("Identity stress"),
+					Html.section(
+						"Controls",
+						[],
 						[
-							Elem.label(count_label),
+							Html.button("Reorder rows", reordered.on_unit(|flag| !flag)),
 						],
 					),
-					Elem.paragraph(Str.concat(row.label, " waiting")),
-				),
-			],
-		)
-	}
-
-	Elem.div(
-		[
-			Elem.heading("Identity stress"),
-			Elem.section(
-				"Controls",
-				[
-					Elem.action_button(
-						{
-							on_click: reorder_send,
-							label: Reactive.Signal.const_str("Reorder rows"),
-							disabled: Reactive.Signal.const_bool(False),
+					Ui.when(
+						Signal.const_bool(True),
+						|_| {
+							Html.section(
+								"Rows active",
+								[],
+								[
+									Ui.each(rows, |row| row.label, render_row),
+								],
+							)
+						},
+						|_| {
+							Html.section(
+								"Rows inactive",
+								[],
+								[
+									Html.paragraph("Rows hidden"),
+								],
+							)
 						},
 					),
 				],
-			),
-			Elem.when(
-				panel_visible,
-				Elem.section(
-					"Rows active",
-					[
-						Elem.each(rows, |row| row.id, render_row),
-					],
-				),
-				Elem.section(
-					"Rows inactive",
-					[
-						Elem.paragraph("Rows hidden"),
-					],
-				),
-			),
-		],
+			)
+		},
 	)
 }

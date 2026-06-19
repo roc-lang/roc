@@ -1,225 +1,28 @@
-import Reactive
-import Graph
+import Node
 import NodeValue exposing [NodeValue]
 
-## Pure UI element tree. The Roc runtime renders this tree into host commands.
+## UI element descriptor tree. Markup nodes (`Element`, `Text`, `TextSignal`)
+## carry no identity. Scope/binder nodes are the identity-bearing positions the
+## host walk accounts for:
+## - `State`: introduces a state binder (init value + boxed is_eq thunk) and a
+##   child subtree built with that binder in scope. Advances the scope ordinal.
+## - `When`: a conditional with two arm subtrees; the live arm is its own scope
+##   (`Branch` step). Advances the scope ordinal (its site ordinal).
+## - `Each`: a keyed list; each row is its own scope keyed by the typed key
+##   payload, with a boxed key `is_eq` thunk. The row thunk receives the erased
+##   key and item value. Advances the scope ordinal.
 Elem := [
-	Div(List(Elem)),
-	Button({ on_click : Graph.EventNode, label : Graph.SignalNode }),
-	ActionButton({ on_click : Graph.EventNode, label : Graph.SignalNode, disabled : Graph.SignalNode }),
-	Label({ signal : Graph.SignalNode }),
+	Element({ tag : Str, attrs : List(Node.Attr), children : List(Elem) }),
 	Text(Str),
-	Heading(Str),
-	Paragraph(Str),
-	Section({ label : Str, children : List(Elem) }),
-	TextInput({ label : Str, value : Graph.SignalNode, on_input : Graph.EventNode, disabled : Graph.SignalNode }),
-	Checkbox({ label : Str, checked : Graph.SignalNode, on_check : Graph.EventNode, disabled : Graph.SignalNode }),
-	Dynamic({ signal : Graph.SignalNode, render : Box((NodeValue -> Elem)) }),
-	DynamicKeyed({ signal : Graph.SignalNode, key : Box((NodeValue -> Str)), render : Box((NodeValue -> Elem)) }),
-	Each({ signal : Graph.SignalNode, key : Box((NodeValue -> Str)), render : Box((NodeValue -> Elem)) }),
-].{
-	div : List(Elem) -> Elem
-	div = |children| Div(children)
-
-	button : { on_click : Reactive.EventSender(Reactive.Unit), label : Reactive.Signal(Str) } -> Elem
-	button = |config| {
-		Button(
-			{
-				on_click: Reactive.EventSender.to_node(config.on_click),
-				label: Reactive.Signal.to_node(config.label),
-			},
-		)
-	}
-
-	action_button :
+	TextSignal(Box(Node.SignalExpr)),
+	State({ initial : NodeValue, eq : Box((NodeValue, NodeValue -> Bool)), child : Box(Elem) }),
+	When({ condition : Box(Node.SignalExpr), when_true : Box(Elem), when_false : Box(Elem) }),
+	Each(
 		{
-			on_click : Reactive.EventSender(Reactive.Unit),
-			label : Reactive.Signal(Str),
-			disabled : Reactive.Signal(Bool),
-		} -> Elem
-	action_button = |config| {
-		ActionButton(
-			{
-				on_click: Reactive.EventSender.to_node(config.on_click),
-				label: Reactive.Signal.to_node(config.label),
-				disabled: Reactive.Signal.to_node(config.disabled),
-			},
-		)
-	}
-
-	label : Reactive.Signal(Str) -> Elem
-	label = |text_signal| Label({ signal: Reactive.Signal.to_node(text_signal) })
-
-	text : Str -> Elem
-	text = |s| Text(s)
-
-	heading : Str -> Elem
-	heading = |s| Heading(s)
-
-	paragraph : Str -> Elem
-	paragraph = |s| Paragraph(s)
-
-	section : Str, List(Elem) -> Elem
-	section = |section_label, children| Section({ label: section_label, children })
-
-	text_input :
-		{
-			label : Str,
-			value : Reactive.Signal(Str),
-			on_input : Reactive.EventSender(Str),
-			disabled : Reactive.Signal(Bool),
-		} -> Elem
-	text_input = |config| {
-		TextInput(
-			{
-				label: config.label,
-				value: Reactive.Signal.to_node(config.value),
-				on_input: Reactive.EventSender.to_node(config.on_input),
-				disabled: Reactive.Signal.to_node(config.disabled),
-			},
-		)
-	}
-
-	checkbox :
-		{
-			label : Str,
-			checked : Reactive.Signal(Bool),
-			on_check : Reactive.EventSender(Bool),
-			disabled : Reactive.Signal(Bool),
-		} -> Elem
-	checkbox = |config| {
-		Checkbox(
-			{
-				label: config.label,
-				checked: Reactive.Signal.to_node(config.checked),
-				on_check: Reactive.EventSender.to_node(config.on_check),
-				disabled: Reactive.Signal.to_node(config.disabled),
-			},
-		)
-	}
-
-	dynamic :
-		Reactive.Signal(a), (a -> Elem) -> Elem
-			where [a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue)]
-	dynamic = |signal, render| {
-		wrapped : NodeValue -> Elem
-		wrapped = |nv| {
-			A : a
-			value : a
-			value =
-				match A.decode(nv, NodeValue.format) {
-					(Ok(val), _) => val
-					(Err(_), _) => {
-						crash "Elem.dynamic received a value that does not match the dynamic render type"
-					}
-				}
-
-			render(value)
-		}
-
-		Dynamic(
-			{
-				signal: Reactive.Signal.to_node(signal),
-				render: Box.box(wrapped),
-			},
-		)
-	}
-
-	when : Reactive.Signal(Bool), Elem, Elem -> Elem
-	when = |condition, when_true, when_false| {
-		Elem.dynamic(
-			condition,
-			|flag| if flag {
-				when_true
-			} else {
-				when_false
-			},
-		)
-	}
-
-	dynamic_keyed :
-		Reactive.Signal(a), (a -> Str), (a -> Elem) -> Elem
-			where [a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue)]
-	dynamic_keyed = |signal, key_fn, render| {
-		wrapped_key : NodeValue -> Str
-		wrapped_key = |nv| {
-			A : a
-			value : a
-			value =
-				match A.decode(nv, NodeValue.format) {
-					(Ok(val), _) => val
-					(Err(_), _) => {
-						crash "Elem.dynamic_keyed received a value that does not match the key type"
-					}
-				}
-
-			key_fn(value)
-		}
-
-		wrapped_render : NodeValue -> Elem
-		wrapped_render = |nv| {
-			A : a
-			value : a
-			value =
-				match A.decode(nv, NodeValue.format) {
-					(Ok(val), _) => val
-					(Err(_), _) => {
-						crash "Elem.dynamic_keyed received a value that does not match the render type"
-					}
-				}
-
-			render(value)
-		}
-
-		DynamicKeyed(
-			{
-				signal: Reactive.Signal.to_node(signal),
-				key: Box.box(wrapped_key),
-				render: Box.box(wrapped_render),
-			},
-		)
-	}
-
-	each :
-		Reactive.Signal(List(a)), (a -> Str), (a -> Elem) -> Elem
-			where [a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue)]
-	each = |items_signal, key_fn, render| {
-		wrapped_key : NodeValue -> Str
-		wrapped_key = |nv| {
-			A : a
-			value : a
-			value =
-				match A.decode(nv, NodeValue.format) {
-					(Ok(val), _) => val
-					(Err(_), _) => {
-						crash "Elem.each received an item value that does not match the key type"
-					}
-				}
-
-			key_fn(value)
-		}
-
-		wrapped_render : NodeValue -> Elem
-		wrapped_render = |nv| {
-			A : a
-			value : a
-			value =
-				match A.decode(nv, NodeValue.format) {
-					(Ok(val), _) => val
-					(Err(_), _) => {
-						crash "Elem.each received an item value that does not match the render type"
-					}
-				}
-
-			render(value)
-		}
-
-		Each(
-			{
-				signal: Reactive.Signal.to_node(items_signal),
-				key: Box.box(wrapped_key),
-				render: Box.box(wrapped_render),
-			},
-		)
-	}
-}
+			items : Box(Node.SignalExpr),
+			key_of : Box((NodeValue -> NodeValue)),
+			key_eq : Box((NodeValue, NodeValue -> Bool)),
+			row : Box((NodeValue, NodeValue -> Elem)),
+		},
+	),
+]

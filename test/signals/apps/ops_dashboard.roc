@@ -1,8 +1,10 @@
 app [main] { pf: platform "../platform/main.roc" }
 
-import pf.Elem
+import pf.Elem exposing [Elem]
+import pf.Html
 import pf.NodeValue exposing [NodeValue]
-import pf.Reactive
+import pf.Signal
+import pf.Ui
 
 Alert := { id : Str, label : Str }.{
 	make : Str, Str -> Alert
@@ -14,7 +16,7 @@ Alert := { id : Str, label : Str }.{
 	decode : NodeValue, NodeValue -> (Try(Alert, [TypeMismatch]), NodeValue)
 	decode = |nv, fmt| {
 		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		alert_result = 
+		alert_result =
 			match result {
 				Ok(fields) =>
 					match (List.get(fields, 0), List.get(fields, 1)) {
@@ -42,249 +44,233 @@ pair_label = |left_name, left, right_name, right| {
 	concat3(left_text, " / ", right_text)
 }
 
-render_alert : Alert -> Elem.Elem
-render_alert = |alert| {
-	ack_key = Str.concat("alert_ack_click:", alert.id)
-	ack_count_key = Str.concat("alert_ack_count:", alert.id)
-	{ sender: ack_send, receiver: ack_clicks } = Reactive.Event.unit_channel(ack_key)
-	ack_deltas : Reactive.Event(I64)
-	ack_deltas = Reactive.Event.map_unit_i64_const(ack_clicks, 1)
-	ack_count : Reactive.Signal(I64)
-	ack_count = Reactive.Signal.fold_i64(ack_count_key, 0, ack_deltas, |current, delta| current + delta)
-	ack_label = 
-		Reactive.Signal.map_i64_str_keyed(
-			Str.concat("alert_ack_label:", alert.id),
-			ack_count,
-			|n| concat3(alert.label, " acknowledgements: ", n.to_str()),
-		)
+increment_i64 : I64 -> I64
+increment_i64 = |current| current + 1
 
-	Elem.section(
-		alert.label,
-		[
-			Elem.paragraph(alert.label),
-			Elem.action_button(
-				{
-					on_click: ack_send,
-					label: Reactive.Signal.const_str(Str.concat("Acknowledge ", alert.label)),
-					disabled: Reactive.Signal.const_bool(False),
-				},
-			),
-			Elem.label(ack_label),
-		],
+add_traffic_sample : I64 -> I64
+add_traffic_sample = |current| current + 75
+
+record_recovery : I64 -> I64
+record_recovery = |current| current - 1
+
+enqueue_jobs : I64 -> I64
+enqueue_jobs = |current| current + 3
+
+drain_jobs : I64 -> I64
+drain_jobs = |current| current - 2
+
+same_i64 : I64 -> I64
+same_i64 = |current| current
+
+toggle_bool : Bool -> Bool
+toggle_bool = |value| !value
+
+set_true : Bool -> Bool
+set_true = |_| True
+
+health_score : I64, I64 -> I64
+health_score = |requests, failing| requests - failing * 10
+
+initial_alerts : List(Alert)
+initial_alerts = [Alert.make("db", "Database warmup")]
+
+incident_alerts : List(Alert)
+incident_alerts = [Alert.make("api", "API latency"), Alert.make("jobs", "Job backlog")]
+
+cleared_alerts : List(Alert)
+cleared_alerts = []
+
+visible_alerts : Bool, Bool -> List(Alert)
+visible_alerts = |active, cleared| {
+	if cleared {
+		cleared_alerts
+	} else if active {
+		incident_alerts
+	} else {
+		initial_alerts
+	}
+}
+
+render_alert : Str, Signal.Signal(Alert) -> Elem
+render_alert = |label, _alert_signal| {
+	initial_count : I64
+	initial_count = 0
+
+	Ui.state(
+		initial_count,
+		|ack_count| {
+			ack_label =
+				Signal.map(
+					ack_count.signal(),
+					|n| concat3(label, " acknowledgements: ", n.to_str()),
+				)
+
+			Html.section(
+				label,
+				[],
+				[
+					Html.paragraph(label),
+					Html.button(Str.concat("Acknowledge ", label), ack_count.on_unit(increment_i64)),
+					Html.text_s(ack_label),
+				],
+			)
+		},
 	)
 }
 
-main : {} -> Elem.Elem
+main : {} -> Elem
 main = |_| {
-	{ sender: traffic_send, receiver: traffic_clicks } = Reactive.Event.unit_channel("traffic_click")
-	traffic_deltas : Reactive.Event(I64)
-	traffic_deltas = Reactive.Event.map_unit_i64_const(traffic_clicks, 75)
-	traffic : Reactive.Signal(I64)
-	traffic = Reactive.Signal.fold_i64("traffic", 1200, traffic_deltas, |current, delta| current + delta)
-	traffic_label = Reactive.Signal.map_i64_str_keyed("traffic_label", traffic, |n| metric_label("Requests", n))
+	initial_traffic : I64
+	initial_traffic = 1200
+	initial_failures : I64
+	initial_failures = 4
+	initial_queue : I64
+	initial_queue = 17
+	initial_fanout : I64
+	initial_fanout = 0
+	initial_incident : Bool
+	initial_incident = False
+	initial_cleared : Bool
+	initial_cleared = False
 
-	{ sender: fail_send, receiver: fail_clicks } = Reactive.Event.unit_channel("fail_click")
-	{ sender: recover_send, receiver: recover_clicks } = Reactive.Event.unit_channel("recover_click")
-	fail_deltas : Reactive.Event(I64)
-	fail_deltas = Reactive.Event.map_unit_i64_const(fail_clicks, 1)
-	recover_deltas : Reactive.Event(I64)
-	recover_deltas = Reactive.Event.map_unit_i64_const(recover_clicks, -1)
-	failure_events = Reactive.Event.merge(fail_deltas, recover_deltas)
-	failures : Reactive.Signal(I64)
-	failures = Reactive.Signal.fold_i64("failures", 4, failure_events, |current, delta| current + delta)
-	failure_label = Reactive.Signal.map_i64_str_keyed("failure_label", failures, |n| metric_label("Failures", n))
+	Ui.state(
+		initial_traffic,
+		|traffic| {
+			Ui.state(
+				initial_failures,
+				|failures| {
+					Ui.state(
+						initial_queue,
+						|queue| {
+							Ui.state(
+								initial_fanout,
+								|fanout_base| {
+									Ui.state(
+										initial_incident,
+										|incident_active| {
+											Ui.state(
+												initial_cleared,
+												|alerts_cleared| {
+													Ui.state(
+														"",
+														|search| {
+															traffic_signal = traffic.signal()
+															failures_signal = failures.signal()
+															queue_signal = queue.signal()
+															incident_signal = incident_active.signal()
+															traffic_label = Signal.map(traffic_signal, |n| metric_label("Requests", n))
+															failure_label = Signal.map(failures_signal, |n| metric_label("Failures", n))
+															queue_label = Signal.map(queue_signal, |n| metric_label("Queue", n))
+															score = Signal.map2(traffic_signal, failures_signal, health_score)
+															score_label =
+																Signal.map2(
+																	score,
+																	queue_signal,
+																	|value, queued| pair_label("Health score", value, "queue", queued),
+																)
+															fanout_signal = fanout_base.signal()
+															fanout_label_a = Signal.map(fanout_signal, |n| metric_label("Fanout A", n))
+															fanout_label_b = Signal.map(fanout_signal, |n| metric_label("Fanout B", n))
+															fanout_label_c = Signal.map(fanout_signal, |n| metric_label("Fanout C", n))
+															fanout_label_d = Signal.map(fanout_signal, |n| metric_label("Fanout D", n))
+															fanout_label_e = Signal.map(fanout_signal, |n| metric_label("Fanout E", n))
+															fanout_label_f = Signal.map(fanout_signal, |n| metric_label("Fanout F", n))
+															fanout_label_g = Signal.map(fanout_signal, |n| metric_label("Fanout G", n))
+															fanout_label_h = Signal.map(fanout_signal, |n| metric_label("Fanout H", n))
+															incident_label =
+																Signal.map(
+																	incident_signal,
+																	|active| if active {
+																		"Incident active"
+																	} else {
+																		"All services nominal"
+																	},
+																)
+															alerts =
+																Signal.map2(
+																	incident_signal,
+																	alerts_cleared.signal(),
+																	visible_alerts,
+																)
+															search_label = Signal.map(search.signal(), |value| Str.concat("Runbook search: ", value))
 
-	{ sender: queue_up_send, receiver: queue_up_clicks } = Reactive.Event.unit_channel("queue_up_click")
-	{ sender: queue_down_send, receiver: queue_down_clicks } = Reactive.Event.unit_channel("queue_down_click")
-	queue_up : Reactive.Event(I64)
-	queue_up = Reactive.Event.map_unit_i64_const(queue_up_clicks, 3)
-	queue_down : Reactive.Event(I64)
-	queue_down = Reactive.Event.map_unit_i64_const(queue_down_clicks, -2)
-	queue_events = Reactive.Event.merge(queue_up, queue_down)
-	queue : Reactive.Signal(I64)
-	queue = Reactive.Signal.fold_i64("queue", 17, queue_events, |current, delta| current + delta)
-	queue_label = Reactive.Signal.map_i64_str_keyed("queue_label", queue, |n| metric_label("Queue", n))
-
-	score : Reactive.Signal(I64)
-	score = 
-		Reactive.Signal.map2_i64_i64_keyed(
-			"score",
-			traffic,
-			failures,
-			|requests, failing| requests - failing * 10,
-		)
-	score_label = 
-		Reactive.Signal.map2_i64_i64_str_keyed(
-			"score_label",
-			score,
-			queue,
-			|value, queued| pair_label("Health score", value, "queue", queued),
-		)
-
-	{ sender: fanout_noop_send, receiver: fanout_noop_clicks } = Reactive.Event.unit_channel("fanout_noop_click")
-	fanout_noop_deltas : Reactive.Event(I64)
-	fanout_noop_deltas = Reactive.Event.map_unit_i64_const(fanout_noop_clicks, 1)
-	fanout_base : Reactive.Signal(I64)
-	fanout_base = Reactive.Signal.fold_i64("fanout_base", 0, fanout_noop_deltas, |current, _delta| current)
-	fanout_label_a = Reactive.Signal.map_i64_str_keyed("fanout_label_a", fanout_base, |n| metric_label("Fanout A", n))
-	fanout_label_b = Reactive.Signal.map_i64_str_keyed("fanout_label_b", fanout_base, |n| metric_label("Fanout B", n))
-	fanout_label_c = Reactive.Signal.map_i64_str_keyed("fanout_label_c", fanout_base, |n| metric_label("Fanout C", n))
-	fanout_label_d = Reactive.Signal.map_i64_str_keyed("fanout_label_d", fanout_base, |n| metric_label("Fanout D", n))
-	fanout_label_e = Reactive.Signal.map_i64_str_keyed("fanout_label_e", fanout_base, |n| metric_label("Fanout E", n))
-	fanout_label_f = Reactive.Signal.map_i64_str_keyed("fanout_label_f", fanout_base, |n| metric_label("Fanout F", n))
-	fanout_label_g = Reactive.Signal.map_i64_str_keyed("fanout_label_g", fanout_base, |n| metric_label("Fanout G", n))
-	fanout_label_h = Reactive.Signal.map_i64_str_keyed("fanout_label_h", fanout_base, |n| metric_label("Fanout H", n))
-
-	{ sender: incident_send, receiver: incident_clicks } = Reactive.Event.unit_channel("incident_click")
-	incident_active : Reactive.Signal(Bool)
-	incident_active = Reactive.Signal.fold_bool_toggle("incident_active", False, incident_clicks)
-	incident_label = 
-		Reactive.Signal.map_keyed(
-			"incident_label",
-			incident_active,
-			|active| if active {
-				"Incident active"
-			} else {
-				"All services nominal"
-			},
-		)
-
-	{ sender: clear_alerts_send, receiver: clear_alerts_clicks } = Reactive.Event.unit_channel("clear_alerts_click")
-	open_alerts : Reactive.Event(List(Alert))
-	open_alerts = 
-		Reactive.Event.map(
-			incident_clicks,
-			|_| [Alert.make("api", "API latency"), Alert.make("jobs", "Job backlog")],
-		)
-	clear_alerts : Reactive.Event(List(Alert))
-	clear_alerts = Reactive.Event.map(clear_alerts_clicks, |_| [])
-	alert_commands = Reactive.Event.merge(open_alerts, clear_alerts)
-	alerts : Reactive.Signal(List(Alert))
-	alerts = 
-		Reactive.Signal.fold(
-			"alerts",
-			[Alert.make("db", "Database warmup")],
-			alert_commands,
-			|_current, next| next,
-		)
-
-	{ sender: search_send, receiver: search_changes } = Reactive.Event.str_channel("search_change")
-	search : Reactive.Signal(Str)
-	search = Reactive.Signal.hold("search", "", search_changes)
-	search_label = Reactive.Signal.map_keyed("search_label", search, |value| Str.concat("Runbook search: ", value))
-
-	Elem.div(
-		[
-			Elem.heading("Ops dashboard"),
-			Elem.section(
-				"Traffic",
-				[
-					Elem.action_button(
-						{
-							on_click: traffic_send,
-							label: Reactive.Signal.const_str("Add traffic sample"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(traffic_label),
-					Elem.action_button(
-						{
-							on_click: fail_send,
-							label: Reactive.Signal.const_str("Record failure"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.action_button(
-						{
-							on_click: recover_send,
-							label: Reactive.Signal.const_str("Record recovery"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(failure_label),
-				],
-			),
-			Elem.section(
-				"Queue",
-				[
-					Elem.action_button(
-						{
-							on_click: queue_up_send,
-							label: Reactive.Signal.const_str("Enqueue jobs"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.action_button(
-						{
-							on_click: queue_down_send,
-							label: Reactive.Signal.const_str("Drain jobs"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(queue_label),
-					Elem.label(score_label),
-				],
-			),
-			Elem.section(
-				"Incident",
-				[
-					Elem.section(
-						"Pruning",
-						[
-							Elem.action_button(
-								{
-									on_click: fanout_noop_send,
-									label: Reactive.Signal.const_str("No-op fanout"),
-									disabled: Reactive.Signal.const_bool(False),
+															Html.div(
+																[],
+																[
+																	Html.heading("Ops dashboard"),
+																	Html.section(
+																		"Traffic",
+																		[],
+																		[
+																			Html.button("Add traffic sample", traffic.on_unit(add_traffic_sample)),
+																			Html.text_s(traffic_label),
+																			Html.button("Record failure", failures.on_unit(increment_i64)),
+																			Html.button("Record recovery", failures.on_unit(record_recovery)),
+																			Html.text_s(failure_label),
+																		],
+																	),
+																	Html.section(
+																		"Queue",
+																		[],
+																		[
+																			Html.button("Enqueue jobs", queue.on_unit(enqueue_jobs)),
+																			Html.button("Drain jobs", queue.on_unit(drain_jobs)),
+																			Html.text_s(queue_label),
+																			Html.text_s(score_label),
+																		],
+																	),
+																	Html.section(
+																		"Incident",
+																		[],
+																		[
+																			Html.section(
+																				"Pruning",
+																				[],
+																				[
+																					Html.button("No-op fanout", fanout_base.on_unit(same_i64)),
+																					Html.text_s(fanout_label_a),
+																					Html.text_s(fanout_label_b),
+																					Html.text_s(fanout_label_c),
+																					Html.text_s(fanout_label_d),
+																					Html.text_s(fanout_label_e),
+																					Html.text_s(fanout_label_f),
+																					Html.text_s(fanout_label_g),
+																					Html.text_s(fanout_label_h),
+																				],
+																			),
+																			Html.button("Toggle incident", incident_active.on_unit(toggle_bool)),
+																			Html.text_s(incident_label),
+																			Ui.when(
+																				incident_signal,
+																				|_| Html.paragraph("Incident room open"),
+																				|_| Html.paragraph("No active incident"),
+																			),
+																			Html.text_input("Runbook search", search.signal(), search.on_str(|_, value| value)),
+																			Html.text_s(search_label),
+																		],
+																	),
+																	Html.section(
+																		"Alerts",
+																		[],
+																		[
+																			Html.button("Clear alerts", alerts_cleared.on_unit(set_true)),
+																			Ui.each(alerts, |alert| alert.label, render_alert),
+																		],
+																	),
+																],
+															)
+														},
+													)
+												},
+											)
+										},
+									)
 								},
-							),
-							Elem.label(fanout_label_a),
-							Elem.label(fanout_label_b),
-							Elem.label(fanout_label_c),
-							Elem.label(fanout_label_d),
-							Elem.label(fanout_label_e),
-							Elem.label(fanout_label_f),
-							Elem.label(fanout_label_g),
-							Elem.label(fanout_label_h),
-						],
-					),
-					Elem.action_button(
-						{
-							on_click: incident_send,
-							label: Reactive.Signal.const_str("Toggle incident"),
-							disabled: Reactive.Signal.const_bool(False),
+							)
 						},
-					),
-					Elem.label(incident_label),
-					Elem.when(
-						incident_active,
-						Elem.paragraph("Incident room open"),
-						Elem.paragraph("No active incident"),
-					),
-					Elem.text_input(
-						{
-							label: "Runbook search",
-							value: search,
-							on_input: search_send,
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(search_label),
-				],
-			),
-			Elem.section(
-				"Alerts",
-				[
-					Elem.action_button(
-						{
-							on_click: clear_alerts_send,
-							label: Reactive.Signal.const_str("Clear alerts"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.each(alerts, |alert| alert.id, render_alert),
-				],
-			),
-		],
+					)
+				},
+			)
+		},
 	)
 }

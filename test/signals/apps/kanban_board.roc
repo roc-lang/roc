@@ -1,8 +1,10 @@
 app [main] { pf: platform "../platform/main.roc" }
 
-import pf.Elem
+import pf.Elem exposing [Elem]
+import pf.Html
 import pf.NodeValue exposing [NodeValue]
-import pf.Reactive
+import pf.Signal
+import pf.Ui
 
 Task := { id : Str, label : Str }.{
 	make : Str, Str -> Task
@@ -14,7 +16,7 @@ Task := { id : Str, label : Str }.{
 	decode : NodeValue, NodeValue -> (Try(Task, [TypeMismatch]), NodeValue)
 	decode = |nv, fmt| {
 		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		task_result = 
+		task_result =
 			match result {
 				Ok(fields) =>
 					match (List.get(fields, 0), List.get(fields, 1)) {
@@ -35,162 +37,125 @@ concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
 count_label : Str, I64 -> Str
 count_label = |name, value| concat3(name, ": ", value.to_str())
 
-render_task : Task -> Elem.Elem
-render_task = |task| {
-	{ sender: progress_send, receiver: progress_clicks } = Reactive.Event.unit_channel(Str.concat("task_progress_click:", task.label))
-	{ sender: note_send, receiver: note_clicks } = Reactive.Event.unit_channel(Str.concat("task_note_click:", task.label))
-	progress_deltas : Reactive.Event(I64)
-	progress_deltas = Reactive.Event.map_unit_i64_const(progress_clicks, 1)
-	note_deltas : Reactive.Event(I64)
-	note_deltas = Reactive.Event.map_unit_i64_const(note_clicks, 1)
-	progress : Reactive.Signal(I64)
-	progress = Reactive.Signal.fold_i64(Str.concat("task_progress:", task.label), 0, progress_deltas, |current, delta| current + delta)
-	notes : Reactive.Signal(I64)
-	notes = Reactive.Signal.fold_i64(Str.concat("task_notes:", task.label), 0, note_deltas, |current, delta| current + delta)
-	status = 
-		Reactive.Signal.map2_i64_i64_str_keyed(
-			Str.concat("task_status:", task.label),
-			progress,
-			notes,
-			|done, note_count| {
-				done_text = count_label("progress", done)
-				note_text = count_label("notes", note_count)
-				concat3(concat3(task.label, " ", done_text), " / ", note_text)
-			},
-		)
+increment_i64 : I64 -> I64
+increment_i64 = |current| current + 1
 
-	Elem.section(
-		task.label,
-		[
-			Elem.paragraph(task.label),
-			Elem.action_button(
-				{
-					on_click: progress_send,
-					label: Reactive.Signal.const_str(Str.concat("Advance ", task.label)),
-					disabled: Reactive.Signal.const_bool(False),
+initial_tasks : List(Task)
+initial_tasks = [Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue"), Task.make("c", "Tune keyed diff")]
+
+reordered_tasks : List(Task)
+reordered_tasks = [Task.make("c", "Tune keyed diff"), Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue")]
+
+archived_tasks : List(Task)
+archived_tasks = [Task.make("a", "Design signal graph"), Task.make("c", "Tune keyed diff")]
+
+focused_tasks : List(Task)
+focused_tasks = [Task.make("c", "Tune keyed diff")]
+
+render_task : Str, Signal.Signal(Task) -> Elem
+render_task = |label, _task_signal| {
+	initial_count : I64
+	initial_count = 0
+
+	Ui.state(
+		initial_count,
+		|progress| {
+			Ui.state(
+				initial_count,
+				|notes| {
+					status =
+						Signal.map2(
+							progress.signal(),
+							notes.signal(),
+							|done, note_count| {
+								done_text = count_label("progress", done)
+								note_text = count_label("notes", note_count)
+								concat3(concat3(label, " ", done_text), " / ", note_text)
+							},
+						)
+
+					Html.section(
+						label,
+						[],
+						[
+							Html.paragraph(label),
+							Html.button(Str.concat("Advance ", label), progress.on_unit(increment_i64)),
+							Html.button(Str.concat("Add note ", label), notes.on_unit(increment_i64)),
+							Html.text_s(status),
+						],
+					)
 				},
-			),
-			Elem.action_button(
-				{
-					on_click: note_send,
-					label: Reactive.Signal.const_str(Str.concat("Add note ", task.label)),
-					disabled: Reactive.Signal.const_bool(False),
-				},
-			),
-			Elem.label(status),
-		],
+			)
+		},
 	)
 }
 
-main : {} -> Elem.Elem
+main : {} -> Elem
 main = |_| {
-	initial_tasks = [Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue"), Task.make("c", "Tune keyed diff")]
+	initial_filter : Bool
+	initial_filter = False
 
-	{ sender: reorder_send, receiver: reorder_clicks } = Reactive.Event.unit_channel("reorder_click")
-	{ sender: archive_send, receiver: archive_clicks } = Reactive.Event.unit_channel("archive_click")
-	{ sender: reset_send, receiver: reset_clicks } = Reactive.Event.unit_channel("reset_click")
-	reordered : Reactive.Event(List(Task))
-	reordered = 
-		Reactive.Event.map(
-			reorder_clicks,
-			|_| [Task.make("c", "Tune keyed diff"), Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue")],
-		)
-	archived : Reactive.Event(List(Task))
-	archived = Reactive.Event.map(archive_clicks, |_| [Task.make("a", "Design signal graph"), Task.make("c", "Tune keyed diff")])
-	reset : Reactive.Event(List(Task))
-	reset = Reactive.Event.map(reset_clicks, |_| initial_tasks)
-	list_commands = Reactive.Event.merge(Reactive.Event.merge(reordered, archived), reset)
-	tasks : Reactive.Signal(List(Task))
-	tasks = Reactive.Signal.fold(
-		"tasks",
+	Ui.state(
 		initial_tasks,
-		list_commands,
-		|_current, next| next,
-	)
+		|tasks| {
+			Ui.state(
+				initial_filter,
+				|filter_active| {
+					Ui.state(
+						"",
+						|reviewer| {
+							filter_signal = filter_active.signal()
+							filter_label =
+								Signal.map(
+									filter_signal,
+									|active| if active {
+										"Focus filter on"
+									} else {
+										"Focus filter off"
+									},
+								)
+							visible_tasks =
+								Signal.map2(
+									filter_signal,
+									tasks.signal(),
+									|active, all_tasks| if active {
+										focused_tasks
+									} else {
+										all_tasks
+									},
+								)
+							reviewer_label = Signal.map(reviewer.signal(), |value| Str.concat("Reviewer: ", value))
 
-	{ sender: filter_send, receiver: filter_clicks } = Reactive.Event.unit_channel("filter_click")
-	filter_active : Reactive.Signal(Bool)
-	filter_active = Reactive.Signal.fold_bool_toggle("filter_active", False, filter_clicks)
-	filter_label = 
-		Reactive.Signal.map_keyed(
-			"filter_label",
-			filter_active,
-			|active| if active {
-				"Focus filter on"
-			} else {
-				"Focus filter off"
-			},
-	)
-	visible_tasks : Reactive.Signal(List(Task))
-	visible_tasks = 
-		Reactive.Signal.map2_keyed(
-			"visible_tasks",
-			filter_active,
-			tasks,
-			|active, all_tasks| if active {
-				[Task.make("c", "Tune keyed diff")]
-			} else {
-				all_tasks
-			},
-		)
-
-	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.str_channel("reviewer_change")
-	reviewer : Reactive.Signal(Str)
-	reviewer = Reactive.Signal.hold("reviewer", "", reviewer_changes)
-	reviewer_label = Reactive.Signal.map_keyed("reviewer_label", reviewer, |value| Str.concat("Reviewer: ", value))
-
-	Elem.div(
-		[
-			Elem.heading("Kanban board"),
-			Elem.section(
-				"Board controls",
-				[
-					Elem.action_button(
-						{
-							on_click: reorder_send,
-							label: Reactive.Signal.const_str("Reorder cards"),
-							disabled: Reactive.Signal.const_bool(False),
+							Html.div(
+								[],
+								[
+									Html.heading("Kanban board"),
+									Html.section(
+										"Board controls",
+										[],
+										[
+											Html.button("Reorder cards", tasks.on_unit(|_| reordered_tasks)),
+											Html.button("Archive platform glue", tasks.on_unit(|_| archived_tasks)),
+											Html.button("Reset board", tasks.on_unit(|_| initial_tasks)),
+											Html.button("Toggle focus filter", filter_active.on_unit(|active| !active)),
+											Html.text_s(filter_label),
+											Html.text_input("Reviewer", reviewer.signal(), reviewer.on_str(|_, value| value)),
+											Html.text_s(reviewer_label),
+										],
+									),
+									Html.section(
+										"Doing",
+										[],
+										[
+											Ui.each(visible_tasks, |task| task.label, render_task),
+										],
+									),
+								],
+							)
 						},
-					),
-					Elem.action_button(
-						{
-							on_click: archive_send,
-							label: Reactive.Signal.const_str("Archive platform glue"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.action_button(
-						{
-							on_click: reset_send,
-							label: Reactive.Signal.const_str("Reset board"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.action_button(
-						{
-							on_click: filter_send,
-							label: Reactive.Signal.const_str("Toggle focus filter"),
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(filter_label),
-					Elem.text_input(
-						{
-							label: "Reviewer",
-							value: reviewer,
-							on_input: reviewer_send,
-							disabled: Reactive.Signal.const_bool(False),
-						},
-					),
-					Elem.label(reviewer_label),
-				],
-			),
-			Elem.section(
-				"Doing",
-				[
-					Elem.each(visible_tasks, |task| task.label, render_task),
-				],
-			),
-		],
+					)
+				},
+			)
+		},
 	)
 }

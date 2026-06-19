@@ -1,3 +1,4 @@
+import Elem exposing [Elem]
 import NodeValue exposing [NodeValue]
 import Node
 import Signal exposing [Signal]
@@ -9,8 +10,6 @@ import Signal exposing [Signal]
 ## referenced de-Bruijn style (distance out to the enclosing `Ui.state`), so the
 ## same helper composes correctly wherever it is mounted.
 Ui := [].{
-	Elem : Node.Elem
-
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -102,7 +101,7 @@ Ui := [].{
 	## `State(a)` handle and returns the subtree built with that state in scope.
 	## The host mints this binder's identity by its construction-order position.
 	state :
-		a, (State(a) -> Node.Elem) -> Node.Elem
+		a, (State(a) -> Elem) -> Elem
 			where [
 				a.is_eq : a, a -> Bool,
 				a.encode : a, NodeValue -> Try(NodeValue, []),
@@ -137,13 +136,13 @@ Ui := [].{
 		handle : State(a)
 		handle = { ref: Node.BinderRef.BinderRef(0) }
 		child = body(handle)
-		Node.Elem.State({ initial: initial_nv, eq: Box.box(eq), child: Box.box(child) })
+		Elem.State({ initial: initial_nv, eq: Box.box(eq), child: Box.box(child) })
 	}
 
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
-	when : Signal(Bool), ({} -> Node.Elem), ({} -> Node.Elem) -> Node.Elem
+	when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 	when = |condition, when_true, when_false| {
-		Node.Elem.When(
+		Elem.When(
 			{
 				condition: Box.box(Signal.to_expr(condition)),
 				when_true: Box.box(when_true({})),
@@ -157,12 +156,12 @@ Ui := [].{
 	## (compared by the key type's `is_eq`), so per-row local state survives
 	## reorder/insert/delete.
 	each :
-		Signal(List(item)), (item -> k), (k, Signal(item) -> Node.Elem) -> Node.Elem
+		Signal(List(item)), (item -> k), (k, Signal(item) -> Elem) -> Elem
 			where [
 				item.decode : NodeValue, NodeValue -> (Try(item, [TypeMismatch]), NodeValue),
 				k.encode : k, NodeValue -> Try(NodeValue, []),
 				k.decode : NodeValue, NodeValue -> (Try(k, [TypeMismatch]), NodeValue),
-				k.hash : k, Hasher -> Hasher,
+				k.to_hash : k, Hasher -> Hasher,
 				k.is_eq : k, k -> Bool,
 			]
 	each = |items, key_of, row| {
@@ -201,10 +200,10 @@ Ui := [].{
 					(Err(_), _) => {
 						crash "Ui.each key equality received a right key that does not match the key type"
 					}
-				}
+			}
 			left_k.is_eq(right_k)
 		}
-		row_nv : NodeValue, NodeValue -> Node.Elem
+		row_nv : NodeValue, NodeValue -> Elem
 		row_nv = |key_nv, item_nv| {
 			K : k
 			key : k
@@ -214,10 +213,10 @@ Ui := [].{
 					(Err(_), _) => {
 						crash "Ui.each received a key value that does not match the key type"
 					}
-				}
+			}
 			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(item_nv)))
 		}
-		Node.Elem.Each(
+		Elem.Each(
 			{
 				items: Box.box(Signal.to_expr(items)),
 				key_of: Box.box(key_of_nv),
