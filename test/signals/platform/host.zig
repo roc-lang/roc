@@ -174,6 +174,7 @@ const HostNodeScopeSiteDesc = struct {
     ordinal: u64,
     parent_elem_id: u64,
     kind: HostNodeScopeSiteKind,
+    binder_node_ids: []u64,
 };
 
 const HostNodeElementDesc = struct {
@@ -310,6 +311,9 @@ const HostNodeDescriptorStream = struct {
         }
         self.events.deinit(allocator);
 
+        for (self.scope_sites.items) |desc| {
+            allocator.free(desc.binder_node_ids);
+        }
         self.scope_sites.deinit(allocator);
 
         for (self.states.items) |desc| {
@@ -450,14 +454,19 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendScopeSite(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, kind: HostNodeScopeSiteKind) void {
+    fn appendScopeSite(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, kind: HostNodeScopeSiteKind, binder_node_ids: []const u64) void {
+        const binder_copy = allocator.dupe(u64, binder_node_ids) catch std.process.exit(1);
         self.scope_sites.append(allocator, .{
             .node_id = node_id,
             .scope_id = scope_id,
             .ordinal = ordinal,
             .parent_elem_id = parent_elem_id,
             .kind = kind,
-        }) catch std.process.exit(1);
+            .binder_node_ids = binder_copy,
+        }) catch {
+            allocator.free(binder_copy);
+            std.process.exit(1);
+        };
     }
 
     fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, node_id: u64, initial: abi.NodeValue, eq: abi.RocErasedCallable) void {
@@ -2097,7 +2106,7 @@ const HostEnv = struct {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
                 ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state);
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
                 stream.appendState(allocator, roc_host, node_id, elem.payload.state.initial, elem.payload.state.eq);
                 binder_stack.append(allocator, node_id) catch std.process.exit(1);
                 self.collectNodeElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, binder_stack);
@@ -2107,7 +2116,7 @@ const HostEnv = struct {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
                 ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when);
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
                 const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.when.condition.*, binder_stack.items);
                 stream.appendWhen(allocator, roc_host, node_id, elem.payload.when.condition.*, source_node_ids);
             },
@@ -2115,7 +2124,7 @@ const HostEnv = struct {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
                 ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each);
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
                 const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.each.items.*, binder_stack.items);
                 stream.appendEach(
                     allocator,
@@ -2140,13 +2149,17 @@ const HostEnv = struct {
         self.collectNodeElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &binder_stack);
     }
 
-    fn collectNodeElemWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch, parent_elem_id: u64, elem: abi.NodeElem) u64 {
-        const branch_scope_id = self.internWhenBranchScope(parent_scope_id, site_ordinal, branch);
+    fn collectNodeElemWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+        if (site.kind != .when) {
+            failHost("NodeElem branch collection requires a when scope site");
+        }
+        const branch_scope_id = self.internWhenBranchScope(site.scope_id, site.ordinal, branch);
         const allocator = self.gpa.allocator();
         var binder_stack: std.ArrayListUnmanaged(u64) = .empty;
         defer binder_stack.deinit(allocator);
+        binder_stack.appendSlice(allocator, site.binder_node_ids) catch std.process.exit(1);
         var ordinal: u64 = 0;
-        self.collectNodeElemDescriptors(roc_host, stream, elem, branch_scope_id, parent_elem_id, &ordinal, &binder_stack);
+        self.collectNodeElemDescriptors(roc_host, stream, elem, branch_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
         return branch_scope_id;
     }
 
@@ -4497,10 +4510,13 @@ test "signals host collects NodeElem descriptor stream" {
     try std.testing.expectEqual(HostNodeScopeSiteKind.state, stream.scope_sites.items[0].kind);
     try std.testing.expectEqual(@as(u64, 0), stream.scope_sites.items[0].ordinal);
     try std.testing.expectEqual(@as(u64, 1), stream.scope_sites.items[0].parent_elem_id);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[0].binder_node_ids.len);
     try std.testing.expectEqual(HostNodeScopeSiteKind.when, stream.scope_sites.items[1].kind);
     try std.testing.expectEqual(@as(u64, 1), stream.scope_sites.items[1].ordinal);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[1].binder_node_ids.len);
     try std.testing.expectEqual(HostNodeScopeSiteKind.each, stream.scope_sites.items[2].kind);
     try std.testing.expectEqual(@as(u64, 2), stream.scope_sites.items[2].ordinal);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[2].binder_node_ids.len);
 
     try std.testing.expectEqual(@as(usize, 1), stream.states.items.len);
     try std.testing.expectEqual(stream.scope_sites.items[0].node_id, stream.states.items[0].node_id);
@@ -4515,4 +4531,55 @@ test "signals host collects NodeElem descriptor stream" {
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[0].ordinal);
     try std.testing.expectEqual(@as(u64, 1), host.node_identities.items[1].ordinal);
     try std.testing.expectEqual(@as(u64, 2), host.node_identities.items[2].ordinal);
+}
+
+test "signals host carries binder context into NodeElem when branch collection" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    var stream: HostNodeDescriptorStream = .{};
+    defer stream.deinit(host.gpa.allocator(), &roc_host);
+
+    const branch_children = [_]abi.NodeElem{
+        testNodeTextSignal(&roc_host, testNodeRefExpr(0)),
+    };
+    const branch_true = testNodeElementWith(&roc_host, "span", &.{}, &branch_children);
+    const when_elem = testNodeWhen(&roc_host, branch_true, testNodeText(&roc_host, "hidden"));
+    const state_child_children = [_]abi.NodeElem{
+        when_elem,
+    };
+    const state_child = testNodeElementWith(&roc_host, "div", &.{}, &state_child_children);
+    const root = testNodeState(&roc_host, state_child);
+    defer abi.decrefNodeElem(root, &roc_host);
+
+    host.collectNodeElemRootDescriptors(&roc_host, &stream, root);
+
+    try std.testing.expectEqual(@as(usize, 2), stream.scope_sites.items.len);
+    const state_site = stream.scope_sites.items[0];
+    const when_site = stream.scope_sites.items[1];
+    try std.testing.expectEqual(HostNodeScopeSiteKind.state, state_site.kind);
+    try std.testing.expectEqual(HostNodeScopeSiteKind.when, when_site.kind);
+    try std.testing.expectEqual(@as(usize, 1), when_site.binder_node_ids.len);
+    try std.testing.expectEqual(state_site.node_id, when_site.binder_node_ids[0]);
+    try std.testing.expectEqual(@as(usize, 0), stream.signal_text_nodes.items.len);
+
+    const branch_scope_id = host.collectNodeElemWhenBranchDescriptors(&roc_host, &stream, when_site, .true_branch, when_elem.payload.when.when_true.*);
+
+    try std.testing.expect(branch_scope_id != 0);
+    try std.testing.expectEqual(@as(usize, 2), stream.elements.items.len);
+    try std.testing.expectEqual(@as(u64, 2), stream.elements.items[1].elem_id);
+    try std.testing.expectEqual(@as(u64, 1), stream.elements.items[1].parent_elem_id);
+    try std.testing.expectEqual(branch_scope_id, stream.elements.items[1].scope_id);
+    try std.testing.expectEqualStrings("span", stream.elements.items[1].tag);
+    try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items.len);
+    try std.testing.expectEqual(branch_scope_id, stream.signal_text_nodes.items[0].scope_id);
+    try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items[0].source_node_ids.len);
+    try std.testing.expectEqual(state_site.node_id, stream.signal_text_nodes.items[0].source_node_ids[0]);
 }

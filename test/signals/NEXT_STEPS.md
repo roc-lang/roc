@@ -277,8 +277,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    DOM elements, static text nodes, signal-backed text nodes/attrs, bool attrs,
    events, and retained `State`/`When`/`Each` site descriptors. The collector
    carries an explicit binder stack, resolves event `BinderRef`s to state node
-   ids, and records source node ids for signal-backed descriptors. The remaining
-   work is wiring this stream into the app init/render lifecycle.
+   ids, records source node ids for signal-backed descriptors, and stores the
+   active binder context on scope sites so branch/row bodies can resolve outer
+   state refs. The remaining work is wiring this stream into the app init/render
+   lifecycle.
 4. **Host-invoked `is_eq` thunks (new host capability).** The host currently never
    invokes erased callables. Wire the `RocErasedCallableFn(host, ret, args, capture)`
    call convention + per-type marshaling so the host can call the boxed key-`is_eq`
