@@ -308,7 +308,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    the `Ui.when`/`Ui.each` descriptor walk or DOM detachment. The host also has a
    typed-key row diff helper that reuses, creates, and disposes row scopes by the
    boxed key equality thunk and records `rows_reused`/`rows_created`/
-   `rows_removed`.
+   `rows_removed`. The `NodeElem` descriptor collector can now consume explicit
+   evaluated item values for an `Each` site, invoke `key_of`, run the typed row
+   diff, call the row thunk, and walk each returned row body in its keyed row
+   scope so row-local state ids survive reorder and removed rows are disposed.
 6. **Port `identity_stress.roc`** to the new API; get its current `.txt` spec green
    first (the smallest honest slice).
 7. **Port `ops_dashboard`, `checkout_wizard`, `kanban_board`** to the new API;

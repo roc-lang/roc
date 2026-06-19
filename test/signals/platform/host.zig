@@ -2163,6 +2163,46 @@ const HostEnv = struct {
         return branch_scope_id;
     }
 
+    fn collectNodeElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const abi.NodeValue) HostKeyedRowDiffResult {
+        if (site.kind != .each) {
+            failHost("NodeElem row collection requires an each scope site");
+        }
+        if (site.node_id != each.node_id) {
+            failHost("NodeElem row collection received mismatched each descriptors");
+        }
+
+        const allocator = self.gpa.allocator();
+        const keys = allocator.alloc(abi.NodeValue, items.len) catch std.process.exit(1);
+        var initialized_keys: usize = 0;
+        defer {
+            for (keys[0..initialized_keys]) |key| {
+                abi.decrefNodeValue(key, roc_host);
+            }
+            allocator.free(keys);
+        }
+
+        for (items, 0..) |item, index| {
+            keys[index] = callErasedNodeValueToNodeValue(roc_host, each.key_of, item);
+            initialized_keys += 1;
+        }
+
+        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, each.key_eq);
+
+        var binder_stack: std.ArrayListUnmanaged(u64) = .empty;
+        defer binder_stack.deinit(allocator);
+        binder_stack.appendSlice(allocator, site.binder_node_ids) catch std.process.exit(1);
+
+        for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
+            const row_elem = callErasedNodeValueNodeValueToNodeElem(roc_host, each.row, key, item);
+            defer abi.decrefNodeElem(row_elem, roc_host);
+
+            var ordinal: u64 = 0;
+            self.collectNodeElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
+        }
+
+        return diff;
+    }
+
     fn clearScopes(self: *HostEnv) void {
         if (self.roc_host) |roc_host| {
             for (self.scopes.items) |*scope| {
@@ -3929,6 +3969,22 @@ fn testBinaryNodeElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]con
     writeTestErasedResult(abi.NodeElem, ret, testNodeText(roc_host, text));
 }
 
+fn testStatefulRowNodeElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const key = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test stateful row NodeElem callable expected key NvI64"),
+    };
+    const item = switch (call_args.arg1.tag) {
+        .NvI64 => call_args.arg1.payload.nv_i64,
+        else => @panic("test stateful row NodeElem callable expected item NvI64"),
+    };
+    var text_buffer: [64]u8 = undefined;
+    const text = std.fmt.bufPrint(&text_buffer, "row-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row NodeElem callable could not format text");
+    writeTestErasedResult(abi.NodeElem, ret, testNodeState(roc_host, testNodeText(roc_host, text)));
+}
+
 fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = capture_ptr;
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
@@ -4298,7 +4354,7 @@ fn testNodeEach(roc_host: *abi.RocHost) abi.NodeElem {
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testBinaryNodeValueCallable,
+        &testStatefulRowNodeElemCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -4628,4 +4684,88 @@ test "signals host carries binder context into NodeElem when branch collection" 
     try std.testing.expectEqual(branch_scope_id, stream.signal_text_nodes.items[0].scope_id);
     try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items[0].source_node_ids.len);
     try std.testing.expectEqual(state_site.node_id, stream.signal_text_nodes.items[0].source_node_ids[0]);
+}
+
+test "signals host collects NodeElem each row bodies by keyed scope" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const root_children = [_]abi.NodeElem{
+        testNodeEach(&roc_host),
+    };
+    const root = testNodeElementWith(&roc_host, "section", &.{}, &root_children);
+    defer abi.decrefNodeElem(root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    defer initial_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &initial_stream, root);
+
+    try std.testing.expectEqual(@as(usize, 1), initial_stream.scope_sites.items.len);
+    try std.testing.expectEqual(HostNodeScopeSiteKind.each, initial_stream.scope_sites.items[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), initial_stream.eaches.items.len);
+
+    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
+    const initial = host.collectNodeElemEachRowDescriptors(&roc_host, &initial_stream, initial_stream.scope_sites.items[0], initial_stream.eaches.items[0], &initial_items);
+    defer freeKeyedRowDiff(&host, initial);
+
+    try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
+    try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
+    try std.testing.expectEqual(@as(u64, 0), initial.rows_removed);
+    try std.testing.expectEqual(@as(usize, 4), initial_stream.scope_sites.items.len);
+    try std.testing.expectEqual(@as(usize, 3), initial_stream.states.items.len);
+    try std.testing.expectEqual(@as(usize, 3), initial_stream.text_nodes.items.len);
+
+    try std.testing.expectEqual(initial.scope_ids[0], initial_stream.scope_sites.items[1].scope_id);
+    try std.testing.expectEqual(initial.scope_ids[1], initial_stream.scope_sites.items[2].scope_id);
+    try std.testing.expectEqual(initial.scope_ids[2], initial_stream.scope_sites.items[3].scope_id);
+    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[1].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[2].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[3].ordinal);
+    try std.testing.expectEqualStrings("row-1-1", initial_stream.text_nodes.items[0].value);
+    try std.testing.expectEqualStrings("row-2-2", initial_stream.text_nodes.items[1].value);
+    try std.testing.expectEqualStrings("row-3-3", initial_stream.text_nodes.items[2].value);
+
+    const state_for_key_2 = host.internNodeIdentity(initial.scope_ids[1], 0);
+
+    var reordered_stream: HostNodeDescriptorStream = .{};
+    defer reordered_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &reordered_stream, root);
+
+    const reordered_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
+    const reordered = host.collectNodeElemEachRowDescriptors(&roc_host, &reordered_stream, reordered_stream.scope_sites.items[0], reordered_stream.eaches.items[0], &reordered_items);
+    defer freeKeyedRowDiff(&host, reordered);
+
+    try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
+    try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
+    try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
+    try std.testing.expectEqual(initial.scope_ids[2], reordered.scope_ids[0]);
+    try std.testing.expectEqual(initial.scope_ids[0], reordered.scope_ids[1]);
+    try std.testing.expectEqual(initial.scope_ids[1], reordered.scope_ids[2]);
+    try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(reordered.scope_ids[2], 0));
+    try std.testing.expectEqual(state_for_key_2, reordered_stream.scope_sites.items[3].node_id);
+
+    var changed_stream: HostNodeDescriptorStream = .{};
+    defer changed_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &changed_stream, root);
+
+    const changed_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
+    const changed = host.collectNodeElemEachRowDescriptors(&roc_host, &changed_stream, changed_stream.scope_sites.items[0], changed_stream.eaches.items[0], &changed_items);
+    defer freeKeyedRowDiff(&host, changed);
+
+    try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
+    try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
+    try std.testing.expectEqual(@as(u64, 2), changed.rows_removed);
+    try std.testing.expectEqual(initial.scope_ids[1], changed.scope_ids[0]);
+    try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[0]);
+    try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
+    try std.testing.expect(!host.scopes.items[@intCast(initial.scope_ids[0])].active);
+    try std.testing.expect(!host.scopes.items[@intCast(initial.scope_ids[2])].active);
+    try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(changed.scope_ids[0], 0));
 }
