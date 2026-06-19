@@ -13,6 +13,7 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const ReachableProcs = @import("reachable_procs.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -241,6 +242,7 @@ pub fn lowerCheckedModulesToLir(
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ReachableProcs.run(&lowered.lir_result);
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,

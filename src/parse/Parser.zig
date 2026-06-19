@@ -265,7 +265,6 @@ const ExprParentKind = enum(u16) {
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
     expr_lambda_body = 0xdca0,
-    pattern_string = 0x43ef,
 };
 
 const PatternParentKind = enum(u16) {
@@ -1381,6 +1380,96 @@ fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
     return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
 }
 
+fn parsePatternString(self: *Parser) Error!AST.Pattern.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .StringStart);
+    self.advance();
+
+    const scratch_top = self.store.scratchPatternStringPartTop();
+    errdefer self.store.clearScratchPatternStringPartsFrom(scratch_top);
+
+    while (true) {
+        switch (self.peek()) {
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance();
+                const part = try self.store.addPatternStringPart(.{ .text = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchPatternStringPart(part);
+            },
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => {
+                self.advance();
+            },
+            .OpenStringInterpolation => {
+                const hole_start = self.pos;
+                self.advance();
+                const name: ?Token.Idx = switch (self.peek()) {
+                    .LowerIdent, .NamedUnderscore => blk: {
+                        const token = self.pos;
+                        self.advance();
+                        break :blk token;
+                    },
+                    .Underscore => blk: {
+                        self.advance();
+                        break :blk null;
+                    },
+                    else => {
+                        while (self.peek() != .CloseStringInterpolation and self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        if (self.peek() == .CloseStringInterpolation) self.advance();
+                        while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        if (self.peek() == .StringEnd) self.advance();
+                        self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                        return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, hole_start);
+                    },
+                };
+
+                if (self.peek() != .CloseStringInterpolation) {
+                    while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                        self.advance();
+                    }
+                    if (self.peek() == .StringEnd) self.advance();
+                    self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, hole_start);
+                }
+                self.advance();
+                const part = try self.store.addPatternStringPart(.{ .capture = .{
+                    .name = name,
+                    .region = .{ .start = hole_start, .end = self.pos },
+                } });
+                try self.store.addScratchPatternStringPart(part);
+            },
+            .StringEnd => {
+                self.advance();
+                const parts = try self.store.patternStringPartSpanFrom(scratch_top);
+                return try self.store.addPattern(.{ .string = .{
+                    .string_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                    .parts = parts,
+                } });
+            },
+            .EndOfFile => {
+                self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, start);
+            },
+            else => {
+                const bad = self.pos;
+                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .StringEnd) self.advance();
+                self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                return try self.pushMalformed(AST.Pattern.Idx, .string_unexpected_token, bad);
+            },
+        }
+    }
+}
+
 fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
     const start = self.pos;
     switch (self.peek()) {
@@ -1938,10 +2027,6 @@ const PatternTupleState = struct {
     scratch_top: u32,
 };
 
-const PatternStringState = struct {
-    start: Token.Idx,
-};
-
 const StatementForExprState = struct {
     start: Token.Idx,
     patt: AST.Pattern.Idx,
@@ -2269,7 +2354,6 @@ const OpenSyntaxStack = struct {
     where_statement_type_anno: std.ArrayList(StatementTypeAnnoAfterWhereState) = .empty,
     where_statement_type_decl: std.ArrayList(StatementTypeDeclAfterWhereState) = .empty,
     where_clause_type: std.ArrayList(WhereClauseTypeState) = .empty,
-    pattern_string: std.ArrayList(PatternStringState) = .empty,
     pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
     pattern_list: std.ArrayList(PatternListState) = .empty,
     pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
@@ -2756,7 +2840,6 @@ fn runExprStatementKernel(
     var pattern_record_state: PatternRecordState = undefined;
     var pattern_tuple_state: PatternTupleState = undefined;
     var pattern_alternatives = if (root == .pattern) root_pattern_alternatives else Alternatives.alternatives_forbidden;
-    var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = switch (root) {
         .statement, .associated_block => root_statement_type,
@@ -3728,16 +3811,6 @@ fn runExprStatementKernel(
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         continue :expr_kernel .statement_complete;
-                    },
-                    .pattern_string => {
-                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
-                        last_expr = null;
-                        last_pattern = try self.store.addPattern(.{ .string = .{
-                            .string_tok = pattern_string_state.start,
-                            .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                            .expr = completed,
-                        } });
-                        continue :expr_kernel .pattern_complete;
                     },
                 }
             }
@@ -5370,16 +5443,8 @@ fn runExprStatementKernel(
                     continue :expr_kernel .pattern_complete;
                 }
                 if (tok == .StringStart) {
-                    const start = self.pos;
-                    self.advance();
-                    try open_syntax.pushExpr(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
-                    expr_string_state = .{
-                        .start = start,
-                        .min_bp = null,
-                        .scratch_top = self.store.scratchExprTop(),
-                        .multiline = false,
-                    };
-                    continue :expr_kernel .string_next;
+                    last_pattern = try self.parsePatternString();
+                    continue :expr_kernel .pattern_complete;
                 }
                 if (tok == .SingleQuote) {
                     const start = self.pos;
@@ -5844,7 +5909,7 @@ fn runExprStatementKernel(
             .DoubleDot => {
                 const field_start = self.pos;
                 self.advance();
-                var name: u32 = 0;
+                var name: ?Token.Idx = null;
                 if (self.peek() == .LowerIdent) {
                     name = self.pos;
                     self.advance();

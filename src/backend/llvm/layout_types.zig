@@ -12,7 +12,7 @@
 //! - ZST (zero-sized types) → void/i1 placeholder
 
 const std = @import("std");
-const Builder = @import("Builder.zig");
+const Builder = @import("vendor_llvm_ir").Builder;
 const layout = @import("../../layout/mod.zig");
 const types = @import("../../types/types.zig");
 

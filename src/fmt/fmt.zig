@@ -1099,6 +1099,25 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
+    fn formatPatternString(fmt: *Formatter, str: anytype) anyerror!void {
+        try fmt.push('"');
+        for (fmt.ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+            switch (fmt.ast.store.getPatternStringPart(part_idx)) {
+                .text => |text| try fmt.pushTokenText(text.token),
+                .capture => |capture| {
+                    try fmt.pushAll("${");
+                    if (capture.name) |name| {
+                        try fmt.pushTokenText(name);
+                    } else {
+                        try fmt.push('_');
+                    }
+                    try fmt.push('}');
+                },
+            }
+        }
+        try fmt.push('"');
+    }
+
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
     }
@@ -1808,17 +1827,18 @@ const Formatter = struct {
         }
         if (field.rest) {
             try fmt.pushAll("..");
-            if (multiline and try fmt.flushCommentsBefore(field.name)) {
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            }
-            if (field.name != 0) {
-                try fmt.pushTokenText(field.name);
+            if (field.name) |name_tok| {
+                if (multiline and try fmt.flushCommentsBefore(name_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(name_tok);
             }
         } else {
-            try fmt.pushTokenText(field.name);
+            const name_tok = field.name orelse unreachable;
+            try fmt.pushTokenText(name_tok);
             if (field.value) |v| {
-                if (multiline and try fmt.flushCommentsAfter(field.name)) {
+                if (multiline and try fmt.flushCommentsAfter(name_tok)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
@@ -1867,7 +1887,7 @@ const Formatter = struct {
             },
             .string => |s| {
                 region = s.region;
-                try fmt.formatExprDiscard(s.expr);
+                try fmt.formatPatternString(s);
             },
             .single_quote => |sq| {
                 region = sq.region;

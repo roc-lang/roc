@@ -71,6 +71,18 @@ pub const RecordDestruct = struct {
     pattern: PatId,
 };
 
+/// List destructuring pattern: fixed element patterns plus an optional rest.
+pub const ListPattern = struct {
+    patterns: Span(PatId),
+    rest: ?ListRestPattern,
+};
+
+/// `..`/`.. as name` portion of a list pattern.
+pub const ListRestPattern = struct {
+    index: u32,
+    pattern: ?PatId,
+};
+
 /// Read of one capture from a capture record.
 pub const CaptureSlot = struct {
     record: ExprId,
@@ -229,6 +241,7 @@ pub const PatData = union(enum) {
     },
     record: Span(RecordDestruct),
     tuple: Span(PatId),
+    list: ListPattern,
     tag: struct {
         name: Type.names.TagNameId,
         payloads: Span(PatId),
@@ -243,6 +256,23 @@ pub const PatData = union(enum) {
     frac_f32_lit: f32,
     frac_f64_lit: f64,
     str_lit: StringLiteralId,
+    str_pattern: StrPattern,
+};
+
+/// End behavior for a Lambda Mono string interpolation pattern.
+pub const StrPatternEnd = Mono.StrPatternEnd;
+
+/// Lambda Mono string interpolation pattern with lowered string literals.
+pub const StrPattern = struct {
+    prefix: StringLiteralId,
+    steps: Span(StrPatternStep),
+    end: StrPatternEnd,
+};
+
+/// Delimited capture step inside a Lambda Mono string interpolation pattern.
+pub const StrPatternStep = struct {
+    capture: ?PatId,
+    delimiter: StringLiteralId,
 };
 
 /// Match branch.
@@ -327,6 +357,7 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     record_destructs: std.ArrayList(RecordDestruct),
+    str_pattern_steps: std.ArrayList(StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
@@ -370,6 +401,7 @@ pub const Program = struct {
             .stmt_ids = .empty,
             .field_exprs = .empty,
             .record_destructs = .empty,
+            .str_pattern_steps = .empty,
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = string_literals,
@@ -407,6 +439,7 @@ pub const Program = struct {
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
+        self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -552,6 +585,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStrPatternStepSpan(self: *Program, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
+        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        try self.str_pattern_steps.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         const start: u32 = @intCast(self.branches.items.len);
         try self.branches.appendSlice(self.allocator, values);
@@ -586,6 +625,10 @@ pub const Program = struct {
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(StrPatternStep)) []const StrPatternStep {
+        return self.str_pattern_steps.items[span_.start..][0..span_.len];
     }
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {

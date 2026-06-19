@@ -988,16 +988,16 @@ test "redundant - record second pattern unreachable with different field order" 
 }
 
 test "exhaustive - record patterns with different field subsets" {
-    // Patterns that destructure different subsets of fields should work correctly.
-    // The exhaustiveness checker should understand that unmentioned fields are wildcards.
+    // Patterns that destructure different subsets of fields with `..` should work correctly.
+    // The exhaustiveness checker should treat the `..`-covered fields as wildcards.
     const source =
         \\x : { name: Str, age: I64, score: I64 }
         \\x = { name: "Alice", age: 30, score: 100 }
         \\
         \\result = match x {
-        \\    { name: "Alice" } => "alice"
-        \\    { age: 30 } => "thirty"
-        \\    { score: 100 } => "perfect"
+        \\    { name: "Alice", .. } => "alice"
+        \\    { age: 30, .. } => "thirty"
+        \\    { score: 100, .. } => "perfect"
         \\    _ => "other"
         \\}
     ;

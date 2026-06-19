@@ -103,7 +103,7 @@ const Encoding = struct {
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
-        return self.count();
+        return @intCast(self.ranges.items.items.len);
     }
     pub fn cellForId(id: Id) Cell {
         return id + 1;

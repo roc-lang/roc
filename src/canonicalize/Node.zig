@@ -156,6 +156,7 @@ pub const Tag = enum {
     pattern_f64_literal,
     pattern_small_dec_literal,
     pattern_str_literal,
+    pattern_str_interpolation,
     pattern_underscore,
 
     // Lambda Capture
@@ -202,6 +203,7 @@ pub const Tag = enum {
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,
+    diag_unreachable_string_pattern_capture,
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
     diag_can_lambda_not_implemented,
@@ -261,11 +263,11 @@ pub const Tag = enum {
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,
+    diag_infinite_loop_never_exits,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
-    diag_infinite_loop_never_exits,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -353,6 +355,7 @@ pub const Payload = extern union {
     pattern_small_dec_literal: PatternSmallDecLiteral,
     pattern_dec_literal: PatternDecLiteral,
     pattern_str_literal: PatternStrLiteral,
+    pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
     pattern_frac_f64: PatternFracF64,
     pattern_malformed: PatternMalformed,
@@ -864,6 +867,11 @@ pub const Payload = extern union {
 
     pub const PatternStrLiteral = extern struct {
         literal: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    pub const PatternStrInterpolation = extern struct {
+        data_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 

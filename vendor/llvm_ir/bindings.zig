@@ -11,24 +11,22 @@
 //!
 //! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
-/// LLVM boolean type compatible with C int. Do not compare directly to .True, use toBool() instead.
+/// Do not compare directly to .True, use toBool() instead.
 pub const Bool = enum(c_int) {
     False,
     True,
     _,
 
-    /// Converts a Zig bool to LLVM Bool.
     pub fn fromBool(b: bool) Bool {
         return @enumFromInt(@intFromBool(b));
     }
 
-    /// Converts an LLVM Bool to a Zig bool.
     pub fn toBool(self: Bool) bool {
         return self != .False;
     }
 };
 
-/// Opaque handle to an LLVM memory buffer for holding bitcode or other data.
+/// LLVM memory buffer for reading bitcode and other data from memory.
 pub const MemoryBuffer = opaque {
     pub const createMemoryBufferWithMemoryRange = LLVMCreateMemoryBufferWithMemoryRange;
     pub const dispose = LLVMDisposeMemoryBuffer;
@@ -67,7 +65,10 @@ pub const Context = opaque {
     extern fn LLVMIntTypeInContext(C: *Context, NumBits: c_uint) *Type;
 };
 
-/// Opaque handle to an LLVM module containing functions, globals, and metadata.
+/// LLVM Value - the base type of all values computed by a program.
+pub const Value = opaque {};
+
+/// LLVM Module - contains functions, global variables, and symbol table.
 pub const Module = opaque {
     pub const dispose = LLVMDisposeModule;
     extern fn LLVMDisposeModule(*Module) void;
@@ -75,94 +76,21 @@ pub const Module = opaque {
     pub const setTargetTriple = LLVMSetTarget;
     extern fn LLVMSetTarget(M: *Module, Triple: [*:0]const u8) void;
 
-    pub const getTargetTriple = LLVMGetTarget;
-    extern fn LLVMGetTarget(M: *const Module) [*:0]const u8;
-
     pub const setDataLayout = LLVMSetDataLayout;
     extern fn LLVMSetDataLayout(M: *Module, DataLayoutStr: [*:0]const u8) void;
 
     pub const getDataLayout = LLVMGetDataLayoutStr;
     extern fn LLVMGetDataLayoutStr(M: *const Module) [*:0]const u8;
 
-    /// Links the source module into this module.
-    /// The source module is destroyed after a successful link.
-    /// Returns true on error, false on success.
-    pub const link = LLVMLinkModules2;
-    extern fn LLVMLinkModules2(Dest: *Module, Src: *Module) Bool;
-
-    pub const verify = LLVMVerifyModule;
-    extern fn LLVMVerifyModule(M: *Module, Action: VerifierFailureAction, OutMessage: *[*:0]const u8) Bool;
-
-    pub const getFirstFunction = LLVMGetFirstFunction;
-    extern fn LLVMGetFirstFunction(M: *Module) ?*Value;
-
-    pub const getFirstGlobal = LLVMGetFirstGlobal;
-    extern fn LLVMGetFirstGlobal(M: *Module) ?*Value;
-
-    pub const getFirstGlobalAlias = LLVMGetFirstGlobalAlias;
-    extern fn LLVMGetFirstGlobalAlias(M: *Module) ?*Value;
-
     pub const getNamedGlobal = LLVMGetNamedGlobal;
     extern fn LLVMGetNamedGlobal(M: *Module, Name: [*:0]const u8) ?*Value;
 };
 
-/// Opaque handle to an LLVM value.
-pub const Value = opaque {
-    pub const getNextFunction = LLVMGetNextFunction;
-    extern fn LLVMGetNextFunction(FnVal: *Value) ?*Value;
-
-    pub const getNextGlobal = LLVMGetNextGlobal;
-    extern fn LLVMGetNextGlobal(Global: *Value) ?*Value;
-
-    pub const getNextGlobalAlias = LLVMGetNextGlobalAlias;
-    extern fn LLVMGetNextGlobalAlias(Alias: *Value) ?*Value;
-
-    pub const getName = LLVMGetValueName2;
-    extern fn LLVMGetValueName2(Val: *Value, Len: *usize) [*]const u8;
-
-    pub const isDeclaration = LLVMIsDeclaration;
-    extern fn LLVMIsDeclaration(Global: *Value) Bool;
-
-    pub const setLinkage = LLVMSetLinkage;
-    extern fn LLVMSetLinkage(Global: *Value, Linkage: c_int) void;
-
-    pub const aliasGetAliasee = LLVMAliasGetAliasee;
-    extern fn LLVMAliasGetAliasee(Alias: *Value) ?*Value;
-
-    pub const replaceAllUsesWith = LLVMReplaceAllUsesWith;
-    extern fn LLVMReplaceAllUsesWith(OldVal: *Value, NewVal: *Value) void;
-
-    pub const removeStringAttributeAtIndex = LLVMRemoveStringAttributeAtIndex;
-    extern fn LLVMRemoveStringAttributeAtIndex(FnVal: *Value, Idx: c_uint, Name: [*]const u8, Len: c_uint) void;
-
-    pub const deleteGlobal = LLVMDeleteGlobal;
-    extern fn LLVMDeleteGlobal(GlobalVar: *Value) void;
-};
-
-/// Runs LLVM global dead-code elimination on a module whose unused definitions
-/// have already been made internal.
-pub const runGlobalDCE = ZigLLVMRunGlobalDCE;
-extern fn ZigLLVMRunGlobalDCE(module: *Module) void;
-
-/// LLVM-C linkage value for `internal`: a local definition, never an exported
-/// symbol, and discarded by global DCE when unused.
-pub const internal_linkage: c_int = 8;
-
-/// LLVM-C attribute index for function-level attributes (`~0U`).
-pub const attribute_function_index: c_uint = 0xFFFFFFFF;
-
-/// Controls how LLVM reports module verifier failures.
-pub const VerifierFailureAction = enum(c_int) {
-    AbortProcess,
-    PrintMessage,
-    ReturnStatus,
-};
-
-/// Frees a message string allocated by LLVM.
+/// Frees an error message string returned by LLVM.
 pub const disposeMessage = LLVMDisposeMessage;
 extern fn LLVMDisposeMessage(Message: [*:0]const u8) void;
 
-/// Opaque handle to an LLVM target machine for code generation to a specific architecture.
+/// LLVM target machine for code generation with specific CPU features and options.
 pub const TargetMachine = opaque {
     pub const FloatABI = enum(c_int) {
         /// Target-specific (either soft or hard depending on triple, etc).
@@ -256,7 +184,7 @@ pub const TargetMachine = opaque {
     extern fn LLVMCreateTargetDataLayout(*TargetMachine) *TargetData;
 };
 
-/// Opaque handle to LLVM target data layout information.
+/// LLVM target data layout describing sizes, alignments, and address spaces.
 pub const TargetData = opaque {
     pub const dispose = LLVMDisposeTargetData;
     extern fn LLVMDisposeTargetData(*TargetData) void;
@@ -268,10 +196,10 @@ pub const TargetData = opaque {
     extern fn LLVMCopyStringRepOfTargetData(*TargetData) [*:0]const u8;
 };
 
-/// Opaque handle to an LLVM type (integer, float, struct, etc.).
+/// Opaque LLVM type reference used by the C API.
 pub const Type = opaque {};
 
-/// LLVM code model controlling address space assumptions for code generation.
+/// Code model for code generation affecting addressing modes and code placement.
 pub const CodeModel = enum(c_int) {
     Default,
     JITDefault,
@@ -282,7 +210,7 @@ pub const CodeModel = enum(c_int) {
     Large,
 };
 
-/// LLVM optimization level for code generation passes.
+/// Optimization level for code generation.
 pub const CodeGenOptLevel = enum(c_int) {
     None,
     Less,
@@ -303,7 +231,7 @@ pub const IrOptimizationLevel = enum(c_int) {
     }
 };
 
-/// LLVM relocation model for position-independent code generation.
+/// Relocation model controlling how symbols are addressed.
 pub const RelocMode = enum(c_int) {
     Default,
     Static,
@@ -314,202 +242,198 @@ pub const RelocMode = enum(c_int) {
     ROPI_RWPI,
 };
 
-/// Opaque handle to an LLVM target representing a specific architecture.
+/// LLVM target representing a specific architecture and OS combination.
 pub const Target = opaque {
     pub const getFromTriple = LLVMGetTargetFromTriple;
     extern fn LLVMGetTargetFromTriple(Triple: [*:0]const u8, T: **Target, ErrorMessage: *[*:0]const u8) Bool;
 };
 
-/// Initializes all LLVM targets (architectures) for code generation.
+/// Zig's custom target initialization function that initializes all targets.
 pub const initializeAllTargets = ZigLLVMInitializeAllTargets;
 extern fn ZigLLVMInitializeAllTargets() void;
 
-// Individual target initialization functions (standard LLVM C API)
-// These register target info, codegen, machine code, asm printer, and asm parser
-// components for each supported architecture.
-
-/// Initializes AArch64 (ARM64) target information.
+/// Initialize target info for AArch64 (ARM 64-bit) architecture.
 pub extern fn LLVMInitializeAArch64TargetInfo() void;
-/// Initializes AMD GPU target information.
+/// Initialize target info for AMD GPU architecture.
 pub extern fn LLVMInitializeAMDGPUTargetInfo() void;
-/// Initializes ARM (32-bit) target information.
+/// Initialize target info for ARM (32-bit) architecture.
 pub extern fn LLVMInitializeARMTargetInfo() void;
-/// Initializes AVR microcontroller target information.
+/// Initialize target info for AVR microcontroller architecture.
 pub extern fn LLVMInitializeAVRTargetInfo() void;
-/// Initializes BPF (Berkeley Packet Filter) target information.
+/// Initialize target info for BPF (Berkeley Packet Filter) architecture.
 pub extern fn LLVMInitializeBPFTargetInfo() void;
-/// Initializes Hexagon DSP target information.
+/// Initialize target info for Hexagon DSP architecture.
 pub extern fn LLVMInitializeHexagonTargetInfo() void;
-/// Initializes Lanai target information.
+/// Initialize target info for Lanai architecture.
 pub extern fn LLVMInitializeLanaiTargetInfo() void;
-/// Initializes MIPS target information.
+/// Initialize target info for MIPS architecture.
 pub extern fn LLVMInitializeMipsTargetInfo() void;
-/// Initializes MSP430 microcontroller target information.
+/// Initialize target info for MSP430 microcontroller architecture.
 pub extern fn LLVMInitializeMSP430TargetInfo() void;
-/// Initializes NVIDIA PTX target information.
+/// Initialize target info for NVIDIA PTX architecture.
 pub extern fn LLVMInitializeNVPTXTargetInfo() void;
-/// Initializes PowerPC target information.
+/// Initialize target info for PowerPC architecture.
 pub extern fn LLVMInitializePowerPCTargetInfo() void;
-/// Initializes RISC-V target information.
+/// Initialize target info for RISC-V architecture.
 pub extern fn LLVMInitializeRISCVTargetInfo() void;
-/// Initializes SPARC target information.
+/// Initialize target info for SPARC architecture.
 pub extern fn LLVMInitializeSparcTargetInfo() void;
-/// Initializes SystemZ (s390x) target information.
+/// Initialize target info for SystemZ (IBM Z) architecture.
 pub extern fn LLVMInitializeSystemZTargetInfo() void;
-/// Initializes WebAssembly target information.
+/// Initialize target info for WebAssembly architecture.
 pub extern fn LLVMInitializeWebAssemblyTargetInfo() void;
-/// Initializes x86/x86-64 target information.
+/// Initialize target info for x86 architecture.
 pub extern fn LLVMInitializeX86TargetInfo() void;
-/// Initializes XCore target information.
+/// Initialize target info for XCore architecture.
 pub extern fn LLVMInitializeXCoreTargetInfo() void;
-/// Initializes LoongArch target information.
+/// Initialize target info for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchTargetInfo() void;
 
-/// Initializes AArch64 code generation.
+/// Initialize code generation for AArch64 architecture.
 pub extern fn LLVMInitializeAArch64Target() void;
-/// Initializes AMD GPU code generation.
+/// Initialize code generation for AMD GPU architecture.
 pub extern fn LLVMInitializeAMDGPUTarget() void;
-/// Initializes ARM code generation.
+/// Initialize code generation for ARM architecture.
 pub extern fn LLVMInitializeARMTarget() void;
-/// Initializes AVR code generation.
+/// Initialize code generation for AVR architecture.
 pub extern fn LLVMInitializeAVRTarget() void;
-/// Initializes BPF code generation.
+/// Initialize code generation for BPF architecture.
 pub extern fn LLVMInitializeBPFTarget() void;
-/// Initializes Hexagon code generation.
+/// Initialize code generation for Hexagon architecture.
 pub extern fn LLVMInitializeHexagonTarget() void;
-/// Initializes Lanai code generation.
+/// Initialize code generation for Lanai architecture.
 pub extern fn LLVMInitializeLanaiTarget() void;
-/// Initializes MIPS code generation.
+/// Initialize code generation for MIPS architecture.
 pub extern fn LLVMInitializeMipsTarget() void;
-/// Initializes MSP430 code generation.
+/// Initialize code generation for MSP430 architecture.
 pub extern fn LLVMInitializeMSP430Target() void;
-/// Initializes NVIDIA PTX code generation.
+/// Initialize code generation for NVIDIA PTX architecture.
 pub extern fn LLVMInitializeNVPTXTarget() void;
-/// Initializes PowerPC code generation.
+/// Initialize code generation for PowerPC architecture.
 pub extern fn LLVMInitializePowerPCTarget() void;
-/// Initializes RISC-V code generation.
+/// Initialize code generation for RISC-V architecture.
 pub extern fn LLVMInitializeRISCVTarget() void;
-/// Initializes SPARC code generation.
+/// Initialize code generation for SPARC architecture.
 pub extern fn LLVMInitializeSparcTarget() void;
-/// Initializes SystemZ code generation.
+/// Initialize code generation for SystemZ architecture.
 pub extern fn LLVMInitializeSystemZTarget() void;
-/// Initializes WebAssembly code generation.
+/// Initialize code generation for WebAssembly architecture.
 pub extern fn LLVMInitializeWebAssemblyTarget() void;
-/// Initializes x86/x86-64 code generation.
+/// Initialize code generation for x86 architecture.
 pub extern fn LLVMInitializeX86Target() void;
-/// Initializes XCore code generation.
+/// Initialize code generation for XCore architecture.
 pub extern fn LLVMInitializeXCoreTarget() void;
-/// Initializes LoongArch code generation.
+/// Initialize code generation for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchTarget() void;
 
-/// Initializes AArch64 machine code components.
+/// Initialize machine code components for AArch64 architecture.
 pub extern fn LLVMInitializeAArch64TargetMC() void;
-/// Initializes AMD GPU machine code components.
+/// Initialize machine code components for AMD GPU architecture.
 pub extern fn LLVMInitializeAMDGPUTargetMC() void;
-/// Initializes ARM machine code components.
+/// Initialize machine code components for ARM architecture.
 pub extern fn LLVMInitializeARMTargetMC() void;
-/// Initializes AVR machine code components.
+/// Initialize machine code components for AVR architecture.
 pub extern fn LLVMInitializeAVRTargetMC() void;
-/// Initializes BPF machine code components.
+/// Initialize machine code components for BPF architecture.
 pub extern fn LLVMInitializeBPFTargetMC() void;
-/// Initializes Hexagon machine code components.
+/// Initialize machine code components for Hexagon architecture.
 pub extern fn LLVMInitializeHexagonTargetMC() void;
-/// Initializes Lanai machine code components.
+/// Initialize machine code components for Lanai architecture.
 pub extern fn LLVMInitializeLanaiTargetMC() void;
-/// Initializes MIPS machine code components.
+/// Initialize machine code components for MIPS architecture.
 pub extern fn LLVMInitializeMipsTargetMC() void;
-/// Initializes MSP430 machine code components.
+/// Initialize machine code components for MSP430 architecture.
 pub extern fn LLVMInitializeMSP430TargetMC() void;
-/// Initializes NVIDIA PTX machine code components.
+/// Initialize machine code components for NVIDIA PTX architecture.
 pub extern fn LLVMInitializeNVPTXTargetMC() void;
-/// Initializes PowerPC machine code components.
+/// Initialize machine code components for PowerPC architecture.
 pub extern fn LLVMInitializePowerPCTargetMC() void;
-/// Initializes RISC-V machine code components.
+/// Initialize machine code components for RISC-V architecture.
 pub extern fn LLVMInitializeRISCVTargetMC() void;
-/// Initializes SPARC machine code components.
+/// Initialize machine code components for SPARC architecture.
 pub extern fn LLVMInitializeSparcTargetMC() void;
-/// Initializes SystemZ machine code components.
+/// Initialize machine code components for SystemZ architecture.
 pub extern fn LLVMInitializeSystemZTargetMC() void;
-/// Initializes WebAssembly machine code components.
+/// Initialize machine code components for WebAssembly architecture.
 pub extern fn LLVMInitializeWebAssemblyTargetMC() void;
-/// Initializes x86/x86-64 machine code components.
+/// Initialize machine code components for x86 architecture.
 pub extern fn LLVMInitializeX86TargetMC() void;
-/// Initializes XCore machine code components.
+/// Initialize machine code components for XCore architecture.
 pub extern fn LLVMInitializeXCoreTargetMC() void;
-/// Initializes LoongArch machine code components.
+/// Initialize machine code components for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchTargetMC() void;
 
-/// Initializes AArch64 assembly printer.
+/// Initialize assembly printer for AArch64 architecture.
 pub extern fn LLVMInitializeAArch64AsmPrinter() void;
-/// Initializes AMD GPU assembly printer.
+/// Initialize assembly printer for AMD GPU architecture.
 pub extern fn LLVMInitializeAMDGPUAsmPrinter() void;
-/// Initializes ARM assembly printer.
+/// Initialize assembly printer for ARM architecture.
 pub extern fn LLVMInitializeARMAsmPrinter() void;
-/// Initializes AVR assembly printer.
+/// Initialize assembly printer for AVR architecture.
 pub extern fn LLVMInitializeAVRAsmPrinter() void;
-/// Initializes BPF assembly printer.
+/// Initialize assembly printer for BPF architecture.
 pub extern fn LLVMInitializeBPFAsmPrinter() void;
-/// Initializes Hexagon assembly printer.
+/// Initialize assembly printer for Hexagon architecture.
 pub extern fn LLVMInitializeHexagonAsmPrinter() void;
-/// Initializes Lanai assembly printer.
+/// Initialize assembly printer for Lanai architecture.
 pub extern fn LLVMInitializeLanaiAsmPrinter() void;
-/// Initializes MIPS assembly printer.
+/// Initialize assembly printer for MIPS architecture.
 pub extern fn LLVMInitializeMipsAsmPrinter() void;
-/// Initializes MSP430 assembly printer.
+/// Initialize assembly printer for MSP430 architecture.
 pub extern fn LLVMInitializeMSP430AsmPrinter() void;
-/// Initializes NVIDIA PTX assembly printer.
+/// Initialize assembly printer for NVIDIA PTX architecture.
 pub extern fn LLVMInitializeNVPTXAsmPrinter() void;
-/// Initializes PowerPC assembly printer.
+/// Initialize assembly printer for PowerPC architecture.
 pub extern fn LLVMInitializePowerPCAsmPrinter() void;
-/// Initializes RISC-V assembly printer.
+/// Initialize assembly printer for RISC-V architecture.
 pub extern fn LLVMInitializeRISCVAsmPrinter() void;
-/// Initializes SPARC assembly printer.
+/// Initialize assembly printer for SPARC architecture.
 pub extern fn LLVMInitializeSparcAsmPrinter() void;
-/// Initializes SystemZ assembly printer.
+/// Initialize assembly printer for SystemZ architecture.
 pub extern fn LLVMInitializeSystemZAsmPrinter() void;
-/// Initializes WebAssembly assembly printer.
+/// Initialize assembly printer for WebAssembly architecture.
 pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
-/// Initializes x86/x86-64 assembly printer.
+/// Initialize assembly printer for x86 architecture.
 pub extern fn LLVMInitializeX86AsmPrinter() void;
-/// Initializes XCore assembly printer.
+/// Initialize assembly printer for XCore architecture.
 pub extern fn LLVMInitializeXCoreAsmPrinter() void;
-/// Initializes LoongArch assembly printer.
+/// Initialize assembly printer for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchAsmPrinter() void;
 
-/// Initializes AArch64 assembly parser.
+/// Initialize assembly parser for AArch64 architecture.
 pub extern fn LLVMInitializeAArch64AsmParser() void;
-/// Initializes AMD GPU assembly parser.
+/// Initialize assembly parser for AMD GPU architecture.
 pub extern fn LLVMInitializeAMDGPUAsmParser() void;
-/// Initializes ARM assembly parser.
+/// Initialize assembly parser for ARM architecture.
 pub extern fn LLVMInitializeARMAsmParser() void;
-/// Initializes AVR assembly parser.
+/// Initialize assembly parser for AVR architecture.
 pub extern fn LLVMInitializeAVRAsmParser() void;
-/// Initializes BPF assembly parser.
+/// Initialize assembly parser for BPF architecture.
 pub extern fn LLVMInitializeBPFAsmParser() void;
-/// Initializes Hexagon assembly parser.
+/// Initialize assembly parser for Hexagon architecture.
 pub extern fn LLVMInitializeHexagonAsmParser() void;
-/// Initializes Lanai assembly parser.
+/// Initialize assembly parser for Lanai architecture.
 pub extern fn LLVMInitializeLanaiAsmParser() void;
-/// Initializes MIPS assembly parser.
+/// Initialize assembly parser for MIPS architecture.
 pub extern fn LLVMInitializeMipsAsmParser() void;
-/// Initializes MSP430 assembly parser.
+/// Initialize assembly parser for MSP430 architecture.
 pub extern fn LLVMInitializeMSP430AsmParser() void;
-/// Initializes PowerPC assembly parser.
+/// Initialize assembly parser for PowerPC architecture.
 pub extern fn LLVMInitializePowerPCAsmParser() void;
-/// Initializes RISC-V assembly parser.
+/// Initialize assembly parser for RISC-V architecture.
 pub extern fn LLVMInitializeRISCVAsmParser() void;
-/// Initializes SPARC assembly parser.
+/// Initialize assembly parser for SPARC architecture.
 pub extern fn LLVMInitializeSparcAsmParser() void;
-/// Initializes SystemZ assembly parser.
+/// Initialize assembly parser for SystemZ architecture.
 pub extern fn LLVMInitializeSystemZAsmParser() void;
-/// Initializes WebAssembly assembly parser.
+/// Initialize assembly parser for WebAssembly architecture.
 pub extern fn LLVMInitializeWebAssemblyAsmParser() void;
-/// Initializes x86/x86-64 assembly parser.
+/// Initialize assembly parser for x86 architecture.
 pub extern fn LLVMInitializeX86AsmParser() void;
-/// Initializes LoongArch assembly parser.
+/// Initialize assembly parser for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchAsmParser() void;
 
-/// Archive file format types supported by LLVM.
+/// Archive file format variants for creating static libraries.
 pub const ArchiveKind = enum(c_int) {
     GNU,
     GNU64,
@@ -520,7 +444,7 @@ pub const ArchiveKind = enum(c_int) {
     AIXBIG,
 };
 
-/// Creates a static archive file from a list of object files.
+/// Create a static library archive from the given object files.
 pub const WriteArchive = ZigLLVMWriteArchive;
 extern fn ZigLLVMWriteArchive(
     archive_name: [*:0]const u8,
@@ -529,22 +453,17 @@ extern fn ZigLLVMWriteArchive(
     archive_kind: ArchiveKind,
 ) bool;
 
-/// Parses LLVM command-line options for debugging and configuration.
+/// Parse LLVM command line options for configuring optimization and codegen behavior.
 pub const ParseCommandLineOptions = ZigLLVMParseCommandLineOptions;
 extern fn ZigLLVMParseCommandLineOptions(argc: usize, argv: [*]const [*:0]const u8) void;
 
-/// Returns the name of the host CPU (e.g., "skylake", "apple-m1").
+/// Get the name of the host CPU (e.g., "skylake", "apple-m1").
 pub const GetHostCPUName = LLVMGetHostCPUName;
 extern fn LLVMGetHostCPUName() ?[*:0]u8;
 
-/// Returns the feature string for the host CPU (e.g., "+sse4.2,+avx").
+/// Get the feature string for the host CPU (e.g., "+avx2,+sse4.2").
 pub const GetHostCPUFeatures = LLVMGetHostCPUFeatures;
 extern fn LLVMGetHostCPUFeatures() ?[*:0]u8;
-
-/// Returns the default target triple for the host (e.g., "x86_64-unknown-linux-gnu").
-/// The returned string must be freed with disposeMessage.
-pub const GetDefaultTargetTriple = LLVMGetDefaultTargetTriple;
-extern fn LLVMGetDefaultTargetTriple() [*:0]u8;
 
 /// High-level function to compile bitcode to an object file.
 /// Returns an error message on failure, null on success.

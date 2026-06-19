@@ -5524,6 +5524,18 @@ pub const CheckedListRestPattern = struct {
     pattern: ?CheckedPatternId,
 };
 
+/// End behavior for a checked string interpolation pattern.
+pub const CheckedStrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Delimited capture step inside a checked string interpolation pattern.
+pub const CheckedStrPatternStep = struct {
+    capture: ?CheckedPatternId,
+    delimiter: CheckedStringLiteralId,
+};
+
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
@@ -5600,6 +5612,11 @@ pub const CheckedPatternData = union(enum) {
         /// Synthesized `.str_from_quote` checked expression for matching this
         /// literal against a non-builtin string type; null on the Str fast path.
         conversion: ?CheckedExprId = null,
+    },
+    str_interpolation: struct {
+        prefix: CheckedStringLiteralId,
+        steps: []const CheckedStrPatternStep,
+        end: CheckedStrPatternEnd,
     },
     underscore,
     runtime_error,
@@ -5990,6 +6007,12 @@ pub const StoredCheckedPatternData = union(enum) {
         literal: CheckedStringLiteralId,
         conversion: ?CheckedExprId = null,
     },
+    str_interpolation: struct {
+        prefix: CheckedStringLiteralId,
+        /// Range into `CheckedBodyStore.str_pattern_step_pool` (transform B).
+        steps: CheckedBodyRange,
+        end: CheckedStrPatternEnd,
+    },
     underscore,
     runtime_error,
 };
@@ -6187,6 +6210,11 @@ fn reconstructCheckedPatternData(pool_owner: anytype, stored: StoredCheckedPatte
         .frac_f32_literal => |v| .{ .frac_f32_literal = v },
         .frac_f64_literal => |v| .{ .frac_f64_literal = v },
         .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .conversion = v.conversion } },
+        .str_interpolation => |s| .{ .str_interpolation = .{
+            .prefix = s.prefix,
+            .steps = pool_owner.strPatternStepPool()[s.steps.start .. s.steps.start + s.steps.len],
+            .end = s.end,
+        } },
     };
 }
 
@@ -6295,6 +6323,7 @@ pub const CheckedBodyStoreView = struct {
     binder_remap_pool: []const CheckedAlternativeBinderRemap = &.{},
     capture_pool: []const CheckedCapture = &.{},
     record_destruct_pool: []const CheckedRecordDestruct = &.{},
+    str_pattern_step_pool: []const CheckedStrPatternStep = &.{},
     interpolation_part_pool: []const CheckedInterpolationPart = &.{},
     string_bytes: []const u8 = &.{},
     string_ranges: []const canonical.NameInterner.Range = &.{},
@@ -6331,6 +6360,9 @@ pub const CheckedBodyStoreView = struct {
     }
     pub fn recordDestructPool(self: CheckedBodyStoreView) []const CheckedRecordDestruct {
         return self.record_destruct_pool;
+    }
+    pub fn strPatternStepPool(self: CheckedBodyStoreView) []const CheckedStrPatternStep {
+        return self.str_pattern_step_pool;
     }
     pub fn interpolationPartPool(self: CheckedBodyStoreView) []const CheckedInterpolationPart {
         return self.interpolation_part_pool;
@@ -6752,6 +6784,15 @@ const CheckedSourceNodes = struct {
                 }
             },
             .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.markPattern(capture, work);
+                    }
+                }
+            },
             .assign,
             .num_literal,
             .small_dec_literal,
@@ -6896,6 +6937,8 @@ pub const CheckedBodyStore = struct {
     capture_pool: std.ArrayList(CheckedCapture) = .empty,
     /// Flat pool of record destructs backing record_destructure patterns.
     record_destruct_pool: std.ArrayList(CheckedRecordDestruct) = .empty,
+    /// Flat pool of string-interpolation pattern steps backing str_interpolation patterns.
+    str_pattern_step_pool: std.ArrayList(CheckedStrPatternStep) = .empty,
     /// Flat pool of interpolation parts backing interpolation payloads.
     interpolation_part_pool: std.ArrayList(CheckedInterpolationPart) = .empty,
     /// Flat bytes pool backing string literals; `string_ranges` holds bounds.
@@ -7119,6 +7162,7 @@ pub const CheckedBodyStore = struct {
             .binder_remap_pool = self.binder_remap_pool.items,
             .capture_pool = self.capture_pool.items,
             .record_destruct_pool = self.record_destruct_pool.items,
+            .str_pattern_step_pool = self.str_pattern_step_pool.items,
             .interpolation_part_pool = self.interpolation_part_pool.items,
             .string_bytes = self.string_bytes.items,
             .string_ranges = self.string_ranges.items,
@@ -7160,6 +7204,9 @@ pub const CheckedBodyStore = struct {
     pub fn recordDestructPool(self: *const CheckedBodyStore) []const CheckedRecordDestruct {
         return self.record_destruct_pool.items;
     }
+    pub fn strPatternStepPool(self: *const CheckedBodyStore) []const CheckedStrPatternStep {
+        return self.str_pattern_step_pool.items;
+    }
     pub fn interpolationPartPool(self: *const CheckedBodyStore) []const CheckedInterpolationPart {
         return self.interpolation_part_pool.items;
     }
@@ -7194,6 +7241,10 @@ pub const CheckedBodyStore = struct {
 
     fn appendRecordDestructs(self: *CheckedBodyStore, allocator: Allocator, destructs: []const CheckedRecordDestruct) Allocator.Error!CheckedBodyRange {
         return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordDestruct, &self.record_destruct_pool, allocator, destructs);
+    }
+
+    fn appendStrPatternSteps(self: *CheckedBodyStore, allocator: Allocator, steps: []const CheckedStrPatternStep) Allocator.Error!CheckedBodyRange {
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedStrPatternStep, &self.str_pattern_step_pool, allocator, steps);
     }
 
     fn appendInterpolationParts(self: *CheckedBodyStore, allocator: Allocator, parts: []const CheckedInterpolationPart) Allocator.Error!CheckedBodyRange {
@@ -7320,6 +7371,11 @@ pub const CheckedBodyStore = struct {
             .frac_f32_literal => |v| .{ .frac_f32_literal = v },
             .frac_f64_literal => |v| .{ .frac_f64_literal = v },
             .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .conversion = v.conversion } },
+            .str_interpolation => |s| .{ .str_interpolation = .{
+                .prefix = s.prefix,
+                .steps = try self.appendStrPatternSteps(allocator, s.steps),
+                .end = s.end,
+            } },
         };
     }
 
@@ -7736,6 +7792,7 @@ pub const CheckedBodyStore = struct {
             self.binder_remap_pool.deinit(allocator);
             self.capture_pool.deinit(allocator);
             self.record_destruct_pool.deinit(allocator);
+            self.str_pattern_step_pool.deinit(allocator);
             self.interpolation_part_pool.deinit(allocator);
         }
         self.* = .{};
@@ -7767,14 +7824,15 @@ pub const CheckedBodyStore = struct {
         binder_remap_pool: SerializedSlice(CheckedAlternativeBinderRemap) = .{},
         capture_pool: SerializedSlice(CheckedCapture) = .{},
         record_destruct_pool: SerializedSlice(CheckedRecordDestruct) = .{},
+        str_pattern_step_pool: SerializedSlice(CheckedStrPatternStep) = .{},
         interpolation_part_pool: SerializedSlice(CheckedInterpolationPart) = .{},
         string_bytes: SerializedSlice(u8) = .{},
         string_ranges: SerializedSlice(canonical.NameInterner.Range) = .{},
 
         comptime {
-            // 20 SerializedSlice fields → 20 base-pointer fixups, independent of
+            // 21 SerializedSlice fields → 21 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 21);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -8729,6 +8787,14 @@ const CheckedBodyPayloadCopier = struct {
                 .literal = try self.string_builder.intern(str.literal),
                 .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
             } },
+            .str_interpolation => |str| .{ .str_interpolation = .{
+                .prefix = try self.string_builder.intern(str.prefix),
+                .steps = try self.copyStrPatternSteps(str.steps),
+                .end = switch (str.end) {
+                    .exact => .exact,
+                    .tail => .tail,
+                },
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -8800,6 +8866,20 @@ const CheckedBodyPayloadCopier = struct {
         if (source.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedPatternId, source.len);
         for (source, 0..) |pattern, i| out[i] = self.checkedPattern(pattern);
+        return out;
+    }
+
+    fn copyStrPatternSteps(self: *@This(), span: CIR.Pattern.StrPatternStep.Span) Allocator.Error![]const CheckedStrPatternStep {
+        if (span.span.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedStrPatternStep, span.span.len);
+        var step_offset: u32 = 0;
+        while (step_offset < span.span.len) : (step_offset += 1) {
+            const step = self.module.moduleEnvConst().store.getStrPatternStep(span, step_offset);
+            out[step_offset] = .{
+                .capture = if (step.capture) |capture| self.checkedPattern(capture) else null,
+                .delimiter = try self.string_builder.intern(step.delimiter),
+            };
+        }
         return out;
     }
 
@@ -8989,6 +9069,15 @@ const CheckedBodyPayloadCopier = struct {
                     try self.collectSourcePatternBinders(child, out);
                 }
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.collectSourcePatternBinders(capture, out);
+                    }
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -9063,6 +9152,13 @@ const CheckedBodyPayloadCopier = struct {
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.markSourcePatternBindersReassignable(child);
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.markSourcePatternBindersReassignable(capture);
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -9112,6 +9208,13 @@ const CheckedBodyPayloadCopier = struct {
             },
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.collectReassignedBinders(child, out);
+            },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.collectReassignedBinders(capture, out);
+                }
             },
             .num_literal,
             .small_dec_literal,
@@ -9501,6 +9604,7 @@ fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) voi
         .record_destructure => |destructs| allocator.free(destructs),
         .list => |list| allocator.free(list.patterns),
         .tuple => |patterns| allocator.free(patterns),
+        .str_interpolation => |str| allocator.free(str.steps),
     }
     data.* = .pending;
 }
@@ -11022,6 +11126,11 @@ const CheckedTemplateRefCollector = struct {
             .tuple => |items| {
                 for (items) |child| try self.collectPattern(child);
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.collectPattern(capture);
+                }
+            },
             .pending,
             .assign,
             .num_literal,
@@ -11721,6 +11830,11 @@ const NestedProcSiteBuilder = struct {
             },
             .tuple => |items| {
                 for (items) |child| try self.scanPattern(child, owner);
+            },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.scanPattern(capture, owner);
+                }
             },
             .pending,
             .assign,
@@ -17998,7 +18112,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 169);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 170);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -21420,8 +21534,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x86, 0x99, 0xF2, 0x18, 0x54, 0xFF, 0x4F, 0xDC, 0x2D, 0xEE, 0x5B, 0x41, 0xA6, 0x8A, 0x87, 0xE8,
-        0x15, 0xFF, 0x48, 0x64, 0x22, 0xBE, 0xBF, 0x4C, 0xB9, 0x4C, 0x4E, 0x19, 0x85, 0x86, 0x41, 0x5F,
+        0x65, 0xC1, 0x31, 0xA9, 0xAF, 0x1F, 0x6D, 0x18, 0x8A, 0xD7, 0x9A, 0x13, 0xA9, 0x6B, 0xCF, 0x34,
+        0x71, 0x44, 0x39, 0xAE, 0x7B, 0x4A, 0x48, 0x66, 0xAA, 0x60, 0x43, 0x1F, 0x8C, 0xC9, 0xEA, 0x4C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

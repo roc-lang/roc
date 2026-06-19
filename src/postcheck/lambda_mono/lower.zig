@@ -769,6 +769,13 @@ const Lowerer = struct {
             } },
             .record => |fields| .{ .record = try self.lowerRecordDestructSpan(fields) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
+            .list => |list| .{ .list = .{
+                .patterns = try self.lowerPatSpan(list.patterns),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPat(rest_pattern) else null,
+                } else null,
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.lowerPatSpan(tag.payloads),
@@ -779,10 +786,30 @@ const Lowerer = struct {
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .str_pattern => |str| .{ .str_pattern = try self.lowerStrPattern(str) },
         };
         const lowered = try self.program.addPat(.{ .ty = ty, .data = data });
         self.pat_map[index] = lowered;
         return lowered;
+    }
+
+    fn lowerStrPattern(self: *Lowerer, str: Lifted.StrPattern) Allocator.Error!Ast.StrPattern {
+        const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, input_steps.len);
+        defer self.allocator.free(steps);
+
+        for (input_steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPat(capture) else null,
+                .delimiter = step.delimiter,
+            };
+        }
+
+        return .{
+            .prefix = str.prefix,
+            .steps = try self.program.addStrPatternStepSpan(steps),
+            .end = str.end,
+        };
     }
 
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId) Allocator.Error!Ast.StmtId {

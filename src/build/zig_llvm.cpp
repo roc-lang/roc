@@ -359,15 +359,11 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     // Pipeline configurations
     const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = true;
-    pipeline_opts.SLPVectorization = true;
-    pipeline_opts.LoopVectorization = true;
-    pipeline_opts.LoopInterleaving = true;
-    pipeline_opts.MergeFunctions = true;
-    // HACK (experiment): crank the inliner threshold so LLVM inlines the
-    // specialized iterator/stream combinator steps into their drive loops,
-    // to observe what fusion/unrolling becomes possible. Not for production.
-    pipeline_opts.InlinerThreshold = 1000000;
+    pipeline_opts.LoopUnrolling = !options->is_debug;
+    pipeline_opts.SLPVectorization = !options->is_debug;
+    pipeline_opts.LoopVectorization = false; // https://github.com/llvm/llvm-project/issues/186922
+    pipeline_opts.LoopInterleaving = !options->is_debug;
+    pipeline_opts.MergeFunctions = !options->is_debug;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;

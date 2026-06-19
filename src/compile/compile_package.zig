@@ -354,6 +354,7 @@ fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool 
             .underscore_in_type_declaration,
             .module_header_deprecated,
             .deprecated_number_suffix,
+            .unreachable_string_pattern_capture,
             => {},
             else => return true,
         }
