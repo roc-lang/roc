@@ -560,7 +560,7 @@ maintain both systems side by side.
   field handle.
 - [ ] Add CLI test: unsupported structural field shape reports a checking error,
   not a post-check invariant.
-- [ ] Add CLI test: custom nominal `parser` is used inside a derived record.
+- [x] Add CLI test: custom nominal `parser` is used inside a derived record.
 - [ ] Add CLI test: structural record `parser` is callable directly.
 
 ## HTTP Header Regression Tests
@@ -658,7 +658,7 @@ maintain both systems side by side.
   - [ ] record field containing externally tagged union
   - [ ] tag payload containing record
   - [ ] nested record containing tag union
-- [ ] Keep JSON `null` out of scope except for tests proving plain `Str` does
+- [x] Keep JSON `null` out of scope except for tests proving plain `Str` does
   not accept it if current JSON tests include that behavior.
 
 ## Compile-Time Constant And Binary Data Tests

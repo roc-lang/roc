@@ -22,6 +22,7 @@ const invalid_empty_record_score: u64 = 37;
 const pair_score: u64 = 31;
 const trailing_empty_record_score: u64 = 41;
 const invalid_string_score: u64 = 43;
+const null_string_score: u64 = 47;
 
 const optional_fields = [_]OptionalField{
     .{ .name = "explicit_optional", .value = "abc" },
@@ -365,6 +366,7 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
         pair_score +
         trailing_empty_record_score +
         invalid_string_score +
+        null_string_score +
         status_scores[status_index] +
         mode_scores[mode_index];
     for (optional_fields, 0..) |field, index| {

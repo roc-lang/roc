@@ -37,6 +37,9 @@ main! = |json| {
 	invalid_string_result : Try(Str, _)
 	invalid_string_result = Json.parse("bare-json-string")
 
+	null_string_result : Try(Str, _)
+	null_string_result = Json.parse("null")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -85,6 +88,7 @@ main! = |json| {
 				+ trailing_empty_record_score(trailing_empty_result)
 				+ top_level_string_score(top_level_string_result)
 				+ invalid_string_score(invalid_string_result)
+				+ null_string_score(null_string_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -135,4 +139,11 @@ invalid_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
 		Err(_) => 43
+	}
+
+null_string_score : Try(Str, _) -> U64
+null_string_score = |string_result|
+	match string_result {
+		Ok(_) => 999999
+		Err(_) => 47
 	}
