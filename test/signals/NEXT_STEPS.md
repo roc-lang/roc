@@ -54,9 +54,10 @@ Ordered roughly by how much of the design they block.
 3. **`NodeValue` is still the value representation, with `encode`/`decode` in
    app code.** Every app type defines `encode`/`decode` against `NodeValue`, and
    `eval_signal` decodes erased values with `crash`-on-mismatch wrappers. The
-   design requires confined per-edge erasure (generated `Eq` / `Encode` /
-   `Decode` thunks pinned to the edge's types) so a mismatch is a compile error,
-   not a runtime crash.
+   design requires confined per-edge erasure (per-edge `is_eq` and, where a value
+   must serialize, `encode`/`decode` thunks resolved by static dispatch on the
+   edge's value type and pinned to it) so a mismatch is a compile error, not a
+   runtime crash.
 
 4. **The combinator zoo still exists.** `MapI64I64`, `MapI64Str`, `Map2I64I64`,
    `Map2I64I64Str`, `FoldI64`, `FoldBoolToggle`, and the `*_keyed` variants are
@@ -88,8 +89,10 @@ Ordered roughly by how much of the design they block.
    carries the design counter names (`nodes_recomputed`,
    `propagation_prunes`, `derived_calls_into_roc`, `patches_emitted`, row/scope
    and closure counters). Scope, closure, and true row-reuse counters remain
-   zero until later phases output that lifecycle data, and host-side Eq-pruned
-   dependent scheduling is still pending.
+   zero until later phases output that lifecycle data. Source-level equal-output
+   pruning now suppresses downstream recompute work in the Roc recompute plan;
+   full per-edge `is_eq` thunk pruning is still pending until confined erasure
+   moves typed edge thunks into the runtime.
 
 9. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
    `Ui.on_change`, `Ui.on_cleanup` are unimplemented. (Lowest priority; the
@@ -116,14 +119,19 @@ building the new API on top, because if they fail the API shape changes:
   Build the nested-`when`-inside-`each`-inside-`when` stress harness and prove
   per-row/branch state is preserved or correctly disposed by minted id, before
   ripping out string keys app-wide.
-- **G3 — Eq-pruned glitch-free propagation.** The rank scheduler exists; add the
-  diamond test (`a->b`, `a->c`, `(b,c)->d`) and assert the join recomputes
-  exactly once per event, and A/B Eq-pruning on a high-fan-out
-  mostly-unchanged graph.
+- **G3 — `is_eq`-pruned glitch-free propagation.** The rank scheduler exists and
+  the Zig host has the diamond test (`a->b`, `a->c`, `(b,c)->d`) asserting the
+  join appears once in the dirty plan. The ops dashboard now includes a
+  high-fan-out no-op source whose unchanged output prunes all downstream labels
+  (`nodes_recomputed +1`, `propagation_prunes +1`, `patches_emitted +0` for the
+  scripted click). Full per-edge `is_eq` pruning is deferred to the confined
+  erasure phase, where typed edge thunks exist.
 
-Also confirm the two maturity unknowns: ability derivation/dispatch
-(`Eq`/`Encode`/`Decode`) across the platform boundary, and monomorphization/
-compile-time behavior of deeply nested generic `Signal`/`Elem` combinators.
+Also confirm the two maturity unknowns: that static dispatch on
+`is_eq`/`encode`/`decode` methods resolves and monomorphizes across the platform
+boundary (there is no ability auto-derivation, so each value type must define
+those methods), and monomorphization/compile-time behavior of deeply nested
+generic `Signal`/`Elem` combinators.
 
 ## Recommended Sequence
 
@@ -138,29 +146,30 @@ Goal: make the scaling claim measurable before changing semantics.
 
 Status as of 2026-06-19: the metrics surface has been replaced and
 `zig build run-signals-bench` records baseline rows with the new counter names.
-The host has a Zig diamond dirty-plan test wired into `run-test-zig`. Remaining
-Phase 1 work: add the high-fan-out Eq-pruning A/B. The current
-`propagation_prunes` counter records equal source/state suppressions, but the
-host still sends a precomputed dependent plan instead of pruning the queue from
-changed values.
+The host has a Zig diamond dirty-plan test wired into `run-test-zig`, and the
+ops dashboard script has a high-fan-out no-op source A/B that proves equal
+source output prunes downstream work and patches. The remaining pruning work is
+the fuller design target: per-edge `is_eq` thunk pruning once confined erasure
+provides typed edge thunks.
 
 - Replace the old-model `RuntimeMetrics` fields with the design's counters:
   `nodes_recomputed`, `propagation_prunes`, `derived_calls_into_roc`,
   `recompute_batches`, `patches_emitted`, `scopes_created`, `scopes_disposed`,
   `rows_reused`, `rows_created`, `rows_removed`, `closure_retains`,
   `closure_releases`, `retained_alloc_delta`. Keep `events_processed`.
-- Add the G3 diamond test and an Eq-pruning A/B to the test host.
+- Keep the G3 diamond test and high-fan-out pruning A/B green while later phases
+  move pruning from `NodeValue` equality to typed `is_eq` thunks.
 - Establish baseline benchmark numbers (`zig build run-signals-bench`) so every
   later phase can be checked for regressions.
 
-Exit: metrics reflect changed-node work; baseline recorded.
+Exit: metrics reflect current changed-node work; baseline recorded.
 
 Baseline recorded on 2026-06-19 (`zig build run-signals-bench`, 20 iterations,
 1 sample):
 
 | case | actions | nodes_recomputed | propagation_prunes | derived_calls_into_roc | recompute_batches | patches_emitted | retained_alloc_delta |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| signals-ops-dashboard | 100 | 3180 | 0 | 880 | 100 | 5860 | 2360 |
+| signals-ops-dashboard | 120 | 4060 | 40 | 1240 | 120 | 7780 | 2980 |
 | signals-kanban-board | 80 | 2980 | 0 | 560 | 80 | 5280 | 2460 |
 | signals-checkout-wizard | 180 | 1500 | 0 | 440 | 180 | 4840 | 2220 |
 
@@ -188,11 +197,13 @@ build keys at the call site — those become inert and are removed in Phase 3).
 
 Build the target surface and port the apps.
 
-- Create `Signal.roc` (opaque `Signal a` over a node id; `state`/`send`, `const`,
+- Create `Signal.roc` (opaque `Signal(a)` over a node id; `state`/`send`, `const`,
   `map`, `map2`, `combine`), `Html.roc` (`div`/`button`/`input`/`text`/`text_s`,
   signal-backed attrs, `on_click`/`on_input`/`on_check` taking typed messages),
   and `Ui.roc` (`when`, `each(items, key_fn, |key, row| ...)`, `component`).
-- `Ui.each` takes a typed `key where key implements Hash & Eq`; no string keys.
+- `Ui.each` carries a `where [key.hash : ..., key.is_eq : ...]` static-dispatch
+  constraint on its key type; no string keys. The key type provides `hash` and
+  `is_eq` through its `.{ }` method block.
 - Port `ops_dashboard`, `checkout_wizard`, `kanban_board` to the new API,
   deleting every `Str.concat("...:", id)` key and every `unit_channel`/`fold_i64`
   call. Re-run their `.txt` specs unchanged (the specs assert user-facing
@@ -203,16 +214,19 @@ no longer imported by apps.
 
 ### Phase 4 — Confined erasure; delete `NodeValue` from app code
 
-- Generate per-edge `Eq` (and, where a value must serialize, `Encode`/`Decode`)
-  thunks from the surrounding `Signal a` types via abilities, produced at the
-  platform-glue layer. The host stores boxed opaque values and calls only that
-  edge's thunk; it never selects a decoder.
-- Remove `encode`/`decode` boilerplate from app types; replace with
-  `implements [Eq]` (and `[Hash, Eq]` for keys).
+- Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
+  thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
+  at the call site and specialized by monomorphization at the platform-glue
+  layer. The host stores boxed opaque values and calls only that edge's thunk; it
+  never selects a decoder.
+- Remove the `NodeValue` `encode`/`decode` boilerplate from app types; instead
+  the value type defines `is_eq` (and a key type also defines `hash`) in its
+  method block.
 - Remove the `crash`-on-decode-mismatch wrappers; a mismatch is now a type error.
 
-Exit: no app defines `encode`/`decode`; no `crash` on value type mismatch; G-level
-ability-derivation confirmed working across the boundary.
+Exit: no app defines `NodeValue` conversions; no `crash` on value type mismatch;
+static dispatch on the `is_eq`/`encode`/`decode` methods confirmed resolving and
+monomorphizing across the boundary.
 
 ### Phase 5 — Collapse the combinator zoo
 
@@ -293,10 +307,11 @@ The migration is complete when, measured against the Phase 1 baseline:
   construction-site/scope identity can silently move state between rows/branches.
   Gate it on G2 and tag every state node with its minted id + scope path in the
   stress harness.
-- **Phases 4–5 depend on Roc ability and monomorphization maturity** across the
-  platform boundary. If derivation/dispatch is not ready, the batched
+- **Phases 4–5 depend on Roc static-dispatch and monomorphization maturity**
+  across the platform boundary. If method resolution/monomorphization for the
+  per-edge `is_eq`/`encode`/`decode` thunks is not ready, the batched
   opaque-value protocol can carry the migration further than per-node typed
-  closures while that matures — keep the batch protocol as the fallback shape.
+  closures while that matures; keep that protocol as an explicit design option.
 - **Keep apps + specs green every phase.** They are the only end-to-end oracle;
   a phase that breaks a spec is not done.
 - **Watch `roc_platform_abi.zig` struct-size asserts** after any boundary type

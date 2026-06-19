@@ -121,6 +121,20 @@ main = |_| {
 			|value, queued| pair_label("Health score", value, "queue", queued),
 		)
 
+	{ sender: fanout_noop_send, receiver: fanout_noop_clicks } = Reactive.Event.unit_channel("fanout_noop_click")
+	fanout_noop_deltas : Reactive.Event(I64)
+	fanout_noop_deltas = Reactive.Event.map_unit_i64_const(fanout_noop_clicks, 1)
+	fanout_base : Reactive.Signal(I64)
+	fanout_base = Reactive.Signal.fold_i64("fanout_base", 0, fanout_noop_deltas, |current, _delta| current)
+	fanout_label_a = Reactive.Signal.map_i64_str_keyed("fanout_label_a", fanout_base, |n| metric_label("Fanout A", n))
+	fanout_label_b = Reactive.Signal.map_i64_str_keyed("fanout_label_b", fanout_base, |n| metric_label("Fanout B", n))
+	fanout_label_c = Reactive.Signal.map_i64_str_keyed("fanout_label_c", fanout_base, |n| metric_label("Fanout C", n))
+	fanout_label_d = Reactive.Signal.map_i64_str_keyed("fanout_label_d", fanout_base, |n| metric_label("Fanout D", n))
+	fanout_label_e = Reactive.Signal.map_i64_str_keyed("fanout_label_e", fanout_base, |n| metric_label("Fanout E", n))
+	fanout_label_f = Reactive.Signal.map_i64_str_keyed("fanout_label_f", fanout_base, |n| metric_label("Fanout F", n))
+	fanout_label_g = Reactive.Signal.map_i64_str_keyed("fanout_label_g", fanout_base, |n| metric_label("Fanout G", n))
+	fanout_label_h = Reactive.Signal.map_i64_str_keyed("fanout_label_h", fanout_base, |n| metric_label("Fanout H", n))
+
 	{ sender: incident_send, receiver: incident_clicks } = Reactive.Event.unit_channel("incident_click")
 	incident_active : Reactive.Signal(Bool)
 	incident_active = Reactive.Signal.fold_bool_toggle("incident_active", False, incident_clicks)
@@ -214,6 +228,26 @@ main = |_| {
 			Elem.section(
 				"Incident",
 				[
+					Elem.section(
+						"Pruning",
+						[
+							Elem.action_button(
+								{
+									on_click: fanout_noop_send,
+									label: Reactive.Signal.const_str("No-op fanout"),
+									disabled: Reactive.Signal.const_bool(False),
+								},
+							),
+							Elem.label(fanout_label_a),
+							Elem.label(fanout_label_b),
+							Elem.label(fanout_label_c),
+							Elem.label(fanout_label_d),
+							Elem.label(fanout_label_e),
+							Elem.label(fanout_label_f),
+							Elem.label(fanout_label_g),
+							Elem.label(fanout_label_h),
+						],
+					),
 					Elem.action_button(
 						{
 							on_click: incident_send,

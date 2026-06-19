@@ -352,9 +352,12 @@ const SpecCommandType = enum {
     expect_checked,
     expect_disabled,
     expect_updates,
+    mark_metrics,
+    expect_metric_delta,
 };
 
 const LocatorKind = enum {
+    none,
     role_name,
     label,
     text,
@@ -378,6 +381,10 @@ const Locator = struct {
     }
 };
 
+fn emptyLocator() Locator {
+    return .{ .kind = .none };
+}
+
 const SpecCommand = struct {
     cmd_type: SpecCommandType,
     locator: Locator,
@@ -400,11 +407,13 @@ fn freeSpecCommands(allocator: std.mem.Allocator, commands: []SpecCommand) void 
 const TestState = struct {
     verbose: bool,
     commands: []SpecCommand,
+    metrics_mark: ?RuntimeMetrics,
 
     fn init() TestState {
         return .{
             .verbose = false,
             .commands = &.{},
+            .metrics_mark = null,
         };
     }
 };
@@ -526,6 +535,8 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
 
         if (std.mem.startsWith(u8, trimmed, "click ")) {
             try appendSpecCommand(&commands, allocator, .click, try parseLocator(allocator, trimmed[6..]), null, null, null, line_num);
+        } else if (std.mem.eql(u8, trimmed, "mark_metrics")) {
+            try appendSpecCommand(&commands, allocator, .mark_metrics, emptyLocator(), null, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "fill ")) {
             const split = try splitTrailingQuoted(trimmed[5..]);
             const value_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
@@ -554,6 +565,11 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             const split = try splitTrailingToken(trimmed[15..]);
             const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
             try appendSpecCommand(&commands, allocator, .expect_updates, try parseLocator(allocator, split.head), null, expected_count, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "expect_metric_delta ")) {
+            const split = try splitTrailingToken(trimmed[20..]);
+            const metric_name = allocator.dupe(u8, split.head) catch return ParseError.OutOfMemory;
+            const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
+            try appendSpecCommand(&commands, allocator, .expect_metric_delta, emptyLocator(), metric_name, expected_count, null, line_num);
         } else {
             return ParseError.InvalidFormat;
         }
@@ -1277,32 +1293,6 @@ const HostEnv = struct {
             abi.decrefNodeValue(state.value, self.roc_host.?);
             state.value = change.value;
             state.version += 1;
-            self.invalidateSignalCacheForState(change.state_id);
-        }
-    }
-
-    fn invalidateSignalCacheForState(self: *HostEnv, state_id: u64) void {
-        const allocator = self.gpa.allocator();
-        var signal_ids: std.ArrayListUnmanaged(u64) = .empty;
-        defer signal_ids.deinit(allocator);
-
-        for (self.signalIdsForState(state_id)) |signal_id| {
-            self.appendSignalAndDependents(allocator, &signal_ids, signal_id);
-        }
-
-        for (signal_ids.items) |signal_id| {
-            if (signal_id >= self.signal_cache.items.len) {
-                failHost("host signal route referenced an unknown signal id");
-            }
-
-            const signal_index: usize = @intCast(signal_id);
-            switch (self.signal_cache.items[signal_index]) {
-                .absent => {},
-                .present => |value| {
-                    abi.decrefNodeValue(value, self.roc_host.?);
-                    self.signal_cache.items[signal_index] = .absent;
-                },
-            }
         }
     }
 
@@ -1408,6 +1398,7 @@ const HostEnv = struct {
     fn locatorMatches(self: *HostEnv, elem: *const DomElement, locator: Locator) bool {
         _ = self;
         return switch (locator.kind) {
+            .none => false,
             .role_name => blk: {
                 const role = HostEnv.implicitRole(elem) orelse break :blk false;
                 const expected_role = locator.role orelse break :blk false;
@@ -1736,6 +1727,28 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .scopes_created = left.scopes_created + right.scopes_created,
         .scopes_disposed = left.scopes_disposed + right.scopes_disposed,
     };
+}
+
+fn u64MetricAsI64(value: u64) i64 {
+    return std.math.cast(i64, value) orelse failHost("runtime metric exceeded signed assertion range");
+}
+
+fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
+    if (std.mem.eql(u8, name, "events_processed")) return u64MetricAsI64(metrics.events_processed);
+    if (std.mem.eql(u8, name, "nodes_recomputed")) return u64MetricAsI64(metrics.nodes_recomputed);
+    if (std.mem.eql(u8, name, "propagation_prunes")) return u64MetricAsI64(metrics.propagation_prunes);
+    if (std.mem.eql(u8, name, "derived_calls_into_roc")) return u64MetricAsI64(metrics.derived_calls_into_roc);
+    if (std.mem.eql(u8, name, "recompute_batches")) return u64MetricAsI64(metrics.recompute_batches);
+    if (std.mem.eql(u8, name, "patches_emitted")) return u64MetricAsI64(metrics.patches_emitted);
+    if (std.mem.eql(u8, name, "scopes_created")) return u64MetricAsI64(metrics.scopes_created);
+    if (std.mem.eql(u8, name, "scopes_disposed")) return u64MetricAsI64(metrics.scopes_disposed);
+    if (std.mem.eql(u8, name, "rows_reused")) return u64MetricAsI64(metrics.rows_reused);
+    if (std.mem.eql(u8, name, "rows_created")) return u64MetricAsI64(metrics.rows_created);
+    if (std.mem.eql(u8, name, "rows_removed")) return u64MetricAsI64(metrics.rows_removed);
+    if (std.mem.eql(u8, name, "closure_retains")) return u64MetricAsI64(metrics.closure_retains);
+    if (std.mem.eql(u8, name, "closure_releases")) return u64MetricAsI64(metrics.closure_releases);
+    if (std.mem.eql(u8, name, "retained_alloc_delta")) return metrics.retained_alloc_delta;
+    return null;
 }
 
 fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) bool {
@@ -2213,7 +2226,7 @@ fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: 
     defer allocator.free(dirty_signal_ids);
     return .{
         .dirty_signal_ids = abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host),
-        .cached_signals = cachedSignalValueListExcluding(host, roc_host, dirty_signal_ids),
+        .cached_signals = cachedSignalValueListExcluding(host, roc_host, &.{}),
         .cached_states = cachedStateValueList(host, roc_host),
     };
 }
@@ -2619,6 +2632,10 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 
     for (host_env.test_state.commands) |cmd| {
         switch (cmd.cmd_type) {
+            .mark_metrics => {
+                host_env.test_state.metrics_mark = host_env.last_runtime_metrics;
+            },
+
             .click => {
                 const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
                     writeLocatorFailure(cmd.line_num, "locator did not resolve to one element");
@@ -2740,6 +2757,28 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
             },
+
+            .expect_metric_delta => {
+                const metric_name = cmd.expected_text orelse "";
+                const expected = u64MetricAsI64(cmd.expected_count orelse 0);
+                const marked = host_env.test_state.metrics_mark orelse {
+                    writeMetricFailure(cmd.line_num, "mark_metrics must run before expect_metric_delta");
+                    return 1;
+                };
+                const start = runtimeMetricValue(marked, metric_name) orelse {
+                    writeUnknownMetric(cmd.line_num, metric_name);
+                    return 1;
+                };
+                const current = runtimeMetricValue(host_env.last_runtime_metrics, metric_name) orelse {
+                    writeUnknownMetric(cmd.line_num, metric_name);
+                    return 1;
+                };
+                const actual = current - start;
+                if (actual != expected) {
+                    writeMetricDeltaMismatch(cmd.line_num, metric_name, expected, actual);
+                    return 1;
+                }
+            },
         }
     }
 
@@ -2765,6 +2804,24 @@ fn writeStringMismatch(line_num: usize, field: []const u8, expected: []const u8,
 fn writeBoolMismatch(line_num: usize, field: []const u8, expected: bool, actual: bool) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected {s}: {}\n  Got {s}:      {}\n", .{ line_num, field, expected, field, actual }) catch "TEST FAILED\n";
+    writeStderr(msg);
+}
+
+fn writeMetricFailure(line_num: usize, message: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: {s}\n", .{ line_num, message }) catch "TEST FAILED\n";
+    writeStderr(msg);
+}
+
+fn writeUnknownMetric(line_num: usize, metric_name: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: unknown metric \"{s}\"\n", .{ line_num, metric_name }) catch "TEST FAILED\n";
+    writeStderr(msg);
+}
+
+fn writeMetricDeltaMismatch(line_num: usize, metric_name: []const u8, expected: i64, actual: i64) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected {s} delta: {d}\n  Got {s} delta:      {d}\n", .{ line_num, metric_name, expected, metric_name, actual }) catch "TEST FAILED\n";
     writeStderr(msg);
 }
 

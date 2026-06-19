@@ -30,7 +30,7 @@ Every part of this design must respect them.
    reactive runtime — the dirty set, the scheduler, the in-place node table — is
    intrinsically mutable, so it lives in the Zig host, which is the one place
    mutation is legal.
-5. **Type-mismatch crashes are structurally impossible.** A typed `Signal a`
+5. **Type-mismatch crashes are structurally impossible.** A typed `Signal(a)`
    stays typed end to end. Erasure is confined to one generated thunk per edge,
    pinned to that edge's monomorphized types. There is no second, independently
    typed read site that can disagree with the writer.
@@ -83,7 +83,7 @@ is the number of nodes whose value actually changed.
 
 ## Core Concepts
 
-- **Signal a** — a continuous, always-present value of type `a`. Opaque type
+- **Signal(a)** — a continuous, always-present value of type `a`. Opaque type
   wrapping a host node id (`U64`), phantom-typed in `a`. The `a` exists only in
   Roc's type system; the wire payload is the id.
 - **Source** — a node whose value is set by host input (a DOM event, a timer, an
@@ -114,11 +114,12 @@ host during graph ingestion.
   shift identities in sibling scopes. This is the new failure mode we design
   around: "where you built it is your identity," so the seams that can shift
   (branches, lists) are explicit scope boundaries.
-- **Dynamic lists use typed keys, not position.** `Signal.each` takes a typed
-  key function `item -> key where key implements Hash & Eq`. A row's identity is
-  its key, so per-row local state survives reorder/insert/delete. Duplicate keys
-  are an `Eq` question the host answers explicitly (reported as a host error),
-  never a silent alias.
+- **Dynamic lists use typed keys, not position.** `Ui.each` takes a typed key
+  function `item -> key` where `key` provides `hash` and `is_eq` methods (the
+  `where [key.hash : ..., key.is_eq : ...]` static-dispatch constraints below).
+  A row's identity is its key, so per-row local state survives
+  reorder/insert/delete. Duplicate keys are an `is_eq` question the host answers
+  explicitly (reported as a host error), never a silent alias.
 
 This replaces string-collision/rename hazards with explicit, typed structure.
 
@@ -128,21 +129,24 @@ The host's node table is heterogeneous, so values cross the boundary as opaque
 payloads. But erasure is confined to **one generated set of thunks per edge**,
 pinned to that edge's monomorphized types:
 
-- For each `map`/`map2`/`combine`/`state`/sink, the platform-glue layer emits,
-  via Roc abilities, the concrete `Eq` (for change pruning) and — only where a
-  value must be stored or moved as bytes — `Encode`/`Decode` thunks. These are
-  generated from the same call site whose argument types are tied to the source
-  `Signal a`'s `a`.
+- For each `map`/`map2`/`combine`/`state`/sink, the platform-glue layer emits the
+  concrete `is_eq` comparison (for change pruning) and — only where a value must
+  be stored or moved as bytes — `encode`/`decode` thunks, by static dispatch on
+  the value type. These are generated from the same call site whose argument
+  types are tied to the source `Signal(a)`'s `a`. (Static dispatch resolves each
+  call to a concrete method on the value's type; there is no auto-derivation, so
+  the value's type must define those methods, and monomorphization specializes
+  the thunk per instantiation.)
 - The host **never chooses** a decoder. It stores a boxed, opaque Roc value and
   hands it back to the one thunk that owns that edge. There is no second,
   independently typed read site, so a mismatch is a compile-time type error, not
   a runtime decode crash.
 
 Hot-path values are stored as **boxed typed Roc values the host never
-inspects**, with an `Eq` thunk used for change pruning. Byte serialization is
+inspects**, with an `is_eq` thunk used for change pruning. Byte serialization is
 reserved for persistence and the wire, never forced on every event. We do not
-`memcmp` encoded bytes for equality (fragile for floats/maps); we call the `Eq`
-ability thunk.
+`memcmp` encoded bytes for equality (fragile for floats/maps); we call the
+generated `is_eq` thunk.
 
 There is no untyped value representation crossing the boundary. The public API
 is a few polymorphic functions (below); monomorphization generates concrete code
@@ -151,79 +155,95 @@ combinators.
 
 ## App-Facing API
 
-The app sees `Signal a`, typed keys, `Elem`, `Cmd`, `Sub`, and a small set of
-polymorphic functions. It never sees ids, string keys, `NodeValue`, lifecycle
-tokens, or subscriptions internals.
+The app sees `Signal(a)`, typed keys, `Elem`, `Cmd(a)`, `Sub(a)`, and a small
+set of polymorphic functions. It never sees ids, string keys, `NodeValue`,
+lifecycle tokens, or subscription internals.
 
 ### Module surface
 
+Signatures use current Roc: parenthesized type application (`Signal(a)`,
+`List(Elem)`), and `where [...]` static-dispatch constraints naming the methods
+a type variable must provide. There is no `implements`/ability syntax; a
+constraint such as `a.is_eq : a, a -> Bool` says "the concrete type bound to `a`
+must define an `is_eq` method of that signature," which monomorphization
+resolves and specializes.
+
 ```roc
 # Opaque to the app:
-Signal a
+Signal(a)
 Elem
-Cmd a
-Sub a
-Scope            # only appears in `Ui.component` / cleanup signatures
+Cmd(a)
+Sub(a)
+Scope            # only appears in Ui.component / cleanup signatures
 
 # Signal construction and combination
-Signal.state  : a -> { signal : Signal a, send : (a -> a) -> Msg } where a implements Eq
-Signal.const  : a -> Signal a where a implements Eq
-Signal.map    : Signal a, (a -> b) -> Signal b where b implements Eq
-Signal.map2   : Signal a, Signal b, (a, b -> c) -> Signal c where c implements Eq
-Signal.combine : List (Signal a) -> Signal (List a) where a implements Eq
+Signal.state : a -> { signal : Signal(a), send : (a -> a) -> Msg }
+    where [a.is_eq : a, a -> Bool]
+Signal.const : a -> Signal(a)
+    where [a.is_eq : a, a -> Bool]
+Signal.map : Signal(a), (a -> b) -> Signal(b)
+    where [b.is_eq : b, b -> Bool]
+Signal.map2 : Signal(a), Signal(b), (a, b -> c) -> Signal(c)
+    where [c.is_eq : c, c -> Bool]
+Signal.combine : List(Signal(a)) -> Signal(List(a))
+    where [a.is_eq : a, a -> Bool]
 
 # Async / effects as sources (same propagation path as user events)
-Signal.from_task : Task a err -> Signal [Loading, Done a, Failed err]
-Signal.interval  : Duration -> Signal Instant
-Ui.on_change     : Signal a, (a -> Cmd msg) -> Elem   # sink: fires a Cmd when value changes
-Ui.on_cleanup    : Task {} {} -> Elem                 # runs at scope disposal
+Signal.from_task : Task(a, err) -> Signal([Loading, Done(a), Failed(err)])
+Signal.interval : Duration -> Signal(Instant)
+Ui.on_change : Signal(a), (a -> Cmd(msg)) -> Elem   # sink: fires a Cmd when value changes
+Ui.on_cleanup : Task({}, {}) -> Elem                # runs at scope disposal
 
 # Structure
-Html.div     : List Attr, List Elem -> Elem
-Html.button  : List Attr, List Elem -> Elem
-Html.input   : List Attr, List Elem -> Elem
-Html.text    : Str -> Elem            # static text
-Html.text_s  : Signal Str -> Elem     # signal-backed text (a sink)
+Html.div : List(Attr), List(Elem) -> Elem
+Html.button : List(Attr), List(Elem) -> Elem
+Html.input : List(Attr), List(Elem) -> Elem
+Html.text : Str -> Elem            # static text
+Html.text_s : Signal(Str) -> Elem  # signal-backed text (a sink)
 
 # Attributes (signal-backed where dynamic)
-Html.value     : Signal Str -> Attr
-Html.checked   : Signal Bool -> Attr
-Html.disabled  : Signal Bool -> Attr
-Html.on_click  : Msg -> Attr
-Html.on_input  : (Str -> Msg) -> Attr
-Html.on_check  : (Bool -> Msg) -> Attr
+Html.value : Signal(Str) -> Attr
+Html.checked : Signal(Bool) -> Attr
+Html.disabled : Signal(Bool) -> Attr
+Html.on_click : Msg -> Attr
+Html.on_input : (Str -> Msg) -> Attr
+Html.on_check : (Bool -> Msg) -> Attr
 
 # Dynamic structure (explicit scopes)
-Ui.when  : Signal Bool, ({} -> Elem), ({} -> Elem) -> Elem
-Ui.each  : Signal (List item), (item -> key), (key, Signal item -> Elem) -> Elem
-           where key implements Hash & Eq
+Ui.when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
+Ui.each : Signal(List(item)), (item -> key), (key, Signal(item) -> Elem) -> Elem
+    where [key.hash : key, Hasher -> Hasher, key.is_eq : key, key -> Bool]
 
 # Components (named scopes for local state)
 Ui.component : ({} -> Elem) -> Elem
 ```
 
 `Msg` here is the unit of host-to-Roc dispatch: a `send`-bound reducer plus an
-optional payload. `Html.on_input(NameChanged)` means "when this input fires,
-route the typed payload through `NameChanged` and apply the bound reducer." The
+optional payload. `Html.on_input(name_changed)` means "when this input fires,
+route the typed payload through `name_changed` and apply the bound reducer." The
 app never names an event id; the host mints and routes them.
 
 ### Example: counter
 
 ```roc
 counter : Elem
-counter =
+counter = {
     { signal: count, send } = Signal.state(0i64)
-    Html.div([], [
-        Html.button([Html.on_click(send(|n| n - 1))], [Html.text("-")]),
-        Html.text_s(Signal.map(count, Num.to_str)),
-        Html.button([Html.on_click(send(|n| n + 1))], [Html.text("+")]),
-    ])
+    Html.div(
+        [],
+        [
+            Html.button([Html.on_click(send(|n| n - 1))], [Html.text("-")]),
+            Html.text_s(Signal.map(count, |n| n.to_str())),
+            Html.button([Html.on_click(send(|n| n + 1))], [Html.text("+")]),
+        ],
+    )
+}
 ```
 
 ### Example: derived value
 
 ```roc
-full_name : Signal Str, Signal Str -> Signal Str
+full_name : Signal(Str), Signal(Str) -> Signal(Str)
 full_name = |first, last| Signal.map2(first, last, |f, l| "${f} ${l}")
 ```
 
@@ -231,12 +251,13 @@ full_name = |first, last| Signal.map2(first, last, |f, l| "${f} ${l}")
 
 ```roc
 name_field : Elem
-name_field =
+name_field = {
     { signal: text, send } = Signal.state("")
     Html.input(
         [Html.value(text), Html.on_input(|new| send(|_| new))],
         [],
     )
+}
 ```
 
 `text` survives across events because the host holds this node by its minted id,
@@ -245,22 +266,40 @@ not by a string and not by re-derived tree position.
 ### Example: keyed list with per-row local state
 
 ```roc
-TodoId := U64 implements [Hash, Eq]
+# A nominal key type provides hash and is_eq through its method block, so it
+# satisfies the `where [key.hash, key.is_eq]` constraint on Ui.each.
+TodoId := U64.{
+    hash : TodoId, Hasher -> Hasher
+    hash = |TodoId(n), hasher| hasher.add_u64(n)
 
-todo_list : Signal (List Todo) -> Elem
+    is_eq : TodoId, TodoId -> Bool
+    is_eq = |TodoId(a), TodoId(b)| a == b
+}
+
+todo_list : Signal(List(Todo)) -> Elem
 todo_list = |todos|
-    Html.ul([], [
-        Ui.each(todos, .id, |_key, row|
-            { signal: editing, send: set_editing } = Signal.state(Bool.false)
-            Html.li([], [
-                Html.text_s(Signal.map(row, .title)),
-                Html.button(
-                    [Html.on_click(set_editing(|e| !e))],
-                    [Html.text_s(Signal.map(editing, |e| if e "done" else "edit"))],
-                ),
-            ]),
-        ),
-    ])
+    Html.ul(
+        [],
+        [
+            Ui.each(
+                todos,
+                |todo| todo.id,
+                |_key, row| {
+                    { signal: editing, send: set_editing } = Signal.state(Bool.false)
+                    Html.li(
+                        [],
+                        [
+                            Html.text_s(Signal.map(row, |t| t.title)),
+                            Html.button(
+                                [Html.on_click(set_editing(|e| !e))],
+                                [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
+                            ),
+                        ],
+                    )
+                },
+            ),
+        ],
+    )
 ```
 
 `editing` is a per-row source keyed by the row's typed `key`. It survives
@@ -274,7 +313,7 @@ has three responsibilities and no reactive runtime of its own.
 
 ### 1. Graph description as an explicit value
 
-`Signal a` is an opaque wrapper over a `U64` node id. The platform builds a graph
+`Signal(a)` is an opaque wrapper over a `U64` node id. The platform builds a graph
 description as it threads a node-id counter through pure construction. Each node
 records its kind and input ids:
 
@@ -296,7 +335,7 @@ GraphDesc := {
 
 `MapThunk`/`Map2Thunk`/`EqThunk` are boxed monomorphized closures (the confined
 erasure). They are produced from `Signal.map`/`map2`/`state` at the call site, so
-their input and output types are pinned to the surrounding `Signal a`.
+their input and output types are pinned to the surrounding `Signal(a)`.
 
 The platform does **not** evaluate the graph. It only describes it. There is no
 `eval_signal`, no dirty propagation, no cache in Roc.
@@ -360,12 +399,12 @@ Per phase, precisely:
 
 **Per user event:**
 - host -> Roc (`ui_event`): `(source_node_id, typed_payload)`. One call.
-- Roc -> host: new source value (boxed opaque) + `List Cmd`.
+- Roc -> host: new source value (boxed opaque) + `List(Cmd)`.
 - host marks the source dirty, computes the dirty derived set in topological
   order, and calls Roc (`ui_recompute`) with **only** the changed derived nodes
   and their input values — batched.
 - Roc -> host: new output values for those nodes (boxed opaque).
-- host prunes propagation where an output is `Eq` to its cached value, then emits
+- host prunes propagation where an output is `is_eq` to its cached value, then emits
   minimal DOM patches for sinks whose value changed.
 
 **Per effect result / timer tick:**
@@ -373,7 +412,7 @@ Per phase, precisely:
   propagation. Async results re-enter through one scheduler and one path.
 
 The boxed opaque values and thunks never have their bytes interpreted by the
-host except through the generated `Eq`/`Encode`/`Decode` thunks for that exact
+host except through the generated `is_eq`/`encode`/`decode` thunks for that exact
 edge.
 
 ## The Host's Responsibilities
@@ -405,7 +444,7 @@ On a source update:
 2. Pop nodes in increasing rank order. For each derived node whose input changed,
    request its recompute (batched) from Roc with input values already in the
    table.
-3. If the new value is `Eq` to the cached value, **stop** — do not dirty its
+3. If the new value is `is_eq` to the cached value, **stop** — do not dirty its
    dependents. Otherwise update the cache and enqueue its dependents.
 4. For sink nodes whose value changed, emit the minimal DOM patch (`SetText`,
    `SetValue`, `SetChecked`, `SetDisabled`, attribute set).
@@ -464,7 +503,7 @@ The patch command set is the typed, host-independent set already present:
 
 The host retains a metrics record for benchmarking. The meaningful counters
 are: `events_processed`, `nodes_recomputed` (should track changed nodes, not
-graph size), `propagation_prunes` (Eq short-circuits), `derived_calls_into_roc`,
+graph size), `propagation_prunes` (`is_eq` short-circuits), `derived_calls_into_roc`,
 `recompute_batches`, `patches_emitted`, `scopes_created`, `scopes_disposed`,
 `rows_reused`, `rows_created`, `rows_removed`, `closure_retains`,
 `closure_releases`, and `retained_alloc_delta`. `rows_reused` must count actual
@@ -481,7 +520,7 @@ is preserved across the update.
   to the owning scope and node — never an app string. Disposing the scope cancels
   the request. `Sub`s are declared by structure; the host diffs the declared
   subscription set against the live set and starts/stops accordingly.
-- **Errors:** `Signal.from_task` yields `[Loading, Done a, Failed err]`, so error
+- **Errors:** `Signal.from_task` yields `[Loading, Done(a), Failed(err)]`, so error
   states are ordinary signal values the app folds and renders. There is no
   effect-inside-signal-evaluation; effects are sources.
 
@@ -518,15 +557,17 @@ first.
    state is preserved or correctly disposed, tagging each state node with its
    minted id and key path. Watch for state "teleporting" between rows.
 
-3. **Glitch-free, Eq-pruned propagation plus thunk cost.** Prototype the diamond
-   graph; flood updates to the root; assert the join recomputes exactly once per
-   event. A/B the runtime with and without Eq-pruning on a high-fan-out graph of
-   mostly-unchanged values to confirm pruning pays for the `Eq` thunk calls.
+3. **Glitch-free, `is_eq`-pruned propagation plus thunk cost.** Prototype the
+   diamond graph; flood updates to the root; assert the join recomputes exactly
+   once per event. A/B the runtime with and without `is_eq` pruning on a
+   high-fan-out graph of mostly-unchanged values to confirm pruning pays for the
+   `is_eq` thunk calls.
 
-Also confirm two maturity unknowns alongside: that `Encode`/`Decode`/`Hash`/`Eq`
-ability derivation and dispatch work across the platform boundary on current Roc,
-and that deeply nested generic `Signal`/`Elem` combinators do not blow up
-monomorphization or compile time.
+Also confirm two maturity unknowns alongside: that static dispatch on
+`encode`/`decode`/`hash`/`is_eq` methods resolves and monomorphizes correctly
+across the platform boundary on current Roc (there is no ability auto-derivation,
+so each value type must define those methods), and that deeply nested generic
+`Signal`/`Elem` combinators do not blow up monomorphization or compile time.
 
 ## Success Metrics
 

@@ -423,7 +423,8 @@ UiRuntime := [].{
 
 			Graph.SignalExpr.MapSignal({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapSignal({ source: Box.box(registered_source.signal), transform }),
 				}
@@ -432,7 +433,8 @@ UiRuntime := [].{
 
 			Graph.SignalExpr.MapI64I64({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64I64({ source: Box.box(registered_source.signal), transform }),
 				}
@@ -441,7 +443,8 @@ UiRuntime := [].{
 
 			Graph.SignalExpr.MapI64Str({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64Str({ source: Box.box(registered_source.signal), transform }),
 				}
@@ -451,7 +454,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.Map2Signal({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2Signal({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
@@ -461,7 +465,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.Map2I64I64({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
@@ -471,7 +476,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.Map2I64I64Str({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64Str({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
@@ -481,7 +487,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.Hold({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Hold({ key, initial, event: Box.box(registered_event.event) }),
 				}
@@ -491,7 +498,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.Fold({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Fold({ key, initial, event: Box.box(registered_event.event), step }),
 				}
@@ -501,7 +509,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_i64(initial))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldI64({ key, initial, event: Box.box(registered_event.event), step }),
 				}
@@ -511,7 +520,8 @@ UiRuntime := [].{
 			Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_bool(initial))
-				registered_signal0 = { ..signal,
+				registered_signal0 = {
+					..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldBoolToggle({ key, initial, event: Box.box(registered_event.event) }),
 				}
@@ -555,7 +565,8 @@ UiRuntime := [].{
 						registered_signal = { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(signal_id) }
 						entry = { key, signal_id, signal: registered_signal, kind, source_state_ids, source_event_ids, input_signal_ids }
 						{
-							runtime: { ..runtime,
+							runtime: {
+								..runtime,
 								next_signal_id: signal_id + 1,
 								signal_registry: List.append(runtime.signal_registry, entry),
 							},
@@ -589,7 +600,8 @@ UiRuntime := [].{
 
 			Graph.EventExpr.MapEvent({ source, transform }) => {
 				registered_source = register_event(runtime, Box.unbox(source))
-				registered_event = { ..event,
+				registered_event = {
+					..event,
 					source_ids: registered_source.event.source_ids,
 					expr: Graph.EventExpr.MapEvent({ source: Box.box(registered_source.event), transform }),
 				}
@@ -598,7 +610,8 @@ UiRuntime := [].{
 
 			Graph.EventExpr.MapUnitI64Const({ source, value }) => {
 				registered_source = register_event(runtime, Box.unbox(source))
-				registered_event = { ..event,
+				registered_event = {
+					..event,
 					source_ids: registered_source.event.source_ids,
 					expr: Graph.EventExpr.MapUnitI64Const({ source: Box.box(registered_source.event), value }),
 				}
@@ -608,7 +621,8 @@ UiRuntime := [].{
 			Graph.EventExpr.Merge({ left, right }) => {
 				registered_left = register_event(runtime, Box.unbox(left))
 				registered_right = register_event(registered_left.runtime, Box.unbox(right))
-				registered_event = { ..event,
+				registered_event = {
+					..event,
 					source_ids: merge_u64_deps(registered_left.event.source_ids, registered_right.event.source_ids),
 					expr: Graph.EventExpr.Merge({ left: Box.box(registered_left.event), right: Box.box(registered_right.event) }),
 				}
@@ -643,7 +657,8 @@ UiRuntime := [].{
 			EventIdMissing => {
 				id = runtime.next_event_id
 				{
-					runtime: { ..runtime,
+					runtime: {
+						..runtime,
 						event_ids: List.append(runtime.event_ids, { key, id, payload_kind }),
 						next_event_id: id + 1,
 					},
@@ -711,9 +726,13 @@ UiRuntime := [].{
 			signal_ids,
 			state,
 			|acc, signal_id| {
-				signal = signal_node_for_registered_id(acc.runtime, signal_id)
-				result = eval_signal(acc, signal)
-				result.state
+				entry = signal_registry_entry_for_registered_id(acc.runtime, signal_id)
+				if signal_plan_should_eval(entry, acc.signal_changes) {
+					result = eval_signal(acc, entry.signal)
+					result.state
+				} else {
+					acc
+				}
 			},
 		)
 	}
@@ -917,8 +936,12 @@ UiRuntime := [].{
 				child = fn(result.value)
 				registered_child = register_elem(result.state.runtime, child)
 				metrics = registered_child.runtime.metrics
-				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, rows_created: metrics.rows_created + 1 }
-					}
+				state1 = {
+					..result.state,
+					runtime: {
+						..registered_child.runtime,
+						metrics: { ..metrics, rows_created: metrics.rows_created + 1 },
+					},
 				}
 				render_child = { ..with_structure_desc, state: state1 }
 				render_elem(render_child, registered_child.elem, created.id)
@@ -933,8 +956,12 @@ UiRuntime := [].{
 				key_fn = Box.unbox(key)
 				render_fn = Box.unbox(render)
 				metrics = result.state.runtime.metrics
-				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, rows_created: metrics.rows_created + List.len(items) }
-					}
+				state1 = {
+					..result.state,
+					runtime: {
+						..result.state.runtime,
+						metrics: { ..metrics, rows_created: metrics.rows_created + List.len(items) },
+					},
 				}
 				start = { ..with_structure_desc, state: state1 }
 				List.fold(
@@ -990,8 +1017,12 @@ UiRuntime := [].{
 				source_result = eval_event(state, Box.unbox(source))
 				fn = Box.unbox(transform)
 				metrics = source_result.state.runtime.metrics
-				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(source_result.values) }
-					}
+				state1 = {
+					..source_result.state,
+					runtime: {
+						..source_result.state.runtime,
+						metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(source_result.values) },
+					},
 				}
 				values = List.map(source_result.values, |value| fn(value))
 				{ state: state1, values }
@@ -1035,14 +1066,18 @@ UiRuntime := [].{
 						}
 					}
 				}
-		}
+			}
 	}
 
 	eval_signal_uncached : EvalState, Graph.SignalNode -> EvalResult
 	eval_signal_uncached = |state, signal| {
 		metrics0 = state.runtime.metrics
-		state_with_count = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, nodes_recomputed: metrics0.nodes_recomputed + 1 }
-			}
+		state_with_count = {
+			..state,
+			runtime: {
+				..state.runtime,
+				metrics: { ..metrics0, nodes_recomputed: metrics0.nodes_recomputed + 1 },
+			},
 		}
 		result =
 			match signal.expr {
@@ -1055,8 +1090,12 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..source_result.state,
+						runtime: {
+							..source_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: fn(source_result.value) }
 				}
@@ -1065,8 +1104,12 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..source_result.state,
+						runtime: {
+							..source_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: NodeValue.from_i64(fn(NodeValue.to_i64(source_result.value))) }
 				}
@@ -1075,8 +1118,12 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..source_result.state,
+						runtime: {
+							..source_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: NodeValue.from_str(fn(NodeValue.to_i64(source_result.value))) }
 				}
@@ -1086,8 +1133,12 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..right_result.state,
+						runtime: {
+							..right_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: fn((left_result.value, right_result.value)) }
 				}
@@ -1097,8 +1148,12 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..right_result.state,
+						runtime: {
+							..right_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: NodeValue.from_i64(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
 				}
@@ -1108,8 +1163,12 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
-						}
+					state1 = {
+						..right_result.state,
+						runtime: {
+							..right_result.state.runtime,
+							metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 },
+						},
 					}
 					{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
 				}
@@ -1123,7 +1182,11 @@ UiRuntime := [].{
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
-						next_value = List.fold(event_result.values, current.value, |_acc, value| value)
+						next_value = List.fold(
+							event_result.values,
+							current.value,
+							|_acc, value| value,
+						)
 						finish_state_update(event_result.state, current.index, current.value, next_value, !List.is_empty(event_result.values))
 					}
 				}
@@ -1139,8 +1202,12 @@ UiRuntime := [].{
 						event_result = eval_event(state1, event_node)
 						fn = Box.unbox(step)
 						metrics = event_result.state.runtime.metrics
-						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) }
-							}
+						state2 = {
+							..event_result.state,
+							runtime: {
+								..event_result.state.runtime,
+								metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) },
+							},
 						}
 						next_value = List.fold(event_result.values, current.value, |acc, evt| fn((acc, evt)))
 						finish_state_update(state2, current.index, current.value, next_value, !List.is_empty(event_result.values))
@@ -1158,8 +1225,12 @@ UiRuntime := [].{
 						event_result = eval_event(state1, event_node)
 						fn = Box.unbox(step)
 						metrics = event_result.state.runtime.metrics
-						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) }
-							}
+						state2 = {
+							..event_result.state,
+							runtime: {
+								..event_result.state.runtime,
+								metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) },
+							},
 						}
 						next_i64 = List.fold(event_result.values, NodeValue.to_i64(current.value), |acc, evt| fn((acc, NodeValue.to_i64(evt))))
 						finish_state_update(state2, current.index, current.value, NodeValue.from_i64(next_i64), !List.is_empty(event_result.values))
@@ -1189,9 +1260,39 @@ UiRuntime := [].{
 			Graph.SignalCacheKey.NoSignalCacheKey => result
 			Graph.SignalCacheKey.SignalCacheKey(_) => {
 				signal_id = registered_signal_id(signal)
-				next_changes = replace_signal_change(result.state.signal_changes, signal_id, result.value)
-				{ state: { ..result.state, signal_changes: next_changes }, value: result.value }
+				if signal_can_prune_dependents(signal) {
+					match signal_cache_lookup(result.state.cached_signals, signal_id) {
+						CacheHit(previous) =>
+							if node_value_equal(previous, result.value) {
+								metrics0 = result.state.runtime.metrics
+								metrics1 = { ..metrics0, propagation_prunes: metrics0.propagation_prunes + 1 }
+								{ state: { ..result.state, runtime: { ..result.state.runtime, metrics: metrics1 } }, value: result.value }
+							} else {
+								next_changes = replace_signal_change(result.state.signal_changes, signal_id, result.value)
+								{ state: { ..result.state, signal_changes: next_changes }, value: result.value }
+							}
+
+						CacheMiss => {
+							next_changes = replace_signal_change(result.state.signal_changes, signal_id, result.value)
+							{ state: { ..result.state, signal_changes: next_changes }, value: result.value }
+						}
+					}
+				} else {
+					next_changes = replace_signal_change(result.state.signal_changes, signal_id, result.value)
+					{ state: { ..result.state, signal_changes: next_changes }, value: result.value }
+				}
 			}
+		}
+	}
+
+	signal_can_prune_dependents : Graph.SignalNode -> Bool
+	signal_can_prune_dependents = |signal| {
+		match signal.expr {
+			Graph.SignalExpr.Hold(_) => True
+			Graph.SignalExpr.Fold(_) => True
+			Graph.SignalExpr.FoldI64(_) => True
+			Graph.SignalExpr.FoldBoolToggle(_) => True
+			_ => False
 		}
 	}
 
@@ -1212,16 +1313,52 @@ UiRuntime := [].{
 
 	signal_node_for_registered_id : Runtime, U64 -> Graph.SignalNode
 	signal_node_for_registered_id = |runtime, signal_id| {
+		entry = signal_registry_entry_for_registered_id(runtime, signal_id)
+		entry.signal
+	}
+
+	signal_registry_entry_for_registered_id : Runtime, U64 -> SignalRegistryEntry
+	signal_registry_entry_for_registered_id = |runtime, signal_id| {
 		match List.get(runtime.signal_registry, signal_id) {
 			Ok(entry) =>
 				if entry.signal_id == signal_id {
-					entry.signal
+					entry
 				} else {
 					crash "Signals runtime invariant violated: signal registry is not indexed by signal id"
 				}
 			Err(_) => {
 				crash "Signals runtime invariant violated: host recompute plan referenced an unknown signal id"
 			}
+		}
+	}
+
+	signal_plan_should_eval : SignalRegistryEntry, List(SignalValueDesc) -> Bool
+	signal_plan_should_eval = |entry, signal_changes| {
+		if entry.kind == signal_kind_source {
+			True
+		} else {
+			var $changed = False
+			var $index = 0
+
+			while $changed == False and $index < List.len(entry.input_signal_ids) {
+				match List.get(entry.input_signal_ids, $index) {
+					Ok(input_signal_id) =>
+						match signal_cache_lookup(signal_changes, input_signal_id) {
+							CacheHit(_) => {
+								$changed = True
+							}
+							CacheMiss => {
+								$index = $index + 1
+							}
+						}
+
+					Err(_) => {
+						crash "Signals runtime invariant violated: signal input id index missing"
+					}
+				}
+			}
+
+			$changed
 		}
 	}
 
@@ -1518,7 +1655,7 @@ UiRuntime := [].{
 						}
 					}
 				}
-		}
+			}
 	}
 
 	finish_state_update : EvalState, U64, NodeValue, NodeValue, Bool -> EvalResult
@@ -1530,9 +1667,7 @@ UiRuntime := [].{
 				if changed {
 					metrics0
 				} else {
-					{ ..metrics0,
-						propagation_prunes: metrics0.propagation_prunes + 1,
-					}
+					metrics0
 				}
 			next_state_changes =
 				if changed {

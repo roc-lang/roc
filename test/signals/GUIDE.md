@@ -23,8 +23,8 @@ change, not with the size of your UI.
 
 ## The Mental Model
 
-A **signal** is a continuous, always-present value. A `Signal Str` always has a
-current string; a `Signal Bool` always has a current boolean. Signals are what
+A **signal** is a continuous, always-present value. A `Signal(Str)` always has a
+current string; a `Signal(Bool)` always has a current boolean. Signals are what
 you read while describing the UI.
 
 Signals come in two flavors, but you build both with the same small toolkit:
@@ -93,36 +93,42 @@ and a disabled action:
 
 ```roc
 main : {} -> Elem
-main = |_|
+main = |_| {
     { signal: name, send: set_name } = Signal.state("")
 
-    greeting : Signal Str
+    greeting : Signal(Str)
     greeting =
-        Signal.map(name, |value|
-            if value == "" then "Enter your name" else "Hello, ${value}")
+        Signal.map(
+            name,
+            |value| if value == "" { "Enter your name" } else { "Hello, ${value}" },
+        )
 
-    submit_disabled : Signal Bool
+    submit_disabled : Signal(Bool)
     submit_disabled = Signal.map(name, |value| value == "")
 
     { signal: submit_count, send: bump } = Signal.state(0i64)
 
-    submit_label : Signal Str
+    submit_label : Signal(Str)
     submit_label =
-        Signal.map(submit_count, |count| "Submissions: ${Num.to_str(count)}")
+        Signal.map(submit_count, |count| "Submissions: ${count.to_str()}")
 
-    Html.div([], [
-        Html.heading("Profile"),
-        Html.input(
-            [Html.label("Name"), Html.value(name), Html.on_input(|new| set_name(|_| new))],
-            [],
-        ),
-        Html.text_s(greeting),
-        Html.button(
-            [Html.label_s(Signal.const("Save profile")), Html.disabled(submit_disabled), Html.on_click(bump(|n| n + 1))],
-            [],
-        ),
-        Html.text_s(submit_label),
-    ])
+    Html.div(
+        [],
+        [
+            Html.heading("Profile"),
+            Html.input(
+                [Html.label("Name"), Html.value(name), Html.on_input(|new| set_name(|_| new))],
+                [],
+            ),
+            Html.text_s(greeting),
+            Html.button(
+                [Html.label_s(Signal.const("Save profile")), Html.disabled(submit_disabled), Html.on_click(bump(|n| n + 1))],
+                [],
+            ),
+            Html.text_s(submit_label),
+        ],
+    )
+}
 ```
 
 The important pieces:
@@ -211,28 +217,45 @@ Ui.when(
 Each branch is its own scope. When the condition flips, the host disposes the
 losing branch (releasing its state and detaching its DOM) and mounts the other.
 
-Use `Ui.each` for lists. You supply a typed key function and a row renderer:
+Use `Ui.each` for lists. You supply a typed key function and a row renderer. The
+key type provides `hash` and `is_eq` methods through its method block:
 
 ```roc
-TodoId := U64 implements [Hash, Eq]
+TodoId := U64.{
+    hash : TodoId, Hasher -> Hasher
+    hash = |TodoId(n), hasher| hasher.add_u64(n)
 
-todo_list : Signal (List Todo) -> Elem
+    is_eq : TodoId, TodoId -> Bool
+    is_eq = |TodoId(a), TodoId(b)| a == b
+}
+
+todo_list : Signal(List(Todo)) -> Elem
 todo_list = |todos|
-    Html.ul([], [
-        Ui.each(todos, |todo| todo.id, |_key, row|
-            { signal: editing, send: set_editing } = Signal.state(Bool.false)
-            Html.li([], [
-                Html.text_s(Signal.map(row, |t| t.title)),
-                Html.button(
-                    [Html.on_click(set_editing(|e| !e))],
-                    [Html.text_s(Signal.map(editing, |e| if e then "done" else "edit"))],
-                ),
-            ]),
-        ),
-    ])
+    Html.ul(
+        [],
+        [
+            Ui.each(
+                todos,
+                |todo| todo.id,
+                |_key, row| {
+                    { signal: editing, send: set_editing } = Signal.state(Bool.false)
+                    Html.li(
+                        [],
+                        [
+                            Html.text_s(Signal.map(row, |t| t.title)),
+                            Html.button(
+                                [Html.on_click(set_editing(|e| !e))],
+                                [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
+                            ),
+                        ],
+                    )
+                },
+            ),
+        ],
+    )
 ```
 
-The row renderer receives the row's key and a `Signal item` for that row's data.
+The row renderer receives the row's key and a `Signal(item)` for that row's data.
 Any `Signal.state` you create inside the renderer is local to that row and keyed
 by the row's typed key, so it survives reorder and filter. The key function must
 return a stable identity from the data (a database id, slug, or durable client
@@ -246,25 +269,39 @@ and removed keys are disposed. Only changed rows touch the DOM.
 ## Typed Values
 
 App code works with ordinary typed Roc values throughout. Signals are typed
-(`Signal Str`, `Signal (List Todo)`), and the transforms you pass to `map`,
+(`Signal(Str)`, `Signal(List(Todo))`), and the transforms you pass to `map`,
 `map2`, and `combine` are ordinary typed functions. There is no untyped value
-representation and no `encode`/`decode` boilerplate to write.
+representation and no hand-written conversion boilerplate to write.
 
-For a custom type to be used as a signal value or a list key, it must implement
-the abilities those positions require:
+For a custom type to be used as a signal value or a list key, it must define the
+methods those positions require. The platform resolves these by static dispatch
+on the value's type (there is no auto-derivation, so you define the methods on
+the type):
 
-- Any signal value type implements `Eq` (the runtime uses it to stop
-  propagation when a recomputed value is unchanged).
-- Any `Ui.each` key type implements `Hash & Eq`.
+- Any signal value type defines `is_eq : t, t -> Bool`. The runtime uses it to
+  stop propagation when a recomputed value is unchanged.
+- Any `Ui.each` key type defines both `hash : t, Hasher -> Hasher` and
+  `is_eq : t, t -> Bool`.
 
 ```roc
-Todo := { id : TodoId, title : Str, done : Bool } implements [Eq]
-TodoId := U64 implements [Hash, Eq]
+Todo := { id : TodoId, title : Str, done : Bool }.{
+    is_eq : Todo, Todo -> Bool
+    is_eq = |a, b| a.id.is_eq(b.id) and a.title == b.title and a.done == b.done
+}
+
+TodoId := U64.{
+    hash : TodoId, Hasher -> Hasher
+    hash = |TodoId(n), hasher| hasher.add_u64(n)
+
+    is_eq : TodoId, TodoId -> Bool
+    is_eq = |TodoId(a), TodoId(b)| a == b
+}
 ```
 
-The platform generates the concrete equality and (where needed) serialization
-code for each signal edge from the surrounding types. You only declare the
-abilities; you never hand-write conversions.
+You define the comparison (and, where a value must serialize, `encode`/`decode`)
+methods on the type; the platform calls them by static dispatch at each signal
+edge. Built-in types such as `Str`, `Bool`, and `I64` already provide what the
+common cases need.
 
 ## Choosing The Right Primitive
 
@@ -292,12 +329,15 @@ mutates the DOM outside the patch stream.
 Effects are modeled as **sources**:
 
 ```roc
-save_state : Signal [NotAsked, Saving, Saved, Failed Str]
+save_state : Signal([NotAsked, Saving, Saved, Failed(Str)])
 save_state =
-    Signal.from_task(save_request, |result|
-        when result is
+    Signal.from_task(
+        save_request,
+        |result| match result {
             Ok(_) => Saved
-            Err(message) => Failed(message))
+            Err(message) => Failed(message)
+        },
+    )
 ```
 
 `Signal.from_task` produces a signal whose value reflects the lifecycle of the
