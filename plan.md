@@ -539,125 +539,125 @@ maintain both systems side by side.
 - [x] Add/rename CLI test: old `parse_from` method is not accepted.
 - [x] Add CLI test: missing `parser` on custom nominal type reports a clear
   static-dispatch error.
-- [ ] Add CLI test: record parser missing `rename_field` reports missing
+- [x] Add CLI test: record parser missing `rename_field` reports missing
   `rename_field`.
-- [ ] Add CLI test: record parser missing `parse_record_field` reports missing
+- [x] Add CLI test: record parser missing `parse_record_field` reports missing
   `parse_record_field`.
-- [ ] Add CLI test: record parser missing `skip_record_field` reports missing
+- [x] Add CLI test: record parser missing `skip_record_field` reports missing
   `skip_record_field` when `TryField` can miss.
 - [x] Add CLI test: required-field record missing `missing_record_field` reports
   missing `missing_record_field`.
-- [ ] Add CLI test: optional-only record does not require `missing_record_field`.
-- [ ] Add CLI test: wrong `parse_record_field` event shape is rejected.
-- [ ] Add CLI test: wrong `Field` phantom shape cannot be passed to another
+- [x] Add CLI test: optional-only record does not require `missing_record_field`.
+- [x] Add CLI test: wrong `parse_record_field` event shape is rejected.
+- [x] Add CLI test: wrong `Field` phantom shape cannot be passed to another
   record parser.
-- [ ] Add CLI test: users cannot construct `Field(_shape)` directly.
-- [ ] Add CLI test: users cannot inspect or pattern-match opaque `Field` or
+- [x] Add CLI test: users cannot construct `Field(_shape)` directly.
+- [x] Add CLI test: users cannot inspect or pattern-match opaque `Field` or
   `Fields`.
-- [ ] Add CLI test: `Fields.iter` and `Fields.for_size` are usable from
+- [x] Add CLI test: `Fields.iter` and `Fields.for_size` are usable from
   userspace parser code.
-- [ ] Add CLI test: `Field.name` returns `Str` and typechecks only for a valid
+- [x] Add CLI test: `Field.name` returns `Str` and typechecks only for a valid
   field handle.
-- [ ] Add CLI test: unsupported structural field shape reports a checking error,
+- [x] Add CLI test: unsupported structural field shape reports a checking error,
   not a post-check invariant.
 - [x] Add CLI test: custom nominal `parser` is used inside a derived record.
-- [ ] Add CLI test: structural record `parser` is callable directly.
+- [x] Add CLI test: structural record `parser` is callable directly.
 
 ## HTTP Header Regression Tests
 
-- [ ] Update the main platform regression to build the Roc app with the new
+- [x] Update the main platform regression to build the Roc app with the new
   `parser` API.
-- [ ] Add required typed field test:
-  - [ ] request contains `Content-Length: 123`
-  - [ ] Roc record field is `content_length : U64`
-  - [ ] response proves numeric value `123` was parsed as `U64`
-- [ ] Add required string field test:
-  - [ ] `Cache-Control: no-cache`
-  - [ ] Roc record field is `cache_control : Str`
-  - [ ] response proves the exact value length or value-dependent result
-- [ ] Add optional field test:
-  - [ ] `x_auth_token : Try(Str, [Missing])`
-  - [ ] present case returns `Ok(value)`
-  - [ ] absent case returns `Err(Missing)`
-  - [ ] one test uses `Err(Missing)`
-  - [ ] one test uses `Err(_)`
-  - [ ] one test uses postfix `?`
-  - [ ] a compiler-only fixture uses a non-`Missing` absence tag to prove the
+- [x] Add required typed field test:
+  - [x] request contains `Content-Length: 123`
+  - [x] Roc record field is `content_length : U64`
+  - [x] response proves numeric value `123` was parsed as `U64`
+- [x] Add required string field test:
+  - [x] `Cache-Control: no-cache`
+  - [x] Roc record field is `cache_control : Str`
+  - [x] response proves the exact value length or value-dependent result
+- [x] Add optional field test:
+  - [x] `x_auth_token : Try(Str, [Missing])`
+  - [x] present case returns `Ok(value)`
+  - [x] absent case returns `Err(Missing)`
+  - [x] one test uses `Err(Missing)`
+  - [x] one test uses `Err(_)`
+  - [x] one test uses postfix `?`
+  - [x] a compiler-only fixture uses a non-`Missing` absence tag to prove the
     tag is format-owned
-  - [ ] a compiler-only fixture uses an optional non-`Str` field
-- [ ] Add mixed-shape record test:
-  - [ ] required `U64`
-  - [ ] required `Str`
-  - [ ] optional `Str`
-  - [ ] unknown headers before, between, and after known headers
-- [ ] Add order-independence tests:
-  - [ ] same known headers in Roc record order
-  - [ ] reverse order
-  - [ ] scrambled order with unknown headers between them
-- [ ] Add case-insensitive header name tests:
-  - [ ] `Cache-Control`
-  - [ ] `cache-control`
-  - [ ] `CACHE-CONTROL`
-  - [ ] mixed-case variant
-- [ ] Add dash/underscore rename tests:
-  - [ ] `cache_control` field matches `Cache-Control`
-  - [ ] `x_auth_token` field matches `X-Auth-Token`
-- [ ] Add invalid header test:
-  - [ ] non-empty line without `:` returns the bad-header error response or
+  - [x] a compiler-only fixture uses an optional non-`Str` field
+- [x] Add mixed-shape record test:
+  - [x] required `U64`
+  - [x] required `Str`
+  - [x] optional `Str`
+  - [x] unknown headers before, between, and after known headers
+- [x] Add order-independence tests:
+  - [x] same known headers in Roc record order
+  - [x] reverse order
+  - [x] scrambled order with unknown headers between them
+- [x] Add case-insensitive header name tests:
+  - [x] `Cache-Control`
+  - [x] `cache-control`
+  - [x] `CACHE-CONTROL`
+  - [x] mixed-case variant
+- [x] Add dash/underscore rename tests:
+  - [x] `cache_control` field matches `Cache-Control`
+  - [x] `x_auth_token` field matches `X-Auth-Token`
+- [x] Add invalid header test:
+  - [x] non-empty line without `:` returns the bad-header error response or
     fails the request as the platform defines
-- [ ] Add invalid U64 tests:
-  - [ ] empty content length value
-  - [ ] non-digit
-  - [ ] overflow
-- [ ] Add duplicate field test:
-  - [ ] duplicate known header follows current chosen behavior
-- [ ] Add no-allocation test:
-  - [ ] `roc_alloc` crashes
-  - [ ] request succeeds
-  - [ ] therefore no Roc runtime allocation occurred
-- [ ] Add no-host-allocation review/test guard:
-  - [ ] no allocator is initialized in the Zig host
-  - [ ] no allocator is passed through host parsing code
-  - [ ] fixed buffers only
-- [ ] Add binary string test for compile-time renaming:
-  - [ ] build the final app in optimized mode
-  - [ ] scan the final app binary for original Roc field names such as
+- [x] Add invalid U64 tests:
+  - [x] empty content length value
+  - [x] non-digit
+  - [x] overflow
+- [x] Add duplicate field test:
+  - [x] duplicate known header follows current chosen behavior
+- [x] Add no-allocation test:
+  - [x] `roc_alloc` crashes
+  - [x] request succeeds
+  - [x] therefore no Roc runtime allocation occurred
+- [x] Add no-host-allocation review/test guard:
+  - [x] no allocator is initialized in the Zig host
+  - [x] no allocator is passed through host parsing code
+  - [x] fixed buffers only
+- [x] Add binary string test for compile-time renaming:
+  - [x] build the final app in optimized mode
+  - [x] scan the final app binary for original Roc field names such as
     `cache_control` and `x_auth_token`
-  - [ ] assert they are absent from runtime data
-  - [ ] allow transformed names such as `cache-control` and `x-auth-token`
-  - [ ] run against the final app binary, not the unstripped compiler binary
+  - [x] assert they are absent from runtime data
+  - [x] allow transformed names such as `cache-control` and `x-auth-token`
+  - [x] run against the final app binary, not the unstripped compiler binary
 
 ## JSON Regression Tests
 
-- [ ] Update JSON proof-of-concept platform to the new `parser` API.
-- [ ] Add identity rename record test:
-  - [ ] Roc field `foo`
-  - [ ] JSON key `"foo"`
-- [ ] Add camel-case rename record test:
-  - [ ] Roc field `user_id`
-  - [ ] JSON key `"userId"`
-  - [ ] original `user_id` does not need to appear in final runtime data when
+- [x] Update JSON proof-of-concept platform to the new `parser` API.
+- [x] Add identity rename record test:
+  - [x] Roc field `foo`
+  - [x] JSON key `"foo"`
+- [x] Add camel-case rename record test:
+  - [x] Roc field `user_id`
+  - [x] JSON key `"userId"`
+  - [x] original `user_id` does not need to appear in final runtime data when
     parser construction is compile-time evaluated
-- [ ] Add missing field tests:
-  - [ ] required `Str` missing fails
-  - [ ] `Try(Str, [Missing])` missing produces `Err(Missing)`
-  - [ ] present optional produces `Ok(value)`
-- [ ] Add order-independence tests:
-  - [ ] object keys in record order
-  - [ ] reverse order
-  - [ ] scrambled order with unknown keys
-- [ ] Add unknown-key skip tests:
-  - [ ] unknown string value before known key
-  - [ ] unknown object value before known key
-  - [ ] unknown key between two known keys
-- [ ] Add nested record tests:
-  - [ ] record containing nested record
-  - [ ] nested record uses its own renamed `Fields`
-  - [ ] nested object keys can be in any order
-- [ ] Add tag-union nesting tests:
-  - [ ] record field containing externally tagged union
-  - [ ] tag payload containing record
-  - [ ] nested record containing tag union
+- [x] Add missing field tests:
+  - [x] required `Str` missing fails
+  - [x] `Try(Str, [Missing])` missing produces `Err(Missing)`
+  - [x] present optional produces `Ok(value)`
+- [x] Add order-independence tests:
+  - [x] object keys in record order
+  - [x] reverse order
+  - [x] scrambled order with unknown keys
+- [x] Add unknown-key skip tests:
+  - [x] unknown string value before known key
+  - [x] unknown object value before known key
+  - [x] unknown key between two known keys
+- [x] Add nested record tests:
+  - [x] record containing nested record
+  - [x] nested record uses its own renamed `Fields`
+  - [x] nested object keys can be in any order
+- [x] Add tag-union nesting tests:
+  - [x] record field containing externally tagged union
+  - [x] tag payload containing record
+  - [x] nested record containing tag union
 - [x] Keep JSON `null` out of scope except for tests proving plain `Str` does
   not accept it if current JSON tests include that behavior.
 

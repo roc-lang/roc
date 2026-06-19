@@ -185,6 +185,18 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(overflow_request_count);
     try runServerAndCheckResponse(allocator, output_path, overflow_request_count, invalid_request_count_response);
 
+    const empty_content_length = try buildInvalidContentLengthRequest(allocator, "");
+    defer allocator.free(empty_content_length);
+    try runServerAndCheckRequestFailure(allocator, output_path, empty_content_length, "BadContentLength");
+
+    const nondigit_content_length = try buildInvalidContentLengthRequest(allocator, "12x");
+    defer allocator.free(nondigit_content_length);
+    try runServerAndCheckRequestFailure(allocator, output_path, nondigit_content_length, "BadContentLength");
+
+    const overflow_content_length = try buildInvalidContentLengthRequest(allocator, "18446744073709551616");
+    defer allocator.free(overflow_content_length);
+    try runServerAndCheckRequestFailure(allocator, output_path, overflow_content_length, "BadContentLength");
+
     try runServerAndCheckInvalidUtf8(allocator, output_path);
     try runServerAndCheckRequestFailure(allocator, output_path, too_large_content_length_request, "RequestTooLarge");
 }
@@ -392,6 +404,21 @@ fn buildInvalidRequestCountRequest(allocator: std.mem.Allocator, value: []const 
     try appendHeader(&request, allocator, "Foo", required_foo_value);
     try appendHeader(&request, allocator, "Request-Count", value);
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildInvalidContentLengthRequest(allocator: std.mem.Allocator, value: []const u8) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /bad-content-length HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "Content-Length", value);
     try request.appendSlice(allocator, "\r\n");
 
     return request.toOwnedSlice(allocator);
