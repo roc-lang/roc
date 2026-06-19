@@ -2,34 +2,8 @@ app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Elem exposing [Elem]
 import pf.Html
-import pf.NodeValue exposing [NodeValue]
 import pf.Signal
 import pf.Ui
-
-Alert := { id : Str, label : Str }.{
-	make : Str, Str -> Alert
-	make = |id, label| { id, label }
-
-	encode : Alert, NodeValue -> Try(NodeValue, [])
-	encode = |alert, fmt| [alert.id, alert.label].encode(fmt)
-
-	decode : NodeValue, NodeValue -> (Try(Alert, [TypeMismatch]), NodeValue)
-	decode = |nv, fmt| {
-		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		alert_result =
-			match result {
-				Ok(fields) =>
-					match (List.get(fields, 0), List.get(fields, 1)) {
-						(Ok(id), Ok(label)) => Ok(Alert.make(id, label))
-						_ => Err(TypeMismatch)
-					}
-
-				Err(err) => Err(err)
-			}
-
-		(alert_result, rest)
-	}
-}
 
 concat3 : Str, Str, Str -> Str
 concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
@@ -71,16 +45,16 @@ set_true = |_| True
 health_score : I64, I64 -> I64
 health_score = |requests, failing| requests - failing * 10
 
-initial_alerts : List(Alert)
-initial_alerts = [Alert.make("db", "Database warmup")]
+initial_alerts : List(Str)
+initial_alerts = ["Database warmup"]
 
-incident_alerts : List(Alert)
-incident_alerts = [Alert.make("api", "API latency"), Alert.make("jobs", "Job backlog")]
+incident_alerts : List(Str)
+incident_alerts = ["API latency", "Job backlog"]
 
-cleared_alerts : List(Alert)
+cleared_alerts : List(Str)
 cleared_alerts = []
 
-visible_alerts : Bool, Bool -> List(Alert)
+visible_alerts : Bool, Bool -> List(Str)
 visible_alerts = |active, cleared| {
 	if cleared {
 		cleared_alerts
@@ -91,7 +65,7 @@ visible_alerts = |active, cleared| {
 	}
 }
 
-render_alert : Str, Signal.Signal(Alert) -> Elem
+render_alert : Str, Signal.Signal(Str) -> Elem
 render_alert = |label, _alert_signal| {
 	initial_count : I64
 	initial_count = 0
@@ -254,7 +228,7 @@ main = |_| {
 																		[],
 																		[
 																			Html.button("Clear alerts", alerts_cleared.on_unit(set_true)),
-																			Ui.each(alerts, |alert| alert.label, render_alert),
+																			Ui.each(alerts, |label| label, render_alert),
 																		],
 																	),
 																],

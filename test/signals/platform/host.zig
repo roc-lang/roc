@@ -747,6 +747,7 @@ const SpecCommandType = enum {
     uncheck,
     expect_text,
     expect_visible,
+    expect_absent,
     expect_value,
     expect_checked,
     expect_disabled,
@@ -950,6 +951,8 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             try appendSpecCommand(&commands, allocator, .expect_text, try parseLocator(allocator, split.head), text_copy, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "expect_visible ")) {
             try appendSpecCommand(&commands, allocator, .expect_visible, try parseLocator(allocator, trimmed[15..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "expect_absent ")) {
+            try appendSpecCommand(&commands, allocator, .expect_absent, try parseLocator(allocator, trimmed[14..]), null, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "expect_value ")) {
             const split = try splitTrailingQuoted(trimmed[13..]);
             const value_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
@@ -2333,6 +2336,16 @@ const HostEnv = struct {
         return found;
     }
 
+    fn countElementsByLocator(self: *HostEnv, locator: Locator) usize {
+        var match_count: usize = 0;
+        for (self.dom_elements.items) |*elem| {
+            if (!elem.active) continue;
+            if (!self.locatorMatches(elem, locator)) continue;
+            match_count += 1;
+        }
+        return match_count;
+    }
+
     fn dumpDom(self: *HostEnv) void {
         for (self.dom_elements.items, 0..) |elem, idx| {
             var dbg_buf: [512]u8 = undefined;
@@ -2848,6 +2861,53 @@ fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
     return applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(value));
 }
 
+fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
+    for (left) |left_id| {
+        for (right) |right_id| {
+            if (left_id == right_id) return true;
+        }
+    }
+    return false;
+}
+
+fn activeStreamNeedsStructuralRender(host: *HostEnv, dirty_source_node_ids: []const u64) bool {
+    for (host.active_stream.whens.items) |desc| {
+        if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+    }
+    for (host.active_stream.eaches.items) |desc| {
+        if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+    }
+    return false;
+}
+
+fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) CommandCounts {
+    var counts: CommandCounts = .{};
+
+    for (host.active_stream.signal_text_nodes.items) |desc| {
+        if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
+        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids)) {
+            counts.addTextField(.text);
+        }
+    }
+
+    for (host.active_stream.signal_text_attrs.items) |desc| {
+        if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+            counts.addTextField(desc.field);
+        }
+    }
+
+    for (host.active_stream.signal_bool_attrs.items) |desc| {
+        if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+
+    host.render_metrics.patches_emitted += counts.total;
+    return counts;
+}
+
 fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
     const elem = domElementById(host, desc.elem_id);
     switch (desc.kind) {
@@ -3103,10 +3163,25 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     }
 
     if (stats) |s| {
-        renderActiveRootMeasured(host, roc_host, &s.dispatch_apply_ns, &s.commands);
+        const dirty_source_node_ids = [_]u64{desc.target_node_id};
+        if (activeStreamNeedsStructuralRender(host, &dirty_source_node_ids)) {
+            renderActiveRootMeasured(host, roc_host, &s.dispatch_apply_ns, &s.commands);
+        } else {
+            const apply_start_ns = benchmarkNowNs();
+            const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
+            s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
+            s.commands.addAll(counts);
+            finishHostMetrics(host);
+        }
         s.actions += 1;
     } else {
-        renderActiveRootMeasured(host, roc_host, null, null);
+        const dirty_source_node_ids = [_]u64{desc.target_node_id};
+        if (activeStreamNeedsStructuralRender(host, &dirty_source_node_ids)) {
+            renderActiveRootMeasured(host, roc_host, null, null);
+        } else {
+            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
+            finishHostMetrics(host);
+        }
     }
 }
 
@@ -3488,6 +3563,14 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 };
             },
 
+            .expect_absent => {
+                const match_count = host_env.countElementsByLocator(cmd.locator);
+                if (match_count != 0) {
+                    writeAbsentFailure(cmd.line_num, match_count);
+                    return 1;
+                }
+            },
+
             .expect_text => {
                 const expected = cmd.expected_text orelse "";
                 const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
@@ -3587,6 +3670,12 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 fn writeLocatorFailure(line_num: usize, message: []const u8) void {
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: {s}\n", .{ line_num, message }) catch "TEST FAILED\n";
+    writeStderr(msg);
+}
+
+fn writeAbsentFailure(line_num: usize, match_count: usize) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: expected no matching elements, found {d}\n", .{ line_num, match_count }) catch "TEST FAILED\n";
     writeStderr(msg);
 }
 
@@ -4001,6 +4090,96 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(recreated_state != row_state);
 }
 
+test "signals host patches dirty leaf sinks without descriptor rebuild" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const root = testNodeStateWithTokenAndInitial(
+        &roc_host,
+        state_token,
+        nodeValueStr(&roc_host, "first"),
+        testNodeTextSignal(&roc_host, testNodeRefExpr(state_token)),
+    );
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
+    try std.testing.expectEqual(@as(u64, 1), initial_counts.set_text);
+    try std.testing.expectEqual(@as(usize, 2), host.dom_elements.items.len);
+    try std.testing.expectEqualStrings("first", host.dom_elements.items[1].text.?);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
+    host.states.items[state_index].value = nodeValueStr(&roc_host, "second");
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    try std.testing.expect(!activeStreamNeedsStructuralRender(&host, &dirty_source_node_ids));
+
+    const patch_start = host.render_metrics.patches_emitted;
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.total);
+    try std.testing.expectEqual(patch_start + 1, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(@as(usize, 2), host.dom_elements.items.len);
+    try std.testing.expectEqualStrings("second", host.dom_elements.items[1].text.?);
+
+    const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    try std.testing.expectEqual(@as(u64, 0), unchanged_counts.total);
+}
+
+test "signals host marks dirty structural sources for full render" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const when_elem: abi.Elem = .{
+        .payload = .{
+            .when = .{
+                .condition = boxTestNodeSignalExpr(&roc_host, testNodeRefExpr(state_token)),
+                .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
+                .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
+            },
+        },
+        .tag = .When,
+    };
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueBool(true), when_elem);
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const dirty_source_node_ids = [_]u64{state_id};
+    try std.testing.expect(activeStreamNeedsStructuralRender(&host, &dirty_source_node_ids));
+}
+
 fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
 }
@@ -4146,7 +4325,7 @@ fn testElement(roc_host: *abi.RocHost, children: []const abi.Elem) abi.Elem {
     return testElementWith(roc_host, "div", &.{}, children);
 }
 
-fn testNodeStateWithToken(roc_host: *abi.RocHost, binder_token: HostBinderToken, child: abi.Elem) abi.Elem {
+fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBinderToken, initial: abi.NodeValue, child: abi.Elem) abi.Elem {
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -4160,11 +4339,15 @@ fn testNodeStateWithToken(roc_host: *abi.RocHost, binder_token: HostBinderToken,
                 .binder = binder_token,
                 .child = boxTestElem(roc_host, child),
                 .eq = eq,
-                .initial = nodeValueI64(0),
+                .initial = initial,
             },
         },
         .tag = .State,
     };
+}
+
+fn testNodeStateWithToken(roc_host: *abi.RocHost, binder_token: HostBinderToken, child: abi.Elem) abi.Elem {
+    return testNodeStateWithTokenAndInitial(roc_host, binder_token, nodeValueI64(0), child);
 }
 
 fn testNodeState(roc_host: *abi.RocHost, child: abi.Elem) abi.Elem {

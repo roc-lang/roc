@@ -20,87 +20,66 @@ matches the design:
   `roc_ui_recompute`, `roc_ui_render`, `roc_ui_drop`, and now by the app-boundary
   flip where `roc_ui_init` returns the retained descriptor tree and the host owns
   subsequent recomputation/rendering.
-- **Identity is dense integer ids at the boundary.** Signals carry a
-  `Graph.SignalIdentity.RegisteredSignal(U64)`; events carry integer ids; the
-  host routes by id. Descriptors (`SignalDesc`, `EventDesc`, `StateDesc`,
-  render descriptors) cross the boundary as explicit data, and the host indexes
-  them by id rather than scanning strings at dispatch time.
+- **Identity is dense integer ids at the boundary.** The host walks the retained
+  `Elem` descriptor tree, interns scope-relative identity-bearing sites, and
+  routes events/signals by dense ids. Descriptors cross the boundary as explicit
+  data, and the host indexes them by id rather than scanning strings at dispatch
+  time.
 - **Recompute is scoped to dirty signals.** `recompute` evaluates only the
   `dirty_signal_ids` plan the host sends, and `eval_signal` consults host-sent
   caches (`cached_signals`, `cached_states`) instead of re-deriving the world.
 
 This is the hard part of the engine, and it is largely in place. The remaining
-work is concentrated in three areas: the **app-facing API still exposes the old
-surface**, **identity is still string-keyed underneath the integer ids**, and
-**erasure / dynamic lifecycle are not yet at the target**.
+work is concentrated in three areas: **confined erasure still uses internal
+`NodeValue`**, **structural render patching is not yet at the target**, and
+**effects/subscriptions are not implemented**. Dirty leaf sinks now patch
+directly from the retained descriptor stream; structural `when`/`each` changes
+still rebuild the active descriptor stream. The old `Reactive`/`Graph`/
+`UiRuntime` Roc surface has been removed from the active platform.
 
 ## Gap Analysis (current vs. `DESIGN.md`)
 
 Ordered roughly by how much of the design they block.
 
-1. **String-key identity persists.** `register_state_key` and
-   `register_signal_descriptor` still key state slots and the signal registry by
-   author-written `Str` keys (`StateSlot.key`, `SignalRegistryEntry.key`,
-   `signal_registry_lookup` doing linear `entry.key == key` scans). The integer
-   ids are assigned *on top of* string keys; the strings are still the real
-   identity and still drive dedup. The design requires construction-site identity
-   within explicit scopes, with **no string keys anywhere**.
-
-2. **App API is the old `Reactive` / `Elem` surface.** All three apps still
-   import `Reactive`, `NodeValue`, call `Reactive.Signal.fold_i64`,
-   `map_i64_str_keyed`, `unit_channel`, `Elem.each`, and hand-write
-   `Str.concat("line_quantity:", id)` keys. The target `Signal` / `Html` / `Ui`
-   modules now exist, but the apps have not been ported to `Ui.state`
-   state-handle reducers, `Html.on_click(msg)`, or
-   `Ui.each(items, key_fn, |key, row| ...)`.
-
-3. **`NodeValue` is still the value representation, with `encode`/`decode` in
-   app code.** Every app type defines `encode`/`decode` against `NodeValue`, and
-   `eval_signal` decodes erased values with `crash`-on-mismatch wrappers. The
-   design requires confined per-edge erasure (per-edge `is_eq` and, where a value
-   must serialize, `encode`/`decode` thunks resolved by static dispatch on the
-   edge's value type and pinned to it) so a mismatch is a compile error, not a
+1. **Internal erasure still uses `NodeValue`.** Apps no longer import
+   `NodeValue` or define app-local row encode/decode boilerplate, but the
+   platform still serializes values through `NodeValue` and still has
+   crash-on-decode-mismatch wrappers inside `Signal.roc`/`Ui.roc`. The design
+   requires confined per-edge erasure so a mismatch is a compile error, not a
    runtime crash.
 
-4. **The combinator zoo still exists.** `MapI64I64`, `MapI64Str`, `Map2I64I64`,
-   `Map2I64I64Str`, `FoldI64`, `FoldBoolToggle`, and the `*_keyed` variants are
-   still distinct `Graph.SignalExpr` constructors and distinct `Reactive`
-   functions. The design collapses these to a few polymorphic functions
-   specialized by monomorphization.
+2. **Minimal patch emission is partial.** For state changes that do not feed an
+   active `Ui.when` condition or `Ui.each` item list, dispatch now reuses the
+   retained descriptor stream and applies only dirty signal-backed text/value/
+   checked/disabled sinks. If the dirty source feeds a structural site, the host
+   still rebuilds the active descriptor stream and reapplies the simulated DOM.
+   The remaining target is structural subtree patching: detach removed branches/
+   rows, move/reuse surviving keyed row DOM, and avoid a full DOM reset for those
+   structural updates.
 
-5. **Dynamic lists do not retain per-row scopes.** `Each`/`DynamicKeyed` in
-   `render_elem` still call `key_fn` and discard the result
-   (`_ = key_fn(item)`), re-`register_elem` every row on every render, and bump
-   `keyed_creates` without real reuse. There is no key-set diff, no per-row
-   scope, no `keyed_reuses`/`keyed_removes` accounting. Per-row local state only
-   appears to survive because it is *also* string-keyed by `item.id`.
-
-6. **No scope model / lifecycle / disposal.** There is no host-owned scope
-   forest. Conditionals (`Dynamic`/`when`) and list rows do not own ids or
-   retained closures, so nothing is disposed when a branch flips or a row leaves;
-   the registry only grows. The design requires scopes that own ids and
-   closures and are disposed deterministically (with the one-refcount-per-live-
-   closure leak invariant).
-
-7. **`render_only` still re-renders the whole tree.** After a recompute,
-   `roc_ui_render` rebuilds the entire `Elem` tree and re-emits all descriptors;
-   the host then diffs. The design wants the host to emit **minimal patches**
-   for sinks whose value changed, driven by the dirty set — not a full descriptor
-   rebuild per event.
-
-8. **Metrics are partway through the design migration.** `RuntimeMetrics` now
+3. **Metrics are partway through the design migration.** `RuntimeMetrics` now
    carries the design counter names (`nodes_recomputed`,
    `propagation_prunes`, `derived_calls_into_roc`, `patches_emitted`, row/scope
-   and closure counters). Scope, closure, and true row-reuse counters remain
-   zero until later phases output that lifecycle data. Source-level equal-output
-   pruning now suppresses downstream recompute work in the Roc recompute plan;
-   full per-edge `is_eq` thunk pruning is still pending until confined erasure
-   moves typed edge thunks into the runtime.
+   and closure counters). Scope and keyed-row counters are real for active
+   branch/row churn; closure counters remain zero until closure lifecycle data is
+   retained explicitly. Leaf sink patch counts now track changed fields on
+   non-structural updates, while structural updates still include full reset/
+   create/bind command counts. Source-level equal-output pruning suppresses
+   downstream work; full per-edge `is_eq` thunk pruning is still pending until
+   confined erasure moves typed edge thunks into the runtime.
 
-9. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
+4. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
    `Ui.on_change`, `Ui.on_cleanup` are unimplemented. (Lowest priority; the
    design treats effects as sources reusing the same path, so they slot in after
    the core is right.)
+
+5. **Optimized benchmark validation is blocked by a compiler bug.** `roc check`,
+   dev builds, and `zig build run-test-signals` are the current regression gates.
+   `zig build run-signals-bench` currently hits
+   [roc-lang/roc#9717](https://github.com/roc-lang/roc/issues/9717) while
+   compiling the optimized ops-dashboard benchmark. Do not skip that case or
+   silently downgrade it to dev mode; rerun the full benchmark when the compiler
+   bug is fixed.
 
 ## De-Risk First (gating experiments)
 
@@ -332,20 +311,29 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    scope so row-local state ids survive reorder and removed rows are disposed.
    It can also collect the active `When` branch while disposing the inactive
    branch scope, so branch-local state is retired on flips and never silently
-   reused.
-4. **Delete legacy:** `Reactive.roc`, `Elem.roc`, `Graph.roc`'s string-keyed paths,
-   old `UiRuntime` string tables; drop them from `main.roc` `exposes`/imports.
-   Apps then import only `Signal`/`Html`/`Ui`.
-5. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
+   reused. The app init/render lifecycle uses this active collector for
+   structural updates.
+4. **Done — delete legacy surface.** `Reactive.roc`, the old string-keyed
+   `Graph.roc`, and the old `UiRuntime.roc` evaluator have been removed. The
+   active platform surface is the retained descriptor API in `Elem`/`Node` plus
+   `Signal`/`Html`/`Ui`, and apps import only `Elem`/`Signal`/`Html`/`Ui`.
+5. **Partial — dirty leaf patches.** Dispatch now classifies changed source
+   nodes against the active descriptor stream. Non-structural changes apply only
+   the matching signal text/value/checked/disabled sinks and leave the descriptor
+   stream and DOM shape intact. Dirty sources that feed active `When`/`Each`
+   descriptors still use the structural active-root render path.
+6. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
    `TodoId := [Tid(U64)]` (nominal-over-tag-union), `state` is a closure binder,
    and the host owns equality/hash through captured per-type thunks rather than
    string identity.
-6. **Extend `identity_stress.txt`** with the mid-list-insert assertion (new row
-    gets fresh state while every existing row's count survives unmoved) — only
-    once honestly supported. Do not weaken existing assertions.
-7. **Validate:** `roc check` on all four apps, `zig build run-test-signals`, and
-    `zig build run-signals-bench` (compare against the Phase 1 baseline; row reuse
-    should be the biggest win).
+7. **Done — extend `identity_stress.txt`.** The G2 fixture now covers reorder,
+   mid-list insert, filter/remove/re-add, enclosing branch disposal, strict
+   row reuse/create/remove metric deltas, absence assertions for removed DOM,
+   and reset of row-local state after branch disposal.
+8. **Validate:** `roc check` on all four apps and `zig build run-test-signals`.
+   `zig build run-signals-bench` remains the optimized benchmark gate, but it is
+   currently blocked by roc-lang/roc#9717 in the LLVM optimized ops-dashboard
+   build; keep the failure visible rather than skipping or downgrading the case.
 
 ## Recommended Sequence
 
@@ -392,20 +380,20 @@ Baseline recorded on 2026-06-19 (`zig build run-signals-bench`, 20 iterations,
 This is the structural keystone and the biggest correctness risk; do it before
 the API rewrite so the new API never exposes keys.
 
-- Keep G2's `identity_stress` harness green and extend it as scope boundaries
-  land. It currently covers row-local state through `when -> each -> when` plus
-  reorder; branch disposal and filter assertions remain to be added once the
-  scope model exists.
-- Move identity assignment fully into graph ingestion: the platform threads a
-  node-id counter during pure construction (state ids, signal ids, event ids,
-  scope ids) and emits dense descriptors. Delete `StateSlot.key`,
-  `SignalRegistryEntry.key`, `signal_registry_lookup`'s string compare, and
-  `register_state_key`/`register_event_key` string dedup.
-- Introduce explicit **scope** boundaries in the descriptor stream
-  (`root`, conditional branch, list row) so identity is construction-site
-  *within a scope* and sibling scopes are insulated from positional shifts.
-- The host already indexes by integer id; remove the string tables it still
-  carries.
+Status as of 2026-06-20: complete for the active platform surface. The host
+walks the pure descriptor tree, advances ordinals only for identity-bearing
+sites, and interns dense ids inside explicit root/branch/row scopes. The old
+string-keyed state/signal/event registration tables lived in the deleted
+`UiRuntime.roc`/`Graph.roc` path.
+
+- Keep G2's `identity_stress` harness green as the lifecycle model changes. It
+  now covers row-local state through `when -> each -> when`, reorder, mid-list
+  insert, filtering/removal, and enclosing branch disposal.
+- Preserve the host-owned identity walk: Roc never threads a mutable id counter
+  and ordinary markup never consumes identity.
+- Keep explicit **scope** boundaries in the descriptor stream (`root`,
+  conditional branch, list row) so identity is construction-site *within a
+  scope* and sibling scopes are insulated from positional shifts.
 
 Exit: no `Str` key participates in identity; apps still pass (they may still
 build keys at the call site — those become inert and are removed in Phase 3).
@@ -413,6 +401,10 @@ build keys at the call site — those become inert and are removed in Phase 3).
 ### Phase 3 — New app-facing API: `Signal`, `Html`, `Ui`
 
 Build the target surface and port the apps.
+
+Status as of 2026-06-20: complete for the maintained app suite. The
+representative apps and identity stress app import `Elem`/`Signal`/`Html`/`Ui`,
+and the old `Reactive` module has been deleted.
 
 - Create `Signal.roc` (opaque `Signal(a)` over a node id; `state`/`send`, `const`,
   `map`, `map2`, `combine`), `Html.roc` (`div`/`button`/`input`/`text`/`text_s`,
@@ -426,10 +418,15 @@ Build the target surface and port the apps.
   call. Re-run their `.txt` specs unchanged (the specs assert user-facing
   behavior, so they are the migration oracle).
 
-Exit: apps import only `Signal`/`Html`/`Ui`; specs pass; `Reactive`/`Elem` are
-no longer imported by apps.
+Exit: apps import only `Elem`/`Signal`/`Html`/`Ui`; specs pass; `Reactive` and
+`NodeValue` are no longer imported by apps.
 
 ### Phase 4 — Confined erasure; delete `NodeValue` from app code
+
+Status as of 2026-06-19: the representative apps and `identity_stress` no
+longer import `NodeValue` or define app-local encode/decode boilerplate for row
+fixtures. They use `List(Str)` row labels until the platform API removes
+`NodeValue` internally and captures typed per-edge thunks directly.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
@@ -447,37 +444,46 @@ monomorphizing across the boundary.
 
 ### Phase 5 — Collapse the combinator zoo
 
-- Reduce `Graph.SignalExpr` to the minimal generic node kinds (source, map,
-  map2, combine) plus the value-carrying constants; delete `MapI64I64`,
-  `MapI64Str`, `Map2I64I64`, `Map2I64I64Str`, `FoldI64`, `FoldBoolToggle`, and
-  all `*_keyed` registration paths. Monomorphization specializes the generic
-  `map`/`map2` for `I64`/`Str`/`Bool` automatically.
-- Regenerate `roc_platform_abi.zig` glue and re-fix any ABI struct-size asserts.
+Status as of 2026-06-20: complete for the active platform surface. The old
+`Graph.roc` combinator family and `Reactive` wrappers have been deleted; the
+active descriptor model uses `Node.SignalExpr.Ref`, `ConstValue`, `Map`, `Map2`,
+and `Combine`.
 
-Exit: one polymorphic family in the API and a small generic node set in `Graph`;
+- Keep the active generic descriptor family small as confined erasure replaces
+  internal `NodeValue`; do not reintroduce type-specific map/fold constructors.
+- Regenerate `roc_platform_abi.zig` glue after exposed platform type changes and
+  re-fix any ABI struct-size asserts.
+
+Exit: one polymorphic family in the API and a small generic node set in `Node`;
 specs pass; compile-time monomorphization cost confirmed acceptable.
 
 ### Phase 6 — Scopes, dynamic lists, and minimal patches
 
 This delivers the headline feature (real keyed reuse) and true incremental render.
 
-- Implement the host scope forest: each conditional branch and list row is a
-  scope owning its minted ids and retained closures.
-- `Ui.each`: host diffs the new typed key-set against the old; reuse surviving
-  row scopes (and their local state), mint new ones, dispose removed ones (drop
-  one refcount per retained closure, run `on_cleanup`, detach DOM, count
-  `rows_removed`). Make `rows_reused` real.
-- `Ui.when`: dispose the losing branch scope on flip; keep-alive only via an
-  explicit flag.
-- Replace `render_only`'s full-tree rebuild with **minimal patch emission**: the
-  host emits `SetText`/`SetValue`/`SetChecked`/`SetDisabled`/attr patches only
-  for sinks whose value changed in the dirty set, rather than rebuilding all
-  descriptors and diffing.
+Status as of 2026-06-20: the host scope forest, keyed-row diff/reuse/removal,
+and active `Ui.when` branch disposal are wired into the active app lifecycle.
+Dirty non-structural source changes now patch only matching leaf sinks from the
+retained descriptor stream. Structural source changes still rebuild the active
+descriptor stream and reset/reapply the simulated DOM.
 
-Exit: `rows_reused`/`rows_disposed` reflect actual reuse; reorder/filter
-preserves per-row state; `patches_emitted` and `nodes_recomputed` track changed
-nodes, not tree size (verify against Phase 1 baseline — this should show the
-biggest win).
+- Keep the host scope forest explicit: each conditional branch and list row is a
+  scope owning its minted ids and retained closures.
+- Keep `Ui.each` keyed-row reuse/removal real: surviving row scopes retain local
+  state, new keys mint scopes, and removed keys dispose scopes and count
+  `rows_removed`.
+- Keep `Ui.when` branch disposal real: the losing branch scope is disposed on
+  flip; keep-alive only via an explicit flag.
+- Done for leaf sinks: non-structural dirty source nodes emit only matching
+  `SetText`/`SetValue`/`SetChecked`/`SetDisabled` patches, with no descriptor
+  rebuild and no DOM reset.
+- Remaining structural patch work: detach removed branch/row DOM, move/reuse
+  surviving keyed row DOM, bind/unbind events for changed subtrees, and avoid the
+  full DOM reset when a dirty source feeds `when`/`each`.
+
+Exit: `rows_reused`/`rows_removed` reflect actual reuse; reorder/filter
+preserves per-row state; non-structural `patches_emitted` tracks changed sinks,
+and structural updates no longer reset/recreate the whole DOM.
 
 ### Phase 7 — Effects and subscriptions
 
@@ -494,10 +500,10 @@ fixture spec passes.
 
 ### Phase 8 — Docs and cleanup
 
-- Delete `Reactive.roc`, `Elem.roc`'s dynamic/erased constructors, `NodeValue.roc`,
-  and the old `UiRuntime` evaluator once nothing references them.
-- Update `README.md` (it still references `UiRuntime.roc`, `NodeValue`, and
-  string keys) to match `DESIGN.md`/`GUIDE.md`.
+- Delete `NodeValue.roc` once confined erasure removes the internal platform
+  representation.
+- Keep `README.md`, `DESIGN.md`, `GUIDE.md`, and this file aligned as each
+  platform boundary changes.
 - Confirm `GUIDE.md` examples compile against the shipped API.
 
 ## Success Criteria (from `DESIGN.md`)

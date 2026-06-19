@@ -2,34 +2,8 @@ app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Elem exposing [Elem]
 import pf.Html
-import pf.NodeValue exposing [NodeValue]
 import pf.Signal
 import pf.Ui
-
-Task := { id : Str, label : Str }.{
-	make : Str, Str -> Task
-	make = |id, label| { id, label }
-
-	encode : Task, NodeValue -> Try(NodeValue, [])
-	encode = |task, fmt| [task.id, task.label].encode(fmt)
-
-	decode : NodeValue, NodeValue -> (Try(Task, [TypeMismatch]), NodeValue)
-	decode = |nv, fmt| {
-		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		task_result =
-			match result {
-				Ok(fields) =>
-					match (List.get(fields, 0), List.get(fields, 1)) {
-						(Ok(id), Ok(label)) => Ok(Task.make(id, label))
-						_ => Err(TypeMismatch)
-					}
-
-				Err(err) => Err(err)
-			}
-
-		(task_result, rest)
-	}
-}
 
 concat3 : Str, Str, Str -> Str
 concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
@@ -40,19 +14,19 @@ count_label = |name, value| concat3(name, ": ", value.to_str())
 increment_i64 : I64 -> I64
 increment_i64 = |current| current + 1
 
-initial_tasks : List(Task)
-initial_tasks = [Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue"), Task.make("c", "Tune keyed diff")]
+initial_tasks : List(Str)
+initial_tasks = ["Design signal graph", "Write platform glue", "Tune keyed diff"]
 
-reordered_tasks : List(Task)
-reordered_tasks = [Task.make("c", "Tune keyed diff"), Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue")]
+reordered_tasks : List(Str)
+reordered_tasks = ["Tune keyed diff", "Design signal graph", "Write platform glue"]
 
-archived_tasks : List(Task)
-archived_tasks = [Task.make("a", "Design signal graph"), Task.make("c", "Tune keyed diff")]
+archived_tasks : List(Str)
+archived_tasks = ["Design signal graph", "Tune keyed diff"]
 
-focused_tasks : List(Task)
-focused_tasks = [Task.make("c", "Tune keyed diff")]
+focused_tasks : List(Str)
+focused_tasks = ["Tune keyed diff"]
 
-render_task : Str, Signal.Signal(Task) -> Elem
+render_task : Str, Signal.Signal(Str) -> Elem
 render_task = |label, _task_signal| {
 	initial_count : I64
 	initial_count = 0
@@ -147,7 +121,7 @@ main = |_| {
 										"Doing",
 										[],
 										[
-											Ui.each(visible_tasks, |task| task.label, render_task),
+											Ui.each(visible_tasks, |label| label, render_task),
 										],
 									),
 								],

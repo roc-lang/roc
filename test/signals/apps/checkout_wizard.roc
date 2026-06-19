@@ -2,34 +2,8 @@ app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Elem exposing [Elem]
 import pf.Html
-import pf.NodeValue exposing [NodeValue]
 import pf.Signal
 import pf.Ui
-
-Line := { id : Str, label : Str }.{
-	make : Str, Str -> Line
-	make = |id, label| { id, label }
-
-	encode : Line, NodeValue -> Try(NodeValue, [])
-	encode = |line, fmt| [line.id, line.label].encode(fmt)
-
-	decode : NodeValue, NodeValue -> (Try(Line, [TypeMismatch]), NodeValue)
-	decode = |nv, fmt| {
-		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		line_result =
-			match result {
-				Ok(fields) =>
-					match (List.get(fields, 0), List.get(fields, 1)) {
-						(Ok(id), Ok(label)) => Ok(Line.make(id, label))
-						_ => Err(TypeMismatch)
-					}
-
-				Err(err) => Err(err)
-			}
-
-		(line_result, rest)
-	}
-}
 
 concat3 : Str, Str, Str -> Str
 concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
@@ -68,16 +42,16 @@ prev_step = |step| {
 	}
 }
 
-initial_lines : List(Line)
-initial_lines = [Line.make("seats", "3 seats"), Line.make("support", "Priority support")]
+initial_lines : List(Str)
+initial_lines = ["3 seats", "Priority support"]
 
-team_lines : List(Line)
-team_lines = [Line.make("seats", "3 seats"), Line.make("support", "Priority support"), Line.make("audit", "Audit log export")]
+team_lines : List(Str)
+team_lines = ["3 seats", "Priority support", "Audit log export"]
 
-basic_lines : List(Line)
-basic_lines = [Line.make("seats", "3 seats")]
+basic_lines : List(Str)
+basic_lines = ["3 seats"]
 
-render_line : Str, Signal.Signal(Line) -> Elem
+render_line : Str, Signal.Signal(Str) -> Elem
 render_line = |label, _line_signal| {
 	initial_quantity : I64
 	initial_quantity = 1
@@ -169,7 +143,7 @@ main = |_| {
 																Html.paragraph("Cart editor"),
 																Html.button("Use team plan", lines.on_unit(|_| team_lines)),
 																Html.button("Use basic plan", lines.on_unit(|_| basic_lines)),
-																Ui.each(lines.signal(), |line| line.label, render_line),
+																Ui.each(lines.signal(), |label| label, render_line),
 															],
 														)
 													delivery_panel =

@@ -8,20 +8,21 @@ renderer would need.
 For an introduction written for web developers, see
 [`GUIDE.md`](GUIDE.md).
 
-The current design keeps graph and render semantics on the Roc side of the
-boundary:
+The current host boundary keeps the app description pure and puts runtime
+mechanics in the host:
 
 - apps expose pure `main : {} -> Elem`,
-- the platform provides `roc_ui_init`, `roc_ui_dispatch`, and `roc_ui_drop`,
-- the Roc runtime keeps signal state and event ids in a boxed `Runtime`,
-- the host sends boxed events and applies command batches to the simulated DOM.
+- the platform provides `roc_ui_init`, which returns a retained descriptor tree,
+- the host owns state values, event routing, scope/key lifecycle, signal
+  evaluation, and simulated DOM patch application.
 
 The maintained coverage is the representative app suite in
 [`apps/`](apps/README.md):
 
 - ops dashboard,
 - checkout wizard,
-- kanban board.
+- kanban board,
+- identity stress.
 
 ## Running
 
@@ -31,8 +32,7 @@ From the repository root:
 zig build run-test-signals
 ```
 
-That step checks, builds, and runs all three representative apps against their
-semantic specs.
+That step checks, builds, and runs all four app specs.
 
 The host can also be rebuilt directly:
 
@@ -40,7 +40,7 @@ The host can also be rebuilt directly:
 zig build build-test-hosts -Dplatform=signals
 ```
 
-Run the representative app benchmark suite:
+Run the three-app representative benchmark suite:
 
 ```sh
 zig build run-signals-bench
@@ -49,6 +49,10 @@ zig build run-signals-bench
 The benchmark replays each app's semantic spec as a user-event trace and prints
 CSV rows with Roc dispatch time, host command-apply time, allocation counts,
 emitted command counts, and Roc runtime counters.
+
+Current note: the optimized benchmark build is blocked by roc-lang/roc#9717 in
+the LLVM `--opt=speed` ops-dashboard build. Keep that failure visible; do not
+skip the case or silently build it in dev mode.
 
 Regenerate glue after changing exposed platform types or provided entrypoints:
 
@@ -82,6 +86,7 @@ Supported commands:
 - `fill <locator> "<text>"`
 - `check <locator>` and `uncheck <locator>`
 - `expect_visible <locator>`
+- `expect_absent <locator>`
 - `expect_text <locator> "<text>"`
 - `expect_value <locator> "<text>"`
 - `expect_checked <locator> true|false`
@@ -93,31 +98,33 @@ Supported commands:
 Apps import:
 
 ```roc
-import pf.Elem
-import pf.Reactive
-import pf.NodeValue exposing [NodeValue]
+import pf.Elem exposing [Elem]
+import pf.Html
+import pf.Signal
+import pf.Ui
 ```
 
-`Reactive` builds pure graph descriptions:
+`Signal`, `Html`, and `Ui` build pure descriptor trees:
 
-- `Reactive.Signal(a)` is a continuous value with a current value.
-- `Reactive.Event(a)` is a discrete stream of occurrences.
-- `Reactive.EventSender(a)` is the write-only handle used by controls.
-- Stateful signals use explicit string keys so state can be retained across
-  rebuilt graph descriptions.
+- `Signal.Signal(a)` is an opaque typed descriptor.
+- `Ui.state` introduces local state through a closure binder.
+- `Ui.when` and `Ui.each` introduce explicit dynamic scopes.
+- `Html` creates static markup, signal-backed text/attrs, and event bindings.
 
-`NodeValue` is still used inside the Roc graph representation for erased
-dynamic/list payloads. It is no longer a host-owned graph boundary value.
+Apps no longer define `NodeValue` encode/decode boilerplate for row fixtures.
+`NodeValue` is still an internal platform representation until confined erasure
+removes it from the platform API.
 
 ## Host Boundary
 
-The host calls `roc_ui_init` once, stores the returned boxed runtime, and applies
-the initial command list. For each spec event, it boxes a `HostEvent`, calls
-`roc_ui_dispatch`, stores the returned boxed runtime, and applies the returned
-commands.
-
-The host does not create graph nodes, store callbacks, or evaluate signals.
-Those responsibilities live in `UiRuntime.roc`.
+The host calls `roc_ui_init` once, stores the returned boxed `Elem`, walks the
+descriptor tree, evaluates signal expressions against host-owned state, applies
+patches to the simulated DOM, and dispatches events through retained Roc
+reducers. Branch and keyed-row scopes are disposed by the host when they leave
+the active tree. Non-structural state changes patch only the dirty signal-backed
+leaf sinks recorded in the retained descriptor stream; structural `when`/`each`
+changes still rebuild the active stream while subtree-level DOM patching is
+finished.
 
 ## Benchmark Mode
 

@@ -14,7 +14,8 @@ applications that use `../platform/main.roc` and are run by
   input state.
 - `identity_stress.roc` is a Phase 2 G2 regression fixture. It is test-only, not
   part of `run-signals-bench`, and stresses row-local state through
-  `when -> each -> when` plus reorder.
+  `when -> each -> when` plus reorder, mid-list insert, filtering/removal, and
+  enclosing branch disposal.
 
 Useful checks from the repository root:
 
@@ -45,6 +46,10 @@ zig build run-signals-bench
 ./zig-out/bin/signals-ops-dashboard --bench-app --bench-name signals-ops-dashboard --bench-iterations 100 --bench-samples 3 test/signals/apps/ops_dashboard.txt
 ```
 
+The optimized benchmark build currently hits roc-lang/roc#9717 for
+`signals-ops-dashboard`. Keep the failure explicit until the compiler bug is
+fixed; the correctness gate remains `zig build run-test-signals`.
+
 Specs use semantic locators:
 
 ```txt
@@ -55,5 +60,6 @@ click role:button name:"Place order"
 ```
 
 The apps expose pure `main : {} -> Elem.Elem`. Signal state is retained by
-explicit keys in Roc's boxed `UiRuntime.Runtime`, while the host only applies
-render commands and sends user events back into Roc.
+host-owned construction-site ids inside explicit scopes; row fixtures use string
+labels as typed keys, and the host owns event routing, scope/key lifecycle, and
+render application.
