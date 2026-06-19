@@ -1,0 +1,20 @@
+# G2 identity stress scenario: nested when -> each -> when with row-local state.
+
+expect_visible role:heading name:"Identity stress"
+expect_visible role:region name:"Controls"
+expect_visible role:region name:"Rows active"
+expect_visible role:region name:"Alpha"
+expect_visible role:region name:"Beta"
+expect_visible role:region name:"Gamma"
+expect_text text:"Alpha waiting" "Alpha waiting"
+expect_text text:"Gamma waiting" "Gamma waiting"
+
+click role:button name:"Bump Alpha"
+expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
+
+click role:button name:"Reorder rows"
+expect_visible role:region name:"Gamma"
+expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
+
+click role:button name:"Bump Gamma"
+expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"

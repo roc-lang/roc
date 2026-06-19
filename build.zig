@@ -2588,21 +2588,31 @@ pub fn build(b: *std.Build) void {
         exe_name: []const u8,
         source: []const u8,
         spec: []const u8,
+        bench: bool,
     }{
         .{
             .exe_name = "signals-ops-dashboard",
             .source = "test/signals/apps/ops_dashboard.roc",
             .spec = "test/signals/apps/ops_dashboard.txt",
+            .bench = true,
         },
         .{
             .exe_name = "signals-checkout-wizard",
             .source = "test/signals/apps/checkout_wizard.roc",
             .spec = "test/signals/apps/checkout_wizard.txt",
+            .bench = true,
         },
         .{
             .exe_name = "signals-kanban-board",
             .source = "test/signals/apps/kanban_board.roc",
             .spec = "test/signals/apps/kanban_board.txt",
+            .bench = true,
+        },
+        .{
+            .exe_name = "signals-identity-stress",
+            .source = "test/signals/apps/identity_stress.roc",
+            .spec = "test/signals/apps/identity_stress.txt",
+            .bench = false,
         },
     };
 
@@ -2624,29 +2634,31 @@ pub fn build(b: *std.Build) void {
         run_signals_app.step.dependOn(&build_signals_test_app.step);
         run_test_signals_step.dependOn(&run_signals_app.step);
 
-        const signals_bench_app_path = b.pathJoin(&.{ "zig-out", "bin", b.fmt("{s}-bench", .{signals_app.exe_name}) });
-        const build_signals_bench_app = b.addRunArtifact(roc_exe);
-        build_signals_bench_app.addArgs(&.{
-            "build",
-            "--opt=speed",
-            b.fmt("--output={s}", .{signals_bench_app_path}),
-            signals_app.source,
-        });
-        build_signals_bench_app.step.dependOn(build_test_hosts_step);
+        if (signals_app.bench) {
+            const signals_bench_app_path = b.pathJoin(&.{ "zig-out", "bin", b.fmt("{s}-bench", .{signals_app.exe_name}) });
+            const build_signals_bench_app = b.addRunArtifact(roc_exe);
+            build_signals_bench_app.addArgs(&.{
+                "build",
+                "--opt=speed",
+                b.fmt("--output={s}", .{signals_bench_app_path}),
+                signals_app.source,
+            });
+            build_signals_bench_app.step.dependOn(build_test_hosts_step);
 
-        const bench_signals_app = b.addSystemCommand(&.{
-            signals_bench_app_path,
-            "--bench-app",
-            "--bench-name",
-            signals_app.exe_name,
-            "--bench-iterations",
-            "20",
-            "--bench-samples",
-            "1",
-            signals_app.spec,
-        });
-        bench_signals_app.step.dependOn(&build_signals_bench_app.step);
-        run_signals_bench_step.dependOn(&bench_signals_app.step);
+            const bench_signals_app = b.addSystemCommand(&.{
+                signals_bench_app_path,
+                "--bench-app",
+                "--bench-name",
+                signals_app.exe_name,
+                "--bench-iterations",
+                "20",
+                "--bench-samples",
+                "1",
+                signals_app.spec,
+            });
+            bench_signals_app.step.dependOn(&build_signals_bench_app.step);
+            run_signals_bench_step.dependOn(&bench_signals_app.step);
+        }
     }
 
     var release_exe_for_llvm_embedded: ?*Step.Compile = null;

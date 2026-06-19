@@ -381,6 +381,8 @@ The maintained examples in `apps/` show larger versions of these patterns:
   actions, list replacement, and per-row local state.
 - `kanban_board.roc` shows list reorder, archive/reset flows, filtering through
   `Signal.map2`, and per-card local state.
+- `identity_stress.roc` is the Phase 2 identity harness for
+  `when -> each -> when` row-local state through reorder.
 
 Run the representative suite from the repository root:
 

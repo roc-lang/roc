@@ -12,6 +12,9 @@ applications that use `../platform/main.roc` and are run by
 - `kanban_board.roc` stresses keyed reorder/archive/reset flows, local card
   state preservation, list filtering through generic `Signal.map2`, and form
   input state.
+- `identity_stress.roc` is a Phase 2 G2 regression fixture. It is test-only, not
+  part of `run-signals-bench`, and stresses row-local state through
+  `when -> each -> when` plus reorder.
 
 Useful checks from the repository root:
 
@@ -19,6 +22,7 @@ Useful checks from the repository root:
 ./zig-out/bin/roc check test/signals/apps/ops_dashboard.roc
 ./zig-out/bin/roc check test/signals/apps/checkout_wizard.roc
 ./zig-out/bin/roc check test/signals/apps/kanban_board.roc
+./zig-out/bin/roc check test/signals/apps/identity_stress.roc
 
 ./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-ops-dashboard test/signals/apps/ops_dashboard.roc
 ./zig-out/bin/signals-ops-dashboard test/signals/apps/ops_dashboard.txt
@@ -28,6 +32,9 @@ Useful checks from the repository root:
 
 ./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-kanban-board test/signals/apps/kanban_board.roc
 ./zig-out/bin/signals-kanban-board test/signals/apps/kanban_board.txt
+
+./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-identity-stress test/signals/apps/identity_stress.roc
+./zig-out/bin/signals-identity-stress test/signals/apps/identity_stress.txt
 ```
 
 The same binaries can replay their spec actions as benchmark traces:

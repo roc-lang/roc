@@ -115,10 +115,11 @@ building the new API on top, because if they fail the API shape changes:
   the **batched** `ui_recompute` (it already passes a plan list) as the
   permanent protocol rather than one-call-per-node.
 - **G2 — Construction-site identity under dynamic shape.** This is the riskiest
-  open item because the codebase has *not* started it (still string-keyed).
-  Build the nested-`when`-inside-`each`-inside-`when` stress harness and prove
-  per-row/branch state is preserved or correctly disposed by minted id, before
-  ripping out string keys app-wide.
+  open item because the codebase has *not* started it (still string-keyed). A
+  first `identity_stress` fixture now runs in `zig build run-test-signals` and
+  proves row-local state survives reorder through `when -> each -> when`.
+  Broader branch disposal/filter assertions still need to be added as
+  scope-relative minted ids replace the string tables.
 - **G3 — `is_eq`-pruned glitch-free propagation.** The rank scheduler exists and
   the Zig host has the diamond test (`a->b`, `a->c`, `(b,c)->d`) asserting the
   join appears once in the dirty plan. The ops dashboard now includes a
@@ -178,7 +179,10 @@ Baseline recorded on 2026-06-19 (`zig build run-signals-bench`, 20 iterations,
 This is the structural keystone and the biggest correctness risk; do it before
 the API rewrite so the new API never exposes keys.
 
-- Run G2's identity stress harness first.
+- Keep G2's `identity_stress` harness green and extend it as scope boundaries
+  land. It currently covers row-local state through `when -> each -> when` plus
+  reorder; branch disposal and filter assertions remain to be added once the
+  scope model exists.
 - Move identity assignment fully into graph ingestion: the platform threads a
   node-id counter during pure construction (state ids, signal ids, event ids,
   scope ids) and emits dense descriptors. Delete `StateSlot.key`,
