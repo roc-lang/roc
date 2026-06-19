@@ -450,6 +450,9 @@ pub const StaticDispatchResultMode = union(enum) {
     parser: struct {
         structural_allowed: bool,
     },
+    encode_to: struct {
+        structural_allowed: bool,
+    },
 };
 
 /// Public `StaticDispatchDispatcher` declaration.
@@ -944,6 +947,11 @@ fn staticDispatchResultModeForCheckedValueCall(
     const common = module.commonIdents();
     if (method_name.eql(common.parser)) {
         return .{ .parser = .{
+            .structural_allowed = true,
+        } };
+    }
+    if (method_name.eql(common.encode_to)) {
+        return .{ .encode_to = .{
             .structural_allowed = true,
         } };
     }

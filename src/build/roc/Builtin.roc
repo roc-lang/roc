@@ -6,8 +6,8 @@ Builtin :: [].{
 	# Compiler-generated structural record field metadata used by derived parsers.
 	# The phantom _shape ties a Field handle to the exact Fields value that
 	# produced it, so generated parsers can dispatch without user-visible slots.
-	# Field's backing payload is opaque outside Builtin; users can only observe it
-	# through Field.name, while compiler-generated code uses the hidden index.
+	# Users can only observe a Field through Field.name. Compiler-generated code
+	# supplies a hidden backing value with the record-slot index and metadata.
 	Fields(_shape) :: {}.{
 		rename_fields : Fields(_shape), (Str -> Str) -> Fields(_shape)
 		shortest_name : Fields(_shape) -> U64

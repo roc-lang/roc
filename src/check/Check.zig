@@ -12015,6 +12015,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     }
+                    if (constraint.fn_name.eql(self.cir.idents.encode_to) and
+                        (self.nominalIsBuiltinStrType(nominal_type) or self.nominalIsBuiltinU64Type(nominal_type)))
+                    {
+                        try self.satisfyImplicitEncodeToConstraint(
+                            deferred_constraint.var_,
+                            constraint,
+                            constraint.fn_var,
+                            env,
+                            region,
+                        );
+                        continue;
+                    }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -12267,6 +12279,19 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         }
                     }
+                    if (constraint.fn_name.eql(self.cir.idents.encode_to)) {
+                        const backing_var = self.types.getAliasBackingVar(alias);
+                        if (try self.varSupportsDerivedEncodeShape(backing_var, env, region)) {
+                            try self.satisfyImplicitEncodeToConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                            continue;
+                        }
+                    }
 
                     const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
                         alias.source_decl.toOptional(),
@@ -12432,6 +12457,25 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         const region = self.getRegionAt(deferred_constraint.var_);
                         if (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             try self.satisfyImplicitParserConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                        } else {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .not_nominal,
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
+                    } else if (constraint.fn_name.eql(self.cir.idents.encode_to)) {
+                        const region = self.getRegionAt(deferred_constraint.var_);
+                        if (try self.typeSupportsDerivedEncode(dispatcher_content.structure, env, region)) {
+                            try self.satisfyImplicitEncodeToConstraint(
                                 deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
@@ -12943,6 +12987,54 @@ fn nominalSupportsDerivedParseField(
     return true;
 }
 
+fn typeSupportsDerivedEncode(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (flat_type) {
+        .record => |record| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!try self.varSupportsDerivedEncodeShape(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
+        .empty_record => true,
+        else => false,
+    };
+}
+
+fn varSupportsDerivedEncodeShape(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.nominalSupportsDerivedEncodeShape(nominal),
+            .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, env, region),
+            .empty_record => true,
+            else => false,
+        },
+        .alias => |alias| try self.varSupportsDerivedEncodeShape(self.types.getAliasBackingVar(alias), env, region),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalSupportsDerivedEncodeShape(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    if (self.nominalIsBuiltinStrType(nominal)) return true;
+    if (self.nominalIsBuiltinU64Type(nominal)) return true;
+    if (nominal.originIsBuiltin()) return false;
+    return true;
+}
+
 fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
@@ -13231,6 +13323,65 @@ fn satisfyImplicitParserConstraint(
     }
 }
 
+fn satisfyImplicitEncodeToConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 2) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    const value_var = args[0];
+    const encoding_var = args[1];
+    const value_result = try self.unifyInContext(dispatcher_var, value_var, env, .none);
+    if (value_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
+    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+    const runtime_args = self.types.sliceVars(runtime_func.args);
+    if (runtime_args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    const state_var = runtime_args[0];
+    const err_var = try self.fresh(env, region);
+    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const ret_result = try self.unifyInContext(encode_result_var, runtime_func.ret, env, .none);
+    if (ret_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    self.var_set.clearRetainingCapacity();
+    switch (try self.validateDerivedEncodeVar(dispatcher_var, encoding_var, state_var, err_var, constraint, env, region, &self.var_set)) {
+        .ok => {},
+        .reported_error => {
+            try self.unifyWith(dispatcher_var, .err, env);
+            try self.markConstraintFunctionAsError(constraint, env);
+        },
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
+    }
+}
+
 fn freshParseResultTryVar(
     self: *Self,
     value_var: Var,
@@ -13350,6 +13501,14 @@ const ParseFormatMethodVar = struct {
     dispatcher_name: Ident.Idx,
 };
 
+const BuiltinEncodeSpecDecl = enum {
+    str,
+    u64,
+    begin_record,
+    record_field,
+    end_record,
+};
+
 fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Error!Ident.Idx {
     const text = switch (decl) {
         .str => "parse_str",
@@ -13374,6 +13533,17 @@ fn skipRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
 
 fn renameFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
     return try @constCast(self.cir).insertIdent(base.Ident.for_text("rename_field"));
+}
+
+fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Error!Ident.Idx {
+    const text = switch (decl) {
+        .str => "encode_str",
+        .u64 => "encode_u64",
+        .begin_record => "begin_record",
+        .record_field => "encode_record_field",
+        .end_record => "end_record",
+    };
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
 fn parseFormatMethodVarForEncoding(
@@ -13492,6 +13662,40 @@ fn validateParseFormatMethod(
         .tag_union => blk: {
             const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, state_var }, expected_ret), env, region);
+        },
+    };
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateEncodeFormatMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    value_var: Var,
+    spec_decl: BuiltinEncodeSpecDecl,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.encodeFormatMethodName(spec_decl);
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const expected_fn = switch (spec_decl) {
+        .str, .u64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ value_var, state_var }, expected_ret), env, region),
+        .begin_record, .end_record => try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region),
+        .record_field => blk: {
+            const str_var = try self.freshStr(env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, expected_ret), env, region);
         },
     };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -13840,6 +14044,148 @@ fn validateDerivedParseNominal(
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, err_var, env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+    const result = try self.unifyInContext(method_var, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = nominal_var,
+            .dispatcher_name = nominal.ident.ident_idx,
+            .method_name = constraint.fn_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateDerivedEncodeVar(
+    self: *Self,
+    var_: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.validateDerivedEncodeNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region),
+            .record => |record| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .empty_record => try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, false),
+            else => .unsupported,
+        },
+        .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
+        .err => .ok,
+        .flex, .rigid => .unsupported,
+    };
+}
+
+fn validateDerivedEncodeRecord(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, fields.len > 0)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+
+    for (fields.items(.var_)) |field_var| {
+        switch (try self.validateDerivedEncodeVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+    return .ok;
+}
+
+fn validateDerivedEncodeRecordMethods(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    has_fields: bool,
+) Allocator.Error!DerivedParseValidation {
+    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .begin_record, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    if (has_fields) {
+        switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .record_field, err_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .end_record, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    return .ok;
+}
+
+fn validateDerivedEncodeNominal(
+    self: *Self,
+    nominal_var: Var,
+    nominal: types_mod.NominalType,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    if (self.nominalIsBuiltinStrType(nominal)) {
+        return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region);
+    }
+    if (self.nominalIsBuiltinU64Type(nominal)) {
+        return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .u64, err_var, constraint, env, region);
+    }
+
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "encode_to nominal field",
+    );
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        self.cir,
+        nominal.sourceDeclOptional(),
+        self.cir.idents.encode_to,
+    ) orelse {
+        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.encode_to, constraint, env);
+    };
+
+    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+    const method_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
+        }
+        break :blk method_type_var;
+    } else blk: {
+        const copied_var = try self.copyVar(method_type_var, original_env, region);
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+    };
+
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ nominal_var, encoding_var }, expected_runtime_fn), env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = nominal_var,
