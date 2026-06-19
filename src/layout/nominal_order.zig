@@ -220,7 +220,7 @@ fn shapes(comptime pairs: anytype) [pairs.len]FieldShape {
     return out;
 }
 
-fn expectOrder(fields: []const FieldShape, expected: []const u16) !void {
+fn expectOrder(fields: []const FieldShape, expected: []const u16) anyerror!void {
     var order: [64]u16 = undefined;
     try computeNominalFieldOrder(testing.allocator, fields, order[0..fields.len]);
     try testing.expect(orderIsPaddingFree(fields, order[0..fields.len]));
