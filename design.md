@@ -567,6 +567,14 @@ alias roots union-find representatives for concrete structures.
 ## Cache Boundary
 
 The checked module cache is the only checked cache boundary in this design.
+Checked module cache entries are trusted compiler-owned artifacts, not
+adversarial inputs. Cache reads validate only the cache header, format version,
+payload hash, key, serialized layout, and ordinary binary decoding. They must
+not rerun semantic validation, reselect hoisted roots, reconstruct checked
+facts, or walk checked expressions to prove that cached checked data is still
+maximal. Correctness belongs to the producer path that writes the cache entry,
+and invalidation belongs to the cache key and explicit cache/selection format
+versions.
 
 The checked module cache id is target-independent:
 
@@ -610,6 +618,13 @@ checked value domain. Host interaction exists only at runtime, so host handles
 and host results cannot be compile-time values. If Roc exposes pointer-sized
 values to compile-time evaluation, their checked cache format must be an explicit
 checked rule before such values may be output.
+
+When the checker changes what checked data it emits, how hoisted roots are
+selected, or how checked compile-time values are serialized, the checked module
+cache format or the specific checked-data selection version must be bumped. A
+cache hit with a matching key and version is consumed as already-checked output;
+the compiler must not pay an extra pass to rediscover whether the cached output
+is semantically maximal.
 
 ## Checked Boundary
 
@@ -750,6 +765,13 @@ A checked module must not permanently store a hoisted-root dependency graph or
 per-expression dependency metadata. The durable checked data is the compile-time
 roots, their sorted compile-time request order, their `ConstStore` payloads, and
 sparse root lookup indexes.
+
+Checked module caches persist that same sorted selected-root list. On cache
+miss, checking computes the list once from explicit checked facts while it is
+already traversing expressions. On cache hit, the cached list is decoded and
+used directly after normal cache header, version, key, payload, and binary-shape
+checks. Cache reads must not run a second hoistability analysis or validate
+root-set maximality.
 
 The compile-time finalizer consumes sorted root requests and validates that any
 referenced same-module constant has already been filled before a root uses it.

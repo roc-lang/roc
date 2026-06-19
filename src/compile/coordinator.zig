@@ -2989,10 +2989,6 @@ pub const Coordinator = struct {
             return false;
         };
         defer check.HoistRoots.freeSelectedRootSlice(module_alloc, hoisted_roots);
-        check.HoistRoots.validateSelectedRootSetForPublication(module_alloc, cached_env, hoisted_roots) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
 
         var artifact = compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             module_alloc,
@@ -4558,47 +4554,6 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
     return overwritten;
 }
 
-fn checkedModuleCacheKeyFromEntryBytes(bytes: []const u8) ?check.CheckedArtifact.CheckedModuleArtifactKey {
-    if (bytes.len < checked_module_cache_magic.len + 8 + 32) return null;
-    if (!std.mem.eql(u8, bytes[0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
-
-    var key = check.CheckedArtifact.CheckedModuleArtifactKey{};
-    const key_offset = checked_module_cache_magic.len + 8;
-    @memcpy(&key.bytes, bytes[key_offset..][0..32]);
-    return key;
-}
-
-fn reorderFirstCheckedModuleCacheEntryWithMultipleHoistedRoots(allocator: Allocator, absolute_dir: []const u8) anyerror!bool {
-    const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-
-        const bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(128 * 1024 * 1024));
-        defer allocator.free(bytes);
-
-        const key = checkedModuleCacheKeyFromEntryBytes(bytes) orelse continue;
-        const decoded_entry = decodeCheckedModuleCacheEntry(key, bytes) orelse continue;
-        if (decoded_entry.hoisted_root_count < 2) continue;
-
-        const roots = decodeCheckedModuleCacheHoistedRoots(allocator, decoded_entry.hoisted_roots, decoded_entry.hoisted_root_count) catch continue;
-        defer check.HoistRoots.freeSelectedRootSlice(allocator, roots);
-        std.mem.swap(check.HoistRoots.SelectedHoistedRoot, @constCast(&roots[0]), @constCast(&roots[1]));
-
-        const rewritten = try encodeCheckedModuleCacheEntry(allocator, key, decoded_entry.module_env, roots);
-        defer allocator.free(rewritten);
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = rewritten });
-        return true;
-    }
-
-    return false;
-}
-
 test "Coordinator checked cache key requires checked direct imports" {
     const allocator = std.testing.allocator;
 
@@ -4744,80 +4699,6 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     try std.testing.expect(second.cache.invalidations > 0);
 }
 
-test "Coordinator semantically invalid checked module cache hoisted roots compile from source" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
-    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache_dir);
-
-    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_echo_platform");
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/main.roc",
-        .data =
-        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
-        \\
-        \\import pf.Echo
-        \\
-        \\main! = |args| {
-        \\    x = 41.I64
-        \\    y = x + 1.I64
-        \\    _ = y + List.len(args).to_i64_wrap()
-        \\    Echo.line!("done")
-        \\    Ok({})
-        \\}
-        ,
-    });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/.roc_echo_platform/main.roc",
-        .data =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
-        \\    exposes [Echo]
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\    hosted { "roc_echo_line": Echo.line! }
-        \\
-        \\import Echo
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |args|
-        \\    match main!(args) {
-        \\        Ok({}) => 0
-        \\        Err(Exit(code)) => code
-        \\        Err(other) => {
-        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
-        \\            1
-        \\        }
-        \\    }
-        ,
-    });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/.roc_echo_platform/Echo.roc",
-        .data =
-        \\Echo := [].{
-        \\    line! : Str => {}
-        \\}
-        ,
-    });
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
-    defer allocator.free(app_path);
-
-    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
-    try std.testing.expect(first.hoisted_constants >= 2);
-
-    const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
-    defer allocator.free(checked_module_cache_dir);
-    try std.testing.expect(try reorderFirstCheckedModuleCacheEntryWithMultipleHoistedRoots(allocator, checked_module_cache_dir));
-
-    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
-    try std.testing.expect(second.cache.invalidations > 0);
-    try std.testing.expect(second.build.modules_compiled > 0);
-}
-
 test "checked module cache roundtrips pattern extraction hoisted root payloads" {
     const allocator = std.testing.allocator;
     const key = check.CheckedArtifact.CheckedModuleArtifactKey{};
@@ -4914,118 +4795,6 @@ test "checked module cache rejects malformed hoisted root payloads" {
     try std.testing.expectError(
         error.InvalidCheckedModuleCache,
         decodeCheckedModuleCacheHoistedRoots(allocator, &valid_extraction_with_trailing_byte, 1),
-    );
-}
-
-test "checked module cache validates decoded hoisted roots against module nodes" {
-    const allocator = std.testing.allocator;
-
-    var env = try ModuleEnv.init(allocator, "");
-    defer env.deinit();
-    try env.initCIRFields("Test");
-
-    const expr_a = try env.store.addExpr(.e_empty_list, base.Region.from_raw_offsets(0, 0));
-    const expr_b = try env.store.addExpr(.e_empty_list, base.Region.from_raw_offsets(1, 1));
-    const pattern_a = try env.store.addPattern(.underscore, base.Region.from_raw_offsets(2, 2));
-    const pattern_b = try env.store.addPattern(.underscore, base.Region.from_raw_offsets(3, 3));
-
-    const valid_roots = [_]check.HoistRoots.SelectedHoistedRoot{
-        .{
-            .expr = expr_a,
-            .body = .expr,
-        },
-        .{
-            .expr = expr_a,
-            .pattern = pattern_a,
-            .body = .{ .pattern_extraction = .{
-                .base_expr = expr_a,
-                .scrutinee_pattern = pattern_b,
-                .result_pattern = pattern_a,
-            } },
-        },
-    };
-    try check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &valid_roots);
-
-    const invalid_expr_index = [_]check.HoistRoots.SelectedHoistedRoot{.{
-        .expr = @enumFromInt(999),
-        .body = .expr,
-    }};
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &invalid_expr_index),
-    );
-
-    const pattern_used_as_expr = [_]check.HoistRoots.SelectedHoistedRoot{.{
-        .expr = @enumFromInt(@intFromEnum(pattern_a)),
-        .body = .expr,
-    }};
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &pattern_used_as_expr),
-    );
-
-    const expr_used_as_pattern = [_]check.HoistRoots.SelectedHoistedRoot{.{
-        .expr = expr_a,
-        .pattern = @enumFromInt(@intFromEnum(expr_b)),
-        .body = .expr,
-    }};
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &expr_used_as_pattern),
-    );
-
-    const duplicate_expr_roots = [_]check.HoistRoots.SelectedHoistedRoot{
-        .{
-            .expr = expr_a,
-            .body = .expr,
-        },
-        .{
-            .expr = expr_a,
-            .body = .expr,
-        },
-    };
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &duplicate_expr_roots),
-    );
-
-    const duplicate_pattern_roots = [_]check.HoistRoots.SelectedHoistedRoot{
-        .{
-            .expr = expr_a,
-            .pattern = pattern_a,
-            .body = .{ .pattern_extraction = .{
-                .base_expr = expr_a,
-                .scrutinee_pattern = pattern_b,
-                .result_pattern = pattern_a,
-            } },
-        },
-        .{
-            .expr = expr_b,
-            .pattern = pattern_a,
-            .body = .{ .pattern_extraction = .{
-                .base_expr = expr_b,
-                .scrutinee_pattern = pattern_b,
-                .result_pattern = pattern_a,
-            } },
-        },
-    };
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &duplicate_pattern_roots),
-    );
-
-    const mismatched_extraction_base = [_]check.HoistRoots.SelectedHoistedRoot{.{
-        .expr = expr_a,
-        .pattern = pattern_a,
-        .body = .{ .pattern_extraction = .{
-            .base_expr = expr_b,
-            .scrutinee_pattern = pattern_b,
-            .result_pattern = pattern_a,
-        } },
-    }};
-    try std.testing.expectError(
-        error.InvalidSelectedHoistedRootSet,
-        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &mismatched_extraction_base),
     );
 }
 
