@@ -1,8 +1,8 @@
 //! Platform host for testing signal-based reactive UI applications.
 //!
 //! The host owns simulated DOM state, event routing, signal topology/cache, and
-//! render batching. Roc still runs retained app code and emits element commands
-//! through the `roc_ui_*` entrypoints during the migration.
+//! render batching. Roc still runs retained app code and emits explicit render
+//! descriptors through the `roc_ui_*` entrypoints during the migration.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -28,21 +28,19 @@ const RenderSignalTextDescList = @FieldType(DispatchResult, "render_signal_texts
 const RenderBoolDescList = @FieldType(DispatchResult, "render_bools");
 const RenderSignalBoolDescList = @FieldType(DispatchResult, "render_signal_bools");
 const RenderEventDescList = @FieldType(DispatchResult, "render_events");
+const RenderStructuralDescList = @FieldType(DispatchResult, "render_structures");
 const RenderElementDesc = @typeInfo(@TypeOf(@as(RenderElementDescList, undefined).items())).pointer.child;
 const RenderTextDesc = @typeInfo(@TypeOf(@as(RenderTextDescList, undefined).items())).pointer.child;
 const RenderSignalTextDesc = @typeInfo(@TypeOf(@as(RenderSignalTextDescList, undefined).items())).pointer.child;
 const RenderBoolDesc = @typeInfo(@TypeOf(@as(RenderBoolDescList, undefined).items())).pointer.child;
 const RenderSignalBoolDesc = @typeInfo(@TypeOf(@as(RenderSignalBoolDescList, undefined).items())).pointer.child;
 const RenderEventDesc = @typeInfo(@TypeOf(@as(RenderEventDescList, undefined).items())).pointer.child;
+const RenderStructuralDesc = @typeInfo(@TypeOf(@as(RenderStructuralDescList, undefined).items())).pointer.child;
 const RecomputeInputBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
 const RecomputeInput = std.meta.Child(RecomputeInputBox);
 const ActiveEvent = @FieldType(RecomputeInput, "active_event");
 const RenderInputBox = @typeInfo(@TypeOf(abi.roc_ui_render)).@"fn".params[1].type.?;
 const RenderInput = std.meta.Child(RenderInputBox);
-const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
-const AppendChildPayload = @FieldType(CommandPayload, "append_child");
-const CreateElementPayload = @FieldType(CommandPayload, "create_element");
-const StringCommandPayload = @FieldType(CommandPayload, "set_text");
 const RocStr = abi.RocStr;
 
 const EventPayloadKind = enum(u64) {
@@ -122,19 +120,18 @@ const SignalEventPayload = struct {
     cached_states: StateChangeList,
 };
 
-const HostCommandSnapshot = struct {
-    kind: u64,
-    a: u64,
-    b: u64,
-    value_bool: bool,
-    value_bytes: []const u8,
-    value_bytes_owned: bool,
+const HostRenderTextSink = struct {
+    elem_id: u64,
+    field: RenderTextField,
+};
 
-    fn deinit(self: HostCommandSnapshot, allocator: std.mem.Allocator) void {
-        if (self.value_bytes_owned) {
-            allocator.free(self.value_bytes);
-        }
-    }
+const HostRenderBoolSink = struct {
+    elem_id: u64,
+    field: RenderBoolField,
+};
+
+const RecomputeApplyOutcome = struct {
+    structural_render_required: bool,
 };
 
 const HostRenderMetrics = struct {
@@ -238,7 +235,7 @@ fn handleRocStackOverflow() noreturn {
     }
 }
 
-fn handleRocAccessViolation(fault_addr: usize) noreturn {
+fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViolationContext) noreturn {
     if (comptime builtin.os.tag == .windows) {
         const DWORD = u32;
         const HANDLE = ?*anyopaque;
@@ -599,8 +596,9 @@ const HostEnv = struct {
     signal_dependents: std.ArrayListUnmanaged(HostSignalDependentsRoute) = .empty,
     signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
-    previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
-    has_previous_render_snapshot: bool = false,
+    render_text_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderTextSink)) = .empty,
+    render_bool_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderBoolSink)) = .empty,
+    render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
     state_metrics: HostStateMetrics = .{},
@@ -858,6 +856,88 @@ const HostEnv = struct {
             }
         }
         self.signal_cache.items.len = 0;
+    }
+
+    fn clearRenderSinkRoutes(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.render_text_sink_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.render_text_sink_routes.items.len = 0;
+
+        for (self.render_bool_sink_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.render_bool_sink_routes.items.len = 0;
+
+        self.render_structural_signals.items.len = 0;
+    }
+
+    fn resetRenderSinkRoutes(self: *HostEnv) void {
+        self.clearRenderSinkRoutes();
+
+        const allocator = self.gpa.allocator();
+        const signal_count = self.signal_descriptors.items.len;
+        self.render_text_sink_routes.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
+        self.render_bool_sink_routes.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
+        self.render_structural_signals.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
+
+        var index: usize = 0;
+        while (index < signal_count) : (index += 1) {
+            self.render_text_sink_routes.appendAssumeCapacity(.empty);
+            self.render_bool_sink_routes.appendAssumeCapacity(.empty);
+            self.render_structural_signals.appendAssumeCapacity(false);
+        }
+    }
+
+    fn validateRenderSinkSignalId(self: *HostEnv, signal_id: u64) usize {
+        if (signal_id >= self.signal_descriptors.items.len) {
+            failHost("Roc render sink descriptor referenced an unknown signal id");
+        }
+        const signal_index: usize = @intCast(signal_id);
+        const signal = self.signal_descriptors.items[signal_index];
+        if (signal.signal_id != signal_id) {
+            failHost("host signal registry is not indexed by signal id");
+        }
+        return signal_index;
+    }
+
+    fn appendRenderTextSink(self: *HostEnv, signal_id: u64, elem_id: u64, field: RenderTextField) void {
+        const signal_index = self.validateRenderSinkSignalId(signal_id);
+        if (signal_index >= self.render_text_sink_routes.items.len) {
+            failHost("host render text sink routes are not indexed by signal id");
+        }
+        self.render_text_sink_routes.items[signal_index].append(self.gpa.allocator(), .{
+            .elem_id = elem_id,
+            .field = field,
+        }) catch std.process.exit(1);
+    }
+
+    fn appendRenderBoolSink(self: *HostEnv, signal_id: u64, elem_id: u64, field: RenderBoolField) void {
+        const signal_index = self.validateRenderSinkSignalId(signal_id);
+        if (signal_index >= self.render_bool_sink_routes.items.len) {
+            failHost("host render bool sink routes are not indexed by signal id");
+        }
+        self.render_bool_sink_routes.items[signal_index].append(self.gpa.allocator(), .{
+            .elem_id = elem_id,
+            .field = field,
+        }) catch std.process.exit(1);
+    }
+
+    fn markRenderStructuralSignal(self: *HostEnv, signal_id: u64) void {
+        const signal_index = self.validateRenderSinkSignalId(signal_id);
+        if (signal_index >= self.render_structural_signals.items.len) {
+            failHost("host render structural signal table is not indexed by signal id");
+        }
+        self.render_structural_signals.items[signal_index] = true;
+    }
+
+    fn signalChangesRequireStructuralRender(self: *HostEnv, changes: SignalValueList) bool {
+        for (changes.items()) |change| {
+            if (change.signal_id >= self.render_structural_signals.items.len) continue;
+            if (self.render_structural_signals.items[@intCast(change.signal_id)]) return true;
+        }
+        return false;
     }
 
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
@@ -1267,21 +1347,6 @@ const HostEnv = struct {
         }
     }
 
-    fn clearPreviousCommandSnapshots(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        for (self.previous_command_snapshots.items) |snapshot| {
-            snapshot.deinit(allocator);
-        }
-        self.previous_command_snapshots.items.len = 0;
-    }
-
-    fn setPreviousCommandSnapshots(self: *HostEnv, next: std.ArrayListUnmanaged(HostCommandSnapshot)) void {
-        self.clearPreviousCommandSnapshots();
-        self.previous_command_snapshots.deinit(self.gpa.allocator());
-        self.previous_command_snapshots = next;
-        self.has_previous_render_snapshot = true;
-    }
-
     fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
         var metrics = roc_metrics;
         metrics.commands_emitted += self.render_metrics.commands_emitted;
@@ -1320,8 +1385,10 @@ const HostEnv = struct {
         self.signal_cache.deinit(allocator);
         self.clearStates();
         self.states.deinit(allocator);
-        self.clearPreviousCommandSnapshots();
-        self.previous_command_snapshots.deinit(allocator);
+        self.clearRenderSinkRoutes();
+        self.render_text_sink_routes.deinit(allocator);
+        self.render_bool_sink_routes.deinit(allocator);
+        self.render_structural_signals.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -1599,8 +1666,6 @@ fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: 
     return true;
 }
 
-const StringField = enum { role, label, test_id };
-
 const CommandCounts = struct {
     total: u64 = 0,
     reset_dom: u64 = 0,
@@ -1648,20 +1713,6 @@ const CommandCounts = struct {
     fn addEventBinding(self: *CommandCounts) void {
         self.total += 1;
         self.bind_event += 1;
-    }
-
-    fn add(self: *CommandCounts, command: abi.UiRuntimeCommand) void {
-        self.total += 1;
-        switch (command.tag) {
-            .CreateElement => self.create_element += 1,
-            .AppendChild => self.append_child += 1,
-            .SetText => self.set_text += 1,
-            .SetValue => self.set_value += 1,
-            .SetChecked => self.set_checked += 1,
-            .SetDisabled => self.set_disabled += 1,
-            .SetRole, .SetLabel, .SetTestId => self.set_metadata += 1,
-            .BindClick, .BindInput, .BindCheck => self.bind_event += 1,
-        }
     }
 
     fn addAll(self: *CommandCounts, other: CommandCounts) void {
@@ -1720,30 +1771,38 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
     };
 }
 
-fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) void {
+fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) bool {
     if (replaceOwnedString(host.gpa.allocator(), &elem.text, text)) {
         elem.text_update_count += 1;
+        return true;
     }
+    return false;
 }
 
-fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8) void {
+fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8) bool {
     if (replaceOwnedString(host.gpa.allocator(), &elem.value, value)) {
         elem.value_update_count += 1;
+        return true;
     }
+    return false;
 }
 
-fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) void {
+fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
     if (elem.checked != checked) {
         elem.checked = checked;
         elem.checked_update_count += 1;
+        return true;
     }
+    return false;
 }
 
-fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) void {
+fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) bool {
     if (elem.disabled != disabled) {
         elem.disabled = disabled;
         elem.disabled_update_count += 1;
+        return true;
     }
+    return false;
 }
 
 fn resetSimulatedDom(host: *HostEnv) void {
@@ -1768,26 +1827,6 @@ fn domElementById(host: *HostEnv, id: u64) *DomElement {
     return elem;
 }
 
-fn applyCreateElementCommand(host: *HostEnv, payload: CreateElementPayload) void {
-    const id = payload.id;
-    if (id != host.dom_elements.items.len) failHost("DOM CreateElement command ids must be sequential");
-
-    const allocator = host.gpa.allocator();
-    const tag_copy = allocator.dupe(u8, payload.tag.asSlice()) catch std.process.exit(1);
-    host.dom_elements.append(allocator, DomElement.init(id, tag_copy)) catch {
-        allocator.free(tag_copy);
-        std.process.exit(1);
-    };
-    host.next_elem_id = id + 1;
-}
-
-fn applyAppendChildCommand(host: *HostEnv, payload: AppendChildPayload) void {
-    const parent = domElementById(host, payload.parent);
-    const child = domElementById(host, payload.child);
-    child.parent_id = parent.id;
-    parent.children.append(host.gpa.allocator(), child.id) catch std.process.exit(1);
-}
-
 fn applyRenderElementDesc(host: *HostEnv, desc: RenderElementDesc) void {
     if (desc.elem_id != host.dom_elements.items.len) failHost("Roc render element descriptors must be dense and ordered by element id");
 
@@ -1805,33 +1844,27 @@ fn applyRenderElementDesc(host: *HostEnv, desc: RenderElementDesc) void {
     parent.children.append(allocator, child.id) catch std.process.exit(1);
 }
 
-fn applyRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) void {
+fn applyRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) bool {
     const elem = domElementById(host, elem_id);
-    switch (field) {
+    return switch (field) {
         .text => setElementTextIfChanged(host, elem, value),
-        .role => _ = replaceOwnedString(host.gpa.allocator(), &elem.role, value),
-        .label => _ = replaceOwnedString(host.gpa.allocator(), &elem.label, value),
-        .test_id => _ = replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
+        .role => replaceOwnedString(host.gpa.allocator(), &elem.role, value),
+        .label => replaceOwnedString(host.gpa.allocator(), &elem.label, value),
+        .test_id => replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
         .value => setElementValueIfChanged(host, elem, value),
-    }
+    };
 }
 
-fn applyRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
+fn applyRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) bool {
     const elem = domElementById(host, elem_id);
-    switch (field) {
+    return switch (field) {
         .checked => setElementCheckedIfChanged(elem, value),
         .disabled => setElementDisabledIfChanged(elem, value),
-    }
+    };
 }
 
 fn validateRenderSinkSignal(host: *HostEnv, signal_id: u64) void {
-    if (signal_id >= host.signal_descriptors.items.len) {
-        failHost("Roc render sink descriptor referenced an unknown signal id");
-    }
-    const signal = host.signal_descriptors.items[@intCast(signal_id)];
-    if (signal.signal_id != signal_id) {
-        failHost("host signal registry is not indexed by signal id");
-    }
+    _ = host.validateRenderSinkSignalId(signal_id);
 }
 
 fn applyRenderEventDesc(host: *HostEnv, desc: RenderEventDesc) void {
@@ -1853,109 +1886,59 @@ fn applyRenderEventDesc(host: *HostEnv, desc: RenderEventDesc) void {
     }
 }
 
-fn applyStringCommand(host: *HostEnv, payload: StringCommandPayload, field: StringField) void {
-    const elem = domElementById(host, payload.id);
-    const value = payload.value.asSlice();
-    switch (field) {
-        .role => _ = replaceOwnedString(host.gpa.allocator(), &elem.role, value),
-        .label => _ = replaceOwnedString(host.gpa.allocator(), &elem.label, value),
-        .test_id => _ = replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
-    }
+fn applyRenderStructuralDesc(host: *HostEnv, desc: RenderStructuralDesc) void {
+    _ = domElementById(host, desc.elem_id);
+    host.markRenderStructuralSignal(desc.signal_id);
 }
 
-fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
-    switch (command.tag) {
-        .CreateElement => applyCreateElementCommand(host, command.payload.create_element),
-        .AppendChild => applyAppendChildCommand(host, command.payload.append_child),
-        .SetText => {
-            const payload = command.payload.set_text;
-            setElementTextIfChanged(host, domElementById(host, payload.id), payload.value.asSlice());
-        },
-        .SetRole => applyStringCommand(host, command.payload.set_role, .role),
-        .SetLabel => applyStringCommand(host, command.payload.set_label, .label),
-        .SetTestId => applyStringCommand(host, command.payload.set_test_id, .test_id),
-        .SetValue => {
-            const payload = command.payload.set_value;
-            setElementValueIfChanged(host, domElementById(host, payload.id), payload.value.asSlice());
-        },
-        .SetChecked => {
-            const payload = command.payload.set_checked;
-            setElementCheckedIfChanged(domElementById(host, payload.id), payload.value);
-        },
-        .SetDisabled => {
-            const payload = command.payload.set_disabled;
-            setElementDisabledIfChanged(domElementById(host, payload.id), payload.value);
-        },
-        .BindClick => {
-            const payload = command.payload.bind_click;
-            host.validateEventPayload(payload.event, .unit);
-            domElementById(host, payload.id).bound_click_event = payload.event;
-        },
-        .BindInput => {
-            const payload = command.payload.bind_input;
-            host.validateEventPayload(payload.event, .str);
-            domElementById(host, payload.id).bound_input_event = payload.event;
-        },
-        .BindCheck => {
-            const payload = command.payload.bind_check;
-            host.validateEventPayload(payload.event, .bool);
-            domElementById(host, payload.id).bound_check_event = payload.event;
-        },
-    }
+fn nodeValueText(value: abi.NodeValue) []const u8 {
+    return switch (value.tag) {
+        .NvStr => value.payload.nv_str.asSlice(),
+        else => failHost("render text sink expected a Str signal value"),
+    };
 }
 
-fn traceCommand(command: abi.UiRuntimeCommand) void {
-    if (!traceEnabled()) return;
-    switch (command.tag) {
-        .CreateElement => {
-            const payload = command.payload.create_element;
-            printStderr("[HOST CMD] CreateElement id={d} tag=\"{s}\"\n", .{ payload.id, payload.tag.asSlice() });
-        },
-        .AppendChild => {
-            const payload = command.payload.append_child;
-            printStderr("[HOST CMD] AppendChild parent={d} child={d}\n", .{ payload.parent, payload.child });
-        },
-        .SetText => {
-            const payload = command.payload.set_text;
-            printStderr("[HOST CMD] SetText id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
-        },
-        .SetRole => {
-            const payload = command.payload.set_role;
-            printStderr("[HOST CMD] SetRole id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
-        },
-        .SetLabel => {
-            const payload = command.payload.set_label;
-            printStderr("[HOST CMD] SetLabel id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
-        },
-        .SetTestId => {
-            const payload = command.payload.set_test_id;
-            printStderr("[HOST CMD] SetTestId id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
-        },
-        .SetValue => {
-            const payload = command.payload.set_value;
-            printStderr("[HOST CMD] SetValue id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
-        },
-        .SetChecked => {
-            const payload = command.payload.set_checked;
-            printStderr("[HOST CMD] SetChecked id={d} value={}\n", .{ payload.id, payload.value });
-        },
-        .SetDisabled => {
-            const payload = command.payload.set_disabled;
-            printStderr("[HOST CMD] SetDisabled id={d} value={}\n", .{ payload.id, payload.value });
-        },
-        .BindClick => {
-            const payload = command.payload.bind_click;
-            printStderr("[HOST CMD] BindClick id={d} event={d}\n", .{ payload.id, payload.event });
-        },
-        .BindInput => {
-            const payload = command.payload.bind_input;
-            printStderr("[HOST CMD] BindInput id={d} event={d}\n", .{ payload.id, payload.event });
-        },
-        .BindCheck => {
-            const payload = command.payload.bind_check;
-            printStderr("[HOST CMD] BindCheck id={d} event={d}\n", .{ payload.id, payload.event });
-        },
+fn nodeValueBoolValue(value: abi.NodeValue) bool {
+    return switch (value.tag) {
+        .NvBool => value.payload.nv_bool,
+        else => failHost("render bool sink expected a Bool signal value"),
+    };
+}
+
+fn applySignalRenderPatches(host: *HostEnv, changes: SignalValueList) CommandCounts {
+    var counts: CommandCounts = .{};
+
+    for (changes.items()) |change| {
+        if (change.signal_id >= host.signal_descriptors.items.len) {
+            failHost("Roc signal change descriptor referenced an unknown signal id");
+        }
+        const signal_index: usize = @intCast(change.signal_id);
+
+        if (signal_index < host.render_text_sink_routes.items.len and host.render_text_sink_routes.items[signal_index].items.len > 0) {
+            const value = nodeValueText(change.value);
+            for (host.render_text_sink_routes.items[signal_index].items) |sink| {
+                if (applyRenderTextField(host, sink.elem_id, sink.field, value)) {
+                    counts.addTextField(sink.field);
+                }
+            }
+        }
+
+        if (signal_index < host.render_bool_sink_routes.items.len and host.render_bool_sink_routes.items[signal_index].items.len > 0) {
+            const value = nodeValueBoolValue(change.value);
+            for (host.render_bool_sink_routes.items[signal_index].items) |sink| {
+                if (applyRenderBoolField(host, sink.elem_id, sink.field, value)) {
+                    counts.addBoolField(sink.field);
+                }
+            }
+        }
     }
+
+    host.render_metrics.commands_emitted += counts.total;
+    if (counts.total > 0) {
+        host.render_metrics.incremental_batches += 1;
+    }
+
+    return counts;
 }
 
 fn traceHostDomReset() void {
@@ -1963,208 +1946,12 @@ fn traceHostDomReset() void {
     writeStderr("[HOST CMD] ResetDom\n");
 }
 
-fn emptyCommandSnapshot(kind: u64, a: u64, b: u64, value_bool: bool) HostCommandSnapshot {
-    return .{
-        .kind = kind,
-        .a = a,
-        .b = b,
-        .value_bool = value_bool,
-        .value_bytes = &.{},
-        .value_bytes_owned = false,
-    };
-}
-
-fn bytesCommandSnapshot(allocator: std.mem.Allocator, kind: u64, a: u64, b: u64, value_bool: bool, value: []const u8) HostCommandSnapshot {
-    if (value.len == 0) return emptyCommandSnapshot(kind, a, b, value_bool);
-    return .{
-        .kind = kind,
-        .a = a,
-        .b = b,
-        .value_bool = value_bool,
-        .value_bytes = allocator.dupe(u8, value) catch std.process.exit(1),
-        .value_bytes_owned = true,
-    };
-}
-
-fn commandSnapshot(allocator: std.mem.Allocator, command: abi.UiRuntimeCommand) HostCommandSnapshot {
-    return switch (command.tag) {
-        .CreateElement => blk: {
-            const payload = command.payload.create_element;
-            break :blk bytesCommandSnapshot(allocator, 1, payload.id, 0, false, payload.tag.asSlice());
-        },
-        .AppendChild => blk: {
-            const payload = command.payload.append_child;
-            break :blk emptyCommandSnapshot(2, payload.parent, payload.child, false);
-        },
-        .SetText => blk: {
-            const payload = command.payload.set_text;
-            break :blk bytesCommandSnapshot(allocator, 3, payload.id, 0, false, payload.value.asSlice());
-        },
-        .SetRole => blk: {
-            const payload = command.payload.set_role;
-            break :blk bytesCommandSnapshot(allocator, 4, payload.id, 0, false, payload.value.asSlice());
-        },
-        .SetLabel => blk: {
-            const payload = command.payload.set_label;
-            break :blk bytesCommandSnapshot(allocator, 5, payload.id, 0, false, payload.value.asSlice());
-        },
-        .SetTestId => blk: {
-            const payload = command.payload.set_test_id;
-            break :blk bytesCommandSnapshot(allocator, 6, payload.id, 0, false, payload.value.asSlice());
-        },
-        .SetValue => blk: {
-            const payload = command.payload.set_value;
-            break :blk bytesCommandSnapshot(allocator, 7, payload.id, 0, false, payload.value.asSlice());
-        },
-        .SetChecked => blk: {
-            const payload = command.payload.set_checked;
-            break :blk emptyCommandSnapshot(8, payload.id, 0, payload.value);
-        },
-        .SetDisabled => blk: {
-            const payload = command.payload.set_disabled;
-            break :blk emptyCommandSnapshot(9, payload.id, 0, payload.value);
-        },
-        .BindClick => blk: {
-            const payload = command.payload.bind_click;
-            break :blk emptyCommandSnapshot(10, payload.id, payload.event, false);
-        },
-        .BindInput => blk: {
-            const payload = command.payload.bind_input;
-            break :blk emptyCommandSnapshot(11, payload.id, payload.event, false);
-        },
-        .BindCheck => blk: {
-            const payload = command.payload.bind_check;
-            break :blk emptyCommandSnapshot(12, payload.id, payload.event, false);
-        },
-    };
-}
-
-fn clearCommandSnapshots(allocator: std.mem.Allocator, snapshots: *std.ArrayListUnmanaged(HostCommandSnapshot)) void {
-    for (snapshots.items) |snapshot| {
-        snapshot.deinit(allocator);
-    }
-    snapshots.items.len = 0;
-}
-
-fn commandSnapshots(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) std.ArrayListUnmanaged(HostCommandSnapshot) {
-    const allocator = host.gpa.allocator();
-    var snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty;
-
-    for (commands.items()) |command| {
-        const snapshot = commandSnapshot(allocator, command);
-        snapshots.append(allocator, snapshot) catch {
-            snapshot.deinit(allocator);
-            clearCommandSnapshots(allocator, &snapshots);
-            snapshots.deinit(allocator);
-            std.process.exit(1);
-        };
-    }
-
-    return snapshots;
-}
-
-fn snapshotIsStructural(snapshot: HostCommandSnapshot) bool {
-    return snapshot.kind == 1 or snapshot.kind == 2;
-}
-
-fn snapshotEqual(left: HostCommandSnapshot, right: HostCommandSnapshot) bool {
-    return left.kind == right.kind and
-        left.a == right.a and
-        left.b == right.b and
-        left.value_bool == right.value_bool and
-        std.mem.eql(u8, left.value_bytes, right.value_bytes);
-}
-
-fn findStructuralSnapshot(snapshots: []const HostCommandSnapshot, start_index: usize) ?usize {
-    var index = start_index;
-    while (index < snapshots.len) : (index += 1) {
-        if (snapshotIsStructural(snapshots[index])) return index;
-    }
-    return null;
-}
-
-fn sameCommandStructure(previous: []const HostCommandSnapshot, next: []const HostCommandSnapshot) bool {
-    var previous_index: usize = 0;
-    var next_index: usize = 0;
-
-    while (true) {
-        const previous_structural = findStructuralSnapshot(previous, previous_index);
-        const next_structural = findStructuralSnapshot(next, next_index);
-
-        if (previous_structural == null and next_structural == null) return true;
-        if (previous_structural == null or next_structural == null) return false;
-
-        const previous_found = previous_structural.?;
-        const next_found = next_structural.?;
-        if (!snapshotEqual(previous[previous_found], next[next_found])) return false;
-
-        previous_index = previous_found + 1;
-        next_index = next_found + 1;
-    }
-}
-
-fn applyFullCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
+fn applyFullRenderDescriptors(host: *HostEnv, result: DispatchResult) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
     traceHostDomReset();
     resetSimulatedDom(host);
-    for (commands.items()) |command| {
-        counts.add(command);
-        traceCommand(command);
-        applyCommand(host, command);
-    }
-    return counts;
-}
-
-fn applyIncrementalCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand), next_snapshots: []const HostCommandSnapshot) CommandCounts {
-    var counts: CommandCounts = .{};
-
-    for (commands.items(), 0..) |command, index| {
-        const snapshot = next_snapshots[index];
-        if (snapshotIsStructural(snapshot)) continue;
-
-        const changed = if (index < host.previous_command_snapshots.items.len)
-            !snapshotEqual(host.previous_command_snapshots.items[index], snapshot)
-        else
-            true;
-
-        if (changed) {
-            counts.add(command);
-            traceCommand(command);
-            applyCommand(host, command);
-        }
-    }
-
-    return counts;
-}
-
-fn applyRenderCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
-    const next_snapshots = commandSnapshots(host, commands);
-    const full_batch = !host.has_previous_render_snapshot or
-        !sameCommandStructure(host.previous_command_snapshots.items, next_snapshots.items);
-
-    const counts = if (full_batch)
-        applyFullCommandList(host, commands)
-    else
-        applyIncrementalCommandList(host, commands, next_snapshots.items);
-
-    host.render_metrics.commands_emitted += counts.total;
-    if (full_batch) {
-        host.render_metrics.full_render_batches += 1;
-        host.render_metrics.structural_resets += 1;
-    } else {
-        host.render_metrics.incremental_batches += 1;
-    }
-
-    host.setPreviousCommandSnapshots(next_snapshots);
-    return counts;
-}
-
-fn applyInitialRenderDescriptors(host: *HostEnv, result: DispatchResult) CommandCounts {
-    var counts: CommandCounts = .{};
-    counts.addHostReset();
-    traceHostDomReset();
-    resetSimulatedDom(host);
+    host.resetRenderSinkRoutes();
 
     for (result.render_elements.items()) |desc| {
         applyRenderElementDesc(host, desc);
@@ -2174,28 +1961,34 @@ fn applyInitialRenderDescriptors(host: *HostEnv, result: DispatchResult) Command
 
     for (result.render_texts.items()) |desc| {
         const field = HostEnv.renderTextFieldFromAbi(desc.field);
-        applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice());
-        counts.addTextField(field);
+        if (applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice())) {
+            counts.addTextField(field);
+        }
     }
 
     for (result.render_signal_texts.items()) |desc| {
         validateRenderSinkSignal(host, desc.signal_id);
         const field = HostEnv.renderTextFieldFromAbi(desc.field);
-        applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice());
-        counts.addTextField(field);
+        host.appendRenderTextSink(desc.signal_id, desc.elem_id, field);
+        if (applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice())) {
+            counts.addTextField(field);
+        }
     }
 
     for (result.render_bools.items()) |desc| {
         const field = HostEnv.renderBoolFieldFromAbi(desc.field);
-        applyRenderBoolField(host, desc.elem_id, field, desc.value);
-        counts.addBoolField(field);
+        if (applyRenderBoolField(host, desc.elem_id, field, desc.value)) {
+            counts.addBoolField(field);
+        }
     }
 
     for (result.render_signal_bools.items()) |desc| {
         validateRenderSinkSignal(host, desc.signal_id);
         const field = HostEnv.renderBoolFieldFromAbi(desc.field);
-        applyRenderBoolField(host, desc.elem_id, field, desc.value);
-        counts.addBoolField(field);
+        host.appendRenderBoolSink(desc.signal_id, desc.elem_id, field);
+        if (applyRenderBoolField(host, desc.elem_id, field, desc.value)) {
+            counts.addBoolField(field);
+        }
     }
 
     for (result.render_events.items()) |desc| {
@@ -2203,20 +1996,15 @@ fn applyInitialRenderDescriptors(host: *HostEnv, result: DispatchResult) Command
         counts.addEventBinding();
     }
 
+    for (result.render_structures.items()) |desc| {
+        applyRenderStructuralDesc(host, desc);
+    }
+
     host.render_metrics.commands_emitted += counts.total;
     host.render_metrics.full_render_batches += 1;
     host.render_metrics.structural_resets += 1;
 
     return counts;
-}
-
-fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), roc_host: *abi.RocHost) void {
-    if (commands.isUnique()) {
-        for (commands.items()) |command| {
-            abi.decrefUiRuntimeCommand(command, roc_host);
-        }
-    }
-    commands.decref(roc_host);
 }
 
 fn releaseRenderElementList(elements: RenderElementDescList, roc_host: *abi.RocHost) void {
@@ -2258,6 +2046,10 @@ fn releaseRenderEventList(events: RenderEventDescList, roc_host: *abi.RocHost) v
     events.decref(roc_host);
 }
 
+fn releaseRenderStructuralList(structures: RenderStructuralDescList, roc_host: *abi.RocHost) void {
+    structures.decref(roc_host);
+}
+
 fn releaseDispatchRenderDescriptors(result: DispatchResult, roc_host: *abi.RocHost) void {
     releaseRenderElementList(result.render_elements, roc_host);
     releaseRenderTextList(result.render_texts, roc_host);
@@ -2265,6 +2057,7 @@ fn releaseDispatchRenderDescriptors(result: DispatchResult, roc_host: *abi.RocHo
     releaseRenderBoolList(result.render_bools, roc_host);
     releaseRenderSignalBoolList(result.render_signal_bools, roc_host);
     releaseRenderEventList(result.render_events, roc_host);
+    releaseRenderStructuralList(result.render_structures, roc_host);
 }
 
 fn releaseEventDescriptorList(descriptors: EventDescriptorList, roc_host: *abi.RocHost) void {
@@ -2313,7 +2106,7 @@ fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) 
 
 fn dropMovedRecomputeResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
-fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox, apply_ns: ?*u64) void {
+fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) RecomputeApplyOutcome {
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
@@ -2322,8 +2115,15 @@ fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_
     host.setEventDescriptors(result.event_descriptors);
     host.setStateDescriptors(result.state_descriptors);
     host.setSignalDescriptors(result.signal_descriptors);
+    const structural_render_required = host.signalChangesRequireStructuralRender(result.signal_changes);
     host.applyStateChanges(result.state_changes);
     host.applySignalChanges(result.signal_changes);
+    if (!structural_render_required) {
+        const counts = applySignalRenderPatches(host, result.signal_changes);
+        if (command_counts) |total| total.addAll(counts);
+        host.last_runtime_metrics = host.metricsWithHostRender(host.pending_roc_metrics);
+        host.pending_roc_metrics = zeroRuntimeMetrics();
+    }
     const elapsed = benchmarkNowNs() - start_ns;
     if (apply_ns) |ns| ns.* += elapsed;
     releaseEventDescriptorList(result.event_descriptors, roc_host);
@@ -2332,72 +2132,49 @@ fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_
     releaseStateDescriptorList(result.state_descriptors, roc_host);
     releaseStateChangeList(result.state_changes, roc_host);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(RecomputeResult), &dropMovedRecomputeResultPayload, roc_host);
+    return .{ .structural_render_required = structural_render_required };
 }
 
-fn acceptRecomputeResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox) void {
-    acceptRecomputeResultMeasured(host, roc_host, result_box, null);
+fn acceptRecomputeResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox) RecomputeApplyOutcome {
+    return acceptRecomputeResultMeasured(host, roc_host, result_box, null, null);
+}
+
+fn acceptRenderResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+    const result = result_box.*;
+    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
+    host.runtime_box = result.runtime;
+    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
+    host.pending_roc_metrics = zeroRuntimeMetrics();
+    host.setEventDescriptors(result.event_descriptors);
+    host.setStateDescriptors(result.state_descriptors);
+    host.setSignalDescriptors(result.signal_descriptors);
+    host.applyStateChanges(result.state_changes);
+    host.applySignalChanges(result.signal_changes);
+    const start_ns = benchmarkNowNs();
+    const counts = applyFullRenderDescriptors(host, result);
+    const elapsed = benchmarkNowNs() - start_ns;
+    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
+    if (apply_ns) |ns| ns.* += elapsed;
+    if (command_counts) |total| total.addAll(counts);
+    releaseDispatchRenderDescriptors(result, roc_host);
+    releaseEventDescriptorList(result.event_descriptors, roc_host);
+    releaseSignalValueList(result.signal_changes, roc_host);
+    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
+    releaseStateDescriptorList(result.state_descriptors, roc_host);
+    releaseStateChangeList(result.state_changes, roc_host);
+    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
+}
+
+fn acceptRenderResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
+    acceptRenderResultMeasured(host, roc_host, result_box, null, null);
 }
 
 fn acceptInitResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
-    const result = result_box.*;
-    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
-    host.runtime_box = result.runtime;
-    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
-    host.pending_roc_metrics = zeroRuntimeMetrics();
-    host.setEventDescriptors(result.event_descriptors);
-    host.setStateDescriptors(result.state_descriptors);
-    host.setSignalDescriptors(result.signal_descriptors);
-    host.applyStateChanges(result.state_changes);
-    host.applySignalChanges(result.signal_changes);
-    const start_ns = benchmarkNowNs();
-    const counts = applyInitialRenderDescriptors(host, result);
-    const elapsed = benchmarkNowNs() - start_ns;
-    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
-    if (apply_ns) |ns| ns.* += elapsed;
-    if (command_counts) |total| total.addAll(counts);
-    releaseCommandList(result.commands, roc_host);
-    releaseDispatchRenderDescriptors(result, roc_host);
-    releaseEventDescriptorList(result.event_descriptors, roc_host);
-    releaseSignalValueList(result.signal_changes, roc_host);
-    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
-    releaseStateDescriptorList(result.state_descriptors, roc_host);
-    releaseStateChangeList(result.state_changes, roc_host);
-    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
+    acceptRenderResultMeasured(host, roc_host, result_box, apply_ns, command_counts);
 }
 
 fn acceptInitResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
-    acceptInitResultMeasured(host, roc_host, result_box, null, null);
-}
-
-fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
-    const result = result_box.*;
-    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
-    host.runtime_box = result.runtime;
-    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
-    host.pending_roc_metrics = zeroRuntimeMetrics();
-    host.setEventDescriptors(result.event_descriptors);
-    host.setStateDescriptors(result.state_descriptors);
-    host.setSignalDescriptors(result.signal_descriptors);
-    host.applyStateChanges(result.state_changes);
-    host.applySignalChanges(result.signal_changes);
-    const start_ns = benchmarkNowNs();
-    const counts = applyRenderCommandList(host, result.commands);
-    const elapsed = benchmarkNowNs() - start_ns;
-    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
-    if (apply_ns) |ns| ns.* += elapsed;
-    if (command_counts) |total| total.addAll(counts);
-    releaseCommandList(result.commands, roc_host);
-    releaseDispatchRenderDescriptors(result, roc_host);
-    releaseEventDescriptorList(result.event_descriptors, roc_host);
-    releaseSignalValueList(result.signal_changes, roc_host);
-    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
-    releaseStateDescriptorList(result.state_descriptors, roc_host);
-    releaseStateChangeList(result.state_changes, roc_host);
-    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
-}
-
-fn acceptDispatchResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
-    acceptDispatchResultMeasured(host, roc_host, result_box, null, null);
+    acceptRenderResult(host, roc_host, result_box);
 }
 
 fn boxRenderInput(roc_host: *abi.RocHost, input: RenderInput) RenderInputBox {
@@ -2533,11 +2310,12 @@ fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInpu
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
     host.recordDispatch();
-    acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxRecomputeInput(roc_host, input)));
+    const outcome = acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxRecomputeInput(roc_host, input)));
+    if (!outcome.structural_render_required) return;
 
     const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
     host.runtime_box = null;
-    acceptDispatchResult(host, roc_host, abi.roc_ui_render(render_runtime, boxRenderInput(roc_host, renderInputForHost(host, roc_host))));
+    acceptRenderResult(host, roc_host, abi.roc_ui_render(render_runtime, boxRenderInput(roc_host, renderInputForHost(host, roc_host))));
 }
 
 fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInput, stats: *BenchmarkStats) void {
@@ -2548,7 +2326,11 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, input: Recom
     const start_ns = benchmarkNowNs();
     const result_box = abi.roc_ui_recompute(runtime, input_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
-    acceptRecomputeResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns);
+    const outcome = acceptRecomputeResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns, &stats.commands);
+    if (!outcome.structural_render_required) {
+        stats.actions += 1;
+        return;
+    }
 
     const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
     host.runtime_box = null;
@@ -2556,7 +2338,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, input: Recom
     const render_start_ns = benchmarkNowNs();
     const render_result_box = abi.roc_ui_render(render_runtime, render_input_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - render_start_ns;
-    acceptDispatchResultMeasured(host, roc_host, render_result_box, &stats.dispatch_apply_ns, &stats.commands);
+    acceptRenderResultMeasured(host, roc_host, render_result_box, &stats.dispatch_apply_ns, &stats.commands);
     stats.actions += 1;
 }
 
@@ -2595,7 +2377,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             if (elem.bound_input_event) |event_id| {
                 dispatchRocEventMeasured(host, roc_host, inputRecomputeInput(host, roc_host, event_id, value), stats);
             } else {
-                setElementValueIfChanged(host, elem, value);
+                _ = setElementValueIfChanged(host, elem, value);
             }
         },
 
@@ -2606,7 +2388,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             if (elem.bound_check_event) |event_id| {
                 dispatchRocEventMeasured(host, roc_host, checkRecomputeInput(host, roc_host, event_id, checked), stats);
             } else {
-                setElementCheckedIfChanged(elem, checked);
+                _ = setElementCheckedIfChanged(elem, checked);
             }
         },
 
@@ -2906,7 +2688,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 if (elem.bound_input_event) |event_id| {
                     dispatchRocEvent(&host_env, &roc_host, inputRecomputeInput(&host_env, &roc_host, event_id, value));
                 } else {
-                    setElementValueIfChanged(&host_env, elem, value);
+                    _ = setElementValueIfChanged(&host_env, elem, value);
                 }
             },
 
@@ -2923,7 +2705,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 if (elem.bound_check_event) |event_id| {
                     dispatchRocEvent(&host_env, &roc_host, checkRecomputeInput(&host_env, &roc_host, event_id, checked));
                 } else {
-                    setElementCheckedIfChanged(elem, checked);
+                    _ = setElementCheckedIfChanged(elem, checked);
                 }
             },
 

@@ -2607,32 +2607,35 @@ pub fn build(b: *std.Build) void {
     };
 
     for (signals_apps) |signals_app| {
-        const check_signals_app = b.addRunArtifact(roc_exe);
-        check_signals_app.addArgs(&.{ "check", signals_app.source });
-        check_signals_app.step.dependOn(build_roc_step);
-
-        const signals_app_path = b.pathJoin(&.{ "zig-out", "bin", signals_app.exe_name });
-        const build_signals_app = b.addRunArtifact(roc_exe);
-        build_signals_app.addArgs(&.{
+        const signals_test_app_path = b.pathJoin(&.{ "zig-out", "bin", signals_app.exe_name });
+        const build_signals_test_app = b.addRunArtifact(roc_exe);
+        build_signals_test_app.addArgs(&.{
             "build",
-            "--opt=speed",
-            "--debug",
-            "--no-cache",
-            b.fmt("--output={s}", .{signals_app_path}),
+            "--opt=dev",
+            b.fmt("--output={s}", .{signals_test_app_path}),
             signals_app.source,
         });
-        build_signals_app.step.dependOn(&check_signals_app.step);
-        build_signals_app.step.dependOn(build_test_hosts_step);
+        build_signals_test_app.step.dependOn(build_test_hosts_step);
 
         const run_signals_app = b.addSystemCommand(&.{
-            signals_app_path,
+            signals_test_app_path,
             signals_app.spec,
         });
-        run_signals_app.step.dependOn(&build_signals_app.step);
+        run_signals_app.step.dependOn(&build_signals_test_app.step);
         run_test_signals_step.dependOn(&run_signals_app.step);
 
+        const signals_bench_app_path = b.pathJoin(&.{ "zig-out", "bin", b.fmt("{s}-bench", .{signals_app.exe_name}) });
+        const build_signals_bench_app = b.addRunArtifact(roc_exe);
+        build_signals_bench_app.addArgs(&.{
+            "build",
+            "--opt=speed",
+            b.fmt("--output={s}", .{signals_bench_app_path}),
+            signals_app.source,
+        });
+        build_signals_bench_app.step.dependOn(build_test_hosts_step);
+
         const bench_signals_app = b.addSystemCommand(&.{
-            signals_app_path,
+            signals_bench_app_path,
             "--bench-app",
             "--bench-name",
             signals_app.exe_name,
@@ -2642,7 +2645,7 @@ pub fn build(b: *std.Build) void {
             "1",
             signals_app.spec,
         });
-        bench_signals_app.step.dependOn(&build_signals_app.step);
+        bench_signals_app.step.dependOn(&build_signals_bench_app.step);
         run_signals_bench_step.dependOn(&bench_signals_app.step);
     }
 

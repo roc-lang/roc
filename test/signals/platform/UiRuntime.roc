@@ -58,20 +58,7 @@ UiRuntime := [].{
 
 	RenderEventDesc : { elem_id : U64, event_kind : U64, event_id : U64 }
 
-	Command := [
-		CreateElement({ id : U64, tag : Str }),
-		AppendChild({ parent : U64, child : U64 }),
-		SetText({ id : U64, value : Str }),
-		SetRole({ id : U64, value : Str }),
-		SetLabel({ id : U64, value : Str }),
-		SetTestId({ id : U64, value : Str }),
-		SetValue({ id : U64, value : Str }),
-		SetChecked({ id : U64, value : Bool }),
-		SetDisabled({ id : U64, value : Bool }),
-		BindClick({ id : U64, event : U64 }),
-		BindInput({ id : U64, event : U64 }),
-		BindCheck({ id : U64, event : U64 }),
-	]
+	RenderStructuralDesc : { elem_id : U64, signal_id : U64 }
 
 	Runtime : {
 		root : Elem,
@@ -85,13 +72,13 @@ UiRuntime := [].{
 
 	DispatchResult : {
 		runtime : Box(Runtime),
-		commands : List(Command),
 		render_elements : List(RenderElementDesc),
 		render_texts : List(RenderTextDesc),
 		render_signal_texts : List(RenderSignalTextDesc),
 		render_bools : List(RenderBoolDesc),
 		render_signal_bools : List(RenderSignalBoolDesc),
 		render_events : List(RenderEventDesc),
+		render_structures : List(RenderStructuralDesc),
 		event_descriptors : List(EventDesc),
 		signal_descriptors : List(SignalDesc),
 		state_descriptors : List(StateDesc),
@@ -145,25 +132,25 @@ UiRuntime := [].{
 
 	RenderState : {
 		state : EvalState,
-		commands : List(Command),
 		render_elements : List(RenderElementDesc),
 		render_texts : List(RenderTextDesc),
 		render_signal_texts : List(RenderSignalTextDesc),
 		render_bools : List(RenderBoolDesc),
 		render_signal_bools : List(RenderSignalBoolDesc),
 		render_events : List(RenderEventDesc),
+		render_structures : List(RenderStructuralDesc),
 		next_elem_id : U64,
 	}
 
 	RenderResult : {
 		runtime : Runtime,
-		emit_commands : List(Command),
 		render_elements : List(RenderElementDesc),
 		render_texts : List(RenderTextDesc),
 		render_signal_texts : List(RenderSignalTextDesc),
 		render_bools : List(RenderBoolDesc),
 		render_signal_bools : List(RenderSignalBoolDesc),
 		render_events : List(RenderEventDesc),
+		render_structures : List(RenderStructuralDesc),
 		changed_state_indexes : List(U64),
 		state_changes : List(StateValueDesc),
 		signal_changes : List(SignalValueDesc),
@@ -299,13 +286,13 @@ UiRuntime := [].{
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
-			commands: rendered.emit_commands,
 			render_elements: rendered.render_elements,
 			render_texts: rendered.render_texts,
 			render_signal_texts: rendered.render_signal_texts,
 			render_bools: rendered.render_bools,
 			render_signal_bools: rendered.render_signal_bools,
 			render_events: rendered.render_events,
+			render_structures: rendered.render_structures,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
@@ -338,13 +325,13 @@ UiRuntime := [].{
 		rendered = render_runtime(runtime0, NoEvent, { ids: [] }, input.cached_signals, input.cached_states)
 		{
 			runtime: Box.box(rendered.runtime),
-			commands: rendered.emit_commands,
 			render_elements: rendered.render_elements,
 			render_texts: rendered.render_texts,
 			render_signal_texts: rendered.render_signal_texts,
 			render_bools: rendered.render_bools,
 			render_signal_bools: rendered.render_signal_bools,
 			render_events: rendered.render_events,
+			render_structures: rendered.render_structures,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
@@ -698,25 +685,25 @@ UiRuntime := [].{
 		scheduled_state = eval_signal_plan(state, dirty_signals.ids)
 		render_state = {
 			state: scheduled_state,
-			commands: [],
 			render_elements: [],
 			render_texts: [],
 			render_signal_texts: [],
 			render_bools: [],
 			render_signal_bools: [],
 			render_events: [],
+			render_structures: [],
 			next_elem_id: 1,
 		}
 		rendered = render_elem(render_state, runtime.root, 0)
 		{
 			runtime: rendered.state.runtime,
-			emit_commands: rendered.commands,
 			render_elements: rendered.render_elements,
 			render_texts: rendered.render_texts,
 			render_signal_texts: rendered.render_signal_texts,
 			render_bools: rendered.render_bools,
 			render_signal_bools: rendered.render_signal_bools,
 			render_events: rendered.render_events,
+			render_structures: rendered.render_structures,
 			changed_state_indexes: rendered.state.changed_state_indexes,
 			state_changes: rendered.state.state_changes,
 			signal_changes: rendered.state.signal_changes,
@@ -751,11 +738,6 @@ UiRuntime := [].{
 		)
 	}
 
-	add_command : RenderState, Command -> RenderState
-	add_command = |render_state, command| {
-		{ ..render_state, commands: List.append(render_state.commands, command) }
-	}
-
 	add_render_element : RenderState, U64, U64, Str -> RenderState
 	add_render_element = |render_state, elem_id, parent_id, tag| {
 		{ ..render_state, render_elements: List.append(render_state.render_elements, { elem_id, parent_id, tag }) }
@@ -786,6 +768,11 @@ UiRuntime := [].{
 		{ ..render_state, render_events: List.append(render_state.render_events, { elem_id, event_kind, event_id }) }
 	}
 
+	add_structural_desc : RenderState, U64, U64 -> RenderState
+	add_structural_desc = |render_state, elem_id, signal_id| {
+		{ ..render_state, render_structures: List.append(render_state.render_structures, { elem_id, signal_id }) }
+	}
+
 	render_signal_id : Graph.SignalNode -> RenderSignalLookup
 	render_signal_id = |signal| {
 		match signal.cache_key {
@@ -810,13 +797,19 @@ UiRuntime := [].{
 		}
 	}
 
+	add_structural_signal_desc : RenderState, U64, Graph.SignalNode -> RenderState
+	add_structural_signal_desc = |render_state, elem_id, signal| {
+		match render_signal_id(signal) {
+			RenderSignalFound(signal_id) => add_structural_desc(render_state, elem_id, signal_id)
+			RenderSignalMissing => render_state
+		}
+	}
+
 	create_child : RenderState, U64, Str -> { render_state : RenderState, id : U64 }
 	create_child = |render_state, parent_id, tag| {
 		id = render_state.next_elem_id
 		next_state = add_render_element({ ..render_state, next_elem_id: id + 1 }, id, parent_id, tag)
-		with_create = add_command(next_state, CreateElement({ id, tag }))
-		with_append = add_command(with_create, AppendChild({ parent: parent_id, child: id }))
-		{ render_state: with_append, id }
+		{ render_state: next_state, id }
 	}
 
 	render_children : RenderState, List(Elem), U64 -> RenderState
@@ -840,9 +833,7 @@ UiRuntime := [].{
 				with_state = { ..created.render_state, state: state1 }
 				label_text = node_text(label_result.value)
 				with_text_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, label, label_text)
-				with_text = add_command(with_text_desc, SetText({ id: created.id, value: label_text }))
-				with_event_desc = add_event_desc(with_text, created.id, render_event_kind_click, event_lookup.id)
-				add_command(with_event_desc, BindClick({ id: created.id, event: event_lookup.id }))
+				add_event_desc(with_text_desc, created.id, render_event_kind_click, event_lookup.id)
 			}
 
 			ActionButton({ on_click, label, disabled }) => {
@@ -856,10 +847,7 @@ UiRuntime := [].{
 				disabled_value = node_bool(disabled_result.value)
 				with_text_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, label, label_text)
 				with_bool_desc = add_bool_sink_desc(with_text_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
-				with_text = add_command(with_bool_desc, SetText({ id: created.id, value: label_text }))
-				with_disabled = add_command(with_text, SetDisabled({ id: created.id, value: disabled_value }))
-				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_click, event_lookup.id)
-				add_command(with_event_desc, BindClick({ id: created.id, event: event_lookup.id }))
+				add_event_desc(with_bool_desc, created.id, render_event_kind_click, event_lookup.id)
 			}
 
 			Label({ signal }) => {
@@ -867,37 +855,30 @@ UiRuntime := [].{
 				result = eval_signal(created.render_state.state, signal)
 				with_state = { ..created.render_state, state: result.state }
 				text = node_text(result.value)
-				with_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, signal, text)
-				add_command(with_desc, SetText({ id: created.id, value: text }))
+				add_text_sink_desc(with_state, created.id, render_text_field_text, signal, text)
 			}
 
 			Text(text) => {
 				created = create_child(render_state, parent_id, "span")
-				with_desc = add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
-				add_command(with_desc, SetText({ id: created.id, value: text }))
+				add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
 			}
 
 			Heading(text) => {
 				created = create_child(render_state, parent_id, "h2")
 				with_role_desc = add_static_text_desc(created.render_state, created.id, render_text_field_role, "heading")
-				with_text_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_text, text)
-				with_role = add_command(with_text_desc, SetRole({ id: created.id, value: "heading" }))
-				add_command(with_role, SetText({ id: created.id, value: text }))
+				add_static_text_desc(with_role_desc, created.id, render_text_field_text, text)
 			}
 
 			Paragraph(text) => {
 				created = create_child(render_state, parent_id, "p")
-				with_desc = add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
-				add_command(with_desc, SetText({ id: created.id, value: text }))
+				add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
 			}
 
 			Section({ label, children }) => {
 				created = create_child(render_state, parent_id, "section")
 				with_role_desc = add_static_text_desc(created.render_state, created.id, render_text_field_role, "region")
 				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
-				with_role = add_command(with_label_desc, SetRole({ id: created.id, value: "region" }))
-				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
-				render_children(with_label, children, created.id)
+				render_children(with_label_desc, children, created.id)
 			}
 
 			TextInput({ label, value, on_input, disabled }) => {
@@ -913,12 +894,7 @@ UiRuntime := [].{
 				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
 				with_value_desc = add_text_sink_desc(with_label_desc, created.id, render_text_field_value, value, value_text)
 				with_bool_desc = add_bool_sink_desc(with_value_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
-				with_role = add_command(with_bool_desc, SetRole({ id: created.id, value: "textbox" }))
-				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
-				with_value = add_command(with_label, SetValue({ id: created.id, value: value_text }))
-				with_disabled = add_command(with_value, SetDisabled({ id: created.id, value: disabled_value }))
-				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_input, event_lookup.id)
-				add_command(with_event_desc, BindInput({ id: created.id, event: event_lookup.id }))
+				add_event_desc(with_bool_desc, created.id, render_event_kind_input, event_lookup.id)
 			}
 
 			Checkbox({ label, checked, on_check, disabled }) => {
@@ -934,17 +910,14 @@ UiRuntime := [].{
 				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
 				with_checked_desc = add_bool_sink_desc(with_label_desc, created.id, render_bool_field_checked, checked, checked_value)
 				with_disabled_desc = add_bool_sink_desc(with_checked_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
-				with_role = add_command(with_disabled_desc, SetRole({ id: created.id, value: "checkbox" }))
-				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
-				with_checked = add_command(with_label, SetChecked({ id: created.id, value: checked_value }))
-				with_disabled = add_command(with_checked, SetDisabled({ id: created.id, value: disabled_value }))
-				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_check, event_lookup.id)
-				add_command(with_event_desc, BindCheck({ id: created.id, event: event_lookup.id }))
+				add_event_desc(with_disabled_desc, created.id, render_event_kind_check, event_lookup.id)
 			}
 
 			Dynamic({ signal, render }) => {
 				created = create_child(render_state, parent_id, "div")
 				result = eval_signal(created.render_state.state, signal)
+				with_signal_state = { ..created.render_state, state: result.state }
+				with_structure_desc = add_structural_signal_desc(with_signal_state, created.id, signal)
 				fn = Box.unbox(render)
 				child = fn(result.value)
 				registered_child = register_elem(result.state.runtime, child)
@@ -952,13 +925,15 @@ UiRuntime := [].{
 				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1 }
 					}
 				}
-				render_child = { ..created.render_state, state: state1 }
+				render_child = { ..with_structure_desc, state: state1 }
 				render_elem(render_child, registered_child.elem, created.id)
 			}
 
 			DynamicKeyed({ signal, key, render }) => {
 				created = create_child(render_state, parent_id, "div")
 				result = eval_signal(created.render_state.state, signal)
+				with_signal_state = { ..created.render_state, state: result.state }
+				with_structure_desc = add_structural_signal_desc(with_signal_state, created.id, signal)
 				key_fn = Box.unbox(key)
 				_ = key_fn(result.value)
 				fn = Box.unbox(render)
@@ -968,13 +943,15 @@ UiRuntime := [].{
 				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + 1 }
 					}
 				}
-				render_child = { ..created.render_state, state: state1 }
+				render_child = { ..with_structure_desc, state: state1 }
 				render_elem(render_child, registered_child.elem, created.id)
 			}
 
 			Each({ signal, key, render }) => {
 				created = create_child(render_state, parent_id, "div")
 				result = eval_signal(created.render_state.state, signal)
+				with_signal_state = { ..created.render_state, state: result.state }
+				with_structure_desc = add_structural_signal_desc(with_signal_state, created.id, signal)
 				items = NodeValue.to_list(result.value)
 				key_fn = Box.unbox(key)
 				render_fn = Box.unbox(render)
@@ -982,7 +959,7 @@ UiRuntime := [].{
 				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + List.len(items) }
 					}
 				}
-				start = { ..created.render_state, state: state1 }
+				start = { ..with_structure_desc, state: state1 }
 				List.fold(
 					items,
 					start,
@@ -1171,7 +1148,7 @@ UiRuntime := [].{
 					{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
 				}
 
-				Graph.SignalExpr.Hold({ event }) => {
+				Graph.SignalExpr.Hold({ key: _, initial: _, event }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
 					current = state_value_by_index(state_with_count, state_index)
@@ -1185,7 +1162,7 @@ UiRuntime := [].{
 					}
 				}
 
-				Graph.SignalExpr.Fold({ event, step }) => {
+				Graph.SignalExpr.Fold({ key: _, initial: _, event, step }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
 					current = state_value_by_index(state_with_count, state_index)
@@ -1204,7 +1181,7 @@ UiRuntime := [].{
 					}
 				}
 
-				Graph.SignalExpr.FoldI64({ event, step }) => {
+				Graph.SignalExpr.FoldI64({ key: _, initial: _, event, step }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
 					current = state_value_by_index(state_with_count, state_index)
@@ -1223,7 +1200,7 @@ UiRuntime := [].{
 					}
 				}
 
-				Graph.SignalExpr.FoldBoolToggle({ event }) => {
+				Graph.SignalExpr.FoldBoolToggle({ key: _, initial: _, event }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
 					current = state_value_by_index(state_with_count, state_index)
