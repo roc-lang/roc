@@ -545,7 +545,7 @@ maintain both systems side by side.
   `parse_record_field`.
 - [ ] Add CLI test: record parser missing `skip_record_field` reports missing
   `skip_record_field` when `TryField` can miss.
-- [ ] Add CLI test: required-field record missing `missing_record_field` reports
+- [x] Add CLI test: required-field record missing `missing_record_field` reports
   missing `missing_record_field`.
 - [ ] Add CLI test: optional-only record does not require `missing_record_field`.
 - [ ] Add CLI test: wrong `parse_record_field` event shape is rejected.
