@@ -12844,7 +12844,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 declaration,
                 nominal.args,
             );
-            const padding_field_tys = try checked_types.ensureInstantiatedPaddingFieldTypes(
+            var padding_field_tys = try checked_types.ensureInstantiatedPaddingFieldTypes(
                 allocator,
                 names,
                 declaration,
@@ -12865,7 +12865,11 @@ pub const ModuleInterfaceCapabilities = struct {
                 .is_opaque = nominal.is_opaque,
             });
             const capability_args = boxed_payload_templates.items[@intFromEnum(capability_id)].instantiated_args;
+            // Ownership of both slices has transferred to the appended entry (freed
+            // by the function-level errdefer / deinit); neutralize the local
+            // errdefers so a later failure in this iteration can't double-free them.
             args = &.{};
+            padding_field_tys = &.{};
 
             const proof_id: ?OpaqueAtomicProofId = blk: {
                 if (!nominal.is_opaque) break :blk null;
