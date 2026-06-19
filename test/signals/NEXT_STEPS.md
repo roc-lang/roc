@@ -290,7 +290,9 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    Progress: `platform/host.zig` now has typed helper calls for
    `NodeValue -> NodeValue`, `(NodeValue, NodeValue) -> NodeValue`, and
    `(NodeValue, NodeValue) -> Bool`, with Zig unit coverage that allocates boxed
-   erased callables through the real ABI payload/capture path. The remaining work
+   erased callables through the real ABI payload/capture path. The host also has
+   the `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each` row
+   thunks and explicitly release the returned descriptor tree. The remaining work
    is wiring those helpers into keyed-row diffing, reducer dispatch, and
    value-pruning once the host owns the new `Node.Elem` graph.
 5. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
