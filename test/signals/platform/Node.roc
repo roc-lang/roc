@@ -10,11 +10,11 @@ import NodeValue exposing [NodeValue]
 ## ref (a path-relative index assigned during the host walk). Declaration of a
 ## binder (via `Ui.state`) mints identity; a use (`map`, sink) does not.
 Node := [].{
-	## Reference to a state/source binder, resolved by the host walk to a dense
-	## node id. `BinderRef(local)` names the `local`-th state binder introduced in
-	## the current scope (construction order). This is scope-relative: the same
-	## `local` in two different scopes refers to two different binders.
-	BinderRef := [BinderRef(U64)]
+	## Reference to a state/source binder. The token is minted by `Ui.state` and
+	## copied into both the state declaration and all signal/message references to
+	## that declaration. The host maps tokens to construction-order node ids during
+	## the active descriptor walk; the token is not the state identity.
+	BinderRef := [BinderRef(Box(U64))]
 
 	## A reducer message: applies `transform` to the bound source's current value.
 	## The host routes a fired event to the referenced binder and applies the
@@ -32,8 +32,8 @@ Node := [].{
 	SignalExpr := [
 		Ref(BinderRef),
 		ConstValue(NodeValue),
-		Map({ input : Box(SignalExpr), transform : Box((NodeValue -> NodeValue)) }),
-		Map2({ left : Box(SignalExpr), right : Box(SignalExpr), transform : Box((NodeValue, NodeValue -> NodeValue)) }),
+		Map(Box(SignalExpr), Box((NodeValue -> NodeValue))),
+		Map2(Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue))),
 		Combine(List(SignalExpr)),
 	]
 

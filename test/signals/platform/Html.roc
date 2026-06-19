@@ -49,7 +49,7 @@ Html := [].{
 
 	## Signal-backed text content.
 	text_s : Signal(Str) -> Elem
-	text_s = |signal| Elem.TextSignal(Box.box(Signal.to_expr(signal)))
+	text_s = |signal| Elem.TextSignal(Signal.to_expr(signal))
 
 	## A button whose label is static text and whose click fires `msg`.
 	button : Str, Node.Msg -> Elem
@@ -73,7 +73,7 @@ Html := [].{
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Box.box(Signal.to_expr(label)) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -88,8 +88,8 @@ Html := [].{
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Box.box(Signal.to_expr(label)) }),
-					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Box.box(Signal.to_expr(disabled)) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -107,7 +107,7 @@ Html := [].{
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "textbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalText({ field: Node.field_value, signal: Box.box(Signal.to_expr(value)) }),
+					Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_input, msg }),
 				],
 				children: [],
@@ -125,7 +125,7 @@ Html := [].{
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "checkbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Box.box(Signal.to_expr(checked)) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_check, msg }),
 				],
 				children: [],

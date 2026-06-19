@@ -1,16 +1,19 @@
 import NodeValue exposing [NodeValue]
 import Node
 
-## Opaque, typed signal. Wraps a pure `Node.SignalExpr` descriptor referencing
+## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor referencing
 ## state/source binders. The `a` lives only in Roc's type system; the wire payload
 ## is the descriptor. Transforms are captured as boxed thunks (confined erasure),
 ## pinned to the surrounding `Signal(a)`'s value type.
-Signal(a) := { expr : Node.SignalExpr }.{
-	to_expr : Signal(a) -> Node.SignalExpr
-	to_expr = |signal| signal.expr
+Signal(a) := { expr : Box(Node.SignalExpr) }.{
+	clone_expr : Box(Node.SignalExpr) -> Box(Node.SignalExpr)
+	clone_expr = |expr| Box.box(Box.unbox(expr))
+
+	to_expr : Signal(a) -> Box(Node.SignalExpr)
+	to_expr = |signal| Signal.clone_expr(signal.expr)
 
 	from_expr : Node.SignalExpr -> Signal(a)
-	from_expr = |expr| { expr: expr }
+	from_expr = |expr| { expr: Box.box(expr) }
 
 	## A constant signal.
 	const : a -> Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
@@ -19,17 +22,17 @@ Signal(a) := { expr : Node.SignalExpr }.{
 			match value.encode(NodeValue.format) {
 				Ok(encoded) => encoded
 			}
-		{ expr: Node.SignalExpr.ConstValue(nv) }
+		{ expr: Box.box(Node.SignalExpr.ConstValue(nv)) }
 	}
 
 	const_i64 : I64 -> Signal(I64)
-	const_i64 = |value| { expr: Node.SignalExpr.ConstValue(NvI64(value)) }
+	const_i64 = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvI64(value))) }
 
 	const_str : Str -> Signal(Str)
-	const_str = |value| { expr: Node.SignalExpr.ConstValue(NvStr(value)) }
+	const_str = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvStr(value))) }
 
 	const_bool : Bool -> Signal(Bool)
-	const_bool = |value| { expr: Node.SignalExpr.ConstValue(NvBool(value)) }
+	const_bool = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvBool(value))) }
 
 	## Derived signal. The transform is a typed `a -> b`; we wrap it to decode the
 	## input payload and encode the output, pinning both to the call site's types.
@@ -59,12 +62,10 @@ Signal(a) := { expr : Node.SignalExpr }.{
 		}
 
 		{
-			expr: Node.SignalExpr.Map(
-				{
-					input: Box.box(signal.expr),
-					transform: Box.box(wrapped),
-				},
-			),
+			expr: Box.box(Node.SignalExpr.Map(
+				Signal.clone_expr(signal.expr),
+				Box.box(wrapped),
+			)),
 		}
 	}
 
@@ -104,20 +105,18 @@ Signal(a) := { expr : Node.SignalExpr }.{
 		}
 
 		{
-			expr: Node.SignalExpr.Map2(
-				{
-					left: Box.box(left.expr),
-					right: Box.box(right.expr),
-					transform: Box.box(wrapped),
-				},
-			),
+			expr: Box.box(Node.SignalExpr.Map2(
+				Signal.clone_expr(left.expr),
+				Signal.clone_expr(right.expr),
+				Box.box(wrapped),
+			)),
 		}
 	}
 
 	## Combine a list of same-typed signals into a signal of the list of values.
 	combine : List(Signal(a)) -> Signal(List(a))
 	combine = |signals| {
-		exprs = List.map(signals, |s| s.expr)
-		{ expr: Node.SignalExpr.Combine(exprs) }
+		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
+		{ expr: Box.box(Node.SignalExpr.Combine(exprs)) }
 	}
 }

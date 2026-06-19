@@ -17,7 +17,9 @@ matches the design:
   push-based, glitch-free scheduler the design calls for, living in the host.
 - **The full-re-render dispatch is gone.** The single `roc_ui_dispatch` that
   re-walked the tree has been replaced by the split protocol: `roc_ui_init`,
-  `roc_ui_recompute`, `roc_ui_render`, `roc_ui_drop`.
+  `roc_ui_recompute`, `roc_ui_render`, `roc_ui_drop`, and now by the app-boundary
+  flip where `roc_ui_init` returns the retained descriptor tree and the host owns
+  subsequent recomputation/rendering.
 - **Identity is dense integer ids at the boundary.** Signals carry a
   `Graph.SignalIdentity.RegisteredSignal(U64)`; events carry integer ids; the
   host routes by id. Descriptors (`SignalDesc`, `EventDesc`, `StateDesc`,
@@ -140,7 +142,7 @@ generic `Signal`/`Elem` combinators.
 A throwaway compile probe (since removed) pinned down three facts on the current
 compiler that reshape the new-API surface and the host equality mechanism:
 
-1. **`where [k.hash : k, Hasher -> Hasher, k.is_eq : k, k -> Bool]` static-dispatch
+1. **`where [k.to_hash : k, Hasher -> Hasher, k.is_eq : k, k -> Bool]` static-dispatch
    constraints compile and are satisfiable across the platform boundary.** The new
    keyed-identity API shape is viable.
 2. **Key/value nominal types must wrap a single-tag union, not a bare primitive.**
@@ -217,14 +219,20 @@ platform modules:
   identity-bearing `Elem` scope binders `State`/`When`/`Each`. `State` and `Each`
   carry boxed `is_eq` / key-`is_eq` thunks (confined erasure). `Msg` is a type
   alias `{ binder : BinderRef, payload_kind : U64, transform : Box(...) }`.
-  Binder refs are de-Bruijn-style (`BinderRef(0)` = nearest enclosing `Ui.state`).
+  Binder refs now carry boxed binder tokens minted by `Ui.state`; the host maps
+  those tokens to active state node ids during the descriptor walk. This replaced
+  the earlier de-Bruijn prototype, which could not represent captured outer
+  state refs inside nested state bodies.
 - `platform/Signal.roc` — opaque `Signal(a)`: `const`/`const_i64`/`const_str`/
-  `const_bool`, `map`, `map2`, `combine`. Confined erasure (decode input / encode
-  output) per edge.
+  `const_bool`, `map`, `map2`, `combine`. `Signal` now boxes/clones retained
+  `SignalExpr` descriptors so multiple sinks can share a source without handing
+  the host dangling descriptor pointers. `Map`/`Map2` use positional tag payloads
+  because the record payload containing an erased callable and boxed recursive
+  field generated a host/Roc field-order mismatch.
 - `platform/Ui.roc` — `state(init, |State(a)| body)` closure binder with
   `signal`/`on_unit`/`on_value`; `when(cond, true_body, false_body)` (branch
   scopes); `each(items, key_fn, |key, row_signal| ...)` with
-  `where [k.hash, k.is_eq]` and boxed key equality. Key types are
+  `where [k.to_hash, k.is_eq]` and boxed key equality. Key types are
   nominal-over-tag-union.
 - `platform/Html.roc` — `div`/`section`/`heading`/`paragraph`/`text`/`text_s`/
   `button`/`button_s`/`text_input`/`checkbox`.
@@ -240,32 +248,48 @@ counter with a `Signal.map` label and `on_unit` reducer) was validated to compil
 in a throwaway `apps/api_check.roc` (removed before commit). `roc check` is green
 on all four existing apps plus that scratch app.
 
-### Remaining work (the host-side / ABI half)
+### Done — app boundary flip into the host (partial end-to-end green)
+
+The platform boundary has been flipped for the signals test host:
+
+- `roc_ui_init` returns a retained `Elem` descriptor tree. The host stores it,
+  walks it, evaluates `SignalExpr`, applies DOM patches, and dispatches events
+  directly through retained reducer callables.
+- The host owns active scope/key/state lifetimes for root, `when` branches, and
+  keyed `each` rows. Keyed rows use the boxed key-equality thunk; removed scopes
+  are disposed instead of being silently reused later.
+- Host calls into erased Roc callables now retain `NodeValue` arguments before
+  invocation. This fixed use-after-free when Roc consumed borrowed list/state/
+  scope values.
+- Runtime metrics are host-owned for host-owned work while preserving cumulative
+  Roc counters, so per-event deltas no longer go negative after the boundary flip.
+
+Verified on this slice:
+
+- `roc check` is green for `checkout_wizard`, `identity_stress`, `kanban_board`,
+  and `ops_dashboard`.
+- `zig test test/signals/platform/host.zig` is green.
+- The `identity_stress`, `kanban_board`, and `ops_dashboard` app specs build and
+  pass against the flipped host.
+
+Known blocker: `checkout_wizard` still `roc check`s but `roc build` panics in
+postcheck with `checked method registry is missing resolved dispatch target`.
+This should be reduced as a standalone compiler issue after merging current
+`origin/main`; avoid tying the report to this signals research.
+
+### Remaining work (after the app-boundary flip)
 
 In dependency order. Each sub-step ends green per `minici` discipline.
 
-1. **UiRuntime ingestion of the `Node.Elem` tree.** Replace the descriptor builder
-   so `build` returns `Node.Elem` and the runtime emits a *scope/node descriptor
-   stream* from a pure pre-order shape (the host assigns ordinals; Roc does not
-   thread a counter). Flip `main.roc` `requires` to `main : {} -> Node.Elem`.
-   Delete the string-keyed paths: `StateSlot.key`, `SignalRegistryEntry.key`,
-   `signal_registry_lookup` string compare, `register_state_key`/
-   `register_event_key`.
-2. **Regenerate `roc_platform_abi.zig`** after the boundary types change:
-   `./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc`.
-   Re-fix the `comptime` struct-size asserts.
-
-   Progress: `Node.Elem` is now reachable in the generated platform ABI through
-   `roc_ui_node_abi_probe`, giving the host generated `NodeElem`,
-   `NodeSignalExpr`, and `NodeAttr` layouts before the main app boundary flips.
-   `Node.SignalExpr.Const` was renamed to `ConstValue` because the generated Zig
-   payload field for `Const` collided with the `const` keyword.
-3. **Host scope forest + identity walk.** Pre-order walk of the descriptor tree
+1. **Resolve or report the checkout postcheck invariant.** Merge `origin/main`,
+   re-test `checkout_wizard`, and if the invariant remains, reduce it against the
+   smallest platform possible (prefer `test/fx`) and open a neutral compiler bug.
+2. **Host scope forest + identity walk.** Pre-order walk of the descriptor tree
    that assigns construction-order ordinals to identity-bearing nodes only (state
    binders, `when` sites, `each` sites); ordinary markup does not advance the
    ordinal. Scope path step = `When(site_ordinal)/Branch(tag)` and
    `Each(site_ordinal)/Keyed(key)`. Intern `(scope_path, ordinal)` to dense node
-   ids (reuse existing rank/adjacency/dirty machinery). No strings; no `Dict(Str,_)`.
+   ids. No strings; no `Dict(Str,_)`.
 
    Progress: `platform/host.zig` now has host-owned scope interning for root,
    `when` branch scopes, keyed row scopes, and dense `(scope_id, ordinal) ->
@@ -279,23 +303,21 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    carries an explicit binder stack, resolves event `BinderRef`s to state node
    ids, records source node ids for signal-backed descriptors, and stores the
    active binder context on scope sites so branch/row bodies can resolve outer
-   state refs. The remaining work is wiring this stream into the app init/render
-   lifecycle.
-4. **Host-invoked `is_eq` thunks (new host capability).** The host currently never
-   invokes erased callables. Wire the `RocErasedCallableFn(host, ret, args, capture)`
-   call convention + per-type marshaling so the host can call the boxed key-`is_eq`
-   for the keyed-row diff and the value `is_eq` for change pruning. Duplicate keys
-   within one keyed scope = hard host error (not a silent alias).
+   state refs. The remaining work is tightening disposal/DOM detachment semantics
+   and adding broader assertions around branch/filter churn.
+3. **Host-invoked `is_eq` thunks.** Keep the erased-callable call convention +
+   per-type marshaling as the only way the host compares typed keys/values.
+   Duplicate keys within one keyed scope = hard host error (not a silent alias).
 
    Progress: `platform/host.zig` now has typed helper calls for
    `NodeValue -> NodeValue`, `(NodeValue, NodeValue) -> NodeValue`, and
    `(NodeValue, NodeValue) -> Bool`, with Zig unit coverage that allocates boxed
    erased callables through the real ABI payload/capture path. The host also has
    the `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each` row
-   thunks and explicitly release the returned descriptor tree. The remaining work
-   is wiring those helpers into keyed-row diffing, reducer dispatch, and
-   value-pruning once the host owns the new `Node.Elem` graph.
-5. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
+   thunks and explicitly release the returned descriptor tree. These helpers are
+   now wired into keyed-row diffing, reducer dispatch, and signal transforms;
+   value-pruning still needs fuller typed edge equality.
+4. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
    `is_eq` thunk; reuse surviving row scopes (and their local state) → `rows_reused`;
    mint new keys → `rows_created`; dispose removed keys → drop one refcount per
    retained closure (`decrefErasedCallable`), detach DOM subtree, `rows_removed`.
@@ -315,21 +337,17 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    It can also collect the active `When` branch while disposing the inactive
    branch scope, so branch-local state is retired on flips and never silently
    reused.
-6. **Port `identity_stress.roc`** to the new API; get its current `.txt` spec green
-   first (the smallest honest slice).
-7. **Port `ops_dashboard`, `checkout_wizard`, `kanban_board`** to the new API;
-   keep their `.txt` specs green unchanged (they are the regression oracle).
-8. **Delete legacy:** `Reactive.roc`, `Elem.roc`, `Graph.roc`'s string-keyed paths,
+5. **Delete legacy:** `Reactive.roc`, `Elem.roc`, `Graph.roc`'s string-keyed paths,
    old `UiRuntime` string tables; drop them from `main.roc` `exposes`/imports.
    Apps then import only `Signal`/`Html`/`Ui`.
-9. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
+6. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
    `TodoId := [Tid(U64)]` (nominal-over-tag-union), `state` is a closure binder,
    and the host owns equality/hash through captured per-type thunks rather than
    string identity.
-10. **Extend `identity_stress.txt`** with the mid-list-insert assertion (new row
+7. **Extend `identity_stress.txt`** with the mid-list-insert assertion (new row
     gets fresh state while every existing row's count survives unmoved) — only
     once honestly supported. Do not weaken existing assertions.
-11. **Validate:** `roc check` on all four apps, `zig build run-test-signals`, and
+8. **Validate:** `roc check` on all four apps, `zig build run-test-signals`, and
     `zig build run-signals-bench` (compare against the Phase 1 baseline; row reuse
     should be the biggest win).
 
@@ -404,7 +422,7 @@ Build the target surface and port the apps.
   `map`, `map2`, `combine`), `Html.roc` (`div`/`button`/`input`/`text`/`text_s`,
   signal-backed attrs, `on_click`/`on_input`/`on_check` taking typed messages),
   and `Ui.roc` (`when`, `each(items, key_fn, |key, row| ...)`, `component`).
-- `Ui.each` carries a `where [key.hash : ..., key.is_eq : ...]` static-dispatch
+- `Ui.each` carries a `where [key.to_hash : ..., key.is_eq : ...]` static-dispatch
   constraint on its key type; no string keys. The key type provides `hash` and
   `is_eq` through its `.{ }` method block.
 - Port `ops_dashboard`, `checkout_wizard`, `kanban_board` to the new API,

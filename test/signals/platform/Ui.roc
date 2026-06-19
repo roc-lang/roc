@@ -133,10 +133,11 @@ Ui := [].{
 				}
 			left_v.is_eq(right_v)
 		}
+		token = Box.box(0)
 		handle : State(a)
-		handle = { ref: Node.BinderRef.BinderRef(0) }
+		handle = { ref: Node.BinderRef.BinderRef(token) }
 		child = body(handle)
-		Elem.State({ initial: initial_nv, eq: Box.box(eq), child: Box.box(child) })
+		Elem.State({ binder: handle.ref, initial: initial_nv, eq: Box.box(eq), child: Box.box(child) })
 	}
 
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
@@ -144,7 +145,7 @@ Ui := [].{
 	when = |condition, when_true, when_false| {
 		Elem.When(
 			{
-				condition: Box.box(Signal.to_expr(condition)),
+				condition: Signal.to_expr(condition),
 				when_true: Box.box(when_true({})),
 				when_false: Box.box(when_false({})),
 			},
@@ -218,7 +219,7 @@ Ui := [].{
 		}
 		Elem.Each(
 			{
-				items: Box.box(Signal.to_expr(items)),
+				items: Signal.to_expr(items),
 				key_of: Box.box(key_of_nv),
 				key_eq: Box.box(key_eq_nv),
 				row: Box.box(row_nv),

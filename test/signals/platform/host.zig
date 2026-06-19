@@ -1,47 +1,43 @@
 //! Platform host for testing signal-based reactive UI applications.
 //!
-//! The host owns simulated DOM state, event routing, signal topology/cache, and
-//! render batching. Roc still runs retained app code and emits explicit render
-//! descriptors through the `roc_ui_*` entrypoints during the migration.
+//! The host owns simulated DOM state, event routing, signal evaluation,
+//! scope/key lifecycle, and render batching. Roc returns a retained immutable
+//! descriptor tree from `roc_ui_init`; the host drives all later events.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 
-const DispatchResultBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
-const DispatchResult = std.meta.Child(DispatchResultBox);
-const RecomputeResultBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".return_type.?;
-const RecomputeResult = std.meta.Child(RecomputeResultBox);
-const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
-const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
-const EventDescriptorList = @FieldType(DispatchResult, "event_descriptors");
-const SignalValueList = @FieldType(DispatchResult, "signal_changes");
-const SignalDescriptorList = @FieldType(DispatchResult, "signal_descriptors");
-const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
-const StateChangeList = @FieldType(DispatchResult, "state_changes");
-const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
-const StateValueDesc = @typeInfo(@TypeOf(@as(StateChangeList, undefined).items())).pointer.child;
-const RenderElementDescList = @FieldType(DispatchResult, "render_elements");
-const RenderTextDescList = @FieldType(DispatchResult, "render_texts");
-const RenderSignalTextDescList = @FieldType(DispatchResult, "render_signal_texts");
-const RenderBoolDescList = @FieldType(DispatchResult, "render_bools");
-const RenderSignalBoolDescList = @FieldType(DispatchResult, "render_signal_bools");
-const RenderEventDescList = @FieldType(DispatchResult, "render_events");
-const RenderStructuralDescList = @FieldType(DispatchResult, "render_structures");
-const RenderElementDesc = @typeInfo(@TypeOf(@as(RenderElementDescList, undefined).items())).pointer.child;
-const RenderTextDesc = @typeInfo(@TypeOf(@as(RenderTextDescList, undefined).items())).pointer.child;
-const RenderSignalTextDesc = @typeInfo(@TypeOf(@as(RenderSignalTextDescList, undefined).items())).pointer.child;
-const RenderBoolDesc = @typeInfo(@TypeOf(@as(RenderBoolDescList, undefined).items())).pointer.child;
-const RenderSignalBoolDesc = @typeInfo(@TypeOf(@as(RenderSignalBoolDescList, undefined).items())).pointer.child;
-const RenderEventDesc = @typeInfo(@TypeOf(@as(RenderEventDescList, undefined).items())).pointer.child;
-const RenderStructuralDesc = @typeInfo(@TypeOf(@as(RenderStructuralDescList, undefined).items())).pointer.child;
-const RecomputeInputBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
-const RecomputeInput = std.meta.Child(RecomputeInputBox);
-const ActiveEvent = @FieldType(RecomputeInput, "active_event");
-const RenderInputBox = @typeInfo(@TypeOf(abi.roc_ui_render)).@"fn".params[1].type.?;
-const RenderInput = std.meta.Child(RenderInputBox);
+const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
+
+const RuntimeMetrics = struct {
+    closure_releases: u64,
+    closure_retains: u64,
+    derived_calls_into_roc: u64,
+    events_processed: u64,
+    nodes_recomputed: u64,
+    patches_emitted: u64,
+    propagation_prunes: u64,
+    recompute_batches: u64,
+    retained_alloc_delta: i64,
+    rows_created: u64,
+    rows_removed: u64,
+    rows_reused: u64,
+    scopes_created: u64,
+    scopes_disposed: u64,
+};
+
+const SignalValueDesc = struct {
+    signal_id: u64,
+    value: abi.NodeValue,
+};
+
+const StateValueDesc = struct {
+    state_id: u64,
+    value: abi.NodeValue,
+};
 
 const EventPayloadKind = enum(u64) {
     unit = 1,
@@ -88,6 +84,7 @@ const HostState = struct {
     state_id: u64,
     value: abi.NodeValue,
     version: u64,
+    active: bool,
 };
 
 const HostSignalDescriptor = struct {
@@ -112,12 +109,6 @@ const HostSignalDependentsRoute = struct {
 const HostSignalCacheSlot = union(enum) {
     absent,
     present: abi.NodeValue,
-};
-
-const SignalEventPayload = struct {
-    dirty_signal_ids: abi.RocListWith(u64, false),
-    cached_signals: SignalValueList,
-    cached_states: StateChangeList,
 };
 
 const HostScopeBranch = enum(u8) {
@@ -175,16 +166,23 @@ const HostNodeScopeSiteKind = enum {
     each,
 };
 
+const HostBinderToken = *u64;
+
+const HostBinderBinding = struct {
+    token: HostBinderToken,
+    node_id: u64,
+};
+
 const HostNodeScopeSiteDesc = struct {
     node_id: u64,
     scope_id: u64,
     ordinal: u64,
     parent_elem_id: u64,
     kind: HostNodeScopeSiteKind,
-    binder_node_ids: []u64,
+    binder_bindings: []HostBinderBinding,
 };
 
-const HostNodeElementDesc = struct {
+const HostElementDesc = struct {
     elem_id: u64,
     parent_elem_id: u64,
     scope_id: u64,
@@ -235,7 +233,7 @@ const HostNodeSignalBoolAttrDesc = struct {
 const HostNodeEventDesc = struct {
     elem_id: u64,
     kind: RenderEventKind,
-    binder_ref: u64,
+    binder_token: HostBinderToken,
     target_node_id: u64,
     payload_kind: EventPayloadKind,
     transform: abi.RocErasedCallable,
@@ -263,7 +261,7 @@ const HostNodeEachDesc = struct {
 };
 
 const HostNodeDescriptorStream = struct {
-    elements: std.ArrayListUnmanaged(HostNodeElementDesc) = .empty,
+    elements: std.ArrayListUnmanaged(HostElementDesc) = .empty,
     text_nodes: std.ArrayListUnmanaged(HostNodeTextNodeDesc) = .empty,
     signal_text_nodes: std.ArrayListUnmanaged(HostNodeSignalTextNodeDesc) = .empty,
     static_text_attrs: std.ArrayListUnmanaged(HostNodeStaticTextAttrDesc) = .empty,
@@ -319,7 +317,7 @@ const HostNodeDescriptorStream = struct {
         self.events.deinit(allocator);
 
         for (self.scope_sites.items) |desc| {
-            allocator.free(desc.binder_node_ids);
+            allocator.free(desc.binder_bindings);
         }
         self.scope_sites.deinit(allocator);
 
@@ -446,12 +444,12 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, elem_id: u64, kind: RenderEventKind, binder_ref: u64, target_node_id: u64, payload_kind: EventPayloadKind, transform: abi.RocErasedCallable) void {
+    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, transform: abi.RocErasedCallable) void {
         abi.increfErasedCallable(transform, 1);
         self.events.append(allocator, .{
             .elem_id = elem_id,
             .kind = kind,
-            .binder_ref = binder_ref,
+            .binder_token = binder_token,
             .target_node_id = target_node_id,
             .payload_kind = payload_kind,
             .transform = transform,
@@ -461,15 +459,15 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendScopeSite(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, kind: HostNodeScopeSiteKind, binder_node_ids: []const u64) void {
-        const binder_copy = allocator.dupe(u64, binder_node_ids) catch std.process.exit(1);
+    fn appendScopeSite(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, kind: HostNodeScopeSiteKind, binder_bindings: []const HostBinderBinding) void {
+        const binder_copy = allocator.dupe(HostBinderBinding, binder_bindings) catch std.process.exit(1);
         self.scope_sites.append(allocator, .{
             .node_id = node_id,
             .scope_id = scope_id,
             .ordinal = ordinal,
             .parent_elem_id = parent_elem_id,
             .kind = kind,
-            .binder_node_ids = binder_copy,
+            .binder_bindings = binder_copy,
         }) catch {
             allocator.free(binder_copy);
             std.process.exit(1);
@@ -568,12 +566,6 @@ fn writeStderr(bytes: []const u8) void {
     std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
 }
 
-fn printStderr(comptime fmt: []const u8, args: anytype) void {
-    var buf: [2048]u8 = undefined;
-    const out = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    writeStderr(out);
-}
-
 fn writeStdout(bytes: []const u8) void {
     std.Io.File.stdout().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
 }
@@ -594,12 +586,6 @@ fn traceEnabled() bool {
         return host.test_state.verbose;
     }
     return false;
-}
-
-fn traceStderr(bytes: []const u8) void {
-    if (traceEnabled()) {
-        writeStderr(bytes);
-    }
 }
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
@@ -1020,6 +1006,7 @@ const HostEnv = struct {
     states: std.ArrayListUnmanaged(HostState) = .empty,
     scopes: std.ArrayListUnmanaged(HostScope) = .empty,
     node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
+    active_stream: HostNodeDescriptorStream = .{},
     render_text_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderTextSink)) = .empty,
     render_bool_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderBoolSink)) = .empty,
     render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
@@ -1027,7 +1014,7 @@ const HostEnv = struct {
     dispatch_metrics: HostDispatchMetrics = .{},
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
-    runtime_box: ?RuntimeBox = null,
+    root_elem: ?abi.Elem = null,
     last_runtime_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
     pending_roc_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
 
@@ -1049,34 +1036,6 @@ const HostEnv = struct {
 
     fn clearEventDescriptors(self: *HostEnv) void {
         self.event_descriptors.items.len = 0;
-    }
-
-    fn setEventDescriptors(self: *HostEnv, descriptors: EventDescriptorList) void {
-        if (descriptors.len() < self.event_descriptors.items.len) {
-            failHost("Roc event descriptors must not shrink");
-        }
-
-        const allocator = self.gpa.allocator();
-        for (descriptors.items(), 0..) |desc, index| {
-            const expected_event_id: u64 = @intCast(index + 1);
-            if (desc.event_id != expected_event_id) {
-                failHost("Roc event descriptors must be dense and ordered by event id");
-            }
-            const payload_kind = HostEnv.eventPayloadKindFromAbi(desc.payload_kind);
-
-            if (index < self.event_descriptors.items.len) {
-                const existing = self.event_descriptors.items[index];
-                if (existing.event_id != desc.event_id or existing.payload_kind != payload_kind) {
-                    failHost("Roc event descriptor changed after registration");
-                }
-                continue;
-            }
-
-            self.event_descriptors.append(allocator, .{
-                .event_id = desc.event_id,
-                .payload_kind = payload_kind,
-            }) catch std.process.exit(1);
-        }
     }
 
     fn clearSignalEventRoutes(self: *HostEnv) void {
@@ -1355,14 +1314,6 @@ const HostEnv = struct {
         self.render_structural_signals.items[signal_index] = true;
     }
 
-    fn signalChangesRequireStructuralRender(self: *HostEnv, changes: SignalValueList) bool {
-        for (changes.items()) |change| {
-            if (change.signal_id >= self.render_structural_signals.items.len) continue;
-            if (self.render_structural_signals.items[@intCast(change.signal_id)]) return true;
-        }
-        return false;
-    }
-
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         var route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), self.states.items.len) catch std.process.exit(1);
@@ -1484,88 +1435,6 @@ const HostEnv = struct {
         }
     }
 
-    fn setSignalDescriptors(self: *HostEnv, descriptors: SignalDescriptorList) void {
-        if (descriptors.len() < self.signal_descriptors.items.len) {
-            failHost("Roc signal descriptors must not shrink");
-        }
-
-        const allocator = self.gpa.allocator();
-        for (descriptors.items(), 0..) |desc, index| {
-            const expected_signal_id: u64 = @intCast(index);
-            if (desc.signal_id != expected_signal_id) {
-                failHost("Roc signal descriptors must be dense and ordered by signal id");
-            }
-            const kind = HostEnv.signalKindFromAbi(desc.kind);
-            self.validateSignalSourceStateIds(kind, desc.source_state_ids.items());
-            self.validateSignalSourceEventIds(kind, desc.source_event_ids.items());
-            self.validateSignalInputIds(desc.signal_id, kind, desc.input_signal_ids.items());
-
-            if (index < self.signal_descriptors.items.len) {
-                if (index >= self.signal_cache.items.len) {
-                    failHost("host signal cache is not indexed by signal id");
-                }
-                const existing = self.signal_descriptors.items[index];
-                if (existing.signal_id != desc.signal_id or existing.kind != kind) {
-                    failHost("Roc signal descriptor changed after registration");
-                }
-                if (existing.source_state_ids.len != desc.source_state_ids.len()) {
-                    failHost("Roc signal descriptor source state ids changed after registration");
-                }
-                if (existing.source_event_ids.len != desc.source_event_ids.len()) {
-                    failHost("Roc signal descriptor source event ids changed after registration");
-                }
-                if (existing.input_signal_ids.len != desc.input_signal_ids.len()) {
-                    failHost("Roc signal descriptor input signal ids changed after registration");
-                }
-                for (desc.source_state_ids.items(), existing.source_state_ids) |next_state_id, existing_state_id| {
-                    if (next_state_id != existing_state_id) {
-                        failHost("Roc signal descriptor source state ids changed after registration");
-                    }
-                }
-                for (desc.source_event_ids.items(), existing.source_event_ids) |next_event_id, existing_event_id| {
-                    if (next_event_id != existing_event_id) {
-                        failHost("Roc signal descriptor source event ids changed after registration");
-                    }
-                }
-                for (desc.input_signal_ids.items(), existing.input_signal_ids) |next_input_signal_id, existing_input_signal_id| {
-                    if (next_input_signal_id != existing_input_signal_id) {
-                        failHost("Roc signal descriptor input signal ids changed after registration");
-                    }
-                }
-                continue;
-            }
-
-            const source_state_ids = allocator.dupe(u64, desc.source_state_ids.items()) catch std.process.exit(1);
-            const source_event_ids = allocator.dupe(u64, desc.source_event_ids.items()) catch {
-                allocator.free(source_state_ids);
-                std.process.exit(1);
-            };
-            const input_signal_ids = allocator.dupe(u64, desc.input_signal_ids.items()) catch {
-                allocator.free(source_state_ids);
-                allocator.free(source_event_ids);
-                std.process.exit(1);
-            };
-            self.signal_descriptors.append(allocator, .{
-                .signal_id = desc.signal_id,
-                .kind = kind,
-                .source_state_ids = source_state_ids,
-                .source_event_ids = source_event_ids,
-                .input_signal_ids = input_signal_ids,
-                .rank = 0,
-            }) catch {
-                allocator.free(source_state_ids);
-                allocator.free(source_event_ids);
-                allocator.free(input_signal_ids);
-                std.process.exit(1);
-            };
-            self.signal_cache.append(allocator, .absent) catch std.process.exit(1);
-        }
-
-        self.rebuildSignalRoutesFromSignals();
-        self.rebuildSignalTopologyFromSignals();
-        self.rebuildSignalEventRoutesFromSignals();
-    }
-
     fn signalIdsForState(self: *HostEnv, state_id: u64) []const u64 {
         if (state_id >= self.signal_routes.items.len) failHost("state id has no host signal route descriptor");
 
@@ -1642,105 +1511,73 @@ const HostEnv = struct {
     }
 
     fn clearStates(self: *HostEnv) void {
-        for (self.states.items) |state| {
+        for (self.states.items) |*state| {
+            if (!state.active) continue;
             abi.decrefNodeValue(state.value, self.roc_host.?);
+            state.active = false;
         }
         self.states.items.len = 0;
     }
 
-    fn setStateDescriptors(self: *HostEnv, descriptors: StateDescriptorList) void {
-        if (descriptors.len() < self.states.items.len) {
-            failHost("Roc state descriptors must not shrink");
+    fn stateIndexByNodeId(self: *HostEnv, node_id: u64) ?usize {
+        for (self.states.items, 0..) |state, index| {
+            if (state.active and state.state_id == node_id) return index;
         }
+        return null;
+    }
 
-        const allocator = self.gpa.allocator();
-        for (descriptors.items(), 0..) |desc, index| {
-            const expected_state_id: u64 = @intCast(index);
-            if (desc.state_id != expected_state_id) {
-                failHost("Roc state descriptors must be dense and ordered by state id");
-            }
+    fn stateValueByNodeId(self: *HostEnv, node_id: u64) abi.NodeValue {
+        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("signal referenced an unknown active state node");
+        return self.states.items[state_index].value;
+    }
 
-            if (index < self.states.items.len) {
-                const existing = self.states.items[index];
-                if (existing.state_id != desc.state_id) {
-                    failHost("host state registry is not indexed by state id");
-                }
-                continue;
-            }
+    fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
+        if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
-            abi.increfNodeValue(desc.value, 1);
-            self.states.append(allocator, .{
-                .state_id = desc.state_id,
-                .value = desc.value,
-                .version = 0,
-            }) catch {
-                abi.decrefNodeValue(desc.value, self.roc_host.?);
-                std.process.exit(1);
-            };
+        abi.increfNodeValue(desc.initial, 1);
+        self.states.append(self.gpa.allocator(), .{
+            .state_id = desc.node_id,
+            .value = desc.initial,
+            .version = 0,
+            .active = true,
+        }) catch {
+            abi.decrefNodeValue(desc.initial, roc_host);
+            std.process.exit(1);
+        };
+    }
+
+    fn syncStatesFromNodeStream(self: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) void {
+        for (stream.states.items) |desc| {
+            self.ensureStateFromDesc(roc_host, desc);
         }
     }
 
-    fn applyStateChanges(self: *HostEnv, changes: StateChangeList) void {
-        if (changes.len() == 0) return;
-
-        const allocator = self.gpa.allocator();
-        const seen = allocator.alloc(bool, self.states.items.len) catch std.process.exit(1);
-        defer allocator.free(seen);
-        @memset(seen, false);
-
-        for (changes.items()) |change| {
-            if (change.state_id >= self.states.items.len) {
-                failHost("Roc state change descriptor referenced an unknown state id");
-            }
-
-            const state_index: usize = @intCast(change.state_id);
-            if (seen[state_index]) {
-                failHost("Roc state change descriptors must not contain duplicate state ids");
-            }
-            seen[state_index] = true;
-
-            const state = &self.states.items[state_index];
-            if (state.state_id != change.state_id) {
-                failHost("host state registry is not indexed by state id");
-            }
-
-            abi.increfNodeValue(change.value, 1);
-            abi.decrefNodeValue(state.value, self.roc_host.?);
-            state.value = change.value;
-            state.version += 1;
+    fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: abi.NodeValue) bool {
+        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
+        const state = &self.states.items[state_index];
+        if (callErasedNodeValueNodeValueToBool(roc_host, self.stateEqCallable(node_id), state.value, value)) {
+            abi.decrefNodeValue(value, roc_host);
+            return false;
         }
+
+        abi.decrefNodeValue(state.value, roc_host);
+        state.value = value;
+        state.version += 1;
+        return true;
     }
 
-    fn applySignalChanges(self: *HostEnv, changes: SignalValueList) void {
-        if (changes.len() == 0) return;
+    fn deactivateState(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64) void {
+        const state_index = self.stateIndexByNodeId(node_id) orelse return;
+        const state = &self.states.items[state_index];
+        abi.decrefNodeValue(state.value, roc_host);
+        state.active = false;
+    }
 
-        const allocator = self.gpa.allocator();
-        const seen = allocator.alloc(bool, self.signal_cache.items.len) catch std.process.exit(1);
-        defer allocator.free(seen);
-        @memset(seen, false);
-
-        for (changes.items()) |change| {
-            if (change.signal_id >= self.signal_cache.items.len) {
-                failHost("Roc signal change descriptor referenced an unknown signal id");
-            }
-
-            const signal_index: usize = @intCast(change.signal_id);
-            if (seen[signal_index]) {
-                failHost("Roc signal change descriptors must not contain duplicate signal ids");
-            }
-            seen[signal_index] = true;
-
-            if (self.signal_descriptors.items[signal_index].signal_id != change.signal_id) {
-                failHost("host signal registry is not indexed by signal id");
-            }
-
-            abi.increfNodeValue(change.value, 1);
-            switch (self.signal_cache.items[signal_index]) {
-                .absent => {},
-                .present => |previous| abi.decrefNodeValue(previous, self.roc_host.?),
-            }
-            self.signal_cache.items[signal_index] = .{ .present = change.value };
+    fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
+        for (self.active_stream.states.items) |desc| {
+            if (desc.node_id == node_id) return desc.eq;
         }
+        failHost("active state has no equality callable");
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
@@ -1765,6 +1602,9 @@ const HostEnv = struct {
                 .step = .root,
                 .active = true,
             }) catch std.process.exit(1);
+            var metrics = self.pending_roc_metrics;
+            metrics.scopes_created += 1;
+            self.pending_roc_metrics = metrics;
             return 0;
         }
 
@@ -1798,6 +1638,9 @@ const HostEnv = struct {
             .step = .{ .when_branch = .{ .site_ordinal = site_ordinal, .branch = branch } },
             .active = true,
         }) catch std.process.exit(1);
+        var metrics = self.pending_roc_metrics;
+        metrics.scopes_created += 1;
+        self.pending_roc_metrics = metrics;
         return scope_id;
     }
 
@@ -1827,6 +1670,9 @@ const HostEnv = struct {
             .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key } },
             .active = true,
         }) catch std.process.exit(1);
+        var metrics = self.pending_roc_metrics;
+        metrics.scopes_created += 1;
+        self.pending_roc_metrics = metrics;
         return scope_id;
     }
 
@@ -1864,6 +1710,7 @@ const HostEnv = struct {
 
         for (self.node_identities.items) |*identity| {
             if (identity.active and identity.scope_id == scope_id) {
+                self.deactivateState(roc_host, identity.node_id);
                 identity.active = false;
             }
         }
@@ -1978,19 +1825,19 @@ const HostEnv = struct {
         };
     }
 
-    fn walkNodeElemIdentitySites(self: *HostEnv, elem: abi.NodeElem, scope_id: u64, ordinal: *u64) void {
+    fn walkElemIdentitySites(self: *HostEnv, elem: abi.Elem, scope_id: u64, ordinal: *u64) void {
         self.validateScopeId(scope_id);
 
         switch (elem.tag) {
             .Element => {
                 for (elem.payload.element.children.items()) |child| {
-                    self.walkNodeElemIdentitySites(child, scope_id, ordinal);
+                    self.walkElemIdentitySites(child, scope_id, ordinal);
                 }
             },
             .State => {
                 _ = self.internNodeIdentity(scope_id, ordinal.*);
                 ordinal.* += 1;
-                self.walkNodeElemIdentitySites(elem.payload.state.child.*, scope_id, ordinal);
+                self.walkElemIdentitySites(elem.payload.state.child.*, scope_id, ordinal);
             },
             .When => {
                 _ = self.internNodeIdentity(scope_id, ordinal.*);
@@ -2004,38 +1851,41 @@ const HostEnv = struct {
         }
     }
 
-    fn walkNodeElemRootIdentitySites(self: *HostEnv, root: abi.NodeElem) void {
+    fn walkElemRootIdentitySites(self: *HostEnv, root: abi.Elem) void {
         const root_scope_id = self.internRootScope();
         var ordinal: u64 = 0;
-        self.walkNodeElemIdentitySites(root, root_scope_id, &ordinal);
+        self.walkElemIdentitySites(root, root_scope_id, &ordinal);
     }
 
-    fn walkNodeElemWhenBranchIdentitySites(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+    fn walkElemWhenBranchIdentitySites(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch, elem: abi.Elem) u64 {
         const branch_scope_id = self.internWhenBranchScope(parent_scope_id, site_ordinal, branch);
         var ordinal: u64 = 0;
-        self.walkNodeElemIdentitySites(elem, branch_scope_id, &ordinal);
+        self.walkElemIdentitySites(elem, branch_scope_id, &ordinal);
         return branch_scope_id;
     }
 
-    fn resolveNodeBinderRef(binder_stack: []const u64, binder_ref: u64) u64 {
-        if (binder_ref >= @as(u64, @intCast(binder_stack.len))) {
-            failHost("Node.BinderRef referenced a state binder outside the active scope");
+    fn resolveNodeBinderRef(binder_stack: []const HostBinderBinding, token: HostBinderToken) u64 {
+        var index = binder_stack.len;
+        while (index > 0) {
+            index -= 1;
+            const binding = binder_stack[index];
+            if (binding.token == token) return binding.node_id;
         }
-        return binder_stack[binder_stack.len - 1 - @as(usize, @intCast(binder_ref))];
+        failHost("Node.BinderRef referenced a state binder outside the active scope");
     }
 
-    fn collectNodeSignalExprSources(self: *HostEnv, allocator: std.mem.Allocator, expr: abi.NodeSignalExpr, binder_stack: []const u64, source_node_ids: *std.ArrayListUnmanaged(u64)) void {
+    fn collectNodeSignalExprSources(self: *HostEnv, allocator: std.mem.Allocator, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding, source_node_ids: *std.ArrayListUnmanaged(u64)) void {
         switch (expr.tag) {
             .Ref => {
                 source_node_ids.append(allocator, HostEnv.resolveNodeBinderRef(binder_stack, expr.payload.ref)) catch std.process.exit(1);
             },
             .ConstValue => {},
             .Map => {
-                self.collectNodeSignalExprSources(allocator, expr.payload.map.input.*, binder_stack, source_node_ids);
+                self.collectNodeSignalExprSources(allocator, expr.payload.map._0.*, binder_stack, source_node_ids);
             },
             .Map2 => {
-                self.collectNodeSignalExprSources(allocator, expr.payload.map2.left.*, binder_stack, source_node_ids);
-                self.collectNodeSignalExprSources(allocator, expr.payload.map2.right.*, binder_stack, source_node_ids);
+                self.collectNodeSignalExprSources(allocator, expr.payload.map2._0.*, binder_stack, source_node_ids);
+                self.collectNodeSignalExprSources(allocator, expr.payload.map2._1.*, binder_stack, source_node_ids);
             },
             .Combine => {
                 for (expr.payload.combine.items()) |child| {
@@ -2045,13 +1895,13 @@ const HostEnv = struct {
         }
     }
 
-    fn nodeSignalExprSourceNodeIds(self: *HostEnv, allocator: std.mem.Allocator, expr: abi.NodeSignalExpr, binder_stack: []const u64) []u64 {
+    fn nodeSignalExprSourceNodeIds(self: *HostEnv, allocator: std.mem.Allocator, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) []u64 {
         var source_node_ids: std.ArrayListUnmanaged(u64) = .empty;
         self.collectNodeSignalExprSources(allocator, expr, binder_stack, &source_node_ids);
         return source_node_ids.toOwnedSlice(allocator) catch std.process.exit(1);
     }
 
-    fn collectNodeAttrDescriptor(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const u64) void {
+    fn collectNodeAttrDescriptor(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
         const allocator = self.gpa.allocator();
         switch (attr.tag) {
             .StaticText => {
@@ -2087,7 +1937,7 @@ const HostEnv = struct {
         }
     }
 
-    fn collectNodeElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.NodeElem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(u64)) void {
+    fn collectElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
         self.validateScopeId(scope_id);
 
         const allocator = self.gpa.allocator();
@@ -2099,7 +1949,7 @@ const HostEnv = struct {
                     self.collectNodeAttrDescriptor(roc_host, stream, elem_id, attr, binder_stack.items);
                 }
                 for (payload.children.items()) |child| {
-                    self.collectNodeElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, binder_stack);
+                    self.collectElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, binder_stack);
                 }
             },
             .Text => {
@@ -2115,8 +1965,8 @@ const HostEnv = struct {
                 ordinal.* += 1;
                 stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
                 stream.appendState(allocator, roc_host, node_id, elem.payload.state.initial, elem.payload.state.eq);
-                binder_stack.append(allocator, node_id) catch std.process.exit(1);
-                self.collectNodeElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, binder_stack);
+                binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
+                self.collectElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, binder_stack);
                 _ = binder_stack.pop() orelse unreachable;
             },
             .When => {
@@ -2147,26 +1997,26 @@ const HostEnv = struct {
         }
     }
 
-    fn collectNodeElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.NodeElem) void {
+    fn collectElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem) void {
         const root_scope_id = self.internRootScope();
         const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(u64) = .empty;
+        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
         var ordinal: u64 = 0;
-        self.collectNodeElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &binder_stack);
+        self.collectElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &binder_stack);
     }
 
-    fn collectNodeElemWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+    fn collectElemWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, branch: HostScopeBranch, elem: abi.Elem) u64 {
         if (site.kind != .when) {
-            failHost("NodeElem branch collection requires a when scope site");
+            failHost("Elem branch collection requires a when scope site");
         }
         const branch_scope_id = self.internWhenBranchScope(site.scope_id, site.ordinal, branch);
         const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(u64) = .empty;
+        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_node_ids) catch std.process.exit(1);
+        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
         var ordinal: u64 = 0;
-        self.collectNodeElemDescriptors(roc_host, stream, elem, branch_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
+        self.collectElemDescriptors(roc_host, stream, elem, branch_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
         return branch_scope_id;
     }
 
@@ -2189,27 +2039,27 @@ const HostEnv = struct {
         return null;
     }
 
-    fn collectNodeElemActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+    fn collectElemActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, elem: abi.Elem) u64 {
         if (site.kind != .when) {
-            failHost("NodeElem active branch collection requires a when scope site");
+            failHost("Elem active branch collection requires a when scope site");
         }
         if (site.node_id != when.node_id) {
-            failHost("NodeElem active branch collection received mismatched when descriptors");
+            failHost("Elem active branch collection received mismatched when descriptors");
         }
 
         if (self.activeWhenBranchScopeId(site.scope_id, site.ordinal, active_branch.opposite())) |inactive_scope_id| {
             self.disposeScopeSubtree(roc_host, inactive_scope_id);
         }
 
-        return self.collectNodeElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
+        return self.collectElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
     }
 
-    fn collectNodeElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const abi.NodeValue) HostKeyedRowDiffResult {
+    fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const abi.NodeValue) HostKeyedRowDiffResult {
         if (site.kind != .each) {
-            failHost("NodeElem row collection requires an each scope site");
+            failHost("Elem row collection requires an each scope site");
         }
         if (site.node_id != each.node_id) {
-            failHost("NodeElem row collection received mismatched each descriptors");
+            failHost("Elem row collection received mismatched each descriptors");
         }
 
         const allocator = self.gpa.allocator();
@@ -2229,19 +2079,133 @@ const HostEnv = struct {
 
         const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, each.key_eq);
 
-        var binder_stack: std.ArrayListUnmanaged(u64) = .empty;
+        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_node_ids) catch std.process.exit(1);
+        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
 
         for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
-            const row_elem = callErasedNodeValueNodeValueToNodeElem(roc_host, each.row, key, item);
-            defer abi.decrefNodeElem(row_elem, roc_host);
+            const row_elem = callErasedNodeValueNodeValueToElem(roc_host, each.row, key, item);
+            defer abi.decrefElem(row_elem, roc_host);
 
             var ordinal: u64 = 0;
-            self.collectNodeElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
+            self.collectElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
         }
 
         return diff;
+    }
+
+    fn collectActiveElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
+        self.validateScopeId(scope_id);
+
+        const allocator = self.gpa.allocator();
+        switch (elem.tag) {
+            .Element => {
+                const payload = elem.payload.element;
+                const elem_id = stream.appendElement(allocator, parent_elem_id, scope_id, payload.tag.asSlice());
+                for (payload.attrs.items()) |attr| {
+                    self.collectNodeAttrDescriptor(roc_host, stream, elem_id, attr, binder_stack.items);
+                }
+                for (payload.children.items()) |child| {
+                    self.collectActiveElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, binder_stack);
+                }
+            },
+            .Text => {
+                stream.appendTextNode(allocator, parent_elem_id, scope_id, elem.payload.text.asSlice());
+            },
+            .TextSignal => {
+                const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.text_signal.*, binder_stack.items);
+                stream.appendSignalTextNode(allocator, roc_host, parent_elem_id, scope_id, elem.payload.text_signal.*, source_node_ids);
+            },
+            .State => {
+                const site_ordinal = ordinal.*;
+                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
+                stream.appendState(allocator, roc_host, node_id, elem.payload.state.initial, elem.payload.state.eq);
+                self.ensureStateFromDesc(roc_host, stream.states.items[stream.states.items.len - 1]);
+                binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
+                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, binder_stack);
+                _ = binder_stack.pop() orelse unreachable;
+            },
+            .When => {
+                const site_ordinal = ordinal.*;
+                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
+                const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.when.condition.*, binder_stack.items);
+                stream.appendWhen(allocator, roc_host, node_id, elem.payload.when.condition.*, source_node_ids);
+
+                const condition = evalNodeSignalExpr(self, roc_host, elem.payload.when.condition.*, source_node_ids);
+                defer abi.decrefNodeValue(condition, roc_host);
+                const active_branch: HostScopeBranch = if (nodeValueBoolValue(condition)) .true_branch else .false_branch;
+                if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite())) |inactive_scope_id| {
+                    self.disposeScopeSubtree(roc_host, inactive_scope_id);
+                }
+                const branch_scope_id = self.internWhenBranchScope(scope_id, site_ordinal, active_branch);
+                var branch_ordinal: u64 = 0;
+                const branch_elem = switch (active_branch) {
+                    .true_branch => elem.payload.when.when_true.*,
+                    .false_branch => elem.payload.when.when_false.*,
+                };
+                self.collectActiveElemDescriptors(roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, binder_stack);
+            },
+            .Each => {
+                const site_ordinal = ordinal.*;
+                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
+                const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.each.items.*, binder_stack.items);
+                stream.appendEach(
+                    allocator,
+                    roc_host,
+                    node_id,
+                    elem.payload.each.items.*,
+                    source_node_ids,
+                    elem.payload.each.key_of,
+                    elem.payload.each.key_eq,
+                    elem.payload.each.row,
+                );
+                const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
+
+                const items_value = evalNodeSignalExpr(self, roc_host, elem.payload.each.items.*, source_node_ids);
+                defer abi.decrefNodeValue(items_value, roc_host);
+                const items = nodeValueListItems(items_value);
+
+                const keys = allocator.alloc(abi.NodeValue, items.len) catch std.process.exit(1);
+                var initialized_keys: usize = 0;
+                defer {
+                    for (keys[0..initialized_keys]) |key| {
+                        abi.decrefNodeValue(key, roc_host);
+                    }
+                    allocator.free(keys);
+                }
+
+                for (items, 0..) |item, index| {
+                    keys[index] = callErasedNodeValueToNodeValue(roc_host, each_desc.key_of, item);
+                    initialized_keys += 1;
+                }
+
+                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, each_desc.key_eq);
+                defer allocator.free(diff.scope_ids);
+
+                for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
+                    const row_elem = callErasedNodeValueNodeValueToElem(roc_host, each_desc.row, key, item);
+                    defer abi.decrefElem(row_elem, roc_host);
+
+                    var row_ordinal: u64 = 0;
+                    self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, binder_stack);
+                }
+            },
+        }
+    }
+
+    fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem) void {
+        const root_scope_id = self.internRootScope();
+        const allocator = self.gpa.allocator();
+        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
+        defer binder_stack.deinit(allocator);
+        var ordinal: u64 = 0;
+        self.collectActiveElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &binder_stack);
     }
 
     fn clearScopes(self: *HostEnv) void {
@@ -2256,20 +2220,14 @@ const HostEnv = struct {
         self.scopes.items.len = 0;
     }
 
-    fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
-        var metrics = roc_metrics;
-        metrics.patches_emitted += self.render_metrics.patches_emitted;
-        metrics.events_processed += self.dispatch_metrics.events_processed;
-        metrics.recompute_batches += self.dispatch_metrics.recompute_batches;
-        return metrics;
-    }
-
     fn deinit(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
 
-        if (self.runtime_box) |runtime| {
-            abi.roc_ui_drop(runtime);
-            self.runtime_box = null;
+        self.active_stream.deinit(allocator, self.roc_host.?);
+
+        if (self.root_elem) |root| {
+            abi.decrefElem(root, self.roc_host.?);
+            self.root_elem = null;
         }
 
         for (self.dom_elements.items) |*elem| {
@@ -2738,23 +2696,6 @@ fn domElementById(host: *HostEnv, id: u64) *DomElement {
     return elem;
 }
 
-fn applyRenderElementDesc(host: *HostEnv, desc: RenderElementDesc) void {
-    if (desc.elem_id != host.dom_elements.items.len) failHost("Roc render element descriptors must be dense and ordered by element id");
-
-    const allocator = host.gpa.allocator();
-    const tag_copy = allocator.dupe(u8, desc.tag.asSlice()) catch std.process.exit(1);
-    host.dom_elements.append(allocator, DomElement.init(desc.elem_id, tag_copy)) catch {
-        allocator.free(tag_copy);
-        std.process.exit(1);
-    };
-    host.next_elem_id = desc.elem_id + 1;
-
-    const parent = domElementById(host, desc.parent_id);
-    const child = domElementById(host, desc.elem_id);
-    child.parent_id = parent.id;
-    parent.children.append(allocator, child.id) catch std.process.exit(1);
-}
-
 fn applyRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) bool {
     const elem = domElementById(host, elem_id);
     return switch (field) {
@@ -2774,34 +2715,6 @@ fn applyRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, va
     };
 }
 
-fn validateRenderSinkSignal(host: *HostEnv, signal_id: u64) void {
-    _ = host.validateRenderSinkSignalId(signal_id);
-}
-
-fn applyRenderEventDesc(host: *HostEnv, desc: RenderEventDesc) void {
-    const elem = domElementById(host, desc.elem_id);
-    const kind = HostEnv.renderEventKindFromAbi(desc.event_kind);
-    switch (kind) {
-        .click => {
-            host.validateEventPayload(desc.event_id, .unit);
-            elem.bound_click_event = desc.event_id;
-        },
-        .input => {
-            host.validateEventPayload(desc.event_id, .str);
-            elem.bound_input_event = desc.event_id;
-        },
-        .check => {
-            host.validateEventPayload(desc.event_id, .bool);
-            elem.bound_check_event = desc.event_id;
-        },
-    }
-}
-
-fn applyRenderStructuralDesc(host: *HostEnv, desc: RenderStructuralDesc) void {
-    _ = domElementById(host, desc.elem_id);
-    host.markRenderStructuralSignal(desc.signal_id);
-}
-
 fn nodeValueText(value: abi.NodeValue) []const u8 {
     return switch (value.tag) {
         .NvStr => value.payload.nv_str.asSlice(),
@@ -2816,351 +2729,196 @@ fn nodeValueBoolValue(value: abi.NodeValue) bool {
     };
 }
 
-fn applySignalRenderPatches(host: *HostEnv, changes: SignalValueList) CommandCounts {
-    var counts: CommandCounts = .{};
-
-    for (changes.items()) |change| {
-        if (change.signal_id >= host.signal_descriptors.items.len) {
-            failHost("Roc signal change descriptor referenced an unknown signal id");
-        }
-        const signal_index: usize = @intCast(change.signal_id);
-
-        if (signal_index < host.render_text_sink_routes.items.len and host.render_text_sink_routes.items[signal_index].items.len > 0) {
-            const value = nodeValueText(change.value);
-            for (host.render_text_sink_routes.items[signal_index].items) |sink| {
-                if (applyRenderTextField(host, sink.elem_id, sink.field, value)) {
-                    counts.addTextField(sink.field);
-                }
-            }
-        }
-
-        if (signal_index < host.render_bool_sink_routes.items.len and host.render_bool_sink_routes.items[signal_index].items.len > 0) {
-            const value = nodeValueBoolValue(change.value);
-            for (host.render_bool_sink_routes.items[signal_index].items) |sink| {
-                if (applyRenderBoolField(host, sink.elem_id, sink.field, value)) {
-                    counts.addBoolField(sink.field);
-                }
-            }
-        }
-    }
-
-    host.render_metrics.patches_emitted += counts.total;
-
-    return counts;
-}
-
 fn traceHostDomReset() void {
     if (!traceEnabled()) return;
     writeStderr("[HOST CMD] ResetDom\n");
 }
 
-fn applyFullRenderDescriptors(host: *HostEnv, result: DispatchResult) CommandCounts {
+fn appendDomNode(host: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+    if (elem_id != host.dom_elements.items.len) failHost("descriptor stream elements must be dense and ordered by elem id");
+
+    const allocator = host.gpa.allocator();
+    const tag_copy = allocator.dupe(u8, tag) catch std.process.exit(1);
+    host.dom_elements.append(allocator, DomElement.init(elem_id, tag_copy)) catch {
+        allocator.free(tag_copy);
+        std.process.exit(1);
+    };
+    host.next_elem_id = elem_id + 1;
+
+    const parent = domElementById(host, parent_elem_id);
+    const child = domElementById(host, elem_id);
+    child.parent_id = parent.id;
+    parent.children.append(allocator, child.id) catch std.process.exit(1);
+}
+
+fn findElementDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostElementDesc {
+    for (stream.elements.items) |desc| {
+        if (desc.elem_id == elem_id) return desc;
+    }
+    return null;
+}
+
+fn findTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostNodeTextNodeDesc {
+    for (stream.text_nodes.items) |desc| {
+        if (desc.elem_id == elem_id) return desc;
+    }
+    return null;
+}
+
+fn findSignalTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostNodeSignalTextNodeDesc {
+    for (stream.signal_text_nodes.items) |desc| {
+        if (desc.elem_id == elem_id) return desc;
+    }
+    return null;
+}
+
+fn cloneNodeValue(value: abi.NodeValue) abi.NodeValue {
+    abi.increfNodeValue(value, 1);
+    return value;
+}
+
+fn nodeValueListItems(value: abi.NodeValue) []const abi.NodeValue {
+    return switch (value.tag) {
+        .NvList => value.payload.nv_list.items(),
+        else => failHost("structural list signal expected a List value"),
+    };
+}
+
+fn evalNodeSignalExprWithSources(host: *HostEnv, roc_host: *abi.RocHost, expr: abi.NodeSignalExpr, source_node_ids: []const u64, source_index: *usize) abi.NodeValue {
+    switch (expr.tag) {
+        .Ref => {
+            if (source_index.* >= source_node_ids.len) failHost("signal source table ended before all refs were evaluated");
+            const node_id = source_node_ids[source_index.*];
+            source_index.* += 1;
+            return cloneNodeValue(host.stateValueByNodeId(node_id));
+        },
+        .ConstValue => return cloneNodeValue(expr.payload.const_value),
+        .Map => {
+            const input = evalNodeSignalExprWithSources(host, roc_host, expr.payload.map._0.*, source_node_ids, source_index);
+            defer abi.decrefNodeValue(input, roc_host);
+            var metrics = host.pending_roc_metrics;
+            metrics.derived_calls_into_roc += 1;
+            host.pending_roc_metrics = metrics;
+            return callErasedNodeValueToNodeValue(roc_host, expr.payload.map._1, input);
+        },
+        .Map2 => {
+            const left = evalNodeSignalExprWithSources(host, roc_host, expr.payload.map2._0.*, source_node_ids, source_index);
+            defer abi.decrefNodeValue(left, roc_host);
+            const right = evalNodeSignalExprWithSources(host, roc_host, expr.payload.map2._1.*, source_node_ids, source_index);
+            defer abi.decrefNodeValue(right, roc_host);
+            var metrics = host.pending_roc_metrics;
+            metrics.derived_calls_into_roc += 1;
+            host.pending_roc_metrics = metrics;
+            return callErasedNodeValueNodeValueToNodeValue(roc_host, expr.payload.map2._2, left, right);
+        },
+        .Combine => {
+            var values: std.ArrayListUnmanaged(abi.NodeValue) = .empty;
+            errdefer {
+                for (values.items) |value| {
+                    abi.decrefNodeValue(value, roc_host);
+                }
+                values.deinit(host.gpa.allocator());
+            }
+            for (expr.payload.combine.items()) |child| {
+                values.append(host.gpa.allocator(), evalNodeSignalExprWithSources(host, roc_host, child, source_node_ids, source_index)) catch std.process.exit(1);
+            }
+            const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
+            values.deinit(host.gpa.allocator());
+            return .{ .payload = .{ .nv_list = list }, .tag = .NvList };
+        },
+    }
+}
+
+fn evalNodeSignalExpr(host: *HostEnv, roc_host: *abi.RocHost, expr: abi.NodeSignalExpr, source_node_ids: []const u64) abi.NodeValue {
+    var source_index: usize = 0;
+    const value = evalNodeSignalExprWithSources(host, roc_host, expr, source_node_ids, &source_index);
+    if (source_index != source_node_ids.len) failHost("signal source table contained unused refs");
+    return value;
+}
+
+fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: abi.NodeSignalExpr, source_node_ids: []const u64) bool {
+    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
+    defer abi.decrefNodeValue(value, roc_host);
+    return applyRenderTextField(host, elem_id, field, nodeValueText(value));
+}
+
+fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: abi.NodeSignalExpr, source_node_ids: []const u64) bool {
+    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
+    defer abi.decrefNodeValue(value, roc_host);
+    return applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(value));
+}
+
+fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
+    const elem = domElementById(host, desc.elem_id);
+    switch (desc.kind) {
+        .click => elem.bound_click_event = event_id,
+        .input => elem.bound_input_event = event_id,
+        .check => elem.bound_check_event = event_id,
+    }
+}
+
+fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
     traceHostDomReset();
     resetSimulatedDom(host);
     host.resetRenderSinkRoutes();
 
-    for (result.render_elements.items()) |desc| {
-        applyRenderElementDesc(host, desc);
-        counts.addCreateElement();
-        counts.addAppendChild();
-    }
-
-    for (result.render_texts.items()) |desc| {
-        const field = HostEnv.renderTextFieldFromAbi(desc.field);
-        if (applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice())) {
-            counts.addTextField(field);
+    var elem_id: u64 = 1;
+    while (elem_id < stream.next_elem_id) : (elem_id += 1) {
+        if (findElementDesc(stream, elem_id)) |desc| {
+            appendDomNode(host, desc.elem_id, desc.parent_elem_id, desc.tag);
+            counts.addCreateElement();
+            counts.addAppendChild();
+        } else if (findTextNodeDesc(stream, elem_id)) |desc| {
+            appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
+            counts.addCreateElement();
+            counts.addAppendChild();
+            if (applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+                counts.addTextField(.text);
+            }
+        } else if (findSignalTextNodeDesc(stream, elem_id)) |desc| {
+            appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
+            counts.addCreateElement();
+            counts.addAppendChild();
+            if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids)) {
+                counts.addTextField(.text);
+            }
+        } else {
+            failHost("descriptor stream skipped an elem id");
         }
     }
 
-    for (result.render_signal_texts.items()) |desc| {
-        validateRenderSinkSignal(host, desc.signal_id);
-        const field = HostEnv.renderTextFieldFromAbi(desc.field);
-        host.appendRenderTextSink(desc.signal_id, desc.elem_id, field);
-        if (applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice())) {
-            counts.addTextField(field);
+    for (stream.static_text_attrs.items) |desc| {
+        if (applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addTextField(desc.field);
         }
     }
-
-    for (result.render_bools.items()) |desc| {
-        const field = HostEnv.renderBoolFieldFromAbi(desc.field);
-        if (applyRenderBoolField(host, desc.elem_id, field, desc.value)) {
-            counts.addBoolField(field);
+    for (stream.signal_text_attrs.items) |desc| {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+            counts.addTextField(desc.field);
         }
     }
-
-    for (result.render_signal_bools.items()) |desc| {
-        validateRenderSinkSignal(host, desc.signal_id);
-        const field = HostEnv.renderBoolFieldFromAbi(desc.field);
-        host.appendRenderBoolSink(desc.signal_id, desc.elem_id, field);
-        if (applyRenderBoolField(host, desc.elem_id, field, desc.value)) {
-            counts.addBoolField(field);
+    for (stream.static_bool_attrs.items) |desc| {
+        if (applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addBoolField(desc.field);
         }
     }
-
-    for (result.render_events.items()) |desc| {
-        applyRenderEventDesc(host, desc);
+    for (stream.signal_bool_attrs.items) |desc| {
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+    for (stream.events.items, 0..) |desc, index| {
+        bindNodeEvent(host, desc, @intCast(index + 1));
         counts.addEventBinding();
     }
 
-    for (result.render_structures.items()) |desc| {
-        applyRenderStructuralDesc(host, desc);
-    }
-
     host.render_metrics.patches_emitted += counts.total;
-
     return counts;
 }
 
-fn releaseRenderElementList(elements: RenderElementDescList, roc_host: *abi.RocHost) void {
-    if (elements.isUnique()) {
-        for (elements.items()) |desc| {
-            desc.tag.decref(roc_host);
-        }
-    }
-    elements.decref(roc_host);
-}
-
-fn releaseRenderTextList(texts: RenderTextDescList, roc_host: *abi.RocHost) void {
-    if (texts.isUnique()) {
-        for (texts.items()) |desc| {
-            desc.value.decref(roc_host);
-        }
-    }
-    texts.decref(roc_host);
-}
-
-fn releaseRenderSignalTextList(texts: RenderSignalTextDescList, roc_host: *abi.RocHost) void {
-    if (texts.isUnique()) {
-        for (texts.items()) |desc| {
-            desc.value.decref(roc_host);
-        }
-    }
-    texts.decref(roc_host);
-}
-
-fn releaseRenderBoolList(bools: RenderBoolDescList, roc_host: *abi.RocHost) void {
-    bools.decref(roc_host);
-}
-
-fn releaseRenderSignalBoolList(bools: RenderSignalBoolDescList, roc_host: *abi.RocHost) void {
-    bools.decref(roc_host);
-}
-
-fn releaseRenderEventList(events: RenderEventDescList, roc_host: *abi.RocHost) void {
-    events.decref(roc_host);
-}
-
-fn releaseRenderStructuralList(structures: RenderStructuralDescList, roc_host: *abi.RocHost) void {
-    structures.decref(roc_host);
-}
-
-fn releaseDispatchRenderDescriptors(result: DispatchResult, roc_host: *abi.RocHost) void {
-    releaseRenderElementList(result.render_elements, roc_host);
-    releaseRenderTextList(result.render_texts, roc_host);
-    releaseRenderSignalTextList(result.render_signal_texts, roc_host);
-    releaseRenderBoolList(result.render_bools, roc_host);
-    releaseRenderSignalBoolList(result.render_signal_bools, roc_host);
-    releaseRenderEventList(result.render_events, roc_host);
-    releaseRenderStructuralList(result.render_structures, roc_host);
-}
-
-fn releaseEventDescriptorList(descriptors: EventDescriptorList, roc_host: *abi.RocHost) void {
-    descriptors.decref(roc_host);
-}
-
-fn releaseSignalDescriptorList(descriptors: SignalDescriptorList, roc_host: *abi.RocHost) void {
-    if (descriptors.isUnique()) {
-        for (descriptors.items()) |descriptor| {
-            descriptor.input_signal_ids.decref(roc_host);
-            descriptor.source_event_ids.decref(roc_host);
-            descriptor.source_state_ids.decref(roc_host);
-        }
-    }
-    descriptors.decref(roc_host);
-}
-
-fn releaseSignalValueList(values: SignalValueList, roc_host: *abi.RocHost) void {
-    if (values.isUnique()) {
-        for (values.items()) |value| {
-            abi.decrefNodeValue(value.value, roc_host);
-        }
-    }
-    values.decref(roc_host);
-}
-
-fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
-    if (descriptors.isUnique()) {
-        for (descriptors.items()) |descriptor| {
-            abi.decrefNodeValue(descriptor.value, roc_host);
-        }
-    }
-    descriptors.decref(roc_host);
-}
-
-fn releaseStateChangeList(changes: StateChangeList, roc_host: *abi.RocHost) void {
-    if (changes.isUnique()) {
-        for (changes.items()) |change| {
-            abi.decrefNodeValue(change.value, roc_host);
-        }
-    }
-    changes.decref(roc_host);
-}
-
-fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
-
-fn dropMovedRecomputeResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
-
-fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) RecomputeApplyOutcome {
-    const result = result_box.*;
-    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
-    host.runtime_box = result.runtime;
-    host.pending_roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
-    const start_ns = benchmarkNowNs();
-    host.setEventDescriptors(result.event_descriptors);
-    host.setStateDescriptors(result.state_descriptors);
-    host.setSignalDescriptors(result.signal_descriptors);
-    const structural_render_required = host.signalChangesRequireStructuralRender(result.signal_changes);
-    host.applyStateChanges(result.state_changes);
-    host.applySignalChanges(result.signal_changes);
-    if (!structural_render_required) {
-        const counts = applySignalRenderPatches(host, result.signal_changes);
-        if (command_counts) |total| total.addAll(counts);
-        host.last_runtime_metrics = host.metricsWithHostRender(host.pending_roc_metrics);
-        host.pending_roc_metrics = zeroRuntimeMetrics();
-    }
-    const elapsed = benchmarkNowNs() - start_ns;
-    if (apply_ns) |ns| ns.* += elapsed;
-    releaseEventDescriptorList(result.event_descriptors, roc_host);
-    releaseSignalValueList(result.signal_changes, roc_host);
-    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
-    releaseStateDescriptorList(result.state_descriptors, roc_host);
-    releaseStateChangeList(result.state_changes, roc_host);
-    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(RecomputeResult), &dropMovedRecomputeResultPayload, roc_host);
-    return .{ .structural_render_required = structural_render_required };
-}
-
-fn acceptRecomputeResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox) RecomputeApplyOutcome {
-    return acceptRecomputeResultMeasured(host, roc_host, result_box, null, null);
-}
-
-fn acceptRenderResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
-    const result = result_box.*;
-    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
-    host.runtime_box = result.runtime;
-    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
-    host.pending_roc_metrics = zeroRuntimeMetrics();
-    host.setEventDescriptors(result.event_descriptors);
-    host.setStateDescriptors(result.state_descriptors);
-    host.setSignalDescriptors(result.signal_descriptors);
-    host.applyStateChanges(result.state_changes);
-    host.applySignalChanges(result.signal_changes);
-    const start_ns = benchmarkNowNs();
-    const counts = applyFullRenderDescriptors(host, result);
-    const elapsed = benchmarkNowNs() - start_ns;
-    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
-    if (apply_ns) |ns| ns.* += elapsed;
-    if (command_counts) |total| total.addAll(counts);
-    releaseDispatchRenderDescriptors(result, roc_host);
-    releaseEventDescriptorList(result.event_descriptors, roc_host);
-    releaseSignalValueList(result.signal_changes, roc_host);
-    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
-    releaseStateDescriptorList(result.state_descriptors, roc_host);
-    releaseStateChangeList(result.state_changes, roc_host);
-    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
-}
-
-fn acceptRenderResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
-    acceptRenderResultMeasured(host, roc_host, result_box, null, null);
-}
-
-fn acceptInitResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
-    acceptRenderResultMeasured(host, roc_host, result_box, apply_ns, command_counts);
-}
-
-fn acceptInitResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
-    acceptRenderResult(host, roc_host, result_box);
-}
-
-fn boxRenderInput(roc_host: *abi.RocHost, input: RenderInput) RenderInputBox {
-    const raw = abi.allocateBox(@sizeOf(RenderInput), @alignOf(RenderInput), true, roc_host);
-    const input_box: RenderInputBox = @ptrCast(@alignCast(raw));
-    input_box.* = input;
-    return input_box;
-}
-
-fn boxRecomputeInput(roc_host: *abi.RocHost, input: RecomputeInput) RecomputeInputBox {
-    const raw = abi.allocateBox(@sizeOf(RecomputeInput), @alignOf(RecomputeInput), true, roc_host);
-    const input_box: RecomputeInputBox = @ptrCast(@alignCast(raw));
-    input_box.* = input;
-    return input_box;
-}
-
-fn cachedSignalValueListExcluding(host: *HostEnv, roc_host: *abi.RocHost, dirty_signal_ids: []const u64) SignalValueList {
-    const allocator = host.gpa.allocator();
-    var cached_signals: std.ArrayListUnmanaged(SignalValueDesc) = .empty;
-    defer cached_signals.deinit(allocator);
-
-    for (host.signal_cache.items, 0..) |slot, signal_index| {
-        if (u64SliceContains(dirty_signal_ids, @intCast(signal_index))) continue;
-        switch (slot) {
-            .absent => {},
-            .present => |value| {
-                cached_signals.append(allocator, .{
-                    .signal_id = @intCast(signal_index),
-                    .value = value,
-                }) catch std.process.exit(1);
-            },
-        }
-    }
-
-    const list = SignalValueList.fromSlice(cached_signals.items, roc_host);
-    for (cached_signals.items) |entry| {
-        abi.increfNodeValue(entry.value, 1);
-    }
-    return list;
-}
-
-fn cachedStateValueList(host: *HostEnv, roc_host: *abi.RocHost) StateChangeList {
-    const allocator = host.gpa.allocator();
-    var cached_states: std.ArrayListUnmanaged(StateValueDesc) = .empty;
-    defer cached_states.deinit(allocator);
-
-    for (host.states.items, 0..) |state, state_index| {
-        if (state.state_id != state_index) {
-            failHost("host state registry is not indexed by state id");
-        }
-        cached_states.append(allocator, .{
-            .state_id = @intCast(state_index),
-            .value = state.value,
-        }) catch std.process.exit(1);
-    }
-
-    const list = StateChangeList.fromSlice(cached_states.items, roc_host);
-    for (cached_states.items) |entry| {
-        abi.increfNodeValue(entry.value, 1);
-    }
-    return list;
-}
-
-fn renderInputForHost(host: *HostEnv, roc_host: *abi.RocHost) RenderInput {
-    return .{
-        .cached_signals = cachedSignalValueListExcluding(host, roc_host, &.{}),
-        .cached_states = cachedStateValueList(host, roc_host),
-    };
-}
-
-fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) SignalEventPayload {
-    const allocator = host.gpa.allocator();
-    const dirty_signal_ids = host.dirtySignalIdsForEvent(allocator, event_id);
-    defer allocator.free(dirty_signal_ids);
-    return .{
-        .dirty_signal_ids = abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host),
-        .cached_signals = cachedSignalValueListExcluding(host, roc_host, &.{}),
-        .cached_states = cachedStateValueList(host, roc_host),
-    };
-}
+fn dropMovedElemPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
 fn nodeValueUnit() abi.NodeValue {
     return .{
@@ -3206,6 +2964,7 @@ fn erasedCallablePayload(callable: abi.RocErasedCallable) *abi.RocErasedCallable
 
 fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue) abi.NodeValue {
     const payload = erasedCallablePayload(callable);
+    abi.increfNodeValue(arg0, 1);
     var call_args = ErasedNodeValueUnaryArgs{ .arg0 = arg0 };
     var result: abi.NodeValue = undefined;
     payload.callable_fn_ptr(
@@ -3219,6 +2978,8 @@ fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErase
 
 fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.NodeValue {
     const payload = erasedCallablePayload(callable);
+    abi.increfNodeValue(arg0, 1);
+    abi.increfNodeValue(arg1, 1);
     var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
     var result: abi.NodeValue = undefined;
     payload.callable_fn_ptr(
@@ -3230,10 +2991,12 @@ fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi
     return result;
 }
 
-fn callErasedNodeValueNodeValueToNodeElem(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.NodeElem {
+fn callErasedNodeValueNodeValueToElem(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.Elem {
     const payload = erasedCallablePayload(callable);
+    abi.increfNodeValue(arg0, 1);
+    abi.increfNodeValue(arg1, 1);
     var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
-    var result: abi.NodeElem = undefined;
+    var result: abi.Elem = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),
@@ -3245,6 +3008,8 @@ fn callErasedNodeValueNodeValueToNodeElem(roc_host: *abi.RocHost, callable: abi.
 
 fn callErasedNodeValueNodeValueToBool(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) bool {
     const payload = erasedCallablePayload(callable);
+    abi.increfNodeValue(arg0, 1);
+    abi.increfNodeValue(arg1, 1);
     var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
     var result: bool = undefined;
     payload.callable_fn_ptr(
@@ -3256,69 +3021,97 @@ fn callErasedNodeValueNodeValueToBool(roc_host: *abi.RocHost, callable: abi.RocE
     return result;
 }
 
-fn activeOccurrence(event_id: u64, value: abi.NodeValue) ActiveEvent {
-    return .{
-        .payload = .{ .occurrence = .{ .id = event_id, .value = value } },
-        .tag = .Occurrence,
-    };
+fn hostEventById(host: *HostEnv, event_id: u64) HostNodeEventDesc {
+    if (event_id == 0 or event_id > host.active_stream.events.items.len) {
+        failHost("DOM event referenced an unknown active event descriptor");
+    }
+    return host.active_stream.events.items[@intCast(event_id - 1)];
 }
 
-fn recomputeInputForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: abi.NodeValue) RecomputeInput {
-    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
-    return .{
-        .active_event = activeOccurrence(event_id, value),
-        .cached_signals = signal_payload.cached_signals,
-        .cached_states = signal_payload.cached_states,
-        .dirty_signal_ids = signal_payload.dirty_signal_ids,
-    };
+fn validateNodeEventPayload(desc: HostNodeEventDesc, payload: abi.NodeValue) void {
+    switch (desc.payload_kind) {
+        .unit => if (payload.tag != .NvUnit) failHost("click event received a non-unit payload"),
+        .str => if (payload.tag != .NvStr) failHost("input event received a non-str payload"),
+        .bool => if (payload.tag != .NvBool) failHost("check event received a non-bool payload"),
+    }
 }
 
-fn clickRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) RecomputeInput {
-    return recomputeInputForEvent(host, roc_host, event_id, nodeValueUnit());
+fn finishHostMetrics(host: *HostEnv) void {
+    var metrics = addRuntimeMetrics(host.last_runtime_metrics, host.pending_roc_metrics);
+    metrics.patches_emitted = host.render_metrics.patches_emitted;
+    metrics.events_processed = host.dispatch_metrics.events_processed;
+    metrics.recompute_batches = host.dispatch_metrics.recompute_batches;
+    host.last_runtime_metrics = metrics;
+    host.pending_roc_metrics = zeroRuntimeMetrics();
 }
 
-fn inputRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: []const u8) RecomputeInput {
-    return recomputeInputForEvent(host, roc_host, event_id, nodeValueStr(roc_host, value));
-}
+fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+    const root = host.root_elem orelse failHost("host render requested before Roc root Elem was initialized");
 
-fn checkRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked: bool) RecomputeInput {
-    return recomputeInputForEvent(host, roc_host, event_id, nodeValueBool(checked));
-}
+    var next_stream: HostNodeDescriptorStream = .{};
+    errdefer next_stream.deinit(host.gpa.allocator(), roc_host);
+    host.collectActiveElemRootDescriptors(roc_host, &next_stream, root);
 
-fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInput) void {
-    const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
-    host.runtime_box = null;
-    host.recordDispatch();
-    const outcome = acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxRecomputeInput(roc_host, input)));
-    if (!outcome.structural_render_required) return;
-
-    const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
-    host.runtime_box = null;
-    acceptRenderResult(host, roc_host, abi.roc_ui_render(render_runtime, boxRenderInput(roc_host, renderInputForHost(host, roc_host))));
-}
-
-fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInput, stats: *BenchmarkStats) void {
-    const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
-    host.runtime_box = null;
-    const input_box = boxRecomputeInput(roc_host, input);
-    host.recordDispatch();
     const start_ns = benchmarkNowNs();
-    const result_box = abi.roc_ui_recompute(runtime, input_box);
-    stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
-    const outcome = acceptRecomputeResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns, &stats.commands);
-    if (!outcome.structural_render_required) {
-        stats.actions += 1;
+    const counts = applyNodeDescriptorStream(host, roc_host, &next_stream);
+    const elapsed = benchmarkNowNs() - start_ns;
+    if (apply_ns) |ns| ns.* += elapsed;
+    if (command_counts) |total| total.addAll(counts);
+
+    host.active_stream.deinit(host.gpa.allocator(), roc_host);
+    host.active_stream = next_stream;
+    finishHostMetrics(host);
+}
+
+fn acceptInitElemMeasured(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+    if (host.root_elem != null) failHost("Roc root Elem initialized more than once");
+    const root = root_box.*;
+    host.root_elem = root;
+    abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), &dropMovedElemPayload, roc_host);
+    renderActiveRootMeasured(host, roc_host, apply_ns, command_counts);
+}
+
+fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) void {
+    acceptInitElemMeasured(host, roc_host, root_box, null, null);
+}
+
+fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload: abi.NodeValue, stats: ?*BenchmarkStats) void {
+    defer abi.decrefNodeValue(payload, roc_host);
+
+    const desc = hostEventById(host, event_id);
+    validateNodeEventPayload(desc, payload);
+    host.recordDispatch();
+
+    var metrics = host.pending_roc_metrics;
+    metrics.nodes_recomputed += 1;
+    metrics.derived_calls_into_roc += 1;
+    host.pending_roc_metrics = metrics;
+
+    const start_ns = benchmarkNowNs();
+    const current = host.stateValueByNodeId(desc.target_node_id);
+    const next = callErasedNodeValueNodeValueToNodeValue(roc_host, desc.transform, current, payload);
+    if (stats) |s| s.dispatch_roc_ns += benchmarkNowNs() - start_ns;
+
+    const changed = host.updateStateValue(roc_host, desc.target_node_id, next);
+    if (!changed) {
+        var prune_metrics = host.pending_roc_metrics;
+        prune_metrics.propagation_prunes += 1;
+        host.pending_roc_metrics = prune_metrics;
+        finishHostMetrics(host);
+        if (stats) |s| s.actions += 1;
         return;
     }
 
-    const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
-    host.runtime_box = null;
-    const render_input_box = boxRenderInput(roc_host, renderInputForHost(host, roc_host));
-    const render_start_ns = benchmarkNowNs();
-    const render_result_box = abi.roc_ui_render(render_runtime, render_input_box);
-    stats.dispatch_roc_ns += benchmarkNowNs() - render_start_ns;
-    acceptRenderResultMeasured(host, roc_host, render_result_box, &stats.dispatch_apply_ns, &stats.commands);
-    stats.actions += 1;
+    if (stats) |s| {
+        renderActiveRootMeasured(host, roc_host, &s.dispatch_apply_ns, &s.commands);
+        s.actions += 1;
+    } else {
+        renderActiveRootMeasured(host, roc_host, null, null);
+    }
+}
+
+fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload: abi.NodeValue) void {
+    dispatchRocEventMeasured(host, roc_host, event_id, payload, null);
 }
 
 fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
@@ -3346,7 +3139,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, roc_host, clickRecomputeInput(host, roc_host, event_id), stats);
+            dispatchRocEventMeasured(host, roc_host, event_id, nodeValueUnit(), stats);
         },
 
         .fill => {
@@ -3354,7 +3147,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
             if (elem.disabled) failHost("benchmark fill target is disabled");
             if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, inputRecomputeInput(host, roc_host, event_id, value), stats);
+                dispatchRocEventMeasured(host, roc_host, event_id, nodeValueStr(roc_host, value), stats);
             } else {
                 _ = setElementValueIfChanged(host, elem, value);
             }
@@ -3365,7 +3158,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
             if (elem.disabled) failHost("benchmark check target is disabled");
             if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, checkRecomputeInput(host, roc_host, event_id, checked), stats);
+                dispatchRocEventMeasured(host, roc_host, event_id, nodeValueBool(checked), stats);
             } else {
                 _ = setElementCheckedIfChanged(elem, checked);
             }
@@ -3387,7 +3180,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
     const init_start_ns = benchmarkNowNs();
     const init_result = abi.roc_ui_init();
     stats.init_roc_ns += benchmarkNowNs() - init_start_ns;
-    acceptInitResultMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
+    acceptInitElemMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
 
     for (commands) |cmd| {
         if (commandIsAction(cmd)) {
@@ -3620,9 +3413,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     defer current_roc_host = null;
     defer host_env.deinit();
 
-    traceStderr("[HOST] calling roc_ui_init\n");
-    acceptInitResult(&host_env, &roc_host, abi.roc_ui_init());
-    traceStderr("[HOST] roc_ui_init returned\n");
+    acceptInitElem(&host_env, &roc_host, abi.roc_ui_init());
 
     if (verbose) {
         var buf: [256]u8 = undefined;
@@ -3653,7 +3444,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
                     return 1;
                 };
-                dispatchRocEvent(&host_env, &roc_host, clickRecomputeInput(&host_env, &roc_host, event_id));
+                dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueUnit());
             },
 
             .fill => {
@@ -3667,7 +3458,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_input_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, inputRecomputeInput(&host_env, &roc_host, event_id, value));
+                    dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueStr(&roc_host, value));
                 } else {
                     _ = setElementValueIfChanged(&host_env, elem, value);
                 }
@@ -3684,7 +3475,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_check_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, checkRecomputeInput(&host_env, &roc_host, event_id, checked));
+                    dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueBool(checked));
                 } else {
                     _ = setElementCheckedIfChanged(elem, checked);
                 }
@@ -3994,36 +3785,36 @@ fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8,
     writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(left + right + capture.amount));
 }
 
-fn testBinaryNodeElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testBinaryElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
     const left = switch (call_args.arg0.tag) {
         .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test row NodeElem callable expected left NvI64"),
+        else => @panic("test row Elem callable expected left NvI64"),
     };
     const right = switch (call_args.arg1.tag) {
         .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test row NodeElem callable expected right NvI64"),
+        else => @panic("test row Elem callable expected right NvI64"),
     };
     var text_buffer: [64]u8 = undefined;
-    const text = std.fmt.bufPrint(&text_buffer, "row-{d}", .{left + right + capture.amount}) catch @panic("test row NodeElem callable could not format text");
-    writeTestErasedResult(abi.NodeElem, ret, testNodeText(roc_host, text));
+    const text = std.fmt.bufPrint(&text_buffer, "row-{d}", .{left + right + capture.amount}) catch @panic("test row Elem callable could not format text");
+    writeTestErasedResult(abi.Elem, ret, testNodeText(roc_host, text));
 }
 
-fn testStatefulRowNodeElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
     const key = switch (call_args.arg0.tag) {
         .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test stateful row NodeElem callable expected key NvI64"),
+        else => @panic("test stateful row Elem callable expected key NvI64"),
     };
     const item = switch (call_args.arg1.tag) {
         .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test stateful row NodeElem callable expected item NvI64"),
+        else => @panic("test stateful row Elem callable expected item NvI64"),
     };
     var text_buffer: [64]u8 = undefined;
-    const text = std.fmt.bufPrint(&text_buffer, "row-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row NodeElem callable could not format text");
-    writeTestErasedResult(abi.NodeElem, ret, testNodeState(roc_host, testNodeText(roc_host, text)));
+    const text = std.fmt.bufPrint(&text_buffer, "row-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row Elem callable could not format text");
+    writeTestErasedResult(abi.Elem, ret, testNodeState(roc_host, testNodeText(roc_host, text)));
 }
 
 fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -4088,16 +3879,16 @@ test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
         const row = writeTestErasedCallable(
             TestErasedI64Capture,
             &roc_host,
-            &testBinaryNodeElemCallable,
+            &testBinaryElemCallable,
             &testErasedCallableOnDrop,
             .{ .amount = 3 },
         );
         defer abi.decrefErasedCallable(row, &roc_host);
 
-        const result = callErasedNodeValueNodeValueToNodeElem(&roc_host, row, nodeValueI64(10), nodeValueI64(29));
-        defer abi.decrefNodeElem(result, &roc_host);
+        const result = callErasedNodeValueNodeValueToElem(&roc_host, row, nodeValueI64(10), nodeValueI64(29));
+        defer abi.decrefElem(result, &roc_host);
 
-        try std.testing.expectEqual(abi.NodeElemTag.Text, result.tag);
+        try std.testing.expectEqual(abi.ElemTag.Text, result.tag);
         try std.testing.expectEqualStrings("row-42", result.payload.text.asSlice());
     }
 
@@ -4214,9 +4005,9 @@ fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
 }
 
-fn boxTestNodeElem(roc_host: *abi.RocHost, elem: abi.NodeElem) *abi.NodeElem {
-    const raw = abi.allocateBox(@sizeOf(abi.NodeElem), @alignOf(abi.NodeElem), true, roc_host);
-    const boxed: *abi.NodeElem = @ptrCast(@alignCast(raw));
+fn boxTestElem(roc_host: *abi.RocHost, elem: abi.Elem) *abi.Elem {
+    const raw = abi.allocateBox(@sizeOf(abi.Elem), @alignOf(abi.Elem), true, roc_host);
+    const boxed: *abi.Elem = @ptrCast(@alignCast(raw));
     boxed.* = elem;
     return boxed;
 }
@@ -4228,6 +4019,17 @@ fn boxTestNodeSignalExpr(roc_host: *abi.RocHost, expr: abi.NodeSignalExpr) *abi.
     return boxed;
 }
 
+fn newTestBinderToken(roc_host: *abi.RocHost) HostBinderToken {
+    const token: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
+    token.* = 0;
+    return token;
+}
+
+fn cloneTestBinderToken(token: HostBinderToken) HostBinderToken {
+    abi.increfBox(@ptrCast(token), 1);
+    return token;
+}
+
 fn testNodeConstExpr(value: abi.NodeValue) abi.NodeSignalExpr {
     return .{
         .payload = .{ .const_value = value },
@@ -4235,21 +4037,21 @@ fn testNodeConstExpr(value: abi.NodeValue) abi.NodeSignalExpr {
     };
 }
 
-fn testNodeRefExpr(binder_ref: u64) abi.NodeSignalExpr {
+fn testNodeRefExpr(binder_token: HostBinderToken) abi.NodeSignalExpr {
     return .{
-        .payload = .{ .ref = binder_ref },
+        .payload = .{ .ref = cloneTestBinderToken(binder_token) },
         .tag = .Ref,
     };
 }
 
-fn testNodeText(roc_host: *abi.RocHost, text: []const u8) abi.NodeElem {
+fn testNodeText(roc_host: *abi.RocHost, text: []const u8) abi.Elem {
     return .{
         .payload = .{ .text = RocStr.fromSlice(text, roc_host) },
         .tag = .Text,
     };
 }
 
-fn testNodeTextSignal(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr) abi.NodeElem {
+fn testNodeTextSignal(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr) abi.Elem {
     return .{
         .payload = .{ .text_signal = boxTestNodeSignalExpr(roc_host, signal) },
         .tag = .TextSignal,
@@ -4304,7 +4106,7 @@ fn testNodeSignalBoolAttr(roc_host: *abi.RocHost, field: RenderBoolField, signal
     };
 }
 
-fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_ref: u64, payload_kind: EventPayloadKind) abi.NodeAttr {
+fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token: HostBinderToken, payload_kind: EventPayloadKind) abi.NodeAttr {
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -4317,7 +4119,7 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_ref: 
             .on_event = .{
                 .kind = @intFromEnum(kind),
                 .msg = .{
-                    .binder = binder_ref,
+                    .binder = cloneTestBinderToken(binder_token),
                     .payload_kind = @intFromEnum(payload_kind),
                     .transform = transform,
                 },
@@ -4327,12 +4129,12 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_ref: 
     };
 }
 
-fn testNodeElementWith(roc_host: *abi.RocHost, tag: []const u8, attrs: []const abi.NodeAttr, children: []const abi.NodeElem) abi.NodeElem {
+fn testElementWith(roc_host: *abi.RocHost, tag: []const u8, attrs: []const abi.NodeAttr, children: []const abi.Elem) abi.Elem {
     return .{
         .payload = .{
             .element = .{
                 .attrs = abi.RocList(abi.NodeAttr).fromSlice(attrs, roc_host),
-                .children = abi.RocList(abi.NodeElem).fromSlice(children, roc_host),
+                .children = abi.RocList(abi.Elem).fromSlice(children, roc_host),
                 .tag = RocStr.fromSlice(tag, roc_host),
             },
         },
@@ -4340,11 +4142,11 @@ fn testNodeElementWith(roc_host: *abi.RocHost, tag: []const u8, attrs: []const a
     };
 }
 
-fn testNodeElement(roc_host: *abi.RocHost, children: []const abi.NodeElem) abi.NodeElem {
-    return testNodeElementWith(roc_host, "div", &.{}, children);
+fn testElement(roc_host: *abi.RocHost, children: []const abi.Elem) abi.Elem {
+    return testElementWith(roc_host, "div", &.{}, children);
 }
 
-fn testNodeState(roc_host: *abi.RocHost, child: abi.NodeElem) abi.NodeElem {
+fn testNodeStateWithToken(roc_host: *abi.RocHost, binder_token: HostBinderToken, child: abi.Elem) abi.Elem {
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -4355,7 +4157,8 @@ fn testNodeState(roc_host: *abi.RocHost, child: abi.NodeElem) abi.NodeElem {
     return .{
         .payload = .{
             .state = .{
-                .child = boxTestNodeElem(roc_host, child),
+                .binder = binder_token,
+                .child = boxTestElem(roc_host, child),
                 .eq = eq,
                 .initial = nodeValueI64(0),
             },
@@ -4364,20 +4167,24 @@ fn testNodeState(roc_host: *abi.RocHost, child: abi.NodeElem) abi.NodeElem {
     };
 }
 
-fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.NodeElem, when_false: abi.NodeElem) abi.NodeElem {
+fn testNodeState(roc_host: *abi.RocHost, child: abi.Elem) abi.Elem {
+    return testNodeStateWithToken(roc_host, newTestBinderToken(roc_host), child);
+}
+
+fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.Elem, when_false: abi.Elem) abi.Elem {
     return .{
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueBool(true))),
-                .when_false = boxTestNodeElem(roc_host, when_false),
-                .when_true = boxTestNodeElem(roc_host, when_true),
+                .when_false = boxTestElem(roc_host, when_false),
+                .when_true = boxTestElem(roc_host, when_true),
             },
         },
         .tag = .When,
     };
 }
 
-fn testNodeEach(roc_host: *abi.RocHost) abi.NodeElem {
+fn testNodeEach(roc_host: *abi.RocHost) abi.Elem {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -4395,7 +4202,7 @@ fn testNodeEach(roc_host: *abi.RocHost) abi.NodeElem {
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testStatefulRowNodeElemCallable,
+        &testStatefulRowElemCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -4482,7 +4289,7 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.rows_removed);
 }
 
-test "signals host walks NodeElem identity-bearing sites only" {
+test "signals host walks Elem identity-bearing sites only" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -4498,21 +4305,21 @@ test "signals host walks NodeElem identity-bearing sites only" {
     const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false"));
     const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
     const each_elem = testNodeEach(&roc_host);
-    const nested_children = [_]abi.NodeElem{
+    const nested_children = [_]abi.Elem{
         testNodeText(&roc_host, "ordinary text"),
         when_elem,
         each_elem,
     };
-    const nested_element = testNodeElement(&roc_host, &nested_children);
-    const root_children = [_]abi.NodeElem{
+    const nested_element = testElement(&roc_host, &nested_children);
+    const root_children = [_]abi.Elem{
         testNodeText(&roc_host, "root text"),
         nested_state,
         nested_element,
     };
-    const root = testNodeElement(&roc_host, &root_children);
-    defer abi.decrefNodeElem(root, &roc_host);
+    const root = testElement(&roc_host, &root_children);
+    defer abi.decrefElem(root, &roc_host);
 
-    host.walkNodeElemRootIdentitySites(root);
+    host.walkElemRootIdentitySites(root);
     try std.testing.expectEqual(@as(usize, 3), host.node_identities.items.len);
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[0].scope_id);
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[0].ordinal);
@@ -4521,26 +4328,26 @@ test "signals host walks NodeElem identity-bearing sites only" {
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[2].scope_id);
     try std.testing.expectEqual(@as(u64, 2), host.node_identities.items[2].ordinal);
 
-    host.walkNodeElemRootIdentitySites(root);
+    host.walkElemRootIdentitySites(root);
     try std.testing.expectEqual(@as(usize, 3), host.node_identities.items.len);
 
-    const true_scope = host.walkNodeElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
+    const true_scope = host.walkElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
     try std.testing.expectEqual(@as(usize, 4), host.node_identities.items.len);
     try std.testing.expectEqual(true_scope, host.node_identities.items[3].scope_id);
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[3].ordinal);
 
-    const true_scope_again = host.walkNodeElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
+    const true_scope_again = host.walkElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
     try std.testing.expectEqual(true_scope, true_scope_again);
     try std.testing.expectEqual(@as(usize, 4), host.node_identities.items.len);
 
-    const false_scope = host.walkNodeElemWhenBranchIdentitySites(0, 1, .false_branch, when_elem.payload.when.when_false.*);
+    const false_scope = host.walkElemWhenBranchIdentitySites(0, 1, .false_branch, when_elem.payload.when.when_false.*);
     try std.testing.expect(false_scope != true_scope);
     try std.testing.expectEqual(@as(usize, 5), host.node_identities.items.len);
     try std.testing.expectEqual(false_scope, host.node_identities.items[4].scope_id);
     try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[4].ordinal);
 }
 
-test "signals host collects NodeElem descriptor stream" {
+test "signals host collects Elem descriptor stream" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -4561,30 +4368,31 @@ test "signals host collects NodeElem descriptor stream" {
         testNodeStaticBoolAttr(.disabled, true),
         testNodeSignalBoolAttr(&roc_host, .checked, testNodeConstExpr(nodeValueBool(false))),
     };
+    const state_token = newTestBinderToken(&roc_host);
     const state_child_attrs = [_]abi.NodeAttr{
         testNodeStaticTextAttr(&roc_host, .test_id, "state-child"),
-        testNodeSignalTextAttr(&roc_host, .value, testNodeRefExpr(0)),
-        testNodeEventAttr(&roc_host, .click, 0, .unit),
+        testNodeSignalTextAttr(&roc_host, .value, testNodeRefExpr(state_token)),
+        testNodeEventAttr(&roc_host, .click, state_token, .unit),
     };
-    const state_child_children = [_]abi.NodeElem{
+    const state_child_children = [_]abi.Elem{
         testNodeText(&roc_host, "state child"),
-        testNodeTextSignal(&roc_host, testNodeRefExpr(0)),
+        testNodeTextSignal(&roc_host, testNodeRefExpr(state_token)),
     };
-    const state_child = testNodeElementWith(&roc_host, "span", &state_child_attrs, &state_child_children);
-    const state = testNodeState(&roc_host, state_child);
+    const state_child = testElementWith(&roc_host, "span", &state_child_attrs, &state_child_children);
+    const state = testNodeStateWithToken(&roc_host, state_token, state_child);
     const when_elem = testNodeWhen(&roc_host, testNodeText(&roc_host, "true branch"), testNodeText(&roc_host, "false branch"));
     const each_elem = testNodeEach(&roc_host);
-    const root_children = [_]abi.NodeElem{
+    const root_children = [_]abi.Elem{
         testNodeText(&roc_host, "intro"),
         testNodeTextSignal(&roc_host, testNodeConstExpr(nodeValueStr(&roc_host, "dynamic text"))),
         state,
         when_elem,
         each_elem,
     };
-    const root = testNodeElementWith(&roc_host, "section", &root_attrs, &root_children);
-    defer abi.decrefNodeElem(root, &roc_host);
+    const root = testElementWith(&roc_host, "section", &root_attrs, &root_children);
+    defer abi.decrefElem(root, &roc_host);
 
-    host.collectNodeElemRootDescriptors(&roc_host, &stream, root);
+    host.collectElemRootDescriptors(&roc_host, &stream, root);
 
     try std.testing.expectEqual(@as(usize, 2), stream.elements.items.len);
     try std.testing.expectEqual(@as(u64, 1), stream.elements.items[0].elem_id);
@@ -4645,7 +4453,7 @@ test "signals host collects NodeElem descriptor stream" {
 
     try std.testing.expectEqual(@as(usize, 1), stream.events.items.len);
     try std.testing.expectEqual(RenderEventKind.click, stream.events.items[0].kind);
-    try std.testing.expectEqual(@as(u64, 0), stream.events.items[0].binder_ref);
+    try std.testing.expect(stream.events.items[0].binder_token == state_token);
     try std.testing.expectEqual(stream.scope_sites.items[0].node_id, stream.events.items[0].target_node_id);
     try std.testing.expectEqual(EventPayloadKind.unit, stream.events.items[0].payload_kind);
 
@@ -4653,13 +4461,13 @@ test "signals host collects NodeElem descriptor stream" {
     try std.testing.expectEqual(HostNodeScopeSiteKind.state, stream.scope_sites.items[0].kind);
     try std.testing.expectEqual(@as(u64, 0), stream.scope_sites.items[0].ordinal);
     try std.testing.expectEqual(@as(u64, 1), stream.scope_sites.items[0].parent_elem_id);
-    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[0].binder_node_ids.len);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[0].binder_bindings.len);
     try std.testing.expectEqual(HostNodeScopeSiteKind.when, stream.scope_sites.items[1].kind);
     try std.testing.expectEqual(@as(u64, 1), stream.scope_sites.items[1].ordinal);
-    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[1].binder_node_ids.len);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[1].binder_bindings.len);
     try std.testing.expectEqual(HostNodeScopeSiteKind.each, stream.scope_sites.items[2].kind);
     try std.testing.expectEqual(@as(u64, 2), stream.scope_sites.items[2].ordinal);
-    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[2].binder_node_ids.len);
+    try std.testing.expectEqual(@as(usize, 0), stream.scope_sites.items[2].binder_bindings.len);
 
     try std.testing.expectEqual(@as(usize, 1), stream.states.items.len);
     try std.testing.expectEqual(stream.scope_sites.items[0].node_id, stream.states.items[0].node_id);
@@ -4676,7 +4484,7 @@ test "signals host collects NodeElem descriptor stream" {
     try std.testing.expectEqual(@as(u64, 2), host.node_identities.items[2].ordinal);
 }
 
-test "signals host carries binder context into NodeElem when branch collection" {
+test "signals host carries binder context into Elem when branch collection" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -4690,30 +4498,32 @@ test "signals host carries binder context into NodeElem when branch collection" 
     var stream: HostNodeDescriptorStream = .{};
     defer stream.deinit(host.gpa.allocator(), &roc_host);
 
-    const branch_children = [_]abi.NodeElem{
-        testNodeTextSignal(&roc_host, testNodeRefExpr(0)),
+    const state_token = newTestBinderToken(&roc_host);
+    const branch_children = [_]abi.Elem{
+        testNodeTextSignal(&roc_host, testNodeRefExpr(state_token)),
     };
-    const branch_true = testNodeElementWith(&roc_host, "span", &.{}, &branch_children);
+    const branch_true = testElementWith(&roc_host, "span", &.{}, &branch_children);
     const when_elem = testNodeWhen(&roc_host, branch_true, testNodeText(&roc_host, "hidden"));
-    const state_child_children = [_]abi.NodeElem{
+    const state_child_children = [_]abi.Elem{
         when_elem,
     };
-    const state_child = testNodeElementWith(&roc_host, "div", &.{}, &state_child_children);
-    const root = testNodeState(&roc_host, state_child);
-    defer abi.decrefNodeElem(root, &roc_host);
+    const state_child = testElementWith(&roc_host, "div", &.{}, &state_child_children);
+    const root = testNodeStateWithToken(&roc_host, state_token, state_child);
+    defer abi.decrefElem(root, &roc_host);
 
-    host.collectNodeElemRootDescriptors(&roc_host, &stream, root);
+    host.collectElemRootDescriptors(&roc_host, &stream, root);
 
     try std.testing.expectEqual(@as(usize, 2), stream.scope_sites.items.len);
     const state_site = stream.scope_sites.items[0];
     const when_site = stream.scope_sites.items[1];
     try std.testing.expectEqual(HostNodeScopeSiteKind.state, state_site.kind);
     try std.testing.expectEqual(HostNodeScopeSiteKind.when, when_site.kind);
-    try std.testing.expectEqual(@as(usize, 1), when_site.binder_node_ids.len);
-    try std.testing.expectEqual(state_site.node_id, when_site.binder_node_ids[0]);
+    try std.testing.expectEqual(@as(usize, 1), when_site.binder_bindings.len);
+    try std.testing.expect(when_site.binder_bindings[0].token == state_token);
+    try std.testing.expectEqual(state_site.node_id, when_site.binder_bindings[0].node_id);
     try std.testing.expectEqual(@as(usize, 0), stream.signal_text_nodes.items.len);
 
-    const branch_scope_id = host.collectNodeElemWhenBranchDescriptors(&roc_host, &stream, when_site, .true_branch, when_elem.payload.when.when_true.*);
+    const branch_scope_id = host.collectElemWhenBranchDescriptors(&roc_host, &stream, when_site, .true_branch, when_elem.payload.when.when_true.*);
 
     try std.testing.expect(branch_scope_id != 0);
     try std.testing.expectEqual(@as(usize, 2), stream.elements.items.len);
@@ -4727,7 +4537,7 @@ test "signals host carries binder context into NodeElem when branch collection" 
     try std.testing.expectEqual(state_site.node_id, stream.signal_text_nodes.items[0].source_node_ids[0]);
 }
 
-test "signals host disposes inactive NodeElem when branch scope" {
+test "signals host disposes inactive Elem when branch scope" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -4741,14 +4551,14 @@ test "signals host disposes inactive NodeElem when branch scope" {
     const branch_true = testNodeState(&roc_host, testNodeText(&roc_host, "true branch"));
     const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false branch"));
     const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
-    const root_children = [_]abi.NodeElem{when_elem};
-    const root = testNodeElementWith(&roc_host, "section", &.{}, &root_children);
-    defer abi.decrefNodeElem(root, &roc_host);
+    const root_children = [_]abi.Elem{when_elem};
+    const root = testElementWith(&roc_host, "section", &.{}, &root_children);
+    defer abi.decrefElem(root, &roc_host);
 
     var true_stream: HostNodeDescriptorStream = .{};
     defer true_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &true_stream, root);
-    const true_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &true_stream, true_stream.scope_sites.items[0], true_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
+    host.collectElemRootDescriptors(&roc_host, &true_stream, root);
+    const true_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &true_stream, true_stream.scope_sites.items[0], true_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
 
     try std.testing.expectEqual(@as(usize, 2), true_stream.scope_sites.items.len);
     const true_state_id = true_stream.scope_sites.items[1].node_id;
@@ -4758,8 +4568,8 @@ test "signals host disposes inactive NodeElem when branch scope" {
 
     var false_stream: HostNodeDescriptorStream = .{};
     defer false_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &false_stream, root);
-    const false_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &false_stream, false_stream.scope_sites.items[0], false_stream.whens.items[0], .false_branch, when_elem.payload.when.when_false.*);
+    host.collectElemRootDescriptors(&roc_host, &false_stream, root);
+    const false_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &false_stream, false_stream.scope_sites.items[0], false_stream.whens.items[0], .false_branch, when_elem.payload.when.when_false.*);
 
     try std.testing.expect(false_scope != true_scope);
     try std.testing.expect(!host.scopes.items[@intCast(true_scope)].active);
@@ -4770,8 +4580,8 @@ test "signals host disposes inactive NodeElem when branch scope" {
 
     var true_again_stream: HostNodeDescriptorStream = .{};
     defer true_again_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &true_again_stream, root);
-    const true_again_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &true_again_stream, true_again_stream.scope_sites.items[0], true_again_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
+    host.collectElemRootDescriptors(&roc_host, &true_again_stream, root);
+    const true_again_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &true_again_stream, true_again_stream.scope_sites.items[0], true_again_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
 
     try std.testing.expect(true_again_scope != true_scope);
     try std.testing.expect(true_again_scope != false_scope);
@@ -4782,7 +4592,7 @@ test "signals host disposes inactive NodeElem when branch scope" {
     try std.testing.expect(true_again_stream.scope_sites.items[1].node_id != true_state_id);
 }
 
-test "signals host collects NodeElem each row bodies by keyed scope" {
+test "signals host collects Elem each row bodies by keyed scope" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -4793,22 +4603,22 @@ test "signals host collects NodeElem each row bodies by keyed scope" {
         _ = host.gpa.deinit();
     }
 
-    const root_children = [_]abi.NodeElem{
+    const root_children = [_]abi.Elem{
         testNodeEach(&roc_host),
     };
-    const root = testNodeElementWith(&roc_host, "section", &.{}, &root_children);
-    defer abi.decrefNodeElem(root, &roc_host);
+    const root = testElementWith(&roc_host, "section", &.{}, &root_children);
+    defer abi.decrefElem(root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
     defer initial_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &initial_stream, root);
+    host.collectElemRootDescriptors(&roc_host, &initial_stream, root);
 
     try std.testing.expectEqual(@as(usize, 1), initial_stream.scope_sites.items.len);
     try std.testing.expectEqual(HostNodeScopeSiteKind.each, initial_stream.scope_sites.items[0].kind);
     try std.testing.expectEqual(@as(usize, 1), initial_stream.eaches.items.len);
 
     const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
-    const initial = host.collectNodeElemEachRowDescriptors(&roc_host, &initial_stream, initial_stream.scope_sites.items[0], initial_stream.eaches.items[0], &initial_items);
+    const initial = host.collectElemEachRowDescriptors(&roc_host, &initial_stream, initial_stream.scope_sites.items[0], initial_stream.eaches.items[0], &initial_items);
     defer freeKeyedRowDiff(&host, initial);
 
     try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
@@ -4832,10 +4642,10 @@ test "signals host collects NodeElem each row bodies by keyed scope" {
 
     var reordered_stream: HostNodeDescriptorStream = .{};
     defer reordered_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &reordered_stream, root);
+    host.collectElemRootDescriptors(&roc_host, &reordered_stream, root);
 
     const reordered_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
-    const reordered = host.collectNodeElemEachRowDescriptors(&roc_host, &reordered_stream, reordered_stream.scope_sites.items[0], reordered_stream.eaches.items[0], &reordered_items);
+    const reordered = host.collectElemEachRowDescriptors(&roc_host, &reordered_stream, reordered_stream.scope_sites.items[0], reordered_stream.eaches.items[0], &reordered_items);
     defer freeKeyedRowDiff(&host, reordered);
 
     try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
@@ -4849,10 +4659,10 @@ test "signals host collects NodeElem each row bodies by keyed scope" {
 
     var changed_stream: HostNodeDescriptorStream = .{};
     defer changed_stream.deinit(host.gpa.allocator(), &roc_host);
-    host.collectNodeElemRootDescriptors(&roc_host, &changed_stream, root);
+    host.collectElemRootDescriptors(&roc_host, &changed_stream, root);
 
     const changed_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
-    const changed = host.collectNodeElemEachRowDescriptors(&roc_host, &changed_stream, changed_stream.scope_sites.items[0], changed_stream.eaches.items[0], &changed_items);
+    const changed = host.collectElemEachRowDescriptors(&roc_host, &changed_stream, changed_stream.scope_sites.items[0], changed_stream.eaches.items[0], &changed_items);
     defer freeKeyedRowDiff(&host, changed);
 
     try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);

@@ -15,7 +15,7 @@ Elem := [
 	Element({ tag : Str, attrs : List(Node.Attr), children : List(Elem) }),
 	Text(Str),
 	TextSignal(Box(Node.SignalExpr)),
-	State({ initial : NodeValue, eq : Box((NodeValue, NodeValue -> Bool)), child : Box(Elem) }),
+	State({ binder : Node.BinderRef, initial : NodeValue, eq : Box((NodeValue, NodeValue -> Bool)), child : Box(Elem) }),
 	When({ condition : Box(Node.SignalExpr), when_true : Box(Elem), when_false : Box(Elem) }),
 	Each(
 		{
