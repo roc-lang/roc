@@ -2103,13 +2103,13 @@ their shape, and the pass iterates so nested wrappers dissolve.
 
 ARC insertion computes a whole-program borrows-with-lifetimes solution over
 ownership-neutral LIR, then emits explicit `incref`, `decref`, and `free`
-statements from that solution. The algorithm is an adaptation of
-fully-automatic borrow inference for reference-counted pure functional
-programs to Roc's statement-only LIR, from the paper ["Fully-Automatic Type
-Inference for Borrows with
+statements from that solution. Roc's borrow inference system is based on
+["Fully-Automatic Type Inference for Borrows with
 Lifetimes"](https://theory.stanford.edu/~aiken/publications/papers/oopsla26.pdf)
 by William Brandon, Benjamin Driscoll, Frank Dai, Jonathan Ragan-Kelley, Mae
-Milano, and Alex Aiken (OOPSLA 2026), implemented in the Morphic compiler.
+Milano, and Alex Aiken (OOPSLA 2026). It adapts the paper's fully automatic
+borrow inference for reference-counted pure functional programs, implemented in
+the Morphic compiler, to Roc's statement-only LIR.
 
 The motivation is RC traffic. With all-owned insertion, every non-final
 occurrence of a refcounted value pays an atomic increment plus a matching
