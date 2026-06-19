@@ -275,7 +275,9 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    branch bodies are walked through explicit branch scopes. The host also has an
    owned descriptor stream collector for generated-ABI `NodeElem` trees covering
    DOM elements, static text nodes, signal-backed text nodes/attrs, bool attrs,
-   events, and retained `State`/`When`/`Each` site descriptors. The remaining
+   events, and retained `State`/`When`/`Each` site descriptors. The collector
+   carries an explicit binder stack, resolves event `BinderRef`s to state node
+   ids, and records source node ids for signal-backed descriptors. The remaining
    work is wiring this stream into the app init/render lifecycle.
 4. **Host-invoked `is_eq` thunks (new host capability).** The host currently never
    invokes erased callables. Wire the `RocErasedCallableFn(host, ret, args, capture)`
