@@ -3834,6 +3834,24 @@ pub fn build(b: *std.Build) void {
         tests_summary.addRun(&module_test.run_step.step);
     }
 
+    const signals_host_test = b.addTest(.{
+        .name = "signals_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/signals/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    signals_host_test.root_module.addImport("base", roc_modules.base);
+    roc_modules.addModuleDependencies(signals_host_test, .base);
+    const run_signals_host_test = b.addRunArtifact(signals_host_test);
+    if (run_args.len != 0) {
+        run_signals_host_test.addArgs(run_args);
+    }
+    build_test_zig_step.dependOn(&signals_host_test.step);
+    tests_summary.addRun(&run_signals_host_test.step);
+
     const lsp_integration_test_harness_module = createTestHarnessModule(b, roc_modules);
     const lsp_integration_runner_exe = b.addExecutable(.{
         .name = "parallel_lsp_integration_runner",

@@ -5,29 +5,19 @@ import NodeValue exposing [NodeValue]
 UiRuntime := [].{
 	RuntimeMetrics : {
 		events_processed : U64,
-		evaluated_nodes : U64,
-		signal_writes : U64,
-		signal_changes : U64,
-		signal_suppressed : U64,
-		callbacks : U64,
-		dynamic_renders : U64,
-		keyed_creates : U64,
-		keyed_reuses : U64,
-		keyed_removes : U64,
-		node_value_equality_checks : U64,
-		graph_nodes : U64,
-		commands_emitted : U64,
-		full_render_batches : U64,
-		incremental_batches : U64,
-		structural_resets : U64,
-		state_lookups : U64,
-		event_lookups : U64,
-		retained_graph_dispatches : U64,
-		signal_cache_hits : U64,
-		signal_cache_misses : U64,
-		stale_signal_cache_misses : U64,
-		clean_signal_skips : U64,
-		state_version_bumps : U64,
+		nodes_recomputed : U64,
+		propagation_prunes : U64,
+		derived_calls_into_roc : U64,
+		recompute_batches : U64,
+		patches_emitted : U64,
+		scopes_created : U64,
+		scopes_disposed : U64,
+		rows_reused : U64,
+		rows_created : U64,
+		rows_removed : U64,
+		closure_retains : U64,
+		closure_releases : U64,
+		retained_alloc_delta : I64,
 	}
 
 	EventId : { key : Str, id : U64, payload_kind : U64 }
@@ -244,29 +234,19 @@ UiRuntime := [].{
 	zero_metrics : RuntimeMetrics
 	zero_metrics = {
 		events_processed: 0,
-		evaluated_nodes: 0,
-		signal_writes: 0,
-		signal_changes: 0,
-		signal_suppressed: 0,
-		callbacks: 0,
-		dynamic_renders: 0,
-		keyed_creates: 0,
-		keyed_reuses: 0,
-		keyed_removes: 0,
-		node_value_equality_checks: 0,
-		graph_nodes: 0,
-		commands_emitted: 0,
-		full_render_batches: 0,
-		incremental_batches: 0,
-		structural_resets: 0,
-		state_lookups: 0,
-		event_lookups: 0,
-		retained_graph_dispatches: 0,
-		signal_cache_hits: 0,
-		signal_cache_misses: 0,
-		stale_signal_cache_misses: 0,
-		clean_signal_skips: 0,
-		state_version_bumps: 0,
+		nodes_recomputed: 0,
+		propagation_prunes: 0,
+		derived_calls_into_roc: 0,
+		recompute_batches: 0,
+		patches_emitted: 0,
+		scopes_created: 0,
+		scopes_disposed: 0,
+		rows_reused: 0,
+		rows_created: 0,
+		rows_removed: 0,
+		closure_retains: 0,
+		closure_releases: 0,
+		retained_alloc_delta: 0,
 	}
 
 	init : Elem -> DispatchResult
@@ -921,10 +901,7 @@ UiRuntime := [].{
 				fn = Box.unbox(render)
 				child = fn(result.value)
 				registered_child = register_elem(result.state.runtime, child)
-				metrics = registered_child.runtime.metrics
-				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1 }
-					}
-				}
+				state1 = { ..result.state, runtime: registered_child.runtime }
 				render_child = { ..with_structure_desc, state: state1 }
 				render_elem(render_child, registered_child.elem, created.id)
 			}
@@ -940,7 +917,7 @@ UiRuntime := [].{
 				child = fn(result.value)
 				registered_child = register_elem(result.state.runtime, child)
 				metrics = registered_child.runtime.metrics
-				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + 1 }
+				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, rows_created: metrics.rows_created + 1 }
 					}
 				}
 				render_child = { ..with_structure_desc, state: state1 }
@@ -956,7 +933,7 @@ UiRuntime := [].{
 				key_fn = Box.unbox(key)
 				render_fn = Box.unbox(render)
 				metrics = result.state.runtime.metrics
-				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + List.len(items) }
+				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, rows_created: metrics.rows_created + List.len(items) }
 					}
 				}
 				start = { ..with_structure_desc, state: state1 }
@@ -977,12 +954,10 @@ UiRuntime := [].{
 
 	event_id_for_node : Runtime, Graph.EventNode -> EventLookup
 	event_id_for_node = |runtime, event| {
-		metrics0 = runtime.metrics
-		runtime_with_count = { ..runtime, metrics: { ..metrics0, event_lookups: metrics0.event_lookups + 1 } }
 		match event.expr {
 			Graph.EventExpr.Source(_) =>
 				match List.get(event.source_ids, 0) {
-					Ok(id) => { runtime: runtime_with_count, id }
+					Ok(id) => { runtime, id }
 					Err(_) => {
 						crash "Signals runtime invariant violated: event source id was not registered"
 					}
@@ -1015,7 +990,7 @@ UiRuntime := [].{
 				source_result = eval_event(state, Box.unbox(source))
 				fn = Box.unbox(transform)
 				metrics = source_result.state.runtime.metrics
-				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(source_result.values) }
+				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(source_result.values) }
 					}
 				}
 				values = List.map(source_result.values, |value| fn(value))
@@ -1046,26 +1021,17 @@ UiRuntime := [].{
 					match signal_cache_lookup(state.signal_changes, signal_id) {
 						CacheHit(value) => { state, value }
 						CacheMiss => {
-							metrics0 = state.runtime.metrics
-							state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
-							eval_signal_uncached(state1, signal)
+							eval_signal_uncached(state, signal)
 						}
 					}
 				} else {
 					match signal_cache_lookup(state.cached_signals, registered_signal_id(signal)) {
 						CacheHit(value) => {
-							metrics0 = state.runtime.metrics
-							metrics1 = { ..metrics0,
-								signal_cache_hits: metrics0.signal_cache_hits + 1,
-								clean_signal_skips: metrics0.clean_signal_skips + 1,
-							}
-							{ state: { ..state, runtime: { ..state.runtime, metrics: metrics1 } }, value }
+							{ state, value }
 						}
 
 						CacheMiss => {
-							metrics0 = state.runtime.metrics
-							state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
-							eval_signal_uncached(state1, signal)
+							eval_signal_uncached(state, signal)
 						}
 					}
 				}
@@ -1075,7 +1041,7 @@ UiRuntime := [].{
 	eval_signal_uncached : EvalState, Graph.SignalNode -> EvalResult
 	eval_signal_uncached = |state, signal| {
 		metrics0 = state.runtime.metrics
-		state_with_count = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, evaluated_nodes: metrics0.evaluated_nodes + 1, graph_nodes: metrics0.graph_nodes + 1 }
+		state_with_count = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, nodes_recomputed: metrics0.nodes_recomputed + 1 }
 			}
 		}
 		result =
@@ -1089,7 +1055,7 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: fn(source_result.value) }
@@ -1099,7 +1065,7 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: NodeValue.from_i64(fn(NodeValue.to_i64(source_result.value))) }
@@ -1109,7 +1075,7 @@ UiRuntime := [].{
 					source_result = eval_signal(state_with_count, Box.unbox(source))
 					fn = Box.unbox(transform)
 					metrics = source_result.state.runtime.metrics
-					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: NodeValue.from_str(fn(NodeValue.to_i64(source_result.value))) }
@@ -1120,7 +1086,7 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: fn((left_result.value, right_result.value)) }
@@ -1131,7 +1097,7 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: NodeValue.from_i64(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
@@ -1142,7 +1108,7 @@ UiRuntime := [].{
 					right_result = eval_signal(left_result.state, Box.unbox(right))
 					fn = Box.unbox(transform)
 					metrics = right_result.state.runtime.metrics
-					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + 1 }
 						}
 					}
 					{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
@@ -1173,7 +1139,7 @@ UiRuntime := [].{
 						event_result = eval_event(state1, event_node)
 						fn = Box.unbox(step)
 						metrics = event_result.state.runtime.metrics
-						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) }
 							}
 						}
 						next_value = List.fold(event_result.values, current.value, |acc, evt| fn((acc, evt)))
@@ -1192,7 +1158,7 @@ UiRuntime := [].{
 						event_result = eval_event(state1, event_node)
 						fn = Box.unbox(step)
 						metrics = event_result.state.runtime.metrics
-						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, derived_calls_into_roc: metrics.derived_calls_into_roc + List.len(event_result.values) }
 							}
 						}
 						next_i64 = List.fold(event_result.values, NodeValue.to_i64(current.value), |acc, evt| fn((acc, NodeValue.to_i64(evt))))
@@ -1529,17 +1495,14 @@ UiRuntime := [].{
 
 	state_value_by_index : EvalState, U64 -> StateValue
 	state_value_by_index = |state, state_index| {
-		metrics0 = state.runtime.metrics
-		runtime_with_count = { ..state.runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
-
 		match state_change_lookup(state.state_changes, state_index) {
-			StateChangeFound(value) => { runtime: runtime_with_count, value, index: state_index }
+			StateChangeFound(value) => { runtime: state.runtime, value, index: state_index }
 			StateChangeMissing =>
 				if state_index < List.len(state.cached_states) {
 					match List.get(state.cached_states, state_index) {
 						Ok(entry) =>
 							if entry.state_id == state_index {
-								{ runtime: runtime_with_count, value: entry.value, index: state_index }
+								{ runtime: state.runtime, value: entry.value, index: state_index }
 							} else {
 								crash "Signals runtime invariant violated: host state values must be dense and ordered by state id"
 							}
@@ -1548,8 +1511,8 @@ UiRuntime := [].{
 						}
 					}
 				} else {
-					match List.get(runtime_with_count.states, state_index) {
-						Ok(slot) => { runtime: runtime_with_count, value: slot.initial, index: state_index }
+					match List.get(state.runtime.states, state_index) {
+						Ok(slot) => { runtime: state.runtime, value: slot.initial, index: state_index }
 						Err(_) => {
 							crash "Signals runtime invariant violated: state index was not registered"
 						}
@@ -1565,14 +1528,10 @@ UiRuntime := [].{
 			changed = !node_value_equal(previous, next)
 			metrics1 =
 				if changed {
-					{ ..metrics0, signal_writes: metrics0.signal_writes + 1,
-						signal_changes: metrics0.signal_changes + 1,
-						node_value_equality_checks: metrics0.node_value_equality_checks + 1,
-					}
+					metrics0
 				} else {
-					{ ..metrics0, signal_writes: metrics0.signal_writes + 1,
-						signal_suppressed: metrics0.signal_suppressed + 1,
-						node_value_equality_checks: metrics0.node_value_equality_checks + 1,
+					{ ..metrics0,
+						propagation_prunes: metrics0.propagation_prunes + 1,
 					}
 				}
 			next_state_changes =

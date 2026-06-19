@@ -135,19 +135,12 @@ const RecomputeApplyOutcome = struct {
 };
 
 const HostRenderMetrics = struct {
-    commands_emitted: u64 = 0,
-    full_render_batches: u64 = 0,
-    incremental_batches: u64 = 0,
-    structural_resets: u64 = 0,
+    patches_emitted: u64 = 0,
 };
 
 const HostDispatchMetrics = struct {
     events_processed: u64 = 0,
-    retained_graph_dispatches: u64 = 0,
-};
-
-const HostStateMetrics = struct {
-    state_version_bumps: u64 = 0,
+    recompute_batches: u64 = 0,
 };
 
 pub const std_options: std.Options = .{
@@ -601,7 +594,6 @@ const HostEnv = struct {
     render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
-    state_metrics: HostStateMetrics = .{},
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
@@ -1215,7 +1207,7 @@ const HostEnv = struct {
 
     fn recordDispatch(self: *HostEnv) void {
         self.dispatch_metrics.events_processed += 1;
-        self.dispatch_metrics.retained_graph_dispatches += 1;
+        self.dispatch_metrics.recompute_batches += 1;
     }
 
     fn clearStates(self: *HostEnv) void {
@@ -1285,7 +1277,6 @@ const HostEnv = struct {
             abi.decrefNodeValue(state.value, self.roc_host.?);
             state.value = change.value;
             state.version += 1;
-            self.state_metrics.state_version_bumps += 1;
             self.invalidateSignalCacheForState(change.state_id);
         }
     }
@@ -1349,13 +1340,9 @@ const HostEnv = struct {
 
     fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
         var metrics = roc_metrics;
-        metrics.commands_emitted += self.render_metrics.commands_emitted;
-        metrics.full_render_batches += self.render_metrics.full_render_batches;
-        metrics.incremental_batches += self.render_metrics.incremental_batches;
-        metrics.structural_resets += self.render_metrics.structural_resets;
+        metrics.patches_emitted += self.render_metrics.patches_emitted;
         metrics.events_processed += self.dispatch_metrics.events_processed;
-        metrics.retained_graph_dispatches += self.dispatch_metrics.retained_graph_dispatches;
-        metrics.state_version_bumps += self.state_metrics.state_version_bumps;
+        metrics.recompute_batches += self.dispatch_metrics.recompute_batches;
         return metrics;
     }
 
@@ -1486,30 +1473,20 @@ const HostEnv = struct {
 
 fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
-        .callbacks = 0,
-        .dynamic_renders = 0,
-        .evaluated_nodes = 0,
+        .closure_releases = 0,
+        .closure_retains = 0,
+        .derived_calls_into_roc = 0,
         .events_processed = 0,
-        .graph_nodes = 0,
-        .keyed_creates = 0,
-        .keyed_removes = 0,
-        .keyed_reuses = 0,
-        .node_value_equality_checks = 0,
-        .signal_changes = 0,
-        .signal_suppressed = 0,
-        .signal_writes = 0,
-        .commands_emitted = 0,
-        .event_lookups = 0,
-        .full_render_batches = 0,
-        .incremental_batches = 0,
-        .retained_graph_dispatches = 0,
-        .state_lookups = 0,
-        .structural_resets = 0,
-        .signal_cache_hits = 0,
-        .signal_cache_misses = 0,
-        .stale_signal_cache_misses = 0,
-        .clean_signal_skips = 0,
-        .state_version_bumps = 0,
+        .nodes_recomputed = 0,
+        .patches_emitted = 0,
+        .propagation_prunes = 0,
+        .recompute_batches = 0,
+        .retained_alloc_delta = 0,
+        .rows_created = 0,
+        .rows_removed = 0,
+        .rows_reused = 0,
+        .scopes_created = 0,
+        .scopes_disposed = 0,
     };
 }
 
@@ -1744,30 +1721,20 @@ const BenchmarkStats = struct {
 
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
-        .callbacks = left.callbacks + right.callbacks,
-        .commands_emitted = left.commands_emitted + right.commands_emitted,
-        .dynamic_renders = left.dynamic_renders + right.dynamic_renders,
-        .evaluated_nodes = left.evaluated_nodes + right.evaluated_nodes,
-        .event_lookups = left.event_lookups + right.event_lookups,
+        .closure_releases = left.closure_releases + right.closure_releases,
+        .closure_retains = left.closure_retains + right.closure_retains,
+        .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
         .events_processed = left.events_processed + right.events_processed,
-        .full_render_batches = left.full_render_batches + right.full_render_batches,
-        .graph_nodes = left.graph_nodes + right.graph_nodes,
-        .incremental_batches = left.incremental_batches + right.incremental_batches,
-        .keyed_creates = left.keyed_creates + right.keyed_creates,
-        .keyed_removes = left.keyed_removes + right.keyed_removes,
-        .keyed_reuses = left.keyed_reuses + right.keyed_reuses,
-        .node_value_equality_checks = left.node_value_equality_checks + right.node_value_equality_checks,
-        .retained_graph_dispatches = left.retained_graph_dispatches + right.retained_graph_dispatches,
-        .signal_changes = left.signal_changes + right.signal_changes,
-        .signal_cache_hits = left.signal_cache_hits + right.signal_cache_hits,
-        .signal_cache_misses = left.signal_cache_misses + right.signal_cache_misses,
-        .signal_suppressed = left.signal_suppressed + right.signal_suppressed,
-        .signal_writes = left.signal_writes + right.signal_writes,
-        .stale_signal_cache_misses = left.stale_signal_cache_misses + right.stale_signal_cache_misses,
-        .state_lookups = left.state_lookups + right.state_lookups,
-        .state_version_bumps = left.state_version_bumps + right.state_version_bumps,
-        .structural_resets = left.structural_resets + right.structural_resets,
-        .clean_signal_skips = left.clean_signal_skips + right.clean_signal_skips,
+        .nodes_recomputed = left.nodes_recomputed + right.nodes_recomputed,
+        .patches_emitted = left.patches_emitted + right.patches_emitted,
+        .propagation_prunes = left.propagation_prunes + right.propagation_prunes,
+        .recompute_batches = left.recompute_batches + right.recompute_batches,
+        .retained_alloc_delta = left.retained_alloc_delta + right.retained_alloc_delta,
+        .rows_created = left.rows_created + right.rows_created,
+        .rows_removed = left.rows_removed + right.rows_removed,
+        .rows_reused = left.rows_reused + right.rows_reused,
+        .scopes_created = left.scopes_created + right.scopes_created,
+        .scopes_disposed = left.scopes_disposed + right.scopes_disposed,
     };
 }
 
@@ -1933,10 +1900,7 @@ fn applySignalRenderPatches(host: *HostEnv, changes: SignalValueList) CommandCou
         }
     }
 
-    host.render_metrics.commands_emitted += counts.total;
-    if (counts.total > 0) {
-        host.render_metrics.incremental_batches += 1;
-    }
+    host.render_metrics.patches_emitted += counts.total;
 
     return counts;
 }
@@ -2000,9 +1964,7 @@ fn applyFullRenderDescriptors(host: *HostEnv, result: DispatchResult) CommandCou
         applyRenderStructuralDesc(host, desc);
     }
 
-    host.render_metrics.commands_emitted += counts.total;
-    host.render_metrics.full_render_batches += 1;
-    host.render_metrics.structural_resets += 1;
+    host.render_metrics.patches_emitted += counts.total;
 
     return counts;
 }
@@ -2416,10 +2378,13 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
         }
     }
 
-    stats.metrics = addRuntimeMetrics(stats.metrics, host_env.last_runtime_metrics);
+    const retained_delta = @as(i64, @intCast(host_env.alloc_count)) - @as(i64, @intCast(host_env.dealloc_count));
+    var iteration_metrics = host_env.last_runtime_metrics;
+    iteration_metrics.retained_alloc_delta = retained_delta;
+    stats.metrics = addRuntimeMetrics(stats.metrics, iteration_metrics);
     stats.allocs += @intCast(host_env.alloc_count);
     stats.deallocs += @intCast(host_env.dealloc_count);
-    stats.retained_alloc_delta += @as(i64, @intCast(host_env.alloc_count)) - @as(i64, @intCast(host_env.dealloc_count));
+    stats.retained_alloc_delta += retained_delta;
 
     host_env.deinit();
     current_host = null;
@@ -2427,7 +2392,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,evaluated_nodes,callbacks,dynamic_renders,graph_nodes,commands_emitted,full_render_batches,incremental_batches,structural_resets,state_lookups,event_lookups,retained_graph_dispatches,signal_cache_hits,signal_cache_misses,stale_signal_cache_misses,clean_signal_skips,state_version_bumps,signal_writes,signal_changes,signal_suppressed,node_value_equality_checks\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -2465,29 +2430,22 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
         .{
             stats.metrics.events_processed,
-            stats.metrics.evaluated_nodes,
-            stats.metrics.callbacks,
-            stats.metrics.dynamic_renders,
-            stats.metrics.graph_nodes,
-            stats.metrics.commands_emitted,
-            stats.metrics.full_render_batches,
-            stats.metrics.incremental_batches,
-            stats.metrics.structural_resets,
-            stats.metrics.state_lookups,
-            stats.metrics.event_lookups,
-            stats.metrics.retained_graph_dispatches,
-            stats.metrics.signal_cache_hits,
-            stats.metrics.signal_cache_misses,
-            stats.metrics.stale_signal_cache_misses,
-            stats.metrics.clean_signal_skips,
-            stats.metrics.state_version_bumps,
-            stats.metrics.signal_writes,
-            stats.metrics.signal_changes,
-            stats.metrics.signal_suppressed,
-            stats.metrics.node_value_equality_checks,
+            stats.metrics.nodes_recomputed,
+            stats.metrics.propagation_prunes,
+            stats.metrics.derived_calls_into_roc,
+            stats.metrics.recompute_batches,
+            stats.metrics.patches_emitted,
+            stats.metrics.scopes_created,
+            stats.metrics.scopes_disposed,
+            stats.metrics.rows_reused,
+            stats.metrics.rows_created,
+            stats.metrics.rows_removed,
+            stats.metrics.closure_retains,
+            stats.metrics.closure_releases,
+            stats.metrics.retained_alloc_delta,
         },
     );
 }
@@ -2519,16 +2477,18 @@ fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: us
 }
 
 comptime {
-    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
-    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
-    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
-    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
-    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
-    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+    if (!builtin.is_test) {
+        @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+        @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+        @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+        @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+        @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+        @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
 
-    @export(&main, .{ .name = "main" });
-    if (@import("builtin").os.tag == .windows) {
-        @export(&__main, .{ .name = "__main" });
+        @export(&main, .{ .name = "main" });
+        if (@import("builtin").os.tag == .windows) {
+            @export(&__main, .{ .name = "__main" });
+        }
     }
 }
 
@@ -2649,9 +2609,9 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 
     if (verbose) {
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} graph nodes\n", .{
+        const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} recomputed nodes\n", .{
             host_env.dom_elements.items.len,
-            host_env.last_runtime_metrics.graph_nodes,
+            host_env.last_runtime_metrics.nodes_recomputed,
         }) catch "";
         writeStderr(msg);
         host_env.dumpDom();
@@ -2806,4 +2766,100 @@ fn writeBoolMismatch(line_num: usize, field: []const u8, expected: bool, actual:
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected {s}: {}\n  Got {s}:      {}\n", .{ line_num, field, expected, field, actual }) catch "TEST FAILED\n";
     writeStderr(msg);
+}
+
+fn appendTestSignalDescriptor(host: *HostEnv, signal_id: u64, kind: SignalKind, source_event_ids: []const u64, input_signal_ids: []const u64) !void {
+    if (!builtin.is_test) @compileError("appendTestSignalDescriptor is test-only");
+
+    const allocator = host.gpa.allocator();
+    const owned_source_states = try allocator.dupe(u64, &.{});
+    errdefer allocator.free(owned_source_states);
+    const owned_source_events = try allocator.dupe(u64, source_event_ids);
+    errdefer allocator.free(owned_source_events);
+    const owned_inputs = try allocator.dupe(u64, input_signal_ids);
+    errdefer allocator.free(owned_inputs);
+
+    try host.signal_descriptors.append(allocator, .{
+        .signal_id = signal_id,
+        .kind = kind,
+        .source_state_ids = owned_source_states,
+        .source_event_ids = owned_source_events,
+        .input_signal_ids = owned_inputs,
+        .rank = 0,
+    });
+}
+
+fn deinitTestHostGraph(host: *HostEnv) void {
+    if (!builtin.is_test) @compileError("deinitTestHostGraph is test-only");
+
+    const allocator = host.gpa.allocator();
+    host.clearEventDescriptors();
+    host.event_descriptors.deinit(allocator);
+    host.clearSignalEventRoutes();
+    host.signal_event_routes.deinit(allocator);
+    host.clearSignalDescriptors();
+    host.signal_descriptors.deinit(allocator);
+    host.clearSignalRoutes();
+    host.signal_routes.deinit(allocator);
+    host.clearSignalDependents();
+    host.signal_dependents.deinit(allocator);
+    host.signal_cache.deinit(allocator);
+}
+
+test "signals host dirty plan deduplicates diamond join by rank" {
+    var host = HostEnv.init();
+    defer {
+        deinitTestHostGraph(&host);
+        _ = host.gpa.deinit();
+    }
+    const allocator = host.gpa.allocator();
+
+    try host.event_descriptors.append(allocator, .{
+        .event_id = 1,
+        .payload_kind = .unit,
+    });
+    try appendTestSignalDescriptor(&host, 0, .source, &.{1}, &.{});
+    try appendTestSignalDescriptor(&host, 1, .map, &.{}, &.{0});
+    try appendTestSignalDescriptor(&host, 2, .map, &.{}, &.{0});
+    try appendTestSignalDescriptor(&host, 3, .map2, &.{}, &.{ 1, 2 });
+
+    host.rebuildSignalTopologyFromSignals();
+    host.rebuildSignalEventRoutesFromSignals();
+
+    const dirty_signal_ids = host.dirtySignalIdsForEvent(allocator, 1);
+    defer allocator.free(dirty_signal_ids);
+
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1, 2, 3 }, dirty_signal_ids);
+    try std.testing.expectEqual(@as(u64, 0), host.signalRank(0));
+    try std.testing.expectEqual(@as(u64, 1), host.signalRank(1));
+    try std.testing.expectEqual(@as(u64, 1), host.signalRank(2));
+    try std.testing.expectEqual(@as(u64, 2), host.signalRank(3));
+}
+
+test "signals metrics accumulate propagation pruning counters" {
+    var left = zeroRuntimeMetrics();
+    left.events_processed = 2;
+    left.nodes_recomputed = 5;
+    left.propagation_prunes = 3;
+    left.derived_calls_into_roc = 4;
+    left.recompute_batches = 2;
+    left.patches_emitted = 7;
+
+    var right = zeroRuntimeMetrics();
+    right.events_processed = 1;
+    right.nodes_recomputed = 8;
+    right.propagation_prunes = 11;
+    right.derived_calls_into_roc = 6;
+    right.recompute_batches = 1;
+    right.patches_emitted = 13;
+    right.retained_alloc_delta = -2;
+
+    const total = addRuntimeMetrics(left, right);
+    try std.testing.expectEqual(@as(u64, 3), total.events_processed);
+    try std.testing.expectEqual(@as(u64, 13), total.nodes_recomputed);
+    try std.testing.expectEqual(@as(u64, 14), total.propagation_prunes);
+    try std.testing.expectEqual(@as(u64, 10), total.derived_calls_into_roc);
+    try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
+    try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
+    try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
 }
