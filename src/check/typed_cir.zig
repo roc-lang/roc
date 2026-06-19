@@ -93,21 +93,15 @@ pub const Modules = struct {
         fn initModuleData(self: @This(), allocator: Allocator) Allocator.Error!ModuleData {
             return switch (self) {
                 .precompiled => |module_env| blk: {
-                    try module_env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(module_env);
-                    module_env.finalizeMethodTables();
+                    try prepareRuntimeEnv(allocator, module_env);
                     break :blk ModuleData.initBorrowed(module_env);
                 },
                 .owned_checked => |owned| blk: {
-                    try owned.env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(owned.env);
-                    owned.env.finalizeMethodTables();
+                    try prepareRuntimeEnv(allocator, owned.env);
                     break :blk ModuleData.initOwnedChecked(owned.env, owned.owned_source);
                 },
                 .owned_cached => |owned| blk: {
-                    try owned.env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(owned.env);
-                    owned.env.finalizeMethodTables();
+                    try prepareRuntimeEnv(allocator, owned.env);
                     break :blk ModuleData.initOwnedCached(owned.env, owned.buffer);
                 },
             };
@@ -184,6 +178,18 @@ pub const Modules = struct {
         return self.module_idxs_by_name.get(target_name);
     }
 };
+
+/// Prepare a checked `ModuleEnv` for runtime use so it can pair with a published or
+/// relocated artifact: enable runtime ident inserts, ensure module-name idents, and
+/// finalize method tables. This is the single source of that 3-step prep — used by
+/// `Modules.init`'s `SourceModule` handling and called DIRECTLY (without building a
+/// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
+/// the env prepared.
+pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!void {
+    try env.getIdentStore().enableRuntimeInserts(allocator);
+    try ensureModuleNameIdents(env);
+    env.finalizeMethodTables();
+}
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     if (env.display_module_name_idx.isNone()) {

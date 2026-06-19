@@ -547,10 +547,8 @@ fn lookupPlanKV(sorted: []const PlanKV, key: u32) ?u32 {
 
 /// Append `ops` to `pool` and return their `(start, len)` range. Used to flatten
 /// per-plan operand slices into the table's shared operand pools (transform B).
-fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator, ops: []const T) Allocator.Error!struct { start: u32, len: u32 } {
-    const start: u32 = @intCast(pool.items.len);
-    try pool.appendSlice(allocator, ops);
-    return .{ .start = start, .len = @intCast(ops.len) };
+fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator, ops: []const T) Allocator.Error!artifact_serialize.Span {
+    return artifact_serialize.appendSpan(artifact_serialize.Span, T, pool, allocator, ops);
 }
 
 fn sortedFromMap(allocator: Allocator, map: anytype) Allocator.Error![]PlanKV {
@@ -565,6 +563,9 @@ fn sortedFromMap(allocator: Allocator, map: anytype) Allocator.Error![]PlanKV {
     return out;
 }
 
+/// Resolved static-dispatch plans for a checked module: the per-call-site plans, the
+/// sorted expr/node → plan indexes, and the shared operand pools the plans reference
+/// (transform D). Reconstituted as plain slices on deserialize.
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
     /// `CIR.Expr.Idx` -> `StaticDispatchPlanId`, sorted by key (transform D).
@@ -946,22 +947,6 @@ pub const StaticDispatchPlanTable = struct {
 
     pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
         return if (lookupPlanKV(self.iterator_for_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn appendTemplateRefSpan(
-        self: *StaticDispatchPlanTable,
-        allocator: Allocator,
-        refs: []const StaticDispatchPlanId,
-    ) Allocator.Error!struct { start: u32, len: u32 } {
-        const start: u32 = @intCast(self.template_refs.len);
-        if (refs.len == 0) return .{ .start = start, .len = 0 };
-        const old = self.template_refs;
-        const next = try allocator.alloc(StaticDispatchPlanId, old.len + refs.len);
-        @memcpy(next[0..old.len], old);
-        @memcpy(next[old.len..], refs);
-        allocator.free(old);
-        self.template_refs = next;
-        return .{ .start = start, .len = @intCast(refs.len) };
     }
 
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {

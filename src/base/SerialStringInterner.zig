@@ -28,7 +28,7 @@ const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
 
-const NameInterner = @This();
+const SerialStringInterner = @This();
 
 /// `{start, len}` into `bytes` for one interned string. POD / relocation-invariant.
 pub const Range = extern struct {
@@ -51,11 +51,11 @@ supports_inserts: bool = true,
 const initial_index_capacity: usize = 16;
 
 /// Initialize an empty, insertable interner sized for roughly `capacity` names.
-pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NameInterner {
+pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStringInterner {
     const target = ((capacity * 5) / 4) + 1;
     const index_cap = std.math.ceilPowerOfTwo(usize, @max(target, initial_index_capacity)) catch initial_index_capacity;
 
-    var self = NameInterner{
+    var self = SerialStringInterner{
         .bytes = .{},
         .ranges = .{},
         .index = .{},
@@ -72,7 +72,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NameInterne
 
 /// Free owned memory. No-op for deserialized (frozen) interners, whose memory is
 /// owned by the serialization buffer.
-pub fn deinit(self: *NameInterner, gpa: Allocator) void {
+pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
     if (!self.supports_inserts) return;
     self.bytes.deinit(gpa);
     self.ranges.deinit(gpa);
@@ -80,23 +80,23 @@ pub fn deinit(self: *NameInterner, gpa: Allocator) void {
 }
 
 /// Number of interned strings.
-pub fn count(self: *const NameInterner) u32 {
+pub fn count(self: *const SerialStringInterner) u32 {
     return @intCast(self.ranges.items.items.len);
 }
 
-fn textAt(self: *const NameInterner, id: u32) []const u8 {
+fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
     const r = self.ranges.items.items[id];
     return self.bytes.items.items[r.start .. r.start + r.len];
 }
 
 /// Text for a serial id.
-pub fn getText(self: *const NameInterner, id: u32) []const u8 {
+pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
     return self.textAt(id);
 }
 
 const Found = struct { id: ?u32, slot: usize };
 
-fn findSlot(self: *const NameInterner, string: []const u8) Found {
+fn findSlot(self: *const SerialStringInterner, string: []const u8) Found {
     const table_size = self.index.items.items.len;
     if (table_size == 0) return .{ .id = null, .slot = 0 };
     const hash = std.hash.Fnv1a_32.hash(string);
@@ -112,11 +112,11 @@ fn findSlot(self: *const NameInterner, string: []const u8) Found {
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
 /// (deserialized) interners.
-pub fn lookup(self: *const NameInterner, string: []const u8) ?u32 {
+pub fn lookup(self: *const SerialStringInterner, string: []const u8) ?u32 {
     return self.findSlot(string).id;
 }
 
-fn rehash(self: *NameInterner, gpa: Allocator) Allocator.Error!void {
+fn rehash(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {
     const new_size = self.index.items.items.len * 2;
     self.index.deinit(gpa);
     self.index = try SafeList(u32).initCapacity(gpa, new_size);
@@ -133,7 +133,7 @@ fn rehash(self: *NameInterner, gpa: Allocator) Allocator.Error!void {
 
 /// Intern `string`, returning its serial id. Deduplicates: equal text always
 /// returns the same id.
-pub fn insert(self: *NameInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
+pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
     if (self.index.items.items.len != 0) {
         if (self.findSlot(string).id) |id| return id;
     }
@@ -166,7 +166,7 @@ pub fn insert(self: *NameInterner, gpa: Allocator, string: []const u8) Allocator
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,
 /// growable memory.
-pub fn enableRuntimeInserts(self: *NameInterner, gpa: Allocator) Allocator.Error!void {
+pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {
     if (self.supports_inserts) return;
 
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
@@ -186,7 +186,7 @@ pub fn enableRuntimeInserts(self: *NameInterner, gpa: Allocator) Allocator.Error
 
 /// Add this interner's offset to its three base pointers. The number of fixups
 /// (3, minus any empty lists) is fixed by the type, never by name count.
-pub fn relocate(self: *NameInterner, offset: isize) void {
+pub fn relocate(self: *SerialStringInterner, offset: isize) void {
     self.bytes.relocate(offset);
     self.ranges.relocate(offset);
     self.index.relocate(offset);
@@ -202,7 +202,7 @@ pub const Serialized = extern struct {
 
     pub fn serialize(
         self: *Serialized,
-        interner: *const NameInterner,
+        interner: *const SerialStringInterner,
         gpa: Allocator,
         writer: *CompactWriter,
     ) Allocator.Error!void {
@@ -213,7 +213,7 @@ pub const Serialized = extern struct {
         self._padding = 0;
     }
 
-    pub fn deserialize(self: *const Serialized, base: usize) NameInterner {
+    pub fn deserialize(self: *const Serialized, base: usize) SerialStringInterner {
         return .{
             .bytes = self.bytes.deserializeInto(base),
             .ranges = self.ranges.deserializeInto(base),
@@ -225,9 +225,9 @@ pub const Serialized = extern struct {
 
 const testing = std.testing;
 
-test "NameInterner: serial ids, dedup, lookup, getText" {
+test "SerialStringInterner: serial ids, dedup, lookup, getText" {
     const gpa = testing.allocator;
-    var it = try NameInterner.initCapacity(gpa, 4);
+    var it = try SerialStringInterner.initCapacity(gpa, 4);
     defer it.deinit(gpa);
 
     const a = try it.insert(gpa, "List");
@@ -245,9 +245,9 @@ test "NameInterner: serial ids, dedup, lookup, getText" {
     try testing.expectEqual(@as(?u32, null), it.lookup("Set"));
 }
 
-test "NameInterner: default-empty interner lazily initializes on first insert" {
+test "SerialStringInterner: default-empty interner lazily initializes on first insert" {
     const gpa = testing.allocator;
-    var it: NameInterner = .{}; // no initCapacity — mirrors CanonicalNameStore.init's `.empty`
+    var it: SerialStringInterner = .{}; // no initCapacity — mirrors CanonicalNameStore.init's `.empty`
     defer it.deinit(gpa);
 
     try testing.expectEqual(@as(u32, 0), it.count());
@@ -260,9 +260,9 @@ test "NameInterner: default-empty interner lazily initializes on first insert" {
     try testing.expectEqual(@as(?u32, 0), it.lookup("List"));
 }
 
-test "NameInterner: grows past initial table capacity preserving ids/lookup" {
+test "SerialStringInterner: grows past initial table capacity preserving ids/lookup" {
     const gpa = testing.allocator;
-    var it = try NameInterner.initCapacity(gpa, 2);
+    var it = try SerialStringInterner.initCapacity(gpa, 2);
     defer it.deinit(gpa);
 
     var buf: [16]u8 = undefined;
@@ -281,25 +281,25 @@ test "NameInterner: grows past initial table capacity preserving ids/lookup" {
     }
 }
 
-fn roundTrip(gpa: Allocator, src: *const NameInterner) !struct { buffer: []align(16) u8, it: NameInterner } {
+fn roundTrip(gpa: Allocator, src: *const SerialStringInterner) anyerror!struct { buffer: []align(16) u8, it: SerialStringInterner } {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
     var writer = CompactWriter.init();
-    const hdr = try writer.appendAlloc(aa, NameInterner.Serialized);
+    const hdr = try writer.appendAlloc(aa, SerialStringInterner.Serialized);
     try hdr.serialize(src, aa, &writer);
 
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
     _ = try writer.writeToBuffer(buffer);
 
-    const ser: *const NameInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const ser: *const SerialStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
     return .{ .buffer = buffer, .it = ser.deserialize(@intFromPtr(buffer.ptr)) };
 }
 
-test "NameInterner: lookup + getText survive serialize/relocate with no rebuild" {
+test "SerialStringInterner: lookup + getText survive serialize/relocate with no rebuild" {
     const gpa = testing.allocator;
-    var it = try NameInterner.initCapacity(gpa, 8);
+    var it = try SerialStringInterner.initCapacity(gpa, 8);
     defer it.deinit(gpa);
     const list = try it.insert(gpa, "List");
     const dict = try it.insert(gpa, "Dict");
@@ -317,7 +317,7 @@ test "NameInterner: lookup + getText survive serialize/relocate with no rebuild"
     try testing.expectEqual(@as(?u32, null), rt.it.lookup("Set"));
 }
 
-fn nonEmptyBasePointers(it: *const NameInterner) usize {
+fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {
     var n: usize = 0;
     if (it.bytes.items.capacity != 0) n += 1;
     if (it.ranges.items.capacity != 0) n += 1;
@@ -325,14 +325,14 @@ fn nonEmptyBasePointers(it: *const NameInterner) usize {
     return n;
 }
 
-test "NameInterner: relocation fixup count is constant in number of names" {
+test "SerialStringInterner: relocation fixup count is constant in number of names" {
     const gpa = testing.allocator;
 
-    var small = try NameInterner.initCapacity(gpa, 2);
+    var small = try SerialStringInterner.initCapacity(gpa, 2);
     defer small.deinit(gpa);
     _ = try small.insert(gpa, "List");
 
-    var large = try NameInterner.initCapacity(gpa, 8);
+    var large = try SerialStringInterner.initCapacity(gpa, 8);
     defer large.deinit(gpa);
     var buf: [16]u8 = undefined;
     var i: u32 = 0;

@@ -199,8 +199,9 @@ fn serializeBuiltinArtifact(
 
     // Append the layout-version hash as a trailer (after the serialized region, so
     // the `Serialized` stays at offset 0 / 16-byte-aligned for the loader). The
-    // loader validates it before relocating, rejecting a blob whose layout differs
-    // from the running compiler's instead of reading into a mismatched struct.
+    // loader (`CheckedModuleArtifact.splitVersionTrailer`) validates and strips it
+    // before relocating, rejecting a blob whose layout differs from the running
+    // compiler's instead of reading into a mismatched struct.
     try file.writePositionalAll(io, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH, writer.total_bytes);
 }
 

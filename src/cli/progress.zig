@@ -409,7 +409,7 @@ test "padName pads short names and leaves long names" {
     try testing.expectEqualStrings("[Parsing                 ]", aw.written());
 }
 
-fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) !void {
+fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
     var reporter = Reporter.init(.{
         .std_io = std.Io.Threaded.global_single_threaded.io(),
         .writer = &buf.writer,
@@ -436,23 +436,23 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) !void {
 test "static breakdown lists every phase with the timings flag" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
-    try collectStatic(&buf, true);
+    collectStatic(&buf, true);
 
     const out = buf.written();
-    try testing.expect(std.mem.indexOf(u8, out, "roc build\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Resolving Dependencies") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Parsing") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Name Resolution") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Type Inference") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Code Generation") != null);
+    try testing.expect(std.mem.find(u8, out, "roc build\n") != null);
+    try testing.expect(std.mem.find(u8, out, "Resolving Dependencies") != null);
+    try testing.expect(std.mem.find(u8, out, "Parsing") != null);
+    try testing.expect(std.mem.find(u8, out, "Name Resolution") != null);
+    try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
+    try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
     // Type Checking is replaced by its breakdown, not shown directly.
-    try testing.expect(std.mem.indexOf(u8, out, "Type Checking") == null);
+    try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
 }
 
 test "fast run without the timings flag prints nothing" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
-    try collectStatic(&buf, false);
+    collectStatic(&buf, false);
     try testing.expectEqualStrings("", buf.written());
 }
 

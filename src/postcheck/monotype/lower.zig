@@ -6348,6 +6348,9 @@ const BodyContext = struct {
         while (branch_index > 0) {
             branch_index -= 1;
             const branch = branches[branch_index];
+            // Hoist the patterns slice: it's invariant for the branch, so deriving it
+            // once avoids re-resolving the pool range on every alternative.
+            const branch_patterns = branch.patternsSlice(self.view.bodies);
             var pattern_index = branch.pt_len;
             while (pattern_index > 0) {
                 pattern_index -= 1;
@@ -6355,7 +6358,7 @@ const BodyContext = struct {
                 fallback = try self.lowerListPatternMatchAlternative(
                     scrutinee,
                     scrutinee_ty,
-                    branch.patternsSlice(self.view.bodies)[pattern_index],
+                    branch_patterns[pattern_index],
                     branch.guard,
                     branch.value,
                     fallback,

@@ -7301,7 +7301,7 @@ fn printBuildSuccess(
     verbose: bool,
     cache_stats: anytype,
     cache_percent: u32,
-) !void {
+) std.Io.Writer.Error!void {
     const stdout = ctx.io.stdout();
     const is_tty = if (builtin.target.cpu.arch == .wasm32)
         false

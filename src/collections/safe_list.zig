@@ -10,101 +10,10 @@ const CompactWriter = @import("CompactWriter.zig");
 const SingleThreadArena = @import("SingleThreadArena.zig");
 
 /// Recursively zero all padding bytes in a value for deterministic serialization.
-/// Handles tagged unions (tail padding, variant overshoot), auto-layout structs
-/// (inter-field gaps), and optionals (null payload). Recurses into nested types.
+/// The single implementation lives in `CompactWriter` (the serialization layer) so
+/// both `SafeList.Serialized` and `CompactWriter.appendSlicePodZeroed` share it.
 fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
-    const vinfo = @typeInfo(V);
-    const vsize = @sizeOf(V);
-    if (vsize == 0) return;
-
-    if (vinfo == .@"union") {
-        const uinfo = vinfo.@"union";
-        if (uinfo.tag_type) |TagType| {
-            const tag_size = @sizeOf(TagType);
-            const max_payload = comptime blk: {
-                var max: usize = 0;
-                for (uinfo.fields) |f| max = @max(max, @sizeOf(f.type));
-                break :blk max;
-            };
-            const meaningful = max_payload + tag_size;
-
-            // Zero tail padding (after tag + max_payload)
-            if (meaningful < vsize) {
-                @memset(ptr[meaningful..vsize], 0);
-            }
-
-            // Per-variant: zero overshoot + recurse into variant payload
-            const item = @as(*const V, @ptrCast(@alignCast(ptr)));
-            switch (item.*) {
-                inline else => |_, tag| {
-                    const VariantType = uinfo.fields[@intFromEnum(tag)].type;
-                    const active_size = @sizeOf(VariantType);
-                    // Recurse into variant payload (handles nested struct/union padding)
-                    zeroValuePadding(VariantType, ptr);
-                    // Zero overshoot (unused payload between active variant and max)
-                    if (active_size < max_payload) {
-                        @memset(ptr[active_size..max_payload], 0);
-                    }
-                },
-            }
-        }
-    } else if (vinfo == .optional) {
-        // For optionals: when null, the payload area contains garbage — zero it all.
-        // When non-null, recurse into the payload to zero its internal padding,
-        // then zero any trailing padding after payload + tag.
-        const ChildType = vinfo.optional.child;
-        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
-        if (item.* == null) {
-            @memset(ptr[0..vsize], 0);
-        } else {
-            // Payload is at offset 0 (auto layout puts highest-alignment first)
-            const child_size = @sizeOf(ChildType);
-            if (child_size > 0) {
-                zeroValuePadding(ChildType, ptr);
-            }
-            // Zero padding after payload + 1-byte tag
-            const meaningful = child_size + 1;
-            if (meaningful < vsize) {
-                @memset(ptr[meaningful..vsize], 0);
-            }
-        }
-    } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
-        // Zero inter-field gaps
-        const covered = comptime blk: {
-            var mask = [_]bool{false} ** vsize;
-            for (vinfo.@"struct".fields) |field| {
-                const start = @offsetOf(V, field.name);
-                const end = start + @sizeOf(field.type);
-                for (start..end) |j| mask[j] = true;
-            }
-            break :blk mask;
-        };
-        const has_padding = comptime blk: {
-            for (covered) |c| {
-                if (!c) break :blk true;
-            }
-            break :blk false;
-        };
-        if (has_padding) {
-            inline for (0..vsize) |j| {
-                if (!covered[j]) ptr[j] = 0;
-            }
-        }
-        // Recurse into struct fields that may have internal padding
-        inline for (vinfo.@"struct".fields) |field| {
-            const FType = field.type;
-            const ftype_info = @typeInfo(FType);
-            if (@sizeOf(FType) > 0) {
-                const needs_recursion = (ftype_info == .@"union" and ftype_info.@"union".tag_type != null) or
-                    (ftype_info == .@"struct" and ftype_info.@"struct".layout == .auto) or
-                    (ftype_info == .optional);
-                if (needs_recursion) {
-                    zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
-                }
-            }
-        }
-    }
-    // Primitives, enums, extern structs: no padding to zero.
+    CompactWriter.zeroValuePadding(V, ptr);
 }
 
 /// Represents a type safe range in a list; [start, end)
@@ -245,6 +154,16 @@ pub fn SafeList(comptime T: type) type {
             offset: i64,
             len: u64,
             capacity: u64,
+
+            /// One relocatable base pointer (`offset`) is fixed up per `deserializeInto`/
+            /// `relocate`, regardless of `len`. Counted by
+            /// `artifact_serialize.relocatablePointerCount` so a composing store's total
+            /// fixup count includes its `SafeList`-backed (e.g. interner) fields.
+            pub const serialized_relocatable_pointers: usize = 1;
+
+            /// The element type whose bytes are serialized, so a layout fingerprint can
+            /// reflect a change to the element's field order/size.
+            pub const SerializedElement = T;
 
             /// Serialize a SafeList into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -835,6 +754,13 @@ pub fn SafeMultiList(comptime T: type) type {
             offset: i64,
             len: u64,
             capacity: u64,
+
+            /// One relocatable base pointer (`offset`) fixed up per relocate, counted by
+            /// `artifact_serialize.relocatablePointerCount`.
+            pub const serialized_relocatable_pointers: usize = 1;
+
+            /// The element type whose bytes are serialized (see `SafeList.Serialized`).
+            pub const SerializedElement = T;
 
             // We copy capacity-sized regions below; clear per-field slack so the writer never
             // observes uninitialized bytes. Leaving that memory undefined is UB and makes the

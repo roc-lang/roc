@@ -31,11 +31,10 @@ pub const BuiltinModules = struct {
     allocator: Allocator,
     builtin_module: LoadedModule,
     builtin_indices: BuiltinIndices,
+    /// Self-describing frozen artifact: it owns the 16-byte-aligned buffer its
+    /// sub-stores alias (stored in its `serialized_backing`), so `deinit` is a single
+    /// `checked_artifact.deinit` — no separate buffer field/teardown here.
     checked_artifact: CheckedModuleArtifact,
-    /// 16-byte-aligned buffer holding the deserialized artifact's frozen
-    /// sub-stores. The artifact's sub-stores alias this buffer, so it must live
-    /// as long as the artifact.
-    artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
 
     /// Get an array of all builtin modules for iteration
     /// For compatibility, we expose the Builtin module for each auto-imported type
@@ -72,37 +71,31 @@ pub const BuiltinModules = struct {
         errdefer builtin_module.deinit();
 
         // Prepare the env exactly as the build-time compiler did before it published
-        // the baked artifact: enable runtime ident inserts, ensure module-name
-        // idents, and finalize method tables. This keeps the runtime env paired
-        // identically with the baked artifact and leaves its interner heap-owned so
-        // the `compiled_buffer` storage can free it on deinit.
-        var typed_modules = try check.TypedCIR.Modules.init(allocator, &.{
-            .{ .precompiled = builtin_module.env },
-        });
-        defer typed_modules.deinit();
+        // the baked artifact (enable runtime ident inserts, ensure module-name idents,
+        // finalize method tables) so the runtime env pairs identically with the baked
+        // artifact and its interner stays heap-owned for `compiled_buffer` teardown.
+        // Call the prep directly — building a whole `Modules` graph just to discard it
+        // would do O(builtin defs) hashmap work on every startup.
+        try check.TypedCIR.prepareRuntimeEnv(allocator, builtin_module.env);
 
-        // The baked blob is the serialized artifact followed by a 32-byte
-        // layout-version trailer. Validate the trailer against the running
-        // compiler's layout hash before relocating: a mismatch means the embedded
-        // blob is stale relative to this compiler (a build-system inconsistency),
-        // which we reject rather than relocate into a differently-shaped struct.
-        const artifact_bytes = compiled_builtins.builtin_artifact_bin;
-        const hash_len = CheckedModuleArtifact.SERIALIZED_VERSION_HASH.len;
-        if (artifact_bytes.len < hash_len) return error.CorruptBuiltinArtifact;
-        const serialized_len = artifact_bytes.len - hash_len;
-        if (!CheckedModuleArtifact.expectSerializedVersion(artifact_bytes[serialized_len..][0..hash_len])) {
-            return error.BuiltinArtifactVersionMismatch;
-        }
+        // The baked blob is the serialized artifact followed by a layout-version
+        // trailer. Validate and strip it before relocating: a mismatch means the
+        // embedded blob is stale relative to this compiler (a build-system
+        // inconsistency), which we reject rather than relocate into a differently-
+        // shaped struct.
+        const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(compiled_builtins.builtin_artifact_bin);
 
         // Copy the serialized region into a freshly-allocated 16-byte-aligned buffer
         // so the relocated sub-stores can alias it for the life of the artifact.
-        const artifact_buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, serialized_len);
+        const artifact_buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, serialized_bytes.len);
         errdefer allocator.free(artifact_buffer);
-        @memcpy(artifact_buffer, artifact_bytes[0..serialized_len]);
+        @memcpy(artifact_buffer, serialized_bytes);
 
         const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+        // `deserialize` records `artifact_buffer` in the artifact's `serialized_backing`,
+        // so the artifact owns it; `errdefer` above hands ownership over on success.
         const checked_artifact = serialized.deserialize(
-            @intFromPtr(artifact_buffer.ptr),
+            artifact_buffer,
             allocator,
             .{ .compiled_buffer = .{
                 .env = builtin_module.env,
@@ -115,18 +108,13 @@ pub const BuiltinModules = struct {
             .builtin_module = builtin_module,
             .builtin_indices = indices,
             .checked_artifact = checked_artifact,
-            .artifact_buffer = artifact_buffer,
         };
     }
 
-    /// Clean up all resources
+    /// Clean up all resources. The artifact is self-describing (buffer-backed via
+    /// `serialized_backing`), so a single `deinit` frees its backing buffer AND its
+    /// `compiled_buffer` env storage (the builtin env + Builtin.bin buffer) correctly.
     pub fn deinit(self: *BuiltinModules) void {
-        // The artifact is buffer-backed: every sub-store slice points into
-        // `artifact_buffer`, so the artifact's own `deinit` (which unconditionally
-        // frees several of those slices) must NOT run. Free only the two things the
-        // baked artifact actually owns: the module_env storage (`compiled_buffer`,
-        // which owns the builtin env + Builtin.bin buffer) and the artifact buffer.
-        self.checked_artifact.module_env.deinit();
-        self.allocator.free(self.artifact_buffer);
+        self.checked_artifact.deinit(self.allocator);
     }
 };

@@ -304,20 +304,9 @@ pub const CheckingContextIdentity = struct {
         explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
-        pub fn serialize(self: *Serialized, t: *const CheckingContextIdentity, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.imports.serialize(t.imports, gpa, writer);
-            try self.explicit_roots.serialize(t.explicit_roots, gpa, writer);
-            try self.platform_requirement_context.serialize(&t.platform_requirement_context, gpa, writer);
-            try self.platform_app_relation.serialize(&t.platform_app_relation, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckingContextIdentity {
-            return .{
-                .imports = self.imports.deserialize(base_addr),
-                .explicit_roots = self.explicit_roots.deserialize(base_addr),
-                .platform_requirement_context = self.platform_requirement_context.deserialize(base_addr),
-                .platform_app_relation = self.platform_app_relation.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -383,16 +372,9 @@ pub const PublicApiDependencies = struct {
     pub const Serialized = extern struct {
         artifacts: SerializedSlice(CheckedModuleArtifactKey) = .{},
         type_owner_artifacts: SerializedSlice(CheckedModuleArtifactKey) = .{},
-        pub fn serialize(self: *Serialized, t: *const PublicApiDependencies, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.artifacts.serialize(t.artifacts, gpa, writer);
-            try self.type_owner_artifacts.serialize(t.type_owner_artifacts, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) PublicApiDependencies {
-            return .{
-                .artifacts = self.artifacts.deserialize(base_addr),
-                .type_owner_artifacts = self.type_owner_artifacts.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(PublicApiDependencies, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
@@ -467,21 +449,15 @@ pub const ExportTable = struct {
     pub const Serialized = extern struct {
         defs: SerializedSlice(CIR.Def.Idx) = .{},
 
-        pub fn serialize(self: *Serialized, table: *const ExportTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.defs.serialize(table.defs, gpa, writer);
-        }
-
-        /// Reconstruct a frozen table; `defs` points into the relocated buffer
-        /// and must not be freed (the artifact owns the buffer).
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ExportTable {
-            return .{ .defs = self.defs.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ExportTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 };
 
 test "ExportTable: serialize/deserialize round-trip preserves defs" {
     const gpa = std.testing.allocator;
-    const defs = [_]CIR.Def.Idx{ @enumFromInt(3), @enumFromInt(9), @enumFromInt(0), @enumFromInt(42) };
+    const defs = [_]CIR.Def.Idx{ @enumFromInt(3), @enumFromInt(9), @enumFromInt(17), @enumFromInt(42) };
     const table = ExportTable{ .defs = @constCast(&defs) };
 
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -525,16 +501,9 @@ pub const ProvidesRequiresMetadata = struct {
     pub const Serialized = extern struct {
         provides: SerializedSlice(ProvidesEntry) = .{},
         requires: SerializedSlice(RequiresEntry) = .{},
-        pub fn serialize(self: *Serialized, t: *const ProvidesRequiresMetadata, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.provides.serialize(t.provides, gpa, writer);
-            try self.requires.serialize(t.requires, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ProvidesRequiresMetadata {
-            return .{
-                .provides = self.provides.deserialize(base_addr),
-                .requires = self.requires.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ProvidesRequiresMetadata, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn deinit(self: *ProvidesRequiresMetadata, allocator: Allocator) void {
@@ -578,12 +547,9 @@ pub const ProvidedExportTable = struct {
 
     pub const Serialized = extern struct {
         exports: SerializedSlice(ProvidedExport) = .{},
-        pub fn serialize(self: *Serialized, t: *const ProvidedExportTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.exports.serialize(t.exports, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ProvidedExportTable {
-            return .{ .exports = self.exports.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ProvidedExportTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -726,18 +692,9 @@ pub const RootRequestTable = struct {
         requests: SerializedSlice(RootRequest) = .{},
         runtime_requests: SerializedSlice(RootRequest) = .{},
         compile_time_requests: SerializedSlice(RootRequest) = .{},
-        pub fn serialize(self: *Serialized, t: *const RootRequestTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.requests.serialize(t.requests, gpa, writer);
-            try self.runtime_requests.serialize(t.runtime_requests, gpa, writer);
-            try self.compile_time_requests.serialize(t.compile_time_requests, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) RootRequestTable {
-            return .{
-                .requests = self.requests.deserialize(base_addr),
-                .runtime_requests = self.runtime_requests.deserialize(base_addr),
-                .compile_time_requests = self.compile_time_requests.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(RootRequestTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -1925,11 +1882,20 @@ pub const StoredCheckedTypePayload = union(enum) {
     empty_tag_union,
 };
 
-/// Reconstruct the public read-form `CheckedTypePayload` from its stored POD
+/// Materialize the public read-form `CheckedTypePayload` from its stored POD
 /// form. `pool_owner` must expose `typeIdPool()`, `recordFieldPool()`,
 /// `constraintPool()`, `tagPool()`, and `varName(u32)` accessors (both
 /// `CheckedTypeStore` and `CheckedTypeStoreView` do). Slice fields alias the
 /// pools; no allocation.
+///
+/// ALIASING INVARIANT: the returned slices point INTO the store's pools. On a
+/// frozen/deserialized store the pools are immutable (buffer-backed), so this is
+/// unconditionally safe — the common case (all post-load consumers: lowering, glue).
+/// During CONSTRUCTION the pools are growable `ArrayList`s, so a build-time caller
+/// must not retain a returned slice across a subsequent pool-growing call
+/// (`appendTypeIds`/`commitPayload`/…), which may reallocate and dangle it; snapshot
+/// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
+/// do). The append helpers `assert(!serialized)` to mark that growth boundary.
 fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypePayload) CheckedTypePayload {
     return switch (stored) {
         .pending => .pending,
@@ -1997,6 +1963,9 @@ fn reconstructCheckedTypeVariable(pool_owner: anytype, v: StoredTypeVariable) Ch
 /// non-optional `var_names` pointer always points at a valid (empty) interner.
 var empty_view_var_names: canonical.NameInterner = .{};
 
+/// Borrowed, read-only view over a `CheckedTypeStore`'s relocated slices plus its
+/// `var_names` interner, so type accessors can resolve ids without holding the owning
+/// store (used by both a live store and a deserialized, buffer-backed one).
 pub const CheckedTypeStoreView = struct {
     roots: []const CheckedTypeRoot = &.{},
     schemes: []const CheckedTypeScheme = &.{},
@@ -2039,7 +2008,7 @@ pub const CheckedTypeStoreView = struct {
         return self.stored_payloads.len;
     }
 
-    /// Reconstruct the public read-form payload for `id`. Slice fields alias the
+    /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// view's pools; no allocation.
     pub fn payload(self: CheckedTypeStoreView, id: CheckedTypeId) CheckedTypePayload {
         const index: usize = @intFromEnum(id);
@@ -2424,7 +2393,7 @@ pub const CheckedTypeStore = struct {
         return self.payloads.items.len;
     }
 
-    /// Reconstruct the public read-form payload for `id`. Slice fields alias the
+    /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// store's pools; no allocation.
     pub fn payload(self: *const CheckedTypeStore, id: CheckedTypeId) CheckedTypePayload {
         const index: usize = @intFromEnum(id);
@@ -2436,26 +2405,24 @@ pub const CheckedTypeStore = struct {
 
     /// Append `ids` to `type_id_pool`, returning their range.
     fn appendTypeIds(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
-        if (ids.len == 0) return .{};
-        const start: u32 = @intCast(self.type_id_pool.items.len);
-        try self.type_id_pool.appendSlice(allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        // Pools only grow during construction. A frozen (deserialized) store's pools
+        // alias buffer memory and must never be appended to — this catches such a bug,
+        // and is the boundary where build-time aliasing slices could be invalidated
+        // (see the `argsSlice`/`payload`/`formalArgs` aliasing-invariant docs).
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.type_id_pool, allocator, ids);
     }
 
     /// Append `fields` to `record_field_pool`, returning their range.
     fn appendRecordFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedRecordField) Allocator.Error!CheckedTypeRange {
-        if (fields.len == 0) return .{};
-        const start: u32 = @intCast(self.record_field_pool.items.len);
-        try self.record_field_pool.appendSlice(allocator, fields);
-        return .{ .start = start, .len = @intCast(fields.len) };
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedRecordField, &self.record_field_pool, allocator, fields);
     }
 
     /// Append `constraints` to `constraint_pool`, returning their range.
     fn appendConstraints(self: *CheckedTypeStore, allocator: Allocator, constraints: []const CheckedStaticDispatchConstraint) Allocator.Error!CheckedTypeRange {
-        if (constraints.len == 0) return .{};
-        const start: u32 = @intCast(self.constraint_pool.items.len);
-        try self.constraint_pool.appendSlice(allocator, constraints);
-        return .{ .start = start, .len = @intCast(constraints.len) };
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedStaticDispatchConstraint, &self.constraint_pool, allocator, constraints);
     }
 
     /// Intern a variable name, returning its interner id or `no_var_name`.
@@ -2931,12 +2898,10 @@ pub const CheckedTypeStore = struct {
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 8 SerializedSlice fields → 8 base-pointer fixups, independent of
-            // stored data size. The nested NameInterner.Serialized relocates its
-            // own 3 SafeList base pointers via its `deserialize`;
-            // `relocatablePointerCount` does not sum those since
-            // SafeList.Serialized exposes no `serialized_relocatable_pointers`.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 8);
+            // 11 = 8 `SerializedSlice` fields + 3 for the nested `var_names`
+            // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
+            // count is the true total fixups, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 11);
         }
 
         pub fn serialize(self: *Serialized, store: *const CheckedTypeStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
@@ -2953,14 +2918,14 @@ pub const CheckedTypeStore = struct {
 
         pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedTypeStore {
             return .{
-                .roots = checkedArrayListFromSlice(CheckedTypeRoot, self.roots.deserialize(base_addr)),
-                .schemes = checkedArrayListFromSlice(CheckedTypeScheme, self.schemes.deserialize(base_addr)),
-                .payloads = checkedArrayListFromSlice(StoredCheckedTypePayload, self.payloads.deserialize(base_addr)),
-                .nominal_declarations = checkedArrayListFromSlice(CheckedNominalDeclaration, self.nominal_declarations.deserialize(base_addr)),
-                .type_id_pool = checkedArrayListFromSlice(CheckedTypeId, self.type_id_pool.deserialize(base_addr)),
-                .record_field_pool = checkedArrayListFromSlice(CheckedRecordField, self.record_field_pool.deserialize(base_addr)),
-                .constraint_pool = checkedArrayListFromSlice(CheckedStaticDispatchConstraint, self.constraint_pool.deserialize(base_addr)),
-                .tag_pool = checkedArrayListFromSlice(CheckedTag, self.tag_pool.deserialize(base_addr)),
+                .roots = artifact_serialize.arrayListFromSlice(CheckedTypeRoot, self.roots.deserialize(base_addr)),
+                .schemes = artifact_serialize.arrayListFromSlice(CheckedTypeScheme, self.schemes.deserialize(base_addr)),
+                .payloads = artifact_serialize.arrayListFromSlice(StoredCheckedTypePayload, self.payloads.deserialize(base_addr)),
+                .nominal_declarations = artifact_serialize.arrayListFromSlice(CheckedNominalDeclaration, self.nominal_declarations.deserialize(base_addr)),
+                .type_id_pool = artifact_serialize.arrayListFromSlice(CheckedTypeId, self.type_id_pool.deserialize(base_addr)),
+                .record_field_pool = artifact_serialize.arrayListFromSlice(CheckedRecordField, self.record_field_pool.deserialize(base_addr)),
+                .constraint_pool = artifact_serialize.arrayListFromSlice(CheckedStaticDispatchConstraint, self.constraint_pool.deserialize(base_addr)),
+                .tag_pool = artifact_serialize.arrayListFromSlice(CheckedTag, self.tag_pool.deserialize(base_addr)),
                 .var_names = self.var_names.deserialize(base_addr),
                 .serialized = true,
             };
@@ -3342,10 +3307,6 @@ pub const CheckedTypeStore = struct {
         };
     }
 };
-
-fn checkedArrayListFromSlice(comptime T: type, slice: []T) std.ArrayList(T) {
-    return .{ .items = slice, .capacity = slice.len };
-}
 
 fn snapshotCheckedTypeVariable(allocator: Allocator, variable: CheckedTypeVariable) Allocator.Error!CheckedTypeVariable {
     const name = if (variable.name) |name_text| try allocator.dupe(u8, name_text) else null;
@@ -4037,18 +3998,6 @@ fn appendNominalDeclarationRootPayload(
     store.roots.appendAssumeCapacity(.{ .id = id, .key = key });
     store.payloads.appendAssumeCapacity(stored);
     return id;
-}
-
-fn checkedTypePayloadKey(
-    allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *const CheckedTypeStore,
-    payload: CheckedTypePayload,
-) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, store, &.{}, &.{});
-    defer builder.deinit();
-    try builder.writePayload(payload);
-    return .{ .bytes = builder.hasher.finalResult() };
 }
 
 fn checkedTypePayloadKeyBuild(
@@ -5491,34 +5440,6 @@ fn copyIdentText(
     return try allocator.dupe(u8, module.getIdent(idx));
 }
 
-fn deinitCheckedTypePayload(allocator: Allocator, payload: *CheckedTypePayload) void {
-    switch (payload.*) {
-        .pending,
-        .empty_record,
-        .empty_tag_union,
-        => {},
-        .flex => |flex| {
-            if (flex.name) |name| allocator.free(name);
-            allocator.free(flex.constraints);
-        },
-        .rigid => |rigid| {
-            if (rigid.name) |name| allocator.free(name);
-            allocator.free(rigid.constraints);
-        },
-        .alias => |alias| allocator.free(alias.args),
-        .record => |record| allocator.free(record.fields),
-        .record_unbound => |fields| allocator.free(fields),
-        .tuple => |elems| allocator.free(elems),
-        .nominal => |nominal| allocator.free(nominal.args),
-        .function => |function| allocator.free(function.args),
-        .tag_union => |tag_union| {
-            for (tag_union.tags) |tag| allocator.free(tag.args);
-            allocator.free(tag_union.tags);
-        },
-    }
-    payload.* = .pending;
-}
-
 fn findCheckedTypeRoot(roots: []const CheckedTypeRoot, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
     for (roots) |root| {
         if (std.meta.eql(root.key.bytes, key.bytes)) return root.id;
@@ -6149,7 +6070,7 @@ pub const StoredCheckedStatement = struct {
     data: StoredCheckedStatementData,
 };
 
-/// Reconstruct the public read-form `CheckedExprData` from its stored POD form.
+/// Materialize the public read-form `CheckedExprData` from its stored POD form.
 /// `pool_owner` must expose the body-store pool accessors. Slice fields alias the
 /// pools; no allocation.
 fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData) CheckedExprData {
@@ -6251,13 +6172,13 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
     };
 }
 
-/// Reconstruct a match-branch slice (aliasing `match_branch_pool`); each branch's
+/// Materialize a match-branch slice (aliasing `match_branch_pool`); each branch's
 /// `patterns` and nested `binder_remaps` alias their pools too.
 fn reconstructMatchBranches(pool_owner: anytype, range: CheckedBodyRange) []const CheckedMatchBranch {
     return pool_owner.matchBranchPool()[range.start .. range.start + range.len];
 }
 
-/// Reconstruct the public read-form `CheckedPatternData` from its stored POD form.
+/// Materialize the public read-form `CheckedPatternData` from its stored POD form.
 fn reconstructCheckedPatternData(pool_owner: anytype, stored: StoredCheckedPatternData) CheckedPatternData {
     return switch (stored) {
         .pending => .pending,
@@ -6285,7 +6206,7 @@ fn reconstructCheckedPatternData(pool_owner: anytype, stored: StoredCheckedPatte
     };
 }
 
-/// Reconstruct the public read-form `CheckedStatementData` from its stored POD form.
+/// Materialize the public read-form `CheckedStatementData` from its stored POD form.
 fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedStatementData) CheckedStatementData {
     return switch (stored) {
         .pending => .pending,
@@ -6316,7 +6237,10 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
     };
 }
 
-/// Reconstruct a public `CheckedExpr` from its stored form (slices alias pools).
+/// Materialize a public `CheckedExpr` from its stored form (slices alias pools).
+/// Same aliasing invariant as `reconstructCheckedTypePayload`: safe unconditionally
+/// on a frozen/deserialized store (immutable pools); during construction a caller must
+/// not retain a returned slice across a pool-growing `commit*` call.
 fn reconstructCheckedExpr(pool_owner: anytype, stored: StoredCheckedExpr) CheckedExpr {
     return .{
         .id = stored.id,
@@ -6326,7 +6250,7 @@ fn reconstructCheckedExpr(pool_owner: anytype, stored: StoredCheckedExpr) Checke
     };
 }
 
-/// Reconstruct a public `CheckedPattern` from its stored form (slices alias pools).
+/// Materialize a public `CheckedPattern` from its stored form (slices alias pools).
 fn reconstructCheckedPattern(pool_owner: anytype, stored: StoredCheckedPattern) CheckedPattern {
     return .{
         .id = stored.id,
@@ -6336,7 +6260,7 @@ fn reconstructCheckedPattern(pool_owner: anytype, stored: StoredCheckedPattern) 
     };
 }
 
-/// Reconstruct a public `CheckedStatement` from its stored form (slices alias pools).
+/// Materialize a public `CheckedStatement` from its stored form (slices alias pools).
 fn reconstructCheckedStatement(pool_owner: anytype, stored: StoredCheckedStatement) CheckedStatement {
     return .{
         .id = stored.id,
@@ -7213,7 +7137,7 @@ pub const CheckedBodyStore = struct {
         };
     }
 
-    // --- Shared flat pool accessors (used by reconstruct functions). ---
+    // --- Shared flat pool accessors (used by materialize functions). ---
 
     pub fn exprIdPool(self: *const CheckedBodyStore) []const CheckedExprId {
         return self.expr_id_pool.items;
@@ -7253,76 +7177,46 @@ pub const CheckedBodyStore = struct {
     }
 
     fn appendExprIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedExprId) Allocator.Error!CheckedBodyRange {
-        if (ids.len == 0) return .{};
-        const start: u32 = @intCast(self.expr_id_pool.items.len);
-        try self.expr_id_pool.appendSlice(allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedExprId, &self.expr_id_pool, allocator, ids);
     }
 
     fn appendPatternIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedPatternId) Allocator.Error!CheckedBodyRange {
-        if (ids.len == 0) return .{};
-        const start: u32 = @intCast(self.pattern_id_pool.items.len);
-        try self.pattern_id_pool.appendSlice(allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedPatternId, &self.pattern_id_pool, allocator, ids);
     }
 
     fn appendStatementIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedStatementId) Allocator.Error!CheckedBodyRange {
-        if (ids.len == 0) return .{};
-        const start: u32 = @intCast(self.statement_id_pool.items.len);
-        try self.statement_id_pool.appendSlice(allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedStatementId, &self.statement_id_pool, allocator, ids);
     }
 
     fn appendPatternBinderIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const PatternBinderId) Allocator.Error!CheckedBodyRange {
-        if (ids.len == 0) return .{};
-        const start: u32 = @intCast(self.pattern_binder_id_pool.items.len);
-        try self.pattern_binder_id_pool.appendSlice(allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, PatternBinderId, &self.pattern_binder_id_pool, allocator, ids);
     }
 
     fn appendRecordExprFields(self: *CheckedBodyStore, allocator: Allocator, fields: []const CheckedRecordExprField) Allocator.Error!CheckedBodyRange {
-        if (fields.len == 0) return .{};
-        const start: u32 = @intCast(self.record_expr_field_pool.items.len);
-        try self.record_expr_field_pool.appendSlice(allocator, fields);
-        return .{ .start = start, .len = @intCast(fields.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordExprField, &self.record_expr_field_pool, allocator, fields);
     }
 
     fn appendIfBranches(self: *CheckedBodyStore, allocator: Allocator, branches: []const CheckedIfBranch) Allocator.Error!CheckedBodyRange {
-        if (branches.len == 0) return .{};
-        const start: u32 = @intCast(self.if_branch_pool.items.len);
-        try self.if_branch_pool.appendSlice(allocator, branches);
-        return .{ .start = start, .len = @intCast(branches.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedIfBranch, &self.if_branch_pool, allocator, branches);
     }
 
     fn appendCaptures(self: *CheckedBodyStore, allocator: Allocator, captures: []const CheckedCapture) Allocator.Error!CheckedBodyRange {
-        if (captures.len == 0) return .{};
-        const start: u32 = @intCast(self.capture_pool.items.len);
-        try self.capture_pool.appendSlice(allocator, captures);
-        return .{ .start = start, .len = @intCast(captures.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedCapture, &self.capture_pool, allocator, captures);
     }
 
     fn appendRecordDestructs(self: *CheckedBodyStore, allocator: Allocator, destructs: []const CheckedRecordDestruct) Allocator.Error!CheckedBodyRange {
-        if (destructs.len == 0) return .{};
-        const start: u32 = @intCast(self.record_destruct_pool.items.len);
-        try self.record_destruct_pool.appendSlice(allocator, destructs);
-        return .{ .start = start, .len = @intCast(destructs.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordDestruct, &self.record_destruct_pool, allocator, destructs);
     }
 
     fn appendInterpolationParts(self: *CheckedBodyStore, allocator: Allocator, parts: []const CheckedInterpolationPart) Allocator.Error!CheckedBodyRange {
-        if (parts.len == 0) return .{};
-        const start: u32 = @intCast(self.interpolation_part_pool.items.len);
-        try self.interpolation_part_pool.appendSlice(allocator, parts);
-        return .{ .start = start, .len = @intCast(parts.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedInterpolationPart, &self.interpolation_part_pool, allocator, parts);
     }
 
     /// Append already-range-formed match branches into `match_branch_pool`. The
     /// branches' `pt_start`/`bn_start` ranges index `match_branch_pattern_pool` /
     /// `binder_remap_pool`, which the copier transferred 1:1 before committing.
     fn appendMatchBranches(self: *CheckedBodyStore, allocator: Allocator, branches: []const CheckedMatchBranch) Allocator.Error!CheckedBodyRange {
-        if (branches.len == 0) return .{};
-        const start: u32 = @intCast(self.match_branch_pool.items.len);
-        try self.match_branch_pool.appendSlice(allocator, branches);
-        return .{ .start = start, .len = @intCast(branches.len) };
+        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedMatchBranch, &self.match_branch_pool, allocator, branches);
     }
 
     /// Convert a build-form expr `data` into stored POD form, copying slices into
@@ -7472,6 +7366,9 @@ pub const CheckedBodyStore = struct {
     }
 
     fn commitExprs(self: *CheckedBodyStore, allocator: Allocator, exprs: []const CheckedExpr) Allocator.Error!void {
+        // Build-only growth; a frozen (deserialized) store aliases buffer memory and
+        // must never be mutated. (See the `expr`/`pattern` aliasing-invariant docs.)
+        std.debug.assert(!self.serialized);
         try self.stored_exprs.ensureUnusedCapacity(allocator, exprs.len);
         for (exprs) |e| {
             self.stored_exprs.appendAssumeCapacity(.{
@@ -7484,6 +7381,7 @@ pub const CheckedBodyStore = struct {
     }
 
     fn commitPatterns(self: *CheckedBodyStore, allocator: Allocator, patterns: []const CheckedPattern) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
         try self.stored_patterns.ensureUnusedCapacity(allocator, patterns.len);
         for (patterns) |p| {
             self.stored_patterns.appendAssumeCapacity(.{
@@ -7496,6 +7394,7 @@ pub const CheckedBodyStore = struct {
     }
 
     fn commitStatements(self: *CheckedBodyStore, allocator: Allocator, statements: []const CheckedStatement) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
         try self.stored_statements.ensureUnusedCapacity(allocator, statements.len);
         for (statements) |s| {
             self.stored_statements.appendAssumeCapacity(.{
@@ -7507,6 +7406,7 @@ pub const CheckedBodyStore = struct {
     }
 
     fn commitStringLiterals(self: *CheckedBodyStore, allocator: Allocator, literals: []const []const u8) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
         try self.string_ranges.ensureUnusedCapacity(allocator, literals.len);
         for (literals) |literal| {
             const start: u32 = @intCast(self.string_bytes.items.len);
@@ -7912,28 +7812,28 @@ pub const CheckedBodyStore = struct {
 
         pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedBodyStore {
             return .{
-                .bodies = checkedArrayListFromSlice(CheckedBody, self.bodies.deserialize(base_addr)),
-                .stored_exprs = checkedArrayListFromSlice(StoredCheckedExpr, self.stored_exprs.deserialize(base_addr)),
-                .expr_diverges = checkedArrayListFromSlice(bool, self.expr_diverges.deserialize(base_addr)),
-                .stored_patterns = checkedArrayListFromSlice(StoredCheckedPattern, self.stored_patterns.deserialize(base_addr)),
-                .stored_statements = checkedArrayListFromSlice(StoredCheckedStatement, self.stored_statements.deserialize(base_addr)),
-                .statement_diverges = checkedArrayListFromSlice(bool, self.statement_diverges.deserialize(base_addr)),
-                .pattern_binders = checkedArrayListFromSlice(CheckedPatternBinder, self.pattern_binders.deserialize(base_addr)),
-                .pattern_binder_by_pattern = checkedArrayListFromSlice(?PatternBinderId, self.pattern_binder_by_pattern.deserialize(base_addr)),
-                .expr_id_pool = checkedArrayListFromSlice(CheckedExprId, self.expr_id_pool.deserialize(base_addr)),
-                .pattern_id_pool = checkedArrayListFromSlice(CheckedPatternId, self.pattern_id_pool.deserialize(base_addr)),
-                .statement_id_pool = checkedArrayListFromSlice(CheckedStatementId, self.statement_id_pool.deserialize(base_addr)),
-                .pattern_binder_id_pool = checkedArrayListFromSlice(PatternBinderId, self.pattern_binder_id_pool.deserialize(base_addr)),
-                .record_expr_field_pool = checkedArrayListFromSlice(CheckedRecordExprField, self.record_expr_field_pool.deserialize(base_addr)),
-                .if_branch_pool = checkedArrayListFromSlice(CheckedIfBranch, self.if_branch_pool.deserialize(base_addr)),
-                .match_branch_pool = checkedArrayListFromSlice(CheckedMatchBranch, self.match_branch_pool.deserialize(base_addr)),
-                .match_branch_pattern_pool = checkedArrayListFromSlice(CheckedMatchBranchPattern, self.match_branch_pattern_pool.deserialize(base_addr)),
-                .binder_remap_pool = checkedArrayListFromSlice(CheckedAlternativeBinderRemap, self.binder_remap_pool.deserialize(base_addr)),
-                .capture_pool = checkedArrayListFromSlice(CheckedCapture, self.capture_pool.deserialize(base_addr)),
-                .record_destruct_pool = checkedArrayListFromSlice(CheckedRecordDestruct, self.record_destruct_pool.deserialize(base_addr)),
-                .interpolation_part_pool = checkedArrayListFromSlice(CheckedInterpolationPart, self.interpolation_part_pool.deserialize(base_addr)),
-                .string_bytes = checkedArrayListFromSlice(u8, self.string_bytes.deserialize(base_addr)),
-                .string_ranges = checkedArrayListFromSlice(canonical.NameInterner.Range, self.string_ranges.deserialize(base_addr)),
+                .bodies = artifact_serialize.arrayListFromSlice(CheckedBody, self.bodies.deserialize(base_addr)),
+                .stored_exprs = artifact_serialize.arrayListFromSlice(StoredCheckedExpr, self.stored_exprs.deserialize(base_addr)),
+                .expr_diverges = artifact_serialize.arrayListFromSlice(bool, self.expr_diverges.deserialize(base_addr)),
+                .stored_patterns = artifact_serialize.arrayListFromSlice(StoredCheckedPattern, self.stored_patterns.deserialize(base_addr)),
+                .stored_statements = artifact_serialize.arrayListFromSlice(StoredCheckedStatement, self.stored_statements.deserialize(base_addr)),
+                .statement_diverges = artifact_serialize.arrayListFromSlice(bool, self.statement_diverges.deserialize(base_addr)),
+                .pattern_binders = artifact_serialize.arrayListFromSlice(CheckedPatternBinder, self.pattern_binders.deserialize(base_addr)),
+                .pattern_binder_by_pattern = artifact_serialize.arrayListFromSlice(?PatternBinderId, self.pattern_binder_by_pattern.deserialize(base_addr)),
+                .expr_id_pool = artifact_serialize.arrayListFromSlice(CheckedExprId, self.expr_id_pool.deserialize(base_addr)),
+                .pattern_id_pool = artifact_serialize.arrayListFromSlice(CheckedPatternId, self.pattern_id_pool.deserialize(base_addr)),
+                .statement_id_pool = artifact_serialize.arrayListFromSlice(CheckedStatementId, self.statement_id_pool.deserialize(base_addr)),
+                .pattern_binder_id_pool = artifact_serialize.arrayListFromSlice(PatternBinderId, self.pattern_binder_id_pool.deserialize(base_addr)),
+                .record_expr_field_pool = artifact_serialize.arrayListFromSlice(CheckedRecordExprField, self.record_expr_field_pool.deserialize(base_addr)),
+                .if_branch_pool = artifact_serialize.arrayListFromSlice(CheckedIfBranch, self.if_branch_pool.deserialize(base_addr)),
+                .match_branch_pool = artifact_serialize.arrayListFromSlice(CheckedMatchBranch, self.match_branch_pool.deserialize(base_addr)),
+                .match_branch_pattern_pool = artifact_serialize.arrayListFromSlice(CheckedMatchBranchPattern, self.match_branch_pattern_pool.deserialize(base_addr)),
+                .binder_remap_pool = artifact_serialize.arrayListFromSlice(CheckedAlternativeBinderRemap, self.binder_remap_pool.deserialize(base_addr)),
+                .capture_pool = artifact_serialize.arrayListFromSlice(CheckedCapture, self.capture_pool.deserialize(base_addr)),
+                .record_destruct_pool = artifact_serialize.arrayListFromSlice(CheckedRecordDestruct, self.record_destruct_pool.deserialize(base_addr)),
+                .interpolation_part_pool = artifact_serialize.arrayListFromSlice(CheckedInterpolationPart, self.interpolation_part_pool.deserialize(base_addr)),
+                .string_bytes = artifact_serialize.arrayListFromSlice(u8, self.string_bytes.deserialize(base_addr)),
+                .string_ranges = artifact_serialize.arrayListFromSlice(canonical.NameInterner.Range, self.string_ranges.deserialize(base_addr)),
                 .serialized = true,
             };
         }
@@ -9741,12 +9641,9 @@ pub const IntrinsicWrapperTable = struct {
 
     pub const Serialized = extern struct {
         wrappers: SerializedSlice(IntrinsicWrapper) = .{},
-        pub fn serialize(self: *Serialized, t: *const IntrinsicWrapperTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.wrappers.serialize(t.wrappers, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) IntrinsicWrapperTable {
-            return .{ .wrappers = self.wrappers.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(IntrinsicWrapperTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn append(
@@ -9795,12 +9692,9 @@ pub const EntryWrapperTable = struct {
 
     pub const Serialized = extern struct {
         wrappers: SerializedSlice(EntryWrapper) = .{},
-        pub fn serialize(self: *Serialized, t: *const EntryWrapperTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.wrappers.serialize(t.wrappers, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) EntryWrapperTable {
-            return .{ .wrappers = self.wrappers.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(EntryWrapperTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn append(
@@ -9954,12 +9848,9 @@ pub const TopLevelProcedureBindingTable = struct {
 
     pub const Serialized = extern struct {
         bindings: SerializedSlice(TopLevelProcedureBinding) = .{},
-        pub fn serialize(self: *Serialized, t: *const TopLevelProcedureBindingTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.bindings.serialize(t.bindings, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) TopLevelProcedureBindingTable {
-            return .{ .bindings = self.bindings.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(TopLevelProcedureBindingTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn initEmpty() TopLevelProcedureBindingTable {
@@ -10039,12 +9930,9 @@ pub const CallableEvalTemplateTable = struct {
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CallableEvalTemplate) = .{},
-        pub fn serialize(self: *Serialized, t: *const CallableEvalTemplateTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.templates.serialize(t.templates, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CallableEvalTemplateTable {
-            return .{ .templates = self.templates.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CallableEvalTemplateTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn append(
@@ -10178,18 +10066,9 @@ pub const ResolvedValueRefTable = struct {
         records: SerializedSlice(ResolvedValueRefRecord) = .{},
         by_checked_expr: SerializedSlice(?ResolvedValueRefId) = .{},
         template_refs: SerializedSlice(ResolvedValueRefId) = .{},
-        pub fn serialize(self: *Serialized, t: *const ResolvedValueRefTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.records.serialize(t.records, gpa, writer);
-            try self.by_checked_expr.serialize(t.by_checked_expr, gpa, writer);
-            try self.template_refs.serialize(t.template_refs, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ResolvedValueRefTable {
-            return .{
-                .records = self.records.deserialize(base_addr),
-                .by_checked_expr = self.by_checked_expr.deserialize(base_addr),
-                .template_refs = self.template_refs.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ResolvedValueRefTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -10278,22 +10157,6 @@ pub const ResolvedValueRefTable = struct {
         const raw = @intFromEnum(expr);
         if (raw >= self.by_checked_expr.len) return null;
         return self.by_checked_expr[raw];
-    }
-
-    pub fn appendTemplateRefSpan(
-        self: *ResolvedValueRefTable,
-        allocator: Allocator,
-        refs: []const ResolvedValueRefId,
-    ) Allocator.Error!ResolvedValueRefTableRef {
-        const start: u32 = @intCast(self.template_refs.len);
-        if (refs.len == 0) return .{ .start = start, .len = 0 };
-        const old = self.template_refs;
-        const next = try allocator.alloc(ResolvedValueRefId, old.len + refs.len);
-        @memcpy(next[0..old.len], old);
-        @memcpy(next[old.len..], refs);
-        allocator.free(old);
-        self.template_refs = next;
-        return .{ .start = start, .len = @intCast(refs.len) };
     }
 
     pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
@@ -10892,6 +10755,15 @@ fn sealCheckedProcedureTemplateRefs(
     var collector = CheckedTemplateRefCollector.init(allocator, checked_bodies, static_dispatch_plans);
     defer collector.deinit();
 
+    // Flatten each template's collected refs into the two shared per-table pools,
+    // recording each template's sub-range. Growing the pools as lists keeps the pass
+    // amortized-O(1) per template; both tables then take ownership of the finished
+    // pool as a single slice.
+    var value_ref_pool = std.ArrayList(ResolvedValueRefId).empty;
+    errdefer value_ref_pool.deinit(allocator);
+    var dispatch_ref_pool = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
+    errdefer dispatch_ref_pool.deinit(allocator);
+
     for (templates.templates) |*template| {
         collector.clear();
 
@@ -10907,13 +10779,12 @@ fn sealCheckedProcedureTemplateRefs(
             .intrinsic_wrapper => {},
         }
 
-        template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, collector.value_refs.items);
-        const dispatch_span = try static_dispatch_plans.appendTemplateRefSpan(allocator, collector.dispatch_refs.items);
-        template.static_dispatch_plans = .{
-            .start = dispatch_span.start,
-            .len = dispatch_span.len,
-        };
+        template.resolved_value_refs = try artifact_serialize.appendSpan(ResolvedValueRefTableRef, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
+        template.static_dispatch_plans = try artifact_serialize.appendSpan(@TypeOf(template.static_dispatch_plans), static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
     }
+
+    resolved_value_refs.template_refs = try value_ref_pool.toOwnedSlice(allocator);
+    static_dispatch_plans.template_refs = try dispatch_ref_pool.toOwnedSlice(allocator);
 }
 
 fn sealConstEvalTemplatesForRoots(
@@ -11343,18 +11214,9 @@ pub const NestedProcSiteTable = struct {
         sites: SerializedSlice(NestedProcSite) = .{},
         template_refs: SerializedSlice(canonical.NestedProcSiteId) = .{},
         path_components: SerializedSlice(NestedProcPathComponent) = .{},
-        pub fn serialize(self: *Serialized, t: *const NestedProcSiteTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.sites.serialize(t.sites, gpa, writer);
-            try self.template_refs.serialize(t.template_refs, gpa, writer);
-            try self.path_components.serialize(t.path_components, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) NestedProcSiteTable {
-            return .{
-                .sites = self.sites.deserialize(base_addr),
-                .template_refs = self.template_refs.deserialize(base_addr),
-                .path_components = self.path_components.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(NestedProcSiteTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromTemplates(
@@ -11432,16 +11294,9 @@ pub const CheckedProcedureTemplateTable = struct {
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
-        pub fn serialize(self: *Serialized, t: *const CheckedProcedureTemplateTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.templates.serialize(t.templates, gpa, writer);
-            try self.by_def.serialize(t.by_def, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedProcedureTemplateTable {
-            return .{
-                .templates = self.templates.deserialize(base_addr),
-                .by_def = self.by_def.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -12030,16 +11885,9 @@ pub const HostedProcTable = struct {
     pub const Serialized = extern struct {
         procs: SerializedSlice(HostedProc) = .{},
         order_key_bytes: SerializedSlice(u8) = .{},
-        pub fn serialize(self: *Serialized, t: *const HostedProcTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.procs.serialize(t.procs, gpa, writer);
-            try self.order_key_bytes.serialize(t.order_key_bytes, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) HostedProcTable {
-            return .{
-                .procs = self.procs.deserialize(base_addr),
-                .order_key_bytes = self.order_key_bytes.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(HostedProcTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     const Candidate = struct {
@@ -12202,12 +12050,9 @@ pub const PlatformRequiredDeclarationTable = struct {
 
     pub const Serialized = extern struct {
         declarations: SerializedSlice(PlatformRequiredDeclaration) = .{},
-        pub fn serialize(self: *Serialized, t: *const PlatformRequiredDeclarationTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.declarations.serialize(t.declarations, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) PlatformRequiredDeclarationTable {
-            return .{ .declarations = self.declarations.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredDeclarationTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -12426,12 +12271,9 @@ pub const PlatformRequirementRelationTable = struct {
 
     pub const Serialized = extern struct {
         relations: SerializedSlice(PlatformRequirementRelation) = .{},
-        pub fn serialize(self: *Serialized, t: *const PlatformRequirementRelationTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.relations.serialize(t.relations, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) PlatformRequirementRelationTable {
-            return .{ .relations = self.relations.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequirementRelationTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromRelation(
@@ -12689,7 +12531,7 @@ pub const PlatformRequiredBindingTable = struct {
         self.* = .{};
     }
 
-    /// Reconstruct a binding's relation template closure from this table's pool.
+    /// Materialize a binding's relation template closure from this table's pool.
     pub fn relationClosure(self: *const PlatformRequiredBindingTable, binding: PlatformRequiredBinding) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(switch (binding.value_use.kind) {
             .const_value => binding.value_use.const_use.relation_template_closure,
@@ -12706,17 +12548,9 @@ pub const PlatformRequiredBindingTable = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
-        pub fn serialize(self: *Serialized, t: *const PlatformRequiredBindingTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.bindings.serialize(t.bindings, gpa, writer);
-            try self.closure_pool.serialize(&t.closure_pool, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) PlatformRequiredBindingTable {
-            return .{
-                .bindings = self.bindings.deserialize(base_addr),
-                .closure_pool = self.closure_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn lookupByRequiredIndex(self: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
@@ -14428,14 +14262,6 @@ fn tagBuildLessThanByName(
     return names.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
-fn tagLessThanByName(
-    names: *const canonical.CanonicalNameStore,
-    lhs: CheckedTag,
-    rhs: CheckedTag,
-) bool {
-    return names.tagLabelTextLessThan(lhs.name, rhs.name);
-}
-
 fn appTopLevelValueByName(
     app_artifact: *const CheckedModuleArtifact,
     required_name: []const u8,
@@ -14624,24 +14450,9 @@ pub const ModuleInterfaceCapabilities = struct {
         platform_representations: SerializedSlice(PlatformRepresentationCapability) = .{},
         exported_nominal_representations: SerializedSlice(ExportedNominalRepresentation) = .{},
         args_pool: SerializedSlice(canonical.CanonicalTypeKey) = .{},
-        pub fn serialize(self: *Serialized, t: *const ModuleInterfaceCapabilities, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.boxed_payload_templates.serialize(t.boxed_payload_templates, gpa, writer);
-            try self.opaque_atomic_proofs.serialize(t.opaque_atomic_proofs, gpa, writer);
-            try self.hosted_representations.serialize(t.hosted_representations, gpa, writer);
-            try self.platform_representations.serialize(t.platform_representations, gpa, writer);
-            try self.exported_nominal_representations.serialize(t.exported_nominal_representations, gpa, writer);
-            try self.args_pool.serialize(t.args_pool, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ModuleInterfaceCapabilities {
-            return .{
-                .boxed_payload_templates = self.boxed_payload_templates.deserialize(base_addr),
-                .opaque_atomic_proofs = self.opaque_atomic_proofs.deserialize(base_addr),
-                .hosted_representations = self.hosted_representations.deserialize(base_addr),
-                .platform_representations = self.platform_representations.deserialize(base_addr),
-                .exported_nominal_representations = self.exported_nominal_representations.deserialize(base_addr),
-                .args_pool = self.args_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ModuleInterfaceCapabilities, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -15065,12 +14876,9 @@ pub const CompileTimeRootTable = struct {
 
     pub const Serialized = extern struct {
         roots: SerializedSlice(CompileTimeRoot) = .{},
-        pub fn serialize(self: *Serialized, t: *const CompileTimeRootTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.roots.serialize(t.roots, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CompileTimeRootTable {
-            return .{ .roots = self.roots.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -15346,18 +15154,9 @@ pub const TopLevelValueTable = struct {
         entries: SerializedSlice(TopLevelValueEntry) = .{},
         by_pattern: SerializedSlice(?u32) = .{},
         by_def: SerializedSlice(TopLevelValueByDefEntry) = .{},
-        pub fn serialize(self: *Serialized, t: *const TopLevelValueTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.entries.serialize(t.entries, gpa, writer);
-            try self.by_pattern.serialize(t.by_pattern, gpa, writer);
-            try self.by_def.serialize(t.by_def, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) TopLevelValueTable {
-            return .{
-                .entries = self.entries.deserialize(base_addr),
-                .by_pattern = self.by_pattern.deserialize(base_addr),
-                .by_def = self.by_def.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(TopLevelValueTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -15533,16 +15332,9 @@ pub const CheckedConstBodyTable = struct {
     pub const Serialized = extern struct {
         bodies: SerializedSlice(CheckedConstBody) = .{},
         by_root: SerializedSlice(?CheckedConstBodyRef) = .{},
-        pub fn serialize(self: *Serialized, t: *const CheckedConstBodyTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.bodies.serialize(t.bodies, gpa, writer);
-            try self.by_root.serialize(t.by_root, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedConstBodyTable {
-            return .{
-                .bodies = self.bodies.deserialize(base_addr),
-                .by_root = self.by_root.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CheckedConstBodyTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromRoots(
@@ -15701,7 +15493,7 @@ pub const StoredImportedTemplateClosure = extern struct {
 /// Flat side pools backing every `StoredImportedTemplateClosure` of a single
 /// closure-bearing table. Each public closure slice has its own pool of POD ref
 /// elements; `commit` copies an owned `ImportedTemplateClosureView` into the
-/// pools and `reconstruct` returns the public view aliasing them (zero-alloc).
+/// pools and `materialize` returns the public view aliasing them (zero-alloc).
 pub const ClosurePool = struct {
     checked_bodies: std.ArrayList(ArtifactCheckedBodyRef),
     checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef),
@@ -15741,9 +15533,7 @@ pub const ClosurePool = struct {
         allocator: Allocator,
         slice: []const T,
     ) Allocator.Error!ClosureRange {
-        const start: u32 = @intCast(pool.items.len);
-        try pool.appendSlice(allocator, slice);
-        return .{ .start = start, .len = @intCast(slice.len) };
+        return artifact_serialize.appendSpan(ClosureRange, T, pool, allocator, slice);
     }
 
     fn poolSlice(comptime T: type, pool: *const std.ArrayList(T), range: ClosureRange) []const T {
@@ -15776,7 +15566,7 @@ pub const ClosurePool = struct {
         };
     }
 
-    /// Reconstruct the public 13-slice view aliasing this pool's flat storage.
+    /// Materialize the public 13-slice view aliasing this pool's flat storage.
     pub fn reconstruct(self: *const ClosurePool, stored: StoredImportedTemplateClosure) ImportedTemplateClosureView {
         return .{
             .checked_bodies = poolSlice(ArtifactCheckedBodyRef, &self.checked_bodies, stored.checked_bodies),
@@ -15853,28 +15643,24 @@ pub const ClosurePool = struct {
 
         pub fn deserialize(self: *const Serialized, base_addr: usize) ClosurePool {
             return .{
-                .checked_bodies = closureArrayListFromSlice(ArtifactCheckedBodyRef, self.checked_bodies.deserialize(base_addr)),
-                .checked_type_roots = closureArrayListFromSlice(ArtifactCheckedTypeRef, self.checked_type_roots.deserialize(base_addr)),
-                .checked_type_schemes = closureArrayListFromSlice(ArtifactCheckedTypeSchemeRef, self.checked_type_schemes.deserialize(base_addr)),
-                .checked_callable_bodies = closureArrayListFromSlice(ArtifactCheckedCallableBodyRef, self.checked_callable_bodies.deserialize(base_addr)),
-                .checked_const_bodies = closureArrayListFromSlice(ArtifactCheckedConstBodyRef, self.checked_const_bodies.deserialize(base_addr)),
-                .checked_procedure_templates = closureArrayListFromSlice(ArtifactProcedureTemplateRef, self.checked_procedure_templates.deserialize(base_addr)),
-                .callable_eval_templates = closureArrayListFromSlice(ArtifactCallableEvalTemplateRef, self.callable_eval_templates.deserialize(base_addr)),
-                .const_templates = closureArrayListFromSlice(ConstRef, self.const_templates.deserialize(base_addr)),
-                .nested_proc_sites = closureArrayListFromSlice(ArtifactNestedProcSiteTableRef, self.nested_proc_sites.deserialize(base_addr)),
-                .resolved_value_refs = closureArrayListFromSlice(ArtifactResolvedValueRefTableRef, self.resolved_value_refs.deserialize(base_addr)),
-                .static_dispatch_plans = closureArrayListFromSlice(ArtifactStaticDispatchPlanTableRef, self.static_dispatch_plans.deserialize(base_addr)),
-                .method_registry_entries = closureArrayListFromSlice(MethodRegistryEntryRef, self.method_registry_entries.deserialize(base_addr)),
-                .interface_capabilities = closureArrayListFromSlice(ArtifactModuleInterfaceCapabilitiesRef, self.interface_capabilities.deserialize(base_addr)),
+                .checked_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedBodyRef, self.checked_bodies.deserialize(base_addr)),
+                .checked_type_roots = artifact_serialize.arrayListFromSlice(ArtifactCheckedTypeRef, self.checked_type_roots.deserialize(base_addr)),
+                .checked_type_schemes = artifact_serialize.arrayListFromSlice(ArtifactCheckedTypeSchemeRef, self.checked_type_schemes.deserialize(base_addr)),
+                .checked_callable_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedCallableBodyRef, self.checked_callable_bodies.deserialize(base_addr)),
+                .checked_const_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedConstBodyRef, self.checked_const_bodies.deserialize(base_addr)),
+                .checked_procedure_templates = artifact_serialize.arrayListFromSlice(ArtifactProcedureTemplateRef, self.checked_procedure_templates.deserialize(base_addr)),
+                .callable_eval_templates = artifact_serialize.arrayListFromSlice(ArtifactCallableEvalTemplateRef, self.callable_eval_templates.deserialize(base_addr)),
+                .const_templates = artifact_serialize.arrayListFromSlice(ConstRef, self.const_templates.deserialize(base_addr)),
+                .nested_proc_sites = artifact_serialize.arrayListFromSlice(ArtifactNestedProcSiteTableRef, self.nested_proc_sites.deserialize(base_addr)),
+                .resolved_value_refs = artifact_serialize.arrayListFromSlice(ArtifactResolvedValueRefTableRef, self.resolved_value_refs.deserialize(base_addr)),
+                .static_dispatch_plans = artifact_serialize.arrayListFromSlice(ArtifactStaticDispatchPlanTableRef, self.static_dispatch_plans.deserialize(base_addr)),
+                .method_registry_entries = artifact_serialize.arrayListFromSlice(MethodRegistryEntryRef, self.method_registry_entries.deserialize(base_addr)),
+                .interface_capabilities = artifact_serialize.arrayListFromSlice(ArtifactModuleInterfaceCapabilitiesRef, self.interface_capabilities.deserialize(base_addr)),
                 .serialized = true,
             };
         }
     };
 };
-
-fn closureArrayListFromSlice(comptime T: type, slice: []T) std.ArrayList(T) {
-    return .{ .items = slice, .capacity = slice.len };
-}
 
 test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
     const gpa = std.testing.allocator;
@@ -15902,7 +15688,7 @@ test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
     try std.testing.expectEqual(@as(u32, 7), @intFromEnum(reconstructed.checked_bodies[0].body));
     try std.testing.expectEqual(@as(usize, 1), reconstructed.interface_capabilities.len);
 
-    // Serialize → aligned buffer → deserialize, then reconstruct again.
+    // Serialize → aligned buffer → deserialize, then materialize again.
     var rt = try artifact_serialize.roundTripForTest(gpa, ClosurePool, &pool);
     defer gpa.free(rt.buffer);
     defer rt.loaded.deinit(gpa);
@@ -15929,9 +15715,9 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
     const stored = try table.closure_pool.commit(gpa, closure);
     var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
     try bindings.append(gpa, .{
-        .binding = .{ .artifact = key_a, .def = @enumFromInt(0), .pattern = @enumFromInt(0) },
+        .binding = .{ .artifact = key_a, .def = @enumFromInt(1), .pattern = @enumFromInt(2) },
         .source_scheme = .{},
-        .body = .{ .callable_eval_template = @enumFromInt(0) },
+        .body = .{ .callable_eval_template = @enumFromInt(3) },
         .template_closure = stored,
     });
     table.bindings = try bindings.toOwnedSlice(gpa);
@@ -16762,7 +16548,7 @@ pub const ExportedProcedureTemplateView = struct {
     templates: []const ExportedProcedureTemplate = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Reconstruct a row's imported template closure from the backing pool.
+    /// Materialize a row's imported template closure from the backing pool.
     pub fn rowClosure(self: ExportedProcedureTemplateView, row: ExportedProcedureTemplate) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -16852,7 +16638,7 @@ pub const ExportedProcedureTemplateTable = struct {
         return .{ .templates = self.templates, .closure_pool = &self.closure_pool };
     }
 
-    /// Reconstruct a row's imported template closure from this table's pool.
+    /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedProcedureTemplateTable, row: ExportedProcedureTemplate) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -16872,17 +16658,9 @@ pub const ExportedProcedureTemplateTable = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
-        pub fn serialize(self: *Serialized, t: *const ExportedProcedureTemplateTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.templates.serialize(t.templates, gpa, writer);
-            try self.closure_pool.serialize(&t.closure_pool, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ExportedProcedureTemplateTable {
-            return .{
-                .templates = self.templates.deserialize(base_addr),
-                .closure_pool = self.closure_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ExportedProcedureTemplateTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 };
 
@@ -17542,7 +17320,7 @@ pub const ExportedProcedureBindingView = struct {
     bindings: []const ImportedProcedureBindingView = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Reconstruct a row's imported template closure from the backing pool.
+    /// Materialize a row's imported template closure from the backing pool.
     pub fn rowClosure(self: ExportedProcedureBindingView, row: ImportedProcedureBindingView) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -17628,7 +17406,7 @@ pub const ExportedProcedureBindingTable = struct {
         return .{ .bindings = self.bindings, .closure_pool = &self.closure_pool };
     }
 
-    /// Reconstruct a row's imported template closure from this table's pool.
+    /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedProcedureBindingTable, row: ImportedProcedureBindingView) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -17648,17 +17426,9 @@ pub const ExportedProcedureBindingTable = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
-        pub fn serialize(self: *Serialized, t: *const ExportedProcedureBindingTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.bindings.serialize(t.bindings, gpa, writer);
-            try self.closure_pool.serialize(&t.closure_pool, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ExportedProcedureBindingTable {
-            return .{
-                .bindings = self.bindings.deserialize(base_addr),
-                .closure_pool = self.closure_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ExportedProcedureBindingTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 };
 
@@ -17800,13 +17570,9 @@ pub const ConstTemplateTable = struct {
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(ConstTemplate) = .{},
-        pub fn serialize(self: *Serialized, t: *const ConstTemplateTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.templates.serialize(t.templates.items, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ConstTemplateTable {
-            const items = self.templates.deserialize(base_addr);
-            return .{ .templates = .{ .items = items, .capacity = items.len } };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ConstTemplateTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn reserveTopLevel(
@@ -17928,7 +17694,7 @@ pub const ExportedConstTemplateView = struct {
     templates: []const ImportedConstTemplateView = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
-    /// Reconstruct a row's imported template closure from the backing pool.
+    /// Materialize a row's imported template closure from the backing pool.
     pub fn rowClosure(self: ExportedConstTemplateView, row: ImportedConstTemplateView) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -18009,7 +17775,7 @@ pub const ExportedConstTemplateTable = struct {
         self.* = .{};
     }
 
-    /// Reconstruct a row's imported template closure from this table's pool.
+    /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedConstTemplateTable, row: ImportedConstTemplateView) ImportedTemplateClosureView {
         return self.closure_pool.reconstruct(row.template_closure);
     }
@@ -18023,17 +17789,9 @@ pub const ExportedConstTemplateTable = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
-        pub fn serialize(self: *Serialized, t: *const ExportedConstTemplateTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.templates.serialize(t.templates, gpa, writer);
-            try self.closure_pool.serialize(&t.closure_pool, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ExportedConstTemplateTable {
-            return .{
-                .templates = self.templates.deserialize(base_addr),
-                .closure_pool = self.closure_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ExportedConstTemplateTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fillStoredConst(
@@ -18320,11 +18078,13 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
 
         comptime {
-            // Sum of each sub-store's own relocatable-pointer count plus one for
-            // `direct_import_artifact_keys`. POD inline `key`/`module_identity`
-            // and the `NameInterner`/`SafeList`-backed `canonical_names`
-            // contribute zero (those expose no `serialized_relocatable_pointers`).
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 146);
+            // The TRUE total relocation fixup count: 1 (`direct_import_artifact_keys`)
+            // + the recursive sum of every sub-store, now including the `SafeList`/
+            // interner base pointers (`canonical_names` = 22 via its 7 interners +
+            // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
+            // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
+            // independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 171);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -18372,21 +18132,26 @@ pub const CheckedModuleArtifact = struct {
             try self.const_store.serialize(&artifact.const_store, gpa, writer);
         }
 
-        /// Reconstruct a frozen artifact from the relocated buffer at `base_addr`.
-        /// `module_env` is supplied by the caller (transform E): the env blob is
-        /// relocated/owned separately and injected here, never serialized. `gpa`
-        /// is retained only by the sub-stores that keep an allocator for their
+        /// Materialize a frozen artifact from its relocated `backing` buffer (whose
+        /// start IS this `Serialized` header). The artifact is SELF-DESCRIBING: it
+        /// stores `backing` in `serialized_backing`, so a single `deinit` frees the
+        /// buffer (and the injected env) correctly for every caller — no per-call-site
+        /// teardown contract. `module_env` is supplied by the caller (transform E): the
+        /// env blob is relocated/owned separately and injected here, never serialized.
+        /// `gpa` is retained only by the sub-stores that keep an allocator for their
         /// build-only fields (`canonical_names`, `const_store`).
         pub fn deserialize(
             self: *const Serialized,
-            base_addr: usize,
+            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
             gpa: Allocator,
             module_env: ModuleEnvStorage,
         ) CheckedModuleArtifact {
+            const base_addr = @intFromPtr(backing.ptr);
             return .{
                 .key = self.key,
                 .module_identity = self.module_identity.decode(),
                 .module_env = module_env,
+                .serialized_backing = backing,
                 .direct_import_artifact_keys = self.direct_import_artifact_keys.deserialize(base_addr),
                 .canonical_names = self.canonical_names.deserialize(base_addr, gpa),
                 .checking_context_identity = self.checking_context_identity.deserialize(base_addr),
@@ -18436,31 +18201,37 @@ pub const CheckedModuleArtifact = struct {
     /// mismatched struct (a real hazard during development, where
     /// `build_options.compiler_version` is a fixed release string that does not move
     /// between rebuilds).
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = computeSerializedVersionHash();
-
-    fn computeSerializedVersionHash() [32]u8 {
-        @setEvalBranchQuota(1_000_000);
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(std.fmt.comptimePrint("roc-artifact-v{d};size={d};fixups={d};", .{
-            serialized_layout_version,
-            @sizeOf(Serialized),
-            artifact_serialize.relocatablePointerCount(Serialized),
-        }));
-        for (@typeInfo(Serialized).@"struct".fields) |f| {
-            hasher.update(f.name);
-            hasher.update(":");
-            hasher.update(@typeName(f.type));
-            hasher.update(";");
-        }
-        var result: [32]u8 = undefined;
-        hasher.final(&result);
-        return result;
-    }
+    pub const SERIALIZED_VERSION_HASH: [32]u8 =
+        artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
 
     /// Validate a version hash read from a serialized artifact (builtin blob trailer
     /// or cache header) against the running compiler's `SERIALIZED_VERSION_HASH`.
     pub fn expectSerializedVersion(found: *const [32]u8) bool {
-        return std.mem.eql(u8, found, &SERIALIZED_VERSION_HASH);
+        // Manual byte compare: `std.mem.eql` is banned in src/check (raw byte
+        // comparison is a type-checker-identity footgun); a fixed-length hash
+        // compare here is unambiguous.
+        for (found, &SERIALIZED_VERSION_HASH) |a, b| {
+            if (a != b) return false;
+        }
+        return true;
+    }
+
+    /// Length of the version trailer the builtin baker appends to its blob.
+    pub const VERSION_TRAILER_LEN = SERIALIZED_VERSION_HASH.len;
+
+    /// The baked builtin blob is laid out `[serialized bytes][version trailer]`: the
+    /// baker (`builtin_compiler`) writes the `Serialized` at offset 0 and appends
+    /// `SERIALIZED_VERSION_HASH` as a trailer. This validates that trailer against the
+    /// running compiler's layout hash and returns the serialized prefix to relocate,
+    /// keeping the one place that knows the trailer's position. A stale or truncated
+    /// blob is rejected rather than relocated into a mismatched struct.
+    pub fn splitVersionTrailer(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch }![]const u8 {
+        if (blob.len < VERSION_TRAILER_LEN) return error.CorruptBuiltinArtifact;
+        const serialized_len = blob.len - VERSION_TRAILER_LEN;
+        if (!expectSerializedVersion(blob[serialized_len..][0..VERSION_TRAILER_LEN])) {
+            return error.BuiltinArtifactVersionMismatch;
+        }
+        return blob[0..serialized_len];
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
@@ -21323,13 +21094,11 @@ test "artifact views are read-only projections" {
     try std.testing.expect(lowering.roots == &artifact.root_requests);
 }
 
-// ============================================================================
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
 // keeps its `[]T` representation; only `Serialized`/`deserialize` are added.
 // Tests fill elements with deterministic bytes (including padding) and assert
 // the deserialized slice is byte-identical, which validates the wiring for any
 // POD element shape without needing valid field literals.
-// ============================================================================
 
 fn isSliceField(comptime FT: type) bool {
     const info = @typeInfo(FT);
@@ -21340,14 +21109,17 @@ fn isSliceField(comptime FT: type) bool {
 /// slices, allocate + byte-fill each field, serialize, deserialize, and assert
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
-fn expectAllSliceStoreRoundTrips(comptime Store: type) !void {
+fn expectAllSliceStoreRoundTrips(comptime Store: type) anyerror!void {
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (std.meta.fields(Store)) |field| {
         comptime std.debug.assert(isSliceField(field.type));
         const Elem = std.meta.Child(field.type);
         const buf = try gpa.alloc(Elem, 3);
-        @memset(std.mem.sliceAsBytes(buf), 0x5A);
+        artifact_serialize.poisonSlice(Elem, buf, 0x5A);
+        // Canonicalize padding to match the deterministic serializer, so the
+        // byte-compare below reflects logical fidelity, not padding bytes.
+        artifact_serialize.zeroSlicePadding(Elem, buf);
         @field(store, field.name) = buf;
     }
     defer inline for (std.meta.fields(Store)) |field| {
@@ -21357,11 +21129,8 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) !void {
     const rt = try artifact_serialize.roundTripForTest(gpa, Store, &store);
     defer gpa.free(rt.buffer);
     inline for (std.meta.fields(Store)) |field| {
-        try std.testing.expectEqualSlices(
-            u8,
-            std.mem.sliceAsBytes(@field(store, field.name)),
-            std.mem.sliceAsBytes(@field(rt.loaded, field.name)),
-        );
+        const Elem = std.meta.Child(field.type);
+        try artifact_serialize.expectSlicesByteEqual(Elem, @field(store, field.name), @field(rt.loaded, field.name));
     }
 }
 
@@ -21391,13 +21160,17 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     const gpa = std.testing.allocator;
     const imports = try gpa.alloc(ImportIdentity, 2);
     defer gpa.free(imports);
-    @memset(std.mem.sliceAsBytes(imports), 0x5A);
+    artifact_serialize.poisonSlice(ImportIdentity, imports, 0x5A);
+    artifact_serialize.zeroSlicePadding(ImportIdentity, imports);
     const roots = try gpa.alloc(ExplicitRootRequestInput, 3);
     defer gpa.free(roots);
-    @memset(std.mem.sliceAsBytes(roots), 0x3C);
+    artifact_serialize.poisonSlice(ExplicitRootRequestInput, roots, 0x3C);
+    artifact_serialize.zeroSlicePadding(ExplicitRootRequestInput, roots);
 
     var prc: PlatformRequirementContextKey = undefined;
     @memset(std.mem.asBytes(&prc), 0x77);
+    // Canonicalize padding to match the deterministic serializer.
+    collections.CompactWriter.zeroValuePadding(PlatformRequirementContextKey, @as([*]u8, @ptrCast(&prc)));
 
     const ident = CheckingContextIdentity{
         .imports = imports,
@@ -21408,8 +21181,8 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
 
     const rt = try artifact_serialize.roundTripForTest(gpa, CheckingContextIdentity, &ident);
     defer gpa.free(rt.buffer);
-    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(ident.imports), std.mem.sliceAsBytes(rt.loaded.imports));
-    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(ident.explicit_roots), std.mem.sliceAsBytes(rt.loaded.explicit_roots));
+    try artifact_serialize.expectSlicesByteEqual(ImportIdentity, ident.imports, rt.loaded.imports);
+    try artifact_serialize.expectSlicesByteEqual(ExplicitRootRequestInput, ident.explicit_roots, rt.loaded.explicit_roots);
     try std.testing.expect(rt.loaded.platform_requirement_context != null);
     try std.testing.expectEqualSlices(u8, std.mem.asBytes(&prc), std.mem.asBytes(&rt.loaded.platform_requirement_context.?));
     try std.testing.expectEqual(@as(?PlatformAppRelationKey, null), rt.loaded.platform_app_relation);
@@ -21419,16 +21192,13 @@ test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
     const gpa = std.testing.allocator;
     const templates = try gpa.alloc(ConstTemplate, 3);
     defer gpa.free(templates);
-    @memset(std.mem.sliceAsBytes(templates), 0x5A);
+    artifact_serialize.poisonSlice(ConstTemplate, templates, 0x5A);
+    artifact_serialize.zeroSlicePadding(ConstTemplate, templates);
     const store = ConstTemplateTable{ .templates = .{ .items = templates, .capacity = templates.len } };
 
     const rt = try artifact_serialize.roundTripForTest(gpa, ConstTemplateTable, &store);
     defer gpa.free(rt.buffer);
-    try std.testing.expectEqualSlices(
-        u8,
-        std.mem.sliceAsBytes(store.templates.items),
-        std.mem.sliceAsBytes(rt.loaded.templates.items),
-    );
+    try artifact_serialize.expectSlicesByteEqual(ConstTemplate, store.templates.items, rt.loaded.templates.items);
 }
 
 test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, ranges" {
@@ -21439,9 +21209,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     defer store.deinit(gpa);
 
     // Two type-id-pool entries used as tag args / scheme generalized vars / decl
-    // formal args / tuple elems.
-    const a: CheckedTypeId = @enumFromInt(0);
-    const b: CheckedTypeId = @enumFromInt(1);
+    // formal args / tuple elems. `a`/`b` are the next two payload ids, derived from
+    // the (empty) pool rather than hardcoded placeholder indices.
+    const a: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    const b: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)) + 1);
 
     // Build via the commit path so the pools are populated correctly.
     // 0: a flex with a name + a constraint.
@@ -21471,7 +21242,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     // A scheme with generalized vars [a, b].
     const gv = try store.appendTypeIds(gpa, &.{ a, b });
     try store.schemes.append(gpa, .{
-        .id = @enumFromInt(0),
+        .id = @enumFromInt(@as(u32, @intCast(store.schemes.items.len))),
         .key = .{ .bytes = [_]u8{3} ** 32 },
         .root = a,
         .gv_start = gv.start,
@@ -21481,8 +21252,8 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     // A nominal declaration with formal args [b].
     const fa = try store.appendTypeIds(gpa, &.{b});
     try store.nominal_declarations.append(gpa, .{
-        .id = @enumFromInt(0),
-        .nominal = .{ .module_name = @enumFromInt(0), .type_name = @enumFromInt(0), .source_decl = null },
+        .id = @enumFromInt(@as(u32, @intCast(store.nominal_declarations.items.len))),
+        .nominal = .{ .module_name = @enumFromInt(1), .type_name = @enumFromInt(2), .source_decl = null },
         .declaration_root = b,
         .backing = a,
         .fa_start = fa.start,
@@ -21534,15 +21305,21 @@ test "CheckedBodyStore: POD round-trip preserves exprs, slices, match branches, 
     var store = CheckedBodyStore{};
     defer store.deinit(gpa);
 
-    const e0: CheckedExprId = @enumFromInt(0);
-    const e1: CheckedExprId = @enumFromInt(1);
-    const p0: CheckedPatternId = @enumFromInt(0);
-    const ty0: CheckedTypeId = @enumFromInt(0);
+    // Structural ids derived from each pool's next position rather than hardcoded,
+    // so the "first element" ids carry no placeholder literals.
+    const e0: CheckedExprId = @enumFromInt(@as(u32, @intCast(store.stored_exprs.items.len)));
+    const e1: CheckedExprId = @enumFromInt(@as(u32, @intCast(store.stored_exprs.items.len)) + 1);
+    const boom_id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(store.string_ranges.items.len)));
+    const second_id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(store.string_ranges.items.len)) + 1);
+    // p0/ty0 are referenced but never dereferenced as indices here; distinct
+    // non-zero ids prove they survive the round-trip.
+    const p0: CheckedPatternId = @enumFromInt(7);
+    const ty0: CheckedTypeId = @enumFromInt(9);
     const region = base.Region.zero();
 
     // A match branch with one pattern carrying one binder remap, transferred 1:1
     // (the store pools start empty, so the build ranges resolve correctly).
-    try store.binder_remap_pool.append(gpa, .{ .candidate_binder = @enumFromInt(0), .representative_binder = @enumFromInt(1) });
+    try store.binder_remap_pool.append(gpa, .{ .candidate_binder = @enumFromInt(5), .representative_binder = @enumFromInt(1) });
     try store.match_branch_pattern_pool.append(gpa, .{ .pattern = p0, .degenerate = false, .bn_start = 0, .bn_len = 1 });
 
     // A `match_` expr referencing the pre-seeded branch pool entry, plus a `str`
@@ -21555,7 +21332,7 @@ test "CheckedBodyStore: POD round-trip preserves exprs, slices, match branches, 
             .is_try_suffix = false,
             .skip_exhaustiveness = false,
         } } },
-        .{ .id = e1, .ty = ty0, .source_region = region, .data = .{ .crash = @enumFromInt(0) } },
+        .{ .id = e1, .ty = ty0, .source_region = region, .data = .{ .crash = boom_id } },
     };
     try store.commitExprs(gpa, &exprs);
     try store.commitStringLiterals(gpa, &.{ "boom", "second" });
@@ -21580,11 +21357,11 @@ test "CheckedBodyStore: POD round-trip preserves exprs, slices, match branches, 
     const match_data = loaded.expr(e0).data.match_;
     try std.testing.expectEqual(@as(usize, 1), match_data.branches.len);
     try std.testing.expectEqual(e1, match_data.branches[0].value);
-    try std.testing.expectEqual(@as(CheckedStringLiteralId, @enumFromInt(0)), loaded.expr(e1).data.crash);
+    try std.testing.expectEqual(boom_id, loaded.expr(e1).data.crash);
 
     // String literals resolve by id.
-    try std.testing.expectEqualStrings("boom", loaded.stringLiteral(@enumFromInt(0)));
-    try std.testing.expectEqualStrings("second", loaded.stringLiteral(@enumFromInt(1)));
+    try std.testing.expectEqualStrings("boom", loaded.stringLiteral(boom_id));
+    try std.testing.expectEqualStrings("second", loaded.stringLiteral(second_id));
 
     // Match-branch pools survive and nest correctly.
     const branch_patterns = match_data.branches[0].patternsSlice(&loaded);
@@ -21597,7 +21374,7 @@ test "CheckedBodyStore: POD round-trip preserves exprs, slices, match branches, 
     // The view exposes the same data.
     const v = loaded.view();
     try std.testing.expectEqual(e1, v.expr(e0).data.match_.branches[0].value);
-    try std.testing.expectEqualStrings("boom", v.stringLiteral(@enumFromInt(0)));
+    try std.testing.expectEqualStrings("boom", v.stringLiteral(boom_id));
 }
 
 test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and sub-store data" {
@@ -21614,8 +21391,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     defer checked_types_src.deinit(gpa);
     const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 32 };
     const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 32 };
-    try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(0), .key = ty0_key });
-    try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(1), .key = ty1_key });
+    try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty0_key });
+    try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty1_key });
     try checked_types_src.payloads.append(gpa, .empty_record);
     try checked_types_src.payloads.append(gpa, .empty_tag_union);
 
@@ -21667,13 +21444,16 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try hdr.serialize(&artifact, aa, &writer);
 
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    defer gpa.free(buffer);
     _ = try writer.writeToBuffer(buffer);
 
     const ser: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    // The deserialized artifact is buffer-backed; do NOT deinit it (its frozen
-    // sub-stores alias buffer memory). `module_env` is injected here, not read.
-    const loaded = ser.deserialize(@intFromPtr(buffer.ptr), gpa, undefined);
+    // The deserialized artifact is SELF-DESCRIBING: it owns `buffer` via
+    // `serialized_backing`, so a single `deinit` frees it. This also exercises the
+    // frozen-deinit path under the testing allocator (no double-free / no leak — the
+    // contract that a stray `.deinit()` on a frozen artifact is always correct).
+    // `deinitRetainingModuleEnv` because `module_env` here is an injected placeholder.
+    var loaded = ser.deserialize(buffer, gpa, undefined);
+    defer loaded.deinitRetainingModuleEnv(gpa);
 
     // POD inline fields survive byte-identically.
     try std.testing.expectEqualSlices(u8, &key.bytes, &loaded.key.bytes);

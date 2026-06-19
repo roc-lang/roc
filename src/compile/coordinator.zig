@@ -171,30 +171,6 @@ const checked_module_cache_format_version: u64 = 3;
 // `compiler_version` is a fixed release string that does not move between rebuilds.
 const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32 + 32 + 8 + 8;
 
-fn writeU64Little(buf: []u8, value: u64) void {
-    std.debug.assert(buf.len == 8);
-    buf[0] = @truncate(value);
-    buf[1] = @truncate(value >> 8);
-    buf[2] = @truncate(value >> 16);
-    buf[3] = @truncate(value >> 24);
-    buf[4] = @truncate(value >> 32);
-    buf[5] = @truncate(value >> 40);
-    buf[6] = @truncate(value >> 48);
-    buf[7] = @truncate(value >> 56);
-}
-
-fn readU64Little(buf: []const u8) u64 {
-    std.debug.assert(buf.len == 8);
-    return @as(u64, buf[0]) |
-        (@as(u64, buf[1]) << 8) |
-        (@as(u64, buf[2]) << 16) |
-        (@as(u64, buf[3]) << 24) |
-        (@as(u64, buf[4]) << 32) |
-        (@as(u64, buf[5]) << 40) |
-        (@as(u64, buf[6]) << 48) |
-        (@as(u64, buf[7]) << 56);
-}
-
 fn hashCacheBodies(env_body: []const u8, artifact_body: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(env_body);
@@ -222,7 +198,7 @@ fn encodeCheckedModuleCacheEntry(
     var offset: usize = 0;
     @memcpy(bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
     offset += checked_module_cache_magic.len;
-    writeU64Little(bytes[offset..][0..8], checked_module_cache_format_version);
+    std.mem.writeInt(u64, bytes[offset..][0..8], checked_module_cache_format_version, .little);
     offset += 8;
     @memcpy(bytes[offset..][0..32], &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
     offset += 32;
@@ -231,9 +207,9 @@ fn encodeCheckedModuleCacheEntry(
     const body_hash = hashCacheBodies(env_body, artifact_body);
     @memcpy(bytes[offset..][0..32], &body_hash);
     offset += 32;
-    writeU64Little(bytes[offset..][0..8], env_body.len);
+    std.mem.writeInt(u64, bytes[offset..][0..8], env_body.len, .little);
     offset += 8;
-    writeU64Little(bytes[offset..][0..8], artifact_body.len);
+    std.mem.writeInt(u64, bytes[offset..][0..8], artifact_body.len, .little);
     offset += 8;
     @memcpy(bytes[offset..][0..env_body.len], env_body);
     offset += env_body.len;
@@ -250,7 +226,7 @@ fn decodeCheckedModuleCacheEntry(
     var offset: usize = 0;
     if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
     offset += checked_module_cache_magic.len;
-    if (readU64Little(bytes[offset..][0..8]) != checked_module_cache_format_version) return null;
+    if (std.mem.readInt(u64, bytes[offset..][0..8], .little) != checked_module_cache_format_version) return null;
     offset += 8;
     // Reject (as a cache miss) an entry whose artifact `Serialized` layout differs
     // from this compiler's, so we never relocate into a mismatched struct.
@@ -264,9 +240,9 @@ fn decodeCheckedModuleCacheEntry(
     // downstream index/slice in usize (so the cache compiles for 32-bit targets
     // like wasm32) and rejects a corrupt entry whose length cannot fit the host
     // address space as a cache miss rather than crashing.
-    const env_len = std.math.cast(usize, readU64Little(bytes[offset..][0..8])) orelse return null;
+    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
-    const artifact_len = std.math.cast(usize, readU64Little(bytes[offset..][0..8])) orelse return null;
+    const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
 
     const remaining = bytes.len - offset;
@@ -2245,9 +2221,14 @@ pub const Coordinator = struct {
         // identity so a subsequent build of the same (app, platform) pairing can
         // relocate it instead of republishing. Keyed by `artifact.key`, which
         // already folds in the relation context. Store failures never poison the
-        // build (they only forgo the future cache hit).
-        if (mod.checkedArtifact()) |republished_artifact| {
-            self.storeCheckedModuleInCache(republished_artifact);
+        // build (they only forgo the future cache hit). Only cache a diagnostic-free
+        // root: a relocate-on-load hit skips the finalizer, so it can't reproduce the
+        // finalizer's non-fatal diagnostics — caching only clean roots keeps a cache
+        // hit observably identical to a cold republish.
+        if (mod.reports.items.len == 0) {
+            if (mod.checkedArtifact()) |republished_artifact| {
+                self.storeCheckedModuleInCache(republished_artifact);
+            }
         }
     }
 
@@ -2879,19 +2860,17 @@ pub const Coordinator = struct {
             module_alloc.destroy(cached_env);
         };
 
-        // Prepare the cached env exactly as the publish path used to (via
-        // `TypedCIR.Modules.init`): enable runtime ident inserts, ensure module-name
-        // idents, and finalize method tables. This pairs the runtime env with the
-        // frozen artifact and leaves its interner heap-owned so `deinitCachedModule`
-        // frees it correctly (e.g. when a root module is later republished, which
-        // mutates the env via `enableRuntimeInserts`).
-        var prepared_modules = CheckedModules.init(module_alloc, &.{
-            .{ .precompiled = cached_env },
-        }) catch {
+        // Prepare the cached env exactly as the publish path does: enable runtime ident
+        // inserts, ensure module-name idents, and finalize method tables. This pairs the
+        // runtime env with the frozen artifact and leaves its interner heap-owned so
+        // `deinitCachedModule` frees it correctly (e.g. when a root module is later
+        // republished, which mutates the env via `enableRuntimeInserts`). Call the prep
+        // directly — building a `Modules` graph just to discard it would do O(defs)
+        // hashmap work on every cache hit.
+        check.TypedCIR.prepareRuntimeEnv(module_alloc, cached_env) catch {
             manager.stats.recordInvalidation();
             return false;
         };
-        prepared_modules.deinit();
 
         // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
         // freshly-relocated cached env (transform E). The resulting artifact is
@@ -2910,8 +2889,10 @@ pub const Coordinator = struct {
         defer if (artifact_buffer_owned) module_alloc.free(artifact_buffer);
 
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+        // `deserialize` stores `artifact_buffer` in `serialized_backing`, so the
+        // artifact owns it: a single `artifact.deinit` frees the buffer + env storage.
         var artifact = artifact_serialized.deserialize(
-            @intFromPtr(artifact_buffer.ptr),
+            artifact_buffer,
             module_alloc,
             .{ .cached_buffer = .{
                 .env = cached_env,
@@ -2919,7 +2900,6 @@ pub const Coordinator = struct {
                 .source = source,
             } },
         );
-        artifact.serialized_backing = artifact_buffer;
         cached_env_owned = false;
         buffer_owned = false;
         source_owned = false;
@@ -3387,8 +3367,16 @@ pub const Coordinator = struct {
             try mod.replaceCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
             artifact_ptr_owned = false;
             try self.registerCheckedArtifact(pkg, mod);
-            if (mod.checkedArtifact()) |cached_artifact| {
-                self.storeCheckedModuleInCache(cached_artifact);
+            // Only cache a fully diagnostic-free module. A relocate-on-load cache hit
+            // skips the compile-time finalizer, so it cannot reproduce the finalizer's
+            // non-fatal diagnostics (e.g. `comptime_unused_branch`); caching only clean
+            // modules guarantees a cache hit reproduces the cold compile's exact
+            // observable result. `mod.reports` holds prior-stage (parse/canon) reports;
+            // `result.reports` holds this stage's (type-check + finalizer) reports.
+            if (mod.reports.items.len == 0 and result.reports.items.len == 0) {
+                if (mod.checkedArtifact()) |cached_artifact| {
+                    self.storeCheckedModuleInCache(cached_artifact);
+                }
             }
         } else if (mod.semantic) |*semantic| {
             self.unregisterCheckedArtifact(mod);

@@ -17,7 +17,11 @@ const CompactWriter = collections.CompactWriter;
 /// Relocatable, serial-id string interner used to back the name stores so the
 /// published artifact can be serialized and deserialized with a constant number
 /// of relocation fixups.
-pub const NameInterner = @import("name_interner.zig");
+/// Re-exported from `base` (a general collections-layer data structure, sibling
+/// to `SmallStringInterner`). Kept under the `canonical.` namespace because
+/// `CanonicalNameStore` is its primary consumer and call sites reference it as
+/// `canonical.NameInterner`.
+pub const NameInterner = base.SerialStringInterner;
 
 /// Public `ModuleNameId` declaration.
 pub const ModuleNameId = enum(u32) { _ };
@@ -350,7 +354,7 @@ pub const CanonicalNameStore = struct {
             try self.proc_bases.serialize(&store.proc_bases, gpa, writer);
         }
 
-        /// Reconstruct a frozen store from the relocated buffer. `allocator` is
+        /// Materialize a frozen store from the relocated buffer. `allocator` is
         /// retained only for the empty build-only fields.
         pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) CanonicalNameStore {
             return .{
@@ -717,7 +721,7 @@ test "CanonicalNameStore: serialize/relocate round-trip preserves names, ids, an
     try std.testing.expectEqualStrings("Ok", loaded.tagLabelText(tag));
     try std.testing.expectEqualStrings("x", loaded.recordFieldLabelText(field));
 
-    // text -> id (frozen lookup, no rebuild) returns the same ids
+    // text -> id (frozen lookup, no re-form) returns the same ids
     try std.testing.expectEqual(@as(?TypeNameId, t_list), loaded.lookupTypeName("List"));
     try std.testing.expectEqual(@as(?TypeNameId, t_dict), loaded.lookupTypeName("Dict"));
     try std.testing.expectEqual(@as(?TypeNameId, null), loaded.lookupTypeName("Set"));

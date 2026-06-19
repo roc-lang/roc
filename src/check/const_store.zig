@@ -162,9 +162,7 @@ pub const ConstStore = struct {
     }
 
     fn appendNodes(self: *ConstStore, nodes: []const ConstNodeId) Allocator.Error!ConstRange {
-        const start: u32 = @intCast(self.node_pool.items.len);
-        try self.node_pool.appendSlice(self.allocator, nodes);
-        return .{ .start = start, .len = @intCast(nodes.len) };
+        return artifact_serialize.appendSpan(ConstRange, ConstNodeId, &self.node_pool, self.allocator, nodes);
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
@@ -242,9 +240,8 @@ pub const ConstStore = struct {
 
     pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
         const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_views.items.len)));
-        const start: u32 = @intCast(self.str_backing.items.len);
-        try self.str_backing.appendSlice(self.allocator, bytes);
-        try self.str_views.append(self.allocator, .{ .start = start, .len = @intCast(bytes.len) });
+        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.str_backing, self.allocator, bytes);
+        try self.str_views.append(self.allocator, view);
         return id;
     }
 
@@ -320,21 +317,17 @@ pub const ConstStore = struct {
         pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) ConstStore {
             return .{
                 .allocator = allocator,
-                .values = arrayListFromSlice(StoredValue, self.values.deserialize(base_addr)),
-                .fns = arrayListFromSlice(StoredFn, self.fns.deserialize(base_addr)),
-                .node_pool = arrayListFromSlice(ConstNodeId, self.node_pool.deserialize(base_addr)),
-                .tag_name_pool = arrayListFromSlice(u8, self.tag_name_pool.deserialize(base_addr)),
-                .capture_pool = arrayListFromSlice(ConstCapture, self.capture_pool.deserialize(base_addr)),
-                .str_backing = arrayListFromSlice(u8, self.str_backing.deserialize(base_addr)),
-                .str_views = arrayListFromSlice(ConstRange, self.str_views.deserialize(base_addr)),
+                .values = artifact_serialize.arrayListFromSlice(StoredValue, self.values.deserialize(base_addr)),
+                .fns = artifact_serialize.arrayListFromSlice(StoredFn, self.fns.deserialize(base_addr)),
+                .node_pool = artifact_serialize.arrayListFromSlice(ConstNodeId, self.node_pool.deserialize(base_addr)),
+                .tag_name_pool = artifact_serialize.arrayListFromSlice(u8, self.tag_name_pool.deserialize(base_addr)),
+                .capture_pool = artifact_serialize.arrayListFromSlice(ConstCapture, self.capture_pool.deserialize(base_addr)),
+                .str_backing = artifact_serialize.arrayListFromSlice(u8, self.str_backing.deserialize(base_addr)),
+                .str_views = artifact_serialize.arrayListFromSlice(ConstRange, self.str_views.deserialize(base_addr)),
                 .serialized = true,
             };
         }
     };
-
-    fn arrayListFromSlice(comptime T: type, slice: []T) std.ArrayList(T) {
-        return .{ .items = slice, .capacity = slice.len };
-    }
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
         const backing = self.strData(str.data);
@@ -474,8 +467,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // A function value with a capture (exercises capture_pool).
     const caps = try gpa.dupe(ConstCapture, &.{.{ .binder = @enumFromInt(1), .value = a }});
     const fn_id = try store.appendFn(.{
-        .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(0), .template = @enumFromInt(0) } },
-        .source_fn_ty = @enumFromInt(0),
+        // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
+        // fields just need to survive, not be specific values.
+        .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+        .source_fn_ty = @enumFromInt(3),
         .source_fn_key = .{},
         .captures = caps,
     });
