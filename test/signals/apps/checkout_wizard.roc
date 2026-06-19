@@ -79,8 +79,11 @@ basic_lines = [Line.make("seats", "3 seats")]
 
 render_line : Str, Signal.Signal(Line) -> Elem
 render_line = |label, _line_signal| {
+	initial_quantity : I64
+	initial_quantity = 1
+
 	Ui.state(
-		1,
+		initial_quantity,
 		|quantity| {
 			quantity_label =
 				Signal.map(
