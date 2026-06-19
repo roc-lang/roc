@@ -1693,10 +1693,10 @@ test "default app resolves a sibling type module imported with exposing" {
     const allocator = std.testing.allocator;
 
     // A headerless file with `main!` runs as a "default app": its source is
-    // staged into a temp dir and compiled with a synthetic echo platform, while
-    // sibling imports resolve against the file's original directory. Here the
-    // sibling `FooBar.roc` is a type module whose associated value `square` is
-    // brought into scope via `exposing` and then called.
+    // staged into a temp dir and compiled with a synthetic default platform,
+    // while sibling imports resolve against the file's original directory. Here
+    // the sibling `FooBar.roc` is a type module whose associated value `square`
+    // is brought into scope via `exposing` and then called.
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -1706,8 +1706,11 @@ test "default app resolves a sibling type module imported with exposing" {
         \\import FooBar exposing [square]
         \\
         \\main! = |_arg| {
-        \\    echo!(square(12).to_str())
-        \\    Ok({})
+        \\    if square(12) == 144 {
+        \\        Ok({})
+        \\    } else {
+        \\        Err(Exit(1))
+        \\    }
         \\}
         ,
     });
@@ -1743,6 +1746,5 @@ test "default app resolves a sibling type module imported with exposing" {
         },
     }
 
-    // 12 * 12 = 144, printed by the echo platform's `echo!`.
-    try testing.expect(std.mem.find(u8, result.stdout, "144") != null);
+    try testing.expectEqualStrings("", result.stdout);
 }

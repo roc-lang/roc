@@ -5797,8 +5797,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
     // Consume the checking_call_arg flag: it applies only to this immediate
-    // checkExpr call and must not propagate to recursive calls (e.g. e_closure
-    // delegating to its inner e_lambda, or nested call arguments).
+    // checkExpr call and must not propagate to recursive calls (e.g. nested call
+    // arguments). The one exception is `e_closure`, which is only the capture
+    // wrapper around its inner `e_lambda`: the lambda is the actual argument
+    // value, so the closure re-asserts this flag before delegating to it (see the
+    // `.e_closure` case) to keep an argument lambda from being generalized.
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
@@ -6818,7 +6821,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_closure => |closure| {
             // Here, we must forward the expected valued to the inner lambda, so
-            // the annotation type is created at the same rank as the expr
+            // the annotation type is created at the same rank as the expr.
+            // A closure is only the capture wrapper around its inner lambda, so
+            // the lambda inherits this closure's call-arg status: an argument
+            // lambda must NOT be generalized, or its body's static-dispatch chain
+            // would be quantified before the caller pins the parameter types,
+            // leaving the original (un-instantiated) dispatch nodes unresolved.
+            self.checking_call_arg = is_call_arg;
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
