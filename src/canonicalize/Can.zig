@@ -17585,19 +17585,6 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
         } });
     };
 
-    // Check if this is a builtin type
-    // Allow builtin type names to be redeclared in the Builtin module
-    // (e.g., Str := ... within Builtin.roc)
-    // Use identifier index comparison instead of string comparison for efficiency
-    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
-        if (self.env.module_role != .builtin) {
-            return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
-                .ident = name_ident,
-                .region = region,
-            } });
-        }
-    }
-
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
@@ -18353,19 +18340,26 @@ pub fn introduceType(
     // Determine if this is an alias or nominal type based on the statement
     const stmt = self.env.store.getStatement(type_decl_stmt);
     const is_alias = stmt == .s_alias_decl;
+    if (shadowed_external_region) |original_region| {
+        try current_scope.type_bindings.put(
+            gpa,
+            name_ident,
+            if (is_alias) Scope.TypeBinding{ .local_alias = type_decl_stmt } else Scope.TypeBinding{ .local_nominal = type_decl_stmt },
+        );
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = name_ident,
+                .region = region,
+                .original_region = original_region,
+            },
+        });
+        return;
+    }
+
     const result = try current_scope.introduceTypeDeclWithKind(gpa, name_ident, type_decl_stmt, is_alias, null);
 
     switch (result) {
         .success => {
-            if (shadowed_external_region) |original_region| {
-                try self.env.pushDiagnostic(Diagnostic{
-                    .shadowing_warning = .{
-                        .ident = name_ident,
-                        .region = region,
-                        .original_region = original_region,
-                    },
-                });
-            }
             // Check if we're shadowing a type in a parent scope
             if (shadowed_in_parent) |shadowed_stmt| {
                 const original_region = self.env.store.getStatementRegion(shadowed_stmt);
