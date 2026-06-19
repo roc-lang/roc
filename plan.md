@@ -537,7 +537,7 @@ maintain both systems side by side.
 ## Checking Tests To Add Or Update
 
 - [x] Add/rename CLI test: old `parse_from` method is not accepted.
-- [ ] Add CLI test: missing `parser` on custom nominal type reports a clear
+- [x] Add CLI test: missing `parser` on custom nominal type reports a clear
   static-dispatch error.
 - [ ] Add CLI test: record parser missing `rename_field` reports missing
   `rename_field`.
