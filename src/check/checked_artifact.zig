@@ -1098,6 +1098,7 @@ fn statementDependsOnUnboundPlatformRequirement(
     return switch (checked_bodies.statements[@intFromEnum(statement_id)].data) {
         .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .var_uninitialized => false,
         .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .dbg,
         .expr,
@@ -4864,11 +4865,24 @@ pub const CheckedListRestPattern = struct {
     pattern: ?CheckedPatternId,
 };
 
+/// End behavior for a checked string interpolation pattern.
+pub const CheckedStrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Delimited capture step inside a checked string interpolation pattern.
+pub const CheckedStrPatternStep = struct {
+    capture: ?CheckedPatternId,
+    delimiter: CheckedStringLiteralId,
+};
+
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -4939,6 +4953,11 @@ pub const CheckedPatternData = union(enum) {
         /// Synthesized `.str_from_quote` checked expression for matching this
         /// literal against a non-builtin string type; null on the Str fast path.
         conversion: ?CheckedExprId = null,
+    },
+    str_interpolation: struct {
+        prefix: CheckedStringLiteralId,
+        steps: []const CheckedStrPatternStep,
+        end: CheckedStrPatternEnd,
     },
     underscore,
     runtime_error,
@@ -5527,6 +5546,15 @@ const CheckedSourceNodes = struct {
                 }
             },
             .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.markPattern(capture, work);
+                    }
+                }
+            },
             .assign,
             .num_literal,
             .small_dec_literal,
@@ -5554,6 +5582,9 @@ const CheckedSourceNodes = struct {
             .s_var => |var_| {
                 try self.markPattern(var_.pattern_idx, work);
                 try self.markExpr(var_.expr, work);
+            },
+            .s_var_uninitialized => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
             },
             .s_reassign => |reassign| {
                 try self.markPattern(reassign.pattern_idx, work);
@@ -6332,6 +6363,7 @@ fn checkedStatementDataDiverges(
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
         .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .var_uninitialized => false,
         .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
@@ -7081,6 +7113,14 @@ const CheckedBodyPayloadCopier = struct {
                 .literal = try self.string_builder.intern(str.literal),
                 .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
             } },
+            .str_interpolation => |str| .{ .str_interpolation = .{
+                .prefix = try self.string_builder.intern(str.prefix),
+                .steps = try self.copyStrPatternSteps(str.steps),
+                .end = switch (str.end) {
+                    .exact => .exact,
+                    .tail => .tail,
+                },
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -7093,6 +7133,10 @@ const CheckedBodyPayloadCopier = struct {
             .s_var => |var_| blk: {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
                 break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
+            },
+            .s_var_uninitialized => |var_| blk: {
+                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
+                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
             },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
@@ -7148,6 +7192,20 @@ const CheckedBodyPayloadCopier = struct {
         if (source.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedPatternId, source.len);
         for (source, 0..) |pattern, i| out[i] = self.checkedPattern(pattern);
+        return out;
+    }
+
+    fn copyStrPatternSteps(self: *@This(), span: CIR.Pattern.StrPatternStep.Span) Allocator.Error![]const CheckedStrPatternStep {
+        if (span.span.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedStrPatternStep, span.span.len);
+        var step_offset: u32 = 0;
+        while (step_offset < span.span.len) : (step_offset += 1) {
+            const step = self.module.moduleEnvConst().store.getStrPatternStep(span, step_offset);
+            out[step_offset] = .{
+                .capture = if (step.capture) |capture| self.checkedPattern(capture) else null,
+                .delimiter = try self.string_builder.intern(step.delimiter),
+            };
+        }
         return out;
     }
 
@@ -7340,6 +7398,15 @@ const CheckedBodyPayloadCopier = struct {
                     try self.collectSourcePatternBinders(child, out);
                 }
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.collectSourcePatternBinders(capture, out);
+                    }
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -7414,6 +7481,13 @@ const CheckedBodyPayloadCopier = struct {
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.markSourcePatternBindersReassignable(child);
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.markSourcePatternBindersReassignable(capture);
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -7463,6 +7537,13 @@ const CheckedBodyPayloadCopier = struct {
             },
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.collectReassignedBinders(child, out);
+            },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.collectReassignedBinders(capture, out);
+                }
             },
             .num_literal,
             .small_dec_literal,
@@ -7856,6 +7937,7 @@ fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) voi
         .record_destructure => |destructs| allocator.free(destructs),
         .list => |list| allocator.free(list.patterns),
         .tuple => |patterns| allocator.free(patterns),
+        .str_interpolation => |str| allocator.free(str.steps),
     }
     data.* = .pending;
 }
@@ -8889,6 +8971,15 @@ const LocalPatternRoleIndex = struct {
                     };
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
                 },
+                .statement_var_uninitialized => {
+                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                    const var_ = switch (module.getStatement(statement)) {
+                        .s_var_uninitialized => |var_| var_,
+                        else => unreachable,
+                    };
+                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
+                },
                 .expr_lambda => {
                     const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                     if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
@@ -9339,6 +9430,11 @@ const CheckedTemplateRefCollector = struct {
             .tuple => |items| {
                 for (items) |child| try self.collectPattern(child);
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.collectPattern(capture);
+                }
+            },
             .pending,
             .assign,
             .num_literal,
@@ -9366,6 +9462,9 @@ const CheckedTemplateRefCollector = struct {
             .var_ => |var_| {
                 try self.collectPattern(var_.pattern);
                 try self.collectExpr(var_.expr);
+            },
+            .var_uninitialized => |var_| {
+                try self.collectPattern(var_.pattern);
             },
             .reassign => |reassign| {
                 try self.collectPattern(reassign.pattern);
@@ -10003,6 +10102,11 @@ const NestedProcSiteBuilder = struct {
             .tuple => |items| {
                 for (items) |child| try self.scanPattern(child, owner);
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.scanPattern(capture, owner);
+                }
+            },
             .pending,
             .assign,
             .num_literal,
@@ -10034,6 +10138,9 @@ const NestedProcSiteBuilder = struct {
             .var_ => |var_| {
                 try self.scanPattern(var_.pattern, owner);
                 try self.scanExpr(var_.expr, owner, false);
+            },
+            .var_uninitialized => |var_| {
+                try self.scanPattern(var_.pattern, owner);
             },
             .reassign => |reassign| {
                 try self.scanPattern(reassign.pattern, owner);

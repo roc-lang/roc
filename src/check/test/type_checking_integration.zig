@@ -522,7 +522,7 @@ test "check type - record - field typo" {
         \\
         \\    { helo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord
         \\
@@ -555,7 +555,7 @@ test "check type - record - field missing" {
         \\
         \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord
         \\
@@ -587,7 +587,7 @@ test "check type - record - ext - field missing" {
         \\
         \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord({ world: U8 })
         \\
@@ -826,7 +826,7 @@ test "check type - tag union - tag typo" {
         \\
         \\    [Greeen, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    Color
         \\
@@ -858,7 +858,7 @@ test "check type - tag - ext - typo" {
         \\
         \\    [Greeen, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    Color([Green])
         \\
@@ -1901,8 +1901,8 @@ test "check type - if else - different branch types 3" {
 }
 
 // Dual-kind literal var (flex/flex merge): both branches are OPEN literals, so
-// unification merges a `from_literal: numeral` and a `from_literal: quote`
-// constraint onto one var. No type satisfies both, so the program is always
+// unification merges a numeral-origin and a quote-origin constraint onto one var.
+// No type satisfies both, so the program is always
 // rejected — but the diagnostic must not depend on which unify side each literal
 // arrived on. `varLiteralKind` tie-breaks dual-kind vars to `.numeral` (matching
 // `numericDefaultPhaseForConstraints` and `flexLiteralDefaultKind`), so BOTH
@@ -2675,8 +2675,8 @@ test "check type - patterns record" {
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
-        \\    { y: False }  => "False",
-        \\    { x }  => x,
+        \\    { y: False, .. }  => "False",
+        \\    { x, .. }  => x,
         \\  }
         \\}
     ;
@@ -2730,6 +2730,154 @@ test "check type - var reassignment" {
         .{ .pass = .last_def },
         "Dec",
     );
+}
+
+test "check type - uninitialized var - all if branches assign before final read" {
+    const source =
+        \\main = |condition| {
+        \\  var $value : Dec
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    $value = 2
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "Bool -> Dec",
+    );
+}
+
+test "check can - uninitialized var - branch-local read before assignment" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    $value
+        \\  }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check can - uninitialized var - missing branch assignment before final read" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    {}
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check type - uninitialized var - terminal branches do not need assignment" {
+    const source =
+        \\fallible : {} -> Try({}, Str)
+        \\fallible = |_| Try.Err("no value")
+        \\
+        \\main = |mode| {
+        \\  var $value : Dec
+        \\
+        \\  match mode {
+        \\    Return => {
+        \\      return Ok(0)
+        \\    }
+        \\    Crash => {
+        \\      crash "no value"
+        \\    }
+        \\    Try => {
+        \\      _ignored = fallible({})?
+        \\      $value = 1
+        \\    }
+        \\    Assign => {
+        \\      $value = 1
+        \\    }
+        \\  }
+        \\
+        \\  Ok($value)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "[Assign, Crash, Return, Try] -> Try(Dec, Str)",
+    );
+}
+
+test "check type - uninitialized var - breakable loop assignment counts" {
+    const source =
+        \\main = {
+        \\  var $value : Dec
+        \\
+        \\  while True {
+        \\    $value = 1
+        \\    break
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "Dec",
+    );
+}
+
+test "check can - uninitialized var - ordinary loop assignment does not guarantee initialization" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  while condition {
+        \\    $value = 1
+        \\    break
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check can - uninitialized var - reports each bad read" {
+    const source =
+        \\main = {
+        \\  var $first
+        \\  var $second
+        \\
+        \\  _ = $first
+        \\  $second
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectReadUninitializedVarDiagnostics(&test_env, 2);
 }
 
 // expect //
@@ -4075,6 +4223,27 @@ const DefExpectation = union(enum) {
     last_def,
     def: []const u8,
 };
+
+fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) anyerror!void {
+    try testing.expect(!test_env.parse_ast.hasErrors());
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+
+    try testing.expectEqual(expected_count, diagnostics.len);
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .read_uninitialized_var => {},
+            else => return error.TestUnexpectedResult,
+        }
+
+        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
+        defer report.deinit();
+
+        try testing.expectEqualStrings("READING UNINITIALIZED VAR", report.title);
+    }
+}
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 ///
@@ -6006,7 +6175,7 @@ test "check type - exhaustive match closes tag union inside record field" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ status: [Active, Inactive] } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6025,7 +6194,7 @@ test "check type - wildcard in record field keeps nested tag union open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ status: [Active, ..] } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6065,7 +6234,7 @@ test "check type - exhaustive match closes tag union through tag then record" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On] })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6086,7 +6255,7 @@ test "check type - exhaustive match opens and closes tag unions through tag then
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On] })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6105,7 +6274,7 @@ test "check type - exhaustive match closes tag union through tuple then record" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "({ color: [Blue, Red] }, _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6125,7 +6294,7 @@ test "check type - exhaustive match closes tag union through record then tuple" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ pair: ([Off, On], _field) } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6147,7 +6316,7 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6169,7 +6338,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6189,7 +6358,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6296,7 +6465,7 @@ test "check type - exhaustive match same record field at multiple nesting levels
         source,
         &.{
             // Inner "a" field's tag union [Red, Blue]: closed
-            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ a: { a: [Blue, Red] } } -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6687,7 +6856,7 @@ test "check type - tag union - ext hints 1" {
         \\
         \\    [X, Y]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    [X, Y, ..]
         \\
@@ -6715,7 +6884,7 @@ test "check type - tag union - ext hints 2" {
         \\
         \\    [A, B, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    [A, B]
         \\

@@ -448,6 +448,8 @@ pub const UnresolvedPattern = union(enum) {
     anything,
     /// Matches a specific literal value
     literal: Literal,
+    /// Matches a refutable string interpolation predicate.
+    str_pattern,
     /// A constructor whose union type is not yet known (tag name only)
     ctor: struct {
         tag_name: Ident.Idx,
@@ -629,6 +631,9 @@ pub fn convertPattern(
         // String literals
         .str_literal => |p| {
             return .{ .literal = .{ .str = p.literal } };
+        },
+        .str_interpolation => {
+            return .str_pattern;
         },
 
         // Nominal patterns: convert the backing pattern
@@ -1971,7 +1976,7 @@ fn isSketchedPatternInhabited(
             const known_empty_vars = if (payload_vars_to_close) |vars| vars.items else &.{};
             return isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, first_col_type, known_empty_vars);
         },
-        .literal => return true, // Literals are always inhabited
+        .literal, .str_pattern => return true, // Literals and string predicates are always inhabited
         .list => |l| {
             // Empty list pattern is always inhabited
             // Non-empty list patterns are uninhabited if the element type is uninhabited
@@ -2761,7 +2766,7 @@ fn collectCtorsSketched(
             .list => {
                 found_list = true;
             },
-            .literal => {
+            .literal, .str_pattern => {
                 found_literal = true;
             },
             .anything => {
@@ -3700,6 +3705,21 @@ pub fn isUsefulSketched(
                 };
 
                 if (matches) {
+                    try matching_rows.append(allocator, row[1..]);
+                }
+            }
+
+            const filtered = SketchedMatrix.init(allocator, try matching_rows.toOwnedSlice(allocator));
+            const rest_types = column_types.dropFirst();
+            return isUsefulSketched(allocator, type_store, builtin_idents, filtered, rest, rest_types, payload_vars_to_close, false);
+        },
+
+        .str_pattern => {
+            var matching_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+            for (existing_matrix.rows) |row| {
+                if (row.len == 0) continue;
+                if (row[0] == .anything) {
                     try matching_rows.append(allocator, row[1..]);
                 }
             }

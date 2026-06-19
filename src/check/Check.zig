@@ -219,14 +219,15 @@ has_can_diagnostics: bool,
 /// Per-instantiation static-dispatch receivers, recorded so the end-of-check
 /// ambiguity sweep can revisit dispatches hidden inside polymorphic helpers — the
 /// expression-keyed def-site sweep never sees these instantiated receiver vars.
-/// Every time a generalized scheme carrying a non-`from_literal` static-dispatch
+/// Every time a generalized scheme carrying a non-literal static-dispatch
 /// constraint is instantiated, the freshly created receiver var is recorded here.
 /// After all solving, a recorded receiver that is still flex/rigid, carries a real
-/// (non-`from_literal`, non-`is_eq`) dispatch constraint, and does not resolve into
-/// the pinnable set can never be pinned, so its dispatch is reported as ambiguous.
+/// non-literal/non-`is_eq` dispatch constraint, and does not resolve into the
+/// pinnable set can never be pinned, so its dispatch is reported as ambiguous.
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
-/// Worklist of flex vars created carrying a `from_literal` constraint — open
-/// literals that may still need defaulting. Checker bookkeeping, not type data:
+/// Worklist of flex vars created by literal conversions (`from_numeral`,
+/// `from_quote`, or `from_interpolation`) — open literals that may still need
+/// defaulting. Checker bookkeeping, not type data:
 /// every registration site lives in this file (literal creation,
 /// `instantiateVarHelp`, `copyVar`), and the defaulting passes iterate it
 /// (re-resolving each entry, skipping resolved ones) instead of scanning the
@@ -276,9 +277,9 @@ const DefProcessed = struct {
 
 /// A static-dispatch receiver var created by instantiating a constrained scheme.
 /// The end-of-check ambiguity sweep revisits each such receiver: if it is still a
-/// flex/rigid var carrying a real (non-`from_literal`, non-`is_eq`) dispatch
-/// constraint and does not resolve into the pinnable set, no caller can ever pin
-/// it, so its dispatch is ambiguous.
+/// flex/rigid var carrying a real non-literal/non-`is_eq` dispatch constraint and
+/// does not resolve into the pinnable set, no caller can ever pin it, so its
+/// dispatch is ambiguous.
 const InstantiationDispatcher = struct {
     /// The freshly instantiated receiver (dispatcher) var.
     dispatcher_var: Var,
@@ -288,7 +289,7 @@ const InstantiationDispatcher = struct {
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
-        // `from_literal` covers every literal kind (numeral, quote, interpolation).
+        // This internal origin tag covers every literal conversion kind.
         .from_literal => true,
         .desugared_binop,
         .desugared_unaryop,
@@ -1021,7 +1022,7 @@ fn instantiateVarHelp(
 
             // Register newly instantiated open-literal flex vars on the worklist
             // so the defaulting passes see them. Separately, a fresh flex
-            // receiver carrying a non-`from_literal` static-dispatch constraint is
+            // receiver carrying a non-literal static-dispatch constraint is
             // a per-instantiation dispatcher: record it so the end-of-check sweep
             // can decide its ambiguity per-instantiation. This hook closes the
             // holes where a polymorphic helper hides an ambiguous dispatch that
@@ -2600,11 +2601,11 @@ fn findStaticDispatchUseForConstraint(
 }
 
 /// Detect ambiguous static dispatch on a per-INSTANTIATION basis. Every time a
-/// generalized scheme carrying a non-`from_literal` static-dispatch constraint
+/// generalized scheme carrying a non-literal static-dispatch constraint
 /// is instantiated, `instantiateVarHelp` recorded the freshly created receiver
 /// var here. After all solving, a recorded receiver that is still flex/rigid,
-/// carries a real (non-`from_literal`, non-`is_eq`) dispatch constraint, and does
-/// not resolve into the `pinnable` set can never be pinned by any caller — its
+/// carries a real non-literal/non-`is_eq` dispatch constraint, and does not
+/// resolve into the `pinnable` set can never be pinned by any caller — its
 /// dispatch is genuinely ambiguous and would reach the lowering `dispatchTarget`
 /// invariant. We report it (`MISSING METHOD`) and mark the offending call
 /// expression a runtime error so lowering never reaches that invariant.
@@ -2641,12 +2642,13 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // pin the owner or leave it externally pinnable. Literal-only constraints
         // are skipped as before because numeric/string defaulting owns them.
         //
-        //  - `from_literal`: an open literal. Checker defaulting owns it (at
-        //    finalize and at generalization boundaries); a generalized literal
-        //    resolves per instantiation. A receiver carrying ANY `from_literal`
-        //    constraint is skipped entirely, matching the def-site sweep —
-        //    essential for numeric helpers like `|x| x + y` whose receiver
-        //    carries `desugared_binop` (`+`) plus `from_literal`.
+        //  - literal conversion (`from_numeral`, `from_quote`, or
+        //    `from_interpolation`): checker defaulting owns it (at finalize and at
+        //    generalization boundaries); a generalized literal resolves per
+        //    instantiation. A receiver carrying any literal-origin constraint is
+        //    skipped entirely, matching the def-site sweep — essential for numeric
+        //    helpers like `|x| x + y` whose receiver carries `desugared_binop` (`+`)
+        //    plus `from_numeral`.
         //  - `is_eq`: structural equality. Lowering compares records/tuples/tag
         //    unions/lists structurally with no owner needed, so a flex `is_eq`
         //    receiver placeholder (left at check time by valid code such as
@@ -2863,7 +2865,7 @@ fn reportAmbiguousStaticDispatch(
     // parameter pattern (local/nested lambdas included).
     //
     // Sweep every expression. Flag any whose own type var is a flex/rigid var with
-    // a non-`from_literal` static-dispatch constraint and whose resolved id is not
+    // a non-literal static-dispatch constraint and whose resolved id is not
     // pinnable. Dedup by resolved var id (using the set shared with the
     // per-instantiation sweep) so a value flowing through multiple expressions — or
     // already reported per-instantiation — is reported once, preferring the first
@@ -2889,11 +2891,12 @@ fn reportAmbiguousStaticDispatch(
 
         // Decide whether to flag based on the constraint origins.
         //
-        // - `from_literal`: the var is an open literal. Defaulting resolves it
-        //   (first satisfier of its constraints; `Dec` when otherwise
+        // - Literal conversion (`from_numeral`, `from_quote`, or
+        //   `from_interpolation`): the var is an open literal. Defaulting resolves
+        //   it (first satisfier of its constraints; `Dec` when otherwise
         //   unconstrained) and reports any unsatisfiable conversion separately, so
         //   it is never flagged here — even when it also carries other constraints
-        //   (e.g. a literal operand of `+` also has a `desugared_binop`).
+        //   (e.g. a numeric literal operand of `+` also has a `desugared_binop`).
         // - `where_clause`: the dispatch is part of an explicit polymorphic
         //   signature (`f : a -> a where [a.method : ...]`). That is a declared
         //   contract pinned when callers instantiate the signature, so it is
@@ -5182,6 +5185,21 @@ fn checkPatternHelp(
             _ = try self.unify(pattern_var, flex_var, env);
             try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
+        .str_interpolation => |str| {
+            const str_var = try self.freshStr(env, pattern_region);
+            _ = try self.unify(pattern_var, str_var, env);
+
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    const capture_region = self.cir.store.getPatternRegion(capture_idx);
+                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place);
+                    const capture_str_var = try self.freshStr(env, capture_region);
+                    _ = try self.unify(capture_var, capture_str_var, env);
+                }
+            }
+        },
         // as //
         .as => |p| {
             const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var);
@@ -5417,19 +5435,19 @@ fn checkPatternHelp(
             }.less);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-            // Update the pattern var
-            if (mb_ext_var) |ext| {
-                try self.unifyWith(pattern_var, .{ .structure = .{
-                    .record = .{
-                        .fields = record_fields_range,
-                        .ext = ext,
-                    },
-                } }, env);
-            } else {
-                try self.unifyWith(pattern_var, .{ .structure = .{
-                    .record_unbound = record_fields_range,
-                } }, env);
-            }
+            // Update the pattern var. A `..` rest pattern makes the record open
+            // (its extension absorbs any remaining fields); without one, the
+            // pattern is closed, so destructuring a record that has extra fields
+            // is a type mismatch the user must resolve (e.g. by adding the field
+            // or a `..` rest).
+            const ext_var = mb_ext_var orelse
+                try self.freshFromContent(.{ .structure = .empty_record }, env, pattern_region);
+            try self.unifyWith(pattern_var, .{ .structure = .{
+                .record = .{
+                    .fields = record_fields_range,
+                    .ext = ext_var,
+                },
+            } }, env);
         },
         // nums //
         .num_literal => |num| {
@@ -5538,6 +5556,7 @@ fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) b
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
+        .str_interpolation,
         => true,
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
@@ -5647,6 +5666,15 @@ fn collectPatternBindings(
         },
         .nominal => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
         .nominal_external => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+        .str_interpolation => |str| {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    try self.collectPatternBindings(capture_idx, out);
+                }
+            }
+        },
         .num_literal,
         .small_dec_literal,
         .dec_literal,
@@ -5779,25 +5807,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_binding_rhs = self.checking_binding_rhs;
     self.checking_binding_rhs = false;
 
-    // Value restriction: only generalize at the inner lambda level, not the
-    // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    // Direct call-argument lambdas are consumed immediately, so they must not
-    // generalize independently. Doing so lets their generalized vars escape
-    // into the enclosing value via unification.
-    //
-    // We also generalize a binding whose RHS is a bare reference to an already-
-    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
-    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
-    // raises none of the duplicate-work or duplicate-effect concerns that motivate
-    // restricting generalization to syntactic functions. In practice the only
-    // generalized schemes are functions (numeric literals use the separate
-    // defaulting path), so this never re-generalizes numbers or tag unions. We
-    // restrict this to binding-RHS position so that bare lookups appearing as
-    // arbitrary subexpressions don't pay generalization cost or get generalized
-    // out from under their surrounding context.
-    const is_value_alias = is_binding_rhs and
-        (expr == .e_lookup_local or expr == .e_lookup_external);
-    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
+    // Decide whether this binding generalizes — see `shouldGeneralize` for the
+    // three qualifying paths and why each is sound.
+    const should_generalize = self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -7982,6 +7994,56 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
     };
 }
 
+/// Should this expression generalize in its current binding context — i.e. push
+/// a rank so the generalizer can quantify its free vars? Three independent paths
+/// qualify; they are checked in order so the annotation scan runs only when the
+/// cheaper structural checks miss:
+///
+///   - **A function def.** Generalized at the inner lambda level only, not the
+///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
+///     and not a direct call argument — those are consumed immediately, and
+///     generalizing one lets its vars escape into the enclosing value.
+///   - **A value alias** — a binding whose RHS is a bare reference to an already-
+///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
+///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
+///     none of the duplicate-work/effect concerns that restrict generalization to
+///     syntactic functions. The referenced scheme is a generalized function or
+///     annotated value (numeric literals use the separate defaulting path), never
+///     a bare number or tag union. Restricted to binding-RHS position so bare
+///     lookups in arbitrary subexpressions aren't generalized out from under their
+///     surrounding context.
+///   - **An annotated value binding** whose annotation introduces a free type var
+///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
+///     quantify exactly the generalizable vars — with none (e.g. a concrete
+///     annotation) the generalize call is a no-op and the value stays monomorphic.
+fn shouldGeneralize(
+    self: *const Self,
+    expr: CIR.Expr,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+    is_call_arg: bool,
+) bool {
+    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
+    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
+    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+}
+
+/// True when a value binding generalizes to its annotated scheme: it sits in
+/// binding-RHS position (only a binding's own right-hand side qualifies; a call
+/// argument never generalizes on its own) and has an annotation introducing a
+/// type variable. The polymorphic annotation is the opt-in, honored regardless
+/// of whether the RHS does work (an expansive definition pays per-specialization
+/// — the cost the author chose by writing the scheme).
+fn isGeneralizableValueBinding(
+    self: *const Self,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+) bool {
+    if (!is_binding_rhs) return false;
+    const annotation_idx = annotation orelse return false;
+    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+}
+
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_crash,
@@ -8294,7 +8356,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
                 try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
 
-                const decl_pattern_result = try self.unify(decl_pattern_var, decl_expr_var, env);
+                // A record-destructure binding gets a dedicated context so the
+                // report can suggest `field: _` or `..` when the pattern is too
+                // narrow for the value (the pattern is the first/expected arg).
+                const decl_pattern_result = switch (self.cir.store.getPattern(decl_stmt.pattern)) {
+                    .record_destructure => try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure),
+                    else => try self.unify(decl_pattern_var, decl_expr_var, env),
+                };
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
 
                 if (decl_pattern_result.isOk()) {
@@ -8316,10 +8384,16 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
-                // Check the annotation, if it exists
+                // Check the annotation, if it exists. A mutable `var` never
+                // generalizes, so a type variable its annotation introduces can
+                // never be bound; reject such an annotation and infer from the
+                // body instead, so it doesn't cascade into confusing mismatches.
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        // Return the expectation
+                        if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                            break :blk Expected.none();
+                        }
                         break :blk Expected.fromAnnotation(annotation_idx);
                     } else {
                         break :blk Expected.none();
@@ -8339,6 +8413,29 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 if (var_pattern_result.isOk()) {
                     try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
                 }
+            },
+            .s_var_uninitialized => |var_stmt| {
+                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
+
+                try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+
+                // A mutable `var` never generalizes, so a type variable its
+                // annotation introduces can never be bound. With no initializer
+                // there is no body to infer from, so reject the annotation and
+                // leave the pattern var free to be inferred from later
+                // reassignments instead of cascading into confusing mismatches.
+                if (var_stmt.anno) |annotation_idx| {
+                    if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                    } else {
+                        try self.generateAnnotationType(annotation_idx, env);
+                        _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    }
+                }
+
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
+                _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_reassign => |reassign| {
                 // Reassignment patterns can mix existing mutable binders with
@@ -10431,11 +10528,11 @@ fn finalizeLiteralDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void 
 const LiteralDefaultUniverse = union(enum) {
     /// `finalizeLiteralDefaults`: the first `literal_count` entries of the
     /// open-literal worklist; a candidate is still flex, not generalized
-    /// (let-polymorphism preserved), with `from_literal` provenance.
+    /// (let-polymorphism preserved), with literal-conversion provenance.
     finalize: struct { literal_count: usize },
     /// `defaultLiteralsAtGeneralizationBoundary`: the first `pool_len` entries of
     /// the var-pool rank the boundary's generalize call will promote; a candidate
-    /// is still flex AT that rank with `from_literal` provenance AND not
+    /// is still flex AT that rank with literal-conversion provenance AND not
     /// signature-reachable (`boundary_reachable_vars`, populated by the caller for
     /// the current boundary before the rounds run) — signature-reachable literals
     /// must stay open so generalization quantifies them. The pool slice is
@@ -10463,11 +10560,11 @@ const LiteralDefaultUniverse = union(enum) {
 ///      filters documented on `LiteralDefaultUniverse`); deduped by union-find
 ///      root.
 ///   2. PARTITION them into interference components. A literal with
-///      non-`from_literal` constraints (a DRIVER) owns a footprint: every
+///      non-literal constraints (a DRIVER) owns a footprint: every
 ///      still-flex root reachable from those constraints' fn signatures
 ///      (`collectReachableVars`, which recurses through nested constraint
 ///      signatures, so the footprint is transitively closed). A literal with only
-///      `from_literal` provenance (a PASSIVE) has footprint {itself}. Two
+///      literal-conversion provenance (a PASSIVE) has footprint {itself}. Two
 ///      literals share a component iff their footprints intersect. Only
 ///      still-flex roots interfere: a commit pins exactly the flex vars its
 ///      unifications reach, all inside the committing literal's footprint — so
@@ -10674,10 +10771,10 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 }
             }
             // Within a round, every gathered root is still flex with its
-            // `from_literal` provenance when its component commits: commits of
-            // OTHER components only touch their own (disjoint) footprints, and this
-            // component commits exactly once. So the kind lookups below cannot
-            // fail — gather guaranteed them non-null.
+            // literal-conversion provenance when its component commits: commits
+            // of OTHER components only touch their own (disjoint) footprints, and
+            // this component commits exactly once. So the kind lookups below
+            // cannot fail — gather guaranteed them non-null.
             if (group_drivers.items.len == 0) {
                 // A component without drivers is a lone passive (a passive's
                 // footprint is just itself, so only a driver can merge it).
@@ -10701,7 +10798,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // DEFAULTED warning post-commit, exactly as if it had committed
                 // alone. Non-leaking members default silently (def-local), and the
                 // component's passives are never committed here, matching the
-                // single-commit paths: a passive carries only `from_literal`
+                // single-commit paths: a passive carries only literal-conversion
                 // constraints, so its leak set is empty and it could never warn.
                 group_warnings.clearRetainingCapacity();
                 if (universe == .boundary) {
@@ -10790,7 +10887,7 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 ///     nothing else in this component) with its own fresh candidate var. All
 ///     assignments happen before any constraint is consulted, so no driver's
 ///     verification can observe a not-yet-assigned peer.
-///   phase 2 — verify: check every driver's every non-`from_literal` constraint
+///   phase 2 — verify: check every driver's every non-literal constraint
 ///     against the candidate (`staticDispatchConstraintAcceptsCandidate`, the
 ///     same check the single-literal probe uses). Passives and other in-footprint
 ///     vars are pinned here by the resolved method signatures — with every driver
@@ -10849,7 +10946,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     candidate: for (candidate_scan) |candidate_kind| {
         // Digit-fit precheck for every numeral driver's literal payload — pure
         // arithmetic on the constraint payloads, before any speculation. Quote
-        // drivers are assigned Str, which their own `from_literal` provenance
+        // drivers are assigned Str, which their own literal-conversion provenance
         // accepts by definition, so they have nothing to precheck.
         for (constraint_ranges.items, kinds.items) |range, kind| {
             if (kind != .numeral) continue;
@@ -10888,7 +10985,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
             if (!unify_result.isOk()) continue :candidate;
         }
 
-        // Phase 2: verify every driver's every non-`from_literal` constraint.
+        // Phase 2: verify every driver's every non-literal constraint.
         // Store-backed iterator, not a held slice: the verification appends to
         // the constraint store, which can reallocate and dangle a slice.
         for (drivers, 0..) |_, driver_idx| {
@@ -10977,7 +11074,7 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
 
 /// Per-literal boundary-warning state, computed BEFORE the literal's commit
 /// resolves the flex away: the leak check walks the still-open constraint
-/// signatures, and for numerals the warning region comes from the `from_literal`
+/// signatures, and for numerals the warning region comes from the `from_numeral`
 /// payload (exact even when the root is an instantiated copy), reachable only
 /// while the var is flex. Quote constraints carry no payload, so they fall back to
 /// the var's own region — right for direct literals, possibly imprecise for
@@ -10995,7 +11092,7 @@ fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator
     return .{
         .leaks_into_signature = try self.boundaryDefaultLeaksIntoSignature(literal_root),
         .region = self.literalSourceRegion(literal_root) orelse self.getRegionAt(literal_root),
-        // Every commit path only reaches here for a var with `from_literal`
+        // Every commit path only reaches here for a var with literal-conversion
         // provenance, and the var is still flex pre-commit, so the kind is
         // always derivable.
         .kind = self.varLiteralKind(literal_root) orelse unreachable,
@@ -11036,7 +11133,7 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
     // checked mid-flight runs in its own env at the same numeric rank, so rank
     // alone cannot tell this def's literals from an enclosing def's.) A candidate
-    // is still flex at this rank with `from_literal` provenance.
+    // is still flex at this rank with literal-conversion provenance.
     const pool_vars = env.var_pool.getVarsForRank(rank);
 
     // Fast path: no open literal at this boundary, nothing to do.
@@ -11147,11 +11244,11 @@ fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) bool {
     return false;
 }
 
-/// The source region of the numeral literal that put a `from_literal` constraint
+/// The source region of the numeral literal that put a `from_numeral` constraint
 /// on this var, straight from the numeral payload — explicit upstream data, exact
-/// even after the literal var was unified with other vars. Quote constraints carry
-/// no payload, so this returns null for them and the caller falls back to the
-/// var's own region.
+/// even after the literal var was unified with other vars. Quote constraints
+/// carry no payload, so this returns null for them and the caller falls back to
+/// the var's own region.
 fn literalSourceRegion(self: *Self, var_: Var) ?Region {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
@@ -11162,7 +11259,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 }
 
 /// The literal kind this var is an open literal of — derived from its constraint
-/// set, never stored. Returns null if the var carries no `from_literal`
+/// set, never stored. Returns null if the var carries no literal-conversion
 /// constraint.
 ///
 /// DUAL-KIND TIE-BREAK: a var can carry BOTH kinds (a flex/flex merge like
@@ -11171,7 +11268,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 /// attempted (Dec vs Str) and hence which literal-kind diagnostic fires — so it
 /// must not depend on constraint storage order (which unify side each literal
 /// arrived on), or mirror-image programs would get different diagnostics. We scan
-/// ALL `from_literal` constraints and prefer `.numeral` over `.quote`, agreeing
+/// all literal-origin constraints and prefer `.numeral` over `.quote`, agreeing
 /// with the two other sites that encode this choice:
 /// `numericDefaultPhaseForConstraints` in src/check/checked_artifact.zig (any
 /// numeral selects the Dec mono phase before quote is considered) and
@@ -11196,7 +11293,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
 }
 
-/// Whether this flex var carries any interpolation `from_literal` constraint.
+/// Whether this flex var carries any interpolation literal-origin constraint.
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
 //
 // Adding a `LiteralKind` variant turns each switch below into a compile error
@@ -11219,7 +11316,7 @@ pub var bench_probe_refuted: usize = 0;
 /// Haskell-style: commit the FIRST candidate in the kind's canonical order that
 /// satisfies every dispatch constraint the var accumulated — and the successful
 /// probe IS the commit (no rollback-and-redo; see `tryCommitNumeralCandidate`). A
-/// literal whose only obligation is its own `from_literal` takes the list head
+/// literal whose only obligation is its own literal conversion takes the list head
 /// directly (the common case, no probing). If no candidate satisfies, the head is
 /// committed via the normal unify path anyway, so the post-finalize dispatch pass
 /// reports the conflict against the documented default type.
@@ -11316,7 +11413,7 @@ fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.
 /// candidate.
 const numeral_default_candidates = [_]CIR.NumKind{ .dec, .i64, .u64, .i128, .u128, .i32, .u32, .i16, .u16, .i8, .u8, .f64, .f32 };
 
-/// Whether the constraint range carries any obligation besides `from_literal`
+/// Whether the constraint range carries any obligation besides literal-conversion
 /// provenance — i.e. whether defaulting must consult the candidate probe at all.
 fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
@@ -11332,7 +11429,7 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// NEVER mutates them. Anything uncertain returns false (fall through to the
 /// probe) — refutation is exact logic, probing is the default.
 ///
-/// Two refutation facts, per non-`from_literal` constraint (the `from_literal`
+/// Two refutation facts, per non-literal constraint (the literal-conversion
 /// ones are pre-filtered by digit-fit inside `tryCommitNumeralCandidate` via
 /// `literalInfoAcceptsBuiltinNumKind`):
 ///
@@ -12884,12 +12981,16 @@ fn varSupportsIsEqInternal(
 
 /// Check if a flex var has incompatible constraints and report errors.
 /// This is called after type-checking to catch cases like `!3` where a flex var
-/// has both `from_literal` (numeric) and `not` (Bool only) constraints. If the
-/// flex var carries a `from_literal` constraint, validate that the canonical
-/// default (`Dec`) has a method for each of its other constraints.
+/// has both `from_numeral` and `not` (Bool only) constraints. If the
+/// non-generalized flex var carries a literal-conversion constraint, validate
+/// that the default type (`Dec` for numerals, `Str` for quotes/interpolations)
+/// has a method for each of its other constraints. Generalized flex vars are
+/// polymorphic signature constraints; each instantiated copy is defaulted and
+/// validated at its own use site.
 fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_numeric_default_pass: bool) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return;
+    if (resolved.desc.rank == .generalized) return;
 
     const flex = resolved.desc.content.flex;
     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);

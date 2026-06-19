@@ -19,6 +19,8 @@ pub const Program = core.Program;
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
+/// Demand-driven proc compaction before ARC and backend emission.
+pub const ReachableProcs = @import("reachable_procs.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
 /// Tail recursion modulo constructor + plain tail-call elimination.
@@ -78,6 +80,7 @@ test "lir tests" {
     std.testing.refAllDecls(RootMetadata);
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
+    std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(Arc);

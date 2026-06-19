@@ -176,6 +176,7 @@ pub const Def = struct {
             .pattern_f64_literal,
             .pattern_small_dec_literal,
             .pattern_str_literal,
+            .pattern_str_interpolation,
             .pattern_underscore,
             => true,
             else => false,
@@ -328,6 +329,14 @@ pub const Annotation = struct {
 
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// Whether `anno` mentions any type variable (a fresh `.rigid_var` or a
+    /// `.rigid_var_lookup` to an enclosing one). Derived from `anno` by
+    /// `addAnnotation` and populated on read by `getAnnotation`; the value passed
+    /// at construction is ignored.
+    mentions_type_var: bool = false,
+    /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
+    /// populated like `mentions_type_var`.
+    introduces_type_var: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;

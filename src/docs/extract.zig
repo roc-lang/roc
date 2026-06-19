@@ -1664,8 +1664,8 @@ fn extractDocTypeInner(
 
     switch (resolved.desc.content) {
         .flex => |flex| {
-            // Check for a from_literal constraint -> default to the literal
-            // kind's default type (numeral -> Dec, quote -> Str)
+            // Check for a literal-conversion constraint and default to the
+            // literal kind's default type (numeral -> Dec, quote -> Str).
             const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
             var literal_kind: ?types_mod.StaticDispatchConstraint.LiteralKind = null;
             for (constraints) |constraint| {

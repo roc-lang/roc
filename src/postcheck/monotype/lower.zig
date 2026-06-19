@@ -234,12 +234,17 @@ const LoweredTemplate = struct {
     status: LoweredTemplateStatus,
 };
 
-/// A lowered nested function specialization together with the Monotype
-/// function type its body was lowered at.
+const LoweredNestedStatus = enum {
+    lowering,
+    ready,
+};
+
+/// A nested function specialization together with the Monotype function type
+/// its body is being lowered or was lowered at.
 const LoweredNestedFn = struct {
-    nested_id: Ast.NestedDefId,
     fn_id: Ast.FnId,
     fn_ty: Type.TypeId,
+    status: LoweredNestedStatus,
 };
 
 const ReservedTemplate = struct {
@@ -1966,16 +1971,18 @@ const Builder = struct {
                 );
                 try request.ctx.graph.drainDirty();
             }
-            return existing.fn_id;
+            switch (existing.status) {
+                .ready,
+                .lowering,
+                => return existing.fn_id,
+            }
         }
 
-        const nested_id: Ast.NestedDefId = @enumFromInt(@as(u32, @intCast(self.program.nested_defs.items.len)));
         const fn_id = try self.program.addFn(fn_template);
-        try self.program.nested_defs.append(self.allocator, undefined);
         try family_entry.value_ptr.append(self.allocator, .{
-            .nested_id = nested_id,
             .fn_id = fn_id,
             .fn_ty = fn_template.mono_fn_ty,
+            .status = .lowering,
         });
 
         try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
@@ -1989,24 +1996,28 @@ const Builder = struct {
         var def_template = fn_template;
         def_template.mono_fn_ty = live_fn_ty;
         self.program.fns.items[@intFromEnum(fn_id)].source = def_template;
-        self.program.nested_defs.items[@intFromEnum(nested_id)] = .{
+        try self.program.nested_defs.append(self.allocator, .{
             .symbol = self.symbols.fresh(),
             .fn_def = def_template,
             .fn_id = fn_id,
             .args = lowered.args,
             .body = lowered.body,
             .ret = lowered.ret,
-        };
-        if (live_fn_ty != fn_template.mono_fn_ty) {
-            const entries = self.lowered_nested_fns.getPtr(family) orelse
-                Common.invariant("lowered nested function family disappeared before completion");
-            for (entries.items) |*entry| {
-                if (entry.nested_id != nested_id) continue;
-                entry.fn_ty = live_fn_ty;
-                break;
-            }
-        }
+        });
+        self.markNestedFnReady(family, fn_id, live_fn_ty);
         return fn_id;
+    }
+
+    fn markNestedFnReady(self: *Builder, family: NestedFnFamily, fn_id: Ast.FnId, fn_ty: Type.TypeId) void {
+        const entries = self.lowered_nested_fns.getPtr(family) orelse
+            Common.invariant("lowered nested function family disappeared before completion");
+        for (entries.items) |*entry| {
+            if (entry.fn_id != fn_id) continue;
+            entry.fn_ty = fn_ty;
+            entry.status = .ready;
+            return;
+        }
+        Common.invariant("lowered nested function disappeared before completion");
     }
 
     /// Process the specialization body requests this specialization enqueued
@@ -3476,9 +3487,9 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
-            .frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
-            .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
-            .dec => |dec| .{ .dec_lit = dec.value },
+            .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
+            .frac_f64 => |frac| self.lowerFracLiteral(.{ .f64 = frac.value }, ty),
+            .dec => |dec| self.lowerFracLiteral(.{ .dec = dec.value }, ty),
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -6251,6 +6262,14 @@ const BodyContext = struct {
                 }
                 break :blk false;
             },
+            .str_interpolation => |str| blk: {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| {
+                        if (self.patternContainsList(capture)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
             .assign,
             .pending,
             .num_literal,
@@ -6305,6 +6324,7 @@ const BodyContext = struct {
             .frac_f32_literal,
             .frac_f64_literal,
             .str_literal,
+            .str_interpolation,
             => true,
             .pending,
             .runtime_error,
@@ -6653,6 +6673,13 @@ const BodyContext = struct {
                     try self.preRegisterPatternBinders(item, item_ty);
                 }
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| {
+                        try self.preRegisterPatternBinders(capture, ty);
+                    }
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -6731,9 +6758,36 @@ const BodyContext = struct {
                 try self.bindLiteralGuardPattern(conversion, ty)
             else
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerStrPatternCollectingLists(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+        checks_out: *std.ArrayList(CollectedListPattern),
+    ) Allocator.Error!Ast.PatData {
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, str.steps.len);
+        defer self.allocator.free(steps);
+
+        for (str.steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPatternAtTypeCollectingLists(capture, ty, checks_out) else null,
+                .delimiter = try self.lowerStringLiteral(step.delimiter),
+            };
+        }
+
+        return .{ .str_pattern = .{
+            .prefix = try self.lowerStringLiteral(str.prefix),
+            .steps = try self.builder.program.addStrPatternStepSpan(steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+        } };
     }
 
     fn lowerPatternSpanAtTypesCollectingLists(
@@ -7239,6 +7293,11 @@ const BodyContext = struct {
                 if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.savePatternBinders(rest_pattern, saved);
             },
             .tuple => |items| for (items) |child| try self.savePatternBinders(child, saved),
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.savePatternBinders(capture, saved);
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -7745,6 +7804,7 @@ const BodyContext = struct {
         return switch (self.view.bodies.statements[raw].data) {
             .decl,
             .var_,
+            .var_uninitialized,
             .reassign,
             .crash,
             .dbg,
@@ -8511,6 +8571,7 @@ const BodyContext = struct {
         switch (statement.data) {
             .decl => |decl| try self.collectReassignedBindersInExpr(decl.expr, out),
             .var_ => |var_| try self.collectReassignedBindersInExpr(var_.expr, out),
+            .var_uninitialized => {},
             .reassign => |reassign| {
                 for (reassign.reassigned_binders) |binder| try self.appendUniqueBinder(out, binder);
                 try self.collectReassignedBindersInExpr(reassign.expr, out);
@@ -8671,6 +8732,7 @@ const BodyContext = struct {
                 break :blk try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
             },
             .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
+            .var_uninitialized => |decl| .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) },
             .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
@@ -8755,6 +8817,14 @@ const BodyContext = struct {
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
         };
         return try self.builder.program.addStmt(stmt);
+    }
+
+    fn lowerUninitializedPatternStatement(
+        self: *BodyContext,
+        pattern: checked.CheckedPatternId,
+    ) Allocator.Error!Ast.PatId {
+        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern)];
+        return try self.lowerPatternAtType(pattern, try self.lowerType(checked_pattern.ty));
     }
 
     fn lowerPatternStatement(
@@ -8891,9 +8961,35 @@ const BodyContext = struct {
                 try self.bindLiteralGuardPattern(conversion, ty)
             else
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerStrPattern(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, str.steps.len);
+        defer self.allocator.free(steps);
+
+        for (str.steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null,
+                .delimiter = try self.lowerStringLiteral(step.delimiter),
+            };
+        }
+
+        return .{ .str_pattern = .{
+            .prefix = try self.lowerStringLiteral(str.prefix),
+            .steps = try self.builder.program.addStrPatternStepSpan(steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+        } };
     }
 
     fn lowerPatternSpanAtTypes(
@@ -9056,6 +9152,60 @@ const BodyContext = struct {
                 else => .{ .int_lit = value },
             },
             else => .{ .int_lit = value },
+        };
+    }
+
+    /// Lower a fractional literal to the constant form its instantiated
+    /// monotype demands. The checked stage finalizes a fractional literal's
+    /// value to one numeric representation, but a generalized literal can be
+    /// instantiated at a different fractional primitive than its finalized
+    /// default (for example, a literal finalized to `Dec` that this
+    /// specialization unifies to `F64`). The constant kind must follow the
+    /// instantiated type so backends store bits the destination layout
+    /// expects, mirroring `lowerIntLiteral`.
+    fn lowerFracLiteral(self: *BodyContext, value: FracLiteralValue, ty: Type.TypeId) Ast.ExprData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .f32 => .{ .frac_f32_lit = value.asF32() },
+                .f64 => .{ .frac_f64_lit = value.asF64() },
+                .dec => .{ .dec_lit = value.asDec() },
+                else => Common.invariant("fractional literal instantiated to a non-fractional Monotype primitive"),
+            },
+            else => Common.invariant("fractional literal instantiated to a non-primitive Monotype type"),
+        };
+    }
+};
+
+/// A fractional literal value in its checked-stage representation, used to
+/// re-derive the constant kind the instantiated Monotype primitive requires.
+const FracLiteralValue = union(enum) {
+    f32: f32,
+    f64: f64,
+    dec: builtins.dec.RocDec,
+
+    fn asF64(self: FracLiteralValue) f64 {
+        return switch (self) {
+            .f32 => |v| @floatCast(v),
+            .f64 => |v| v,
+            .dec => |v| v.toF64(),
+        };
+    }
+
+    fn asF32(self: FracLiteralValue) f32 {
+        return switch (self) {
+            .f32 => |v| v,
+            .f64 => |v| @floatCast(v),
+            .dec => |v| @floatCast(v.toF64()),
+        };
+    }
+
+    fn asDec(self: FracLiteralValue) builtins.dec.RocDec {
+        return switch (self) {
+            .f32 => |v| builtins.dec.RocDec.fromF64(@floatCast(v)) orelse
+                Common.invariant("f32 fractional literal could not be represented as Dec at its instantiated type"),
+            .f64 => |v| builtins.dec.RocDec.fromF64(v) orelse
+                Common.invariant("f64 fractional literal could not be represented as Dec at its instantiated type"),
+            .dec => |v| v,
         };
     }
 };

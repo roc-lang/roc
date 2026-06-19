@@ -54,6 +54,12 @@ pub const Pat = Mono.Pat;
 
 /// Monotype Lifted pattern forms.
 pub const PatData = Mono.PatData;
+/// Monotype Lifted string interpolation pattern.
+pub const StrPattern = Mono.StrPattern;
+/// Monotype Lifted delimited capture step inside a string interpolation pattern.
+pub const StrPatternStep = Mono.StrPatternStep;
+/// Monotype Lifted end behavior for a string interpolation pattern.
+pub const StrPatternEnd = Mono.StrPatternEnd;
 
 /// Match branch.
 pub const Branch = Mono.Branch;
@@ -124,6 +130,7 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     record_destructs: std.ArrayList(RecordDestruct),
+    str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
@@ -159,6 +166,7 @@ pub const Program = struct {
         stmt_ids: std.ArrayList(StmtId),
         field_exprs: std.ArrayList(FieldExpr),
         record_destructs: std.ArrayList(RecordDestruct),
+        str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
@@ -186,6 +194,7 @@ pub const Program = struct {
             .stmt_ids = stmt_ids,
             .field_exprs = field_exprs,
             .record_destructs = record_destructs,
+            .str_pattern_steps = str_pattern_steps,
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
@@ -223,6 +232,7 @@ pub const Program = struct {
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
+        self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -343,6 +353,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStrPatternStepSpan(self: *Program, values: []const Mono.StrPatternStep) std.mem.Allocator.Error!Span(Mono.StrPatternStep) {
+        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        try self.str_pattern_steps.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         const start: u32 = @intCast(self.branches.items.len);
         try self.branches.appendSlice(self.allocator, values);
@@ -377,6 +393,10 @@ pub const Program = struct {
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
+        return self.str_pattern_steps.items[span_.start..][0..span_.len];
     }
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
