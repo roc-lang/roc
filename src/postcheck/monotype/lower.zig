@@ -1730,9 +1730,15 @@ const Builder = struct {
             .s_nominal_decl => |decl| decl.anno,
             else => return Type.Span.empty(),
         };
-        const record = switch (module_env.store.getTypeAnno(anno_idx)) {
-            .record => |record| record,
-            else => return Type.Span.empty(),
+        // The backing record may be wrapped in parentheses; unwrap before reading
+        // its fields (the backing type itself already handles parens).
+        var record_anno = anno_idx;
+        const record = while (true) {
+            switch (module_env.store.getTypeAnno(record_anno)) {
+                .parens => |parens| record_anno = parens.anno,
+                .record => |record| break record,
+                else => return Type.Span.empty(),
+            }
         };
         const fields = module_env.store.sliceAnnoRecordFields(record.fields);
         if (fields.len == 0) return Type.Span.empty();

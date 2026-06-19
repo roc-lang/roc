@@ -340,6 +340,35 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
+test "nominal record with a parenthesized backing still honors declared order and padding" {
+    const allocator = std.testing.allocator;
+    // The backing record is wrapped in parentheses. Parens are transparent here:
+    // the unnamed field must still be accepted and the layout must match the
+    // unparenthesized form (a@0, b@4, size 8, with three padding spacers).
+    const source =
+        \\module [main]
+        \\
+        \\Padded := ({ a : U8, _ : U8, _ : U8, _ : U8, b : U32 })
+        \\
+        \\main : Padded -> Padded
+        \\main = |padded| padded
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    try std.testing.expectEqual(@as(u16, 5), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+}
+
 fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,

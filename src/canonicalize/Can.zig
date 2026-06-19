@@ -16209,7 +16209,19 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_t
 /// for nominal/opaque declarations (aliases keep the plain entry point so they
 /// reject unnamed fields).
 fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
-    var ctx = TypeAnnoCtx.initNominalBacking(anno_idx);
+    // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
+    // The kernel descends through parens and compares each record against the
+    // backing AST index, so point the comparison at the unwrapped node it will
+    // actually reach — otherwise the inner record's unnamed fields are mistaken
+    // for a structural record and rejected.
+    var backing_anno = anno_idx;
+    while (true) {
+        switch (self.parse_ir.store.getTypeAnno(backing_anno)) {
+            .parens => |parens| backing_anno = parens.anno,
+            else => break,
+        }
+    }
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 

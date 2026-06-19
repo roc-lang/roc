@@ -97,12 +97,18 @@ fn repair(gpa: Allocator, fields: []const FieldShape, out_order: []u16) Allocato
     defer gpa.free(placed);
     @memset(placed, false);
 
+    // Memo-key buffer, sized to the exact worst case (`offset_mod` u32 + one u16
+    // per distinct signature) so it can never overflow regardless of field count.
+    const key_scratch = try gpa.alloc(u8, 4 + signatures.items.len * 2);
+    defer gpa.free(key_scratch);
+
     var solver = Solver{
         .signatures = signatures.items,
         .counts = counts,
         .max_alignment = max_alignment,
         .memo = std.StringHashMap(bool).init(gpa),
         .key_arena = std.heap.ArenaAllocator.init(gpa),
+        .key_scratch = key_scratch,
     };
     defer solver.deinit();
 
@@ -146,7 +152,8 @@ const Solver = struct {
     max_alignment: u32,
     memo: std.StringHashMap(bool),
     key_arena: std.heap.ArenaAllocator,
-    key_scratch: [4096]u8 = undefined,
+    /// Memo-key scratch, sized by the caller to `4 + signatures.len * 2`.
+    key_scratch: []u8,
 
     fn deinit(self: *Solver) void {
         self.memo.deinit();

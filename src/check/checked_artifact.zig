@@ -3180,9 +3180,15 @@ fn paddingFieldTypesFromDeclarationAnno(
     declaration_formals: []const DeclarationFormal,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error![]const CheckedTypeId {
-    const record = switch (module.moduleEnvConst().store.getTypeAnno(anno_idx)) {
-        .record => |record| record,
-        else => return &.{},
+    // The backing record may be wrapped in parentheses; unwrap before reading its
+    // fields (mirrors the parens handling in appendCheckedTypeRootFromDeclarationAnno).
+    var record_anno = anno_idx;
+    const record = while (true) {
+        switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
+            .parens => |parens| record_anno = parens.anno,
+            .record => |record| break record,
+            else => return &.{},
+        }
     };
     const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(record.fields);
     var padding_count: usize = 0;
