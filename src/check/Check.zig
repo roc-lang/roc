@@ -9530,7 +9530,7 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
-    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsImplicitIsEq(nominal_type)) {
+    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsDerivedIsEq(nominal_type)) {
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
@@ -9961,42 +9961,32 @@ fn mkInterpolationConstraint(
     return constraint_fn_var;
 }
 
-fn rewriteImplicitEqMethodCallAsStructuralEq(
+fn rewriteDerivedIsEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
-) void {
-    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return;
+) bool {
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return true;
 
     switch (self.cir.store.getExpr(expr_idx)) {
         .e_method_call => |method_call| {
             const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) {
-                std.debug.panic(
-                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
-                    .{args.len},
-                );
-            }
+            if (args.len != 1) return false;
 
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
         },
         .e_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return;
+            if (method_call.constraint_fn_var != constraint.fn_var) return true;
             const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) {
-                std.debug.panic(
-                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
-                    .{args.len},
-                );
-            }
+            if (args.len != 1) return false;
 
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
         },
         .e_method_eq => |eq| {
-            if (eq.constraint_fn_var != constraint.fn_var) return;
+            if (eq.constraint_fn_var != constraint.fn_var) return true;
             self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
         },
         .e_binop => |binop| {
-            if (binop.op != .eq and binop.op != .ne) return;
+            if (binop.op != .eq and binop.op != .ne) return true;
             self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, constraint.origin.binopNegated());
         },
         .e_structural_eq => |eq| {
@@ -10004,6 +9994,8 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
         },
         else => {},
     }
+
+    return true;
 }
 
 fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) void {
@@ -11981,15 +11973,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        try self.nominalSupportsImplicitIsEq(nominal_type))
+                        try self.nominalSupportsDerivedIsEq(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and try self.nominalSupportsImplicitIsEq(nominal_type)) {
-                            try self.satisfyImplicitEqualityConstraint(
+                        if (exact_method_binding == null and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+                            try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
@@ -12202,7 +12194,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (method_binding == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsIsEq(backing_var)) {
-                                try self.satisfyImplicitEqualityConstraint(
+                                try self.satisfyDerivedIsEqConstraint(
                                     deferred_constraint.var_,
                                     constraint,
                                     constraint.fn_var,
@@ -12355,17 +12347,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     dispatcher_content.structure == .empty_record or
                     dispatcher_content.structure == .empty_tag_union))
             {
-                // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
+                // Anonymous structural types (records, tuples, tag unions) have derived is_eq
                 // only if all their components also support is_eq
                 // iterRange re-fetches each item through the SafeList, so it stays valid even if
-                // satisfyImplicitEqualityConstraint appends and reallocates the backing array.
+                // satisfyDerivedIsEqConstraint appends and reallocates the backing array.
                 var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
                 while (constraints_iter.next()) |constraint| {
-                    // Check if this is a call to is_eq (anonymous types have implicit structural equality)
+                    // Check if this is a call to is_eq (anonymous types have derived is_eq)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
                         if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
-                            try self.satisfyImplicitEqualityConstraint(
+                            try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
@@ -12736,7 +12728,7 @@ fn flatTypeContainsUnboxedFunction(
     };
 }
 
-fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
@@ -12937,7 +12929,7 @@ fn validateFromNumeralLiteralForBuiltinAlias(
     return true;
 }
 
-fn satisfyImplicitEqualityConstraint(
+fn satisfyDerivedIsEqConstraint(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
@@ -12953,10 +12945,17 @@ fn satisfyImplicitEqualityConstraint(
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 2) {
-        std.debug.panic(
-            "type checker invariant violated: implicit equality constraint expected 2 args, found {d}",
-            .{args.len},
-        );
+        const bool_var = try self.freshBool(env, region);
+        const expected_content = try self.types.mkFuncUnbound(&.{ dispatcher_var, dispatcher_var }, bool_var);
+        const expected_fn_var = try self.freshFromContent(expected_content, env, region);
+
+        _ = try self.unifyInContext(expected_fn_var, constraint_fn_var, env, .{ .fn_call_arity = .{
+            .fn_name = self.cir.idents.is_eq,
+            .expected_args = 2,
+            .actual_args = @intCast(args.len),
+        } });
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
     }
 
     // Read both arg vars before unifying: the first unify can append fresh
@@ -12966,7 +12965,9 @@ fn satisfyImplicitEqualityConstraint(
     _ = try self.unify(dispatcher_var, arg0, env);
     _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
-    self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
+    if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
+        try self.markConstraintFunctionAsError(constraint, env);
+    }
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

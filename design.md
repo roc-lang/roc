@@ -903,7 +903,7 @@ Literal patterns participate through the same machinery. A literal pattern on
 a non-builtin number or string type carries a synthesized checked conversion
 expression; match lowering binds the matched value and tests it against the
 converted constant, dispatching to the type's `is_eq` method when it has one
-and using structural equality otherwise — exactly mirroring `==`. Checking
+and using derived `is_eq` otherwise — exactly mirroring `==`. Checking
 attaches an `is_eq` constraint to the pattern's type so this lowering is
 total. Literal patterns on builtin types keep their direct literal-pattern
 encoding.
@@ -1244,14 +1244,15 @@ or depending on traversal order.
 
 Structural equality follows the same rule. The checker has already established
 that the operands are equality-compatible and has either emitted a dispatch plan
-that permits structural equality or rewritten the expression to an explicit
-structural equality node. Monotype lowering constrains the two checked operand
-types to the same instantiation relation and lowers both operands at that single
-Monotype operand type. It must not independently lower the left and right
-operand types and then attempt to reconcile the results. Independent operand
-lowering is order-sensitive: an unconstrained operand can default to an
-uninhabited type before the other operand provides evidence. A shared
-instantiated operand type preserves the checked equality relation directly.
+that permits derived `is_eq` to lower as structural equality or rewritten the
+expression to an explicit structural equality node. Monotype lowering
+constrains the two checked operand types to the same instantiation relation and
+lowers both operands at that single Monotype operand type. It must not
+independently lower the left and right operand types and then attempt to
+reconcile the results. Independent operand lowering is order-sensitive: an
+unconstrained operand can default to an uninhabited type before the other
+operand provides evidence. A shared instantiated operand type preserves the
+checked equality relation directly.
 
 The reason this is the long-term design rather than a local implementation
 detail is that it makes specialization, dispatch, lambda lowering, and equality
@@ -1516,8 +1517,8 @@ The owner algorithm is fixed:
 2. Compute its `DispatchOwnerHead` from Monotype type content.
 3. If the head is `builtin`, use that builtin owner.
 4. If the head is `type_def`, use that exact `TypeDef`.
-5. If the head is `none` and the checked dispatch plan permits structural
-   equality, emit structural equality.
+5. If the head is `none` and the checked dispatch plan permits derived `is_eq`,
+   emit structural equality.
 6. Otherwise stop with a compiler invariant failure.
 
 The algorithm never asks the method registry "which owners could match this
