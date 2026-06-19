@@ -593,7 +593,7 @@ const Lowerer = struct {
         if (self.comptime_site_map[index]) |existing| return existing;
 
         const source = self.solved.lifted.comptimeSite(site);
-        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.branch_regions);
+        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.checked_site, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }

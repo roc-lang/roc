@@ -74,6 +74,7 @@ const ModuleView = struct {
     names: *const names.NameStore,
     types: checked.CheckedTypeStoreView,
     bodies: checked.CheckedBodyStoreView,
+    exhaustiveness_sites: *const checked.CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const checked.CheckedConstBodyTable,
     templates: *const checked.CheckedProcedureTemplateTable,
     compile_time_roots: *const checked.CompileTimeRootTable,
@@ -967,7 +968,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null);
+        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, 0, null);
     }
 
     /// Specializations of one template family are deduplicated by the CURRENT
@@ -984,6 +985,7 @@ const Builder = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
+        comptime_exhaustiveness_depth: u32,
         requester: ?*InstGraph,
     ) Allocator.Error!Ast.DefId {
         const family = TemplateFamily.from(template_ref, source_fn_key);
@@ -1093,6 +1095,7 @@ const Builder = struct {
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
+        body_ctx.comptime_exhaustiveness_depth = comptime_exhaustiveness_depth;
         defer body_ctx.deinit();
         if (moduleBytesEqual(source_ty_view.key.bytes, view.key.bytes)) {
             try body_ctx.constrainKnownType(source_fn_ty, lower_fn_ty);
@@ -1822,6 +1825,7 @@ const Builder = struct {
                         .source_fn_ty = fn_template.source_fn_ty,
                         .source_fn_key = fn_template.source_fn_key,
                         .fn_ty = fn_template.mono_fn_ty,
+                        .comptime_exhaustiveness_depth = 0,
                     });
                 }
                 return reserved.fn_id;
@@ -1875,6 +1879,7 @@ const Builder = struct {
                 .source_fn_ty = fn_template.source_fn_ty,
                 .source_fn_key = fn_template.source_fn_key,
                 .fn_ty = fn_template.mono_fn_ty,
+                .comptime_exhaustiveness_depth = source_ctx.comptime_exhaustiveness_depth,
             });
         }
         return reserved.fn_id;
@@ -2032,6 +2037,7 @@ const Builder = struct {
                 request.source_fn_ty,
                 request.source_fn_key,
                 request.fn_ty,
+                request.comptime_exhaustiveness_depth,
                 graph,
             );
         }
@@ -3312,9 +3318,6 @@ const BodyContext = struct {
         const body_expr = self.view.bodies.exprs[@intFromEnum(checked_body)];
         self.builder.program.current_loc = try self.sourceLocFor(body_expr.source_region);
 
-        const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
-        defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
-
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
         var arg_lets = std.ArrayList(LambdaArgLet).empty;
@@ -3457,16 +3460,6 @@ const BodyContext = struct {
         self.comptime_exhaustiveness_depth += 1;
         defer self.comptime_exhaustiveness_depth -= 1;
         return try self.lowerExprAtType(expr_id, ty);
-    }
-
-    fn resetComptimeExhaustivenessDepth(self: *BodyContext) u32 {
-        const saved = self.comptime_exhaustiveness_depth;
-        self.comptime_exhaustiveness_depth = 0;
-        return saved;
-    }
-
-    fn restoreComptimeExhaustivenessDepth(self: *BodyContext, saved: u32) void {
-        self.comptime_exhaustiveness_depth = saved;
     }
 
     fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {
@@ -6536,7 +6529,22 @@ const BodyContext = struct {
                 }
                 return branch_body;
             },
-            else => {
+            .pending,
+            .assign,
+            .as,
+            .applied_tag,
+            .nominal,
+            .record_destructure,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            .runtime_error,
+            => {
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 defer branch_ctx.deinit();
                 var saved = std.ArrayList(BinderRestore).empty;
@@ -7245,9 +7253,10 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: Ast.ComptimeSiteKind,
         region: base.Region,
+        checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) Allocator.Error!Ast.ComptimeSiteId {
-        return try self.builder.program.addComptimeSite(kind, region, branch_regions);
+        return try self.builder.program.addComptimeSite(kind, region, checked_site, branch_regions);
     }
 
     fn wrapComptimeBranch(
@@ -7275,7 +7284,14 @@ const BodyContext = struct {
             .match => .match,
             .destructure => .destructure,
         };
-        return try self.addComptimeSite(site_kind, expr.source_region, branch_regions);
+        const checked_site = switch (match.comptime_site_kind) {
+            .match => self.view.exhaustiveness_sites.lookupByMatchExpr(expr_id),
+            .destructure => blk: {
+                if (match.branches.len != 1 or match.branches[0].patterns.len != 1) break :blk null;
+                break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(match.branches[0].patterns[0].pattern);
+            },
+        };
+        return try self.addComptimeSite(site_kind, expr.source_region, checked_site, branch_regions);
     }
 
     fn matchBranchRegions(self: *BodyContext, branches: []const checked.CheckedMatchBranch) Allocator.Error![]base.Region {
@@ -7296,7 +7312,7 @@ const BodyContext = struct {
         const branch_regions = try self.ifBranchRegions(if_);
         defer self.allocator.free(branch_regions);
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
-        return try self.addComptimeSite(.if_, expr.source_region, branch_regions);
+        return try self.addComptimeSite(.if_, expr.source_region, null, branch_regions);
     }
 
     fn ifBranchRegions(self: *BodyContext, if_: anytype) Allocator.Error![]base.Region {
@@ -7848,7 +7864,7 @@ const BodyContext = struct {
 
         const source_expr = try self.builder.localExpr(source_local, value_ty);
         const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
-            try self.addComptimeSite(.destructure, statement.source_region, &.{})
+            try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
             null;
         try self.appendRecordRestPatternStatements(source_expr, value_ty, destructs, lowered, comptime_site);
@@ -8935,7 +8951,7 @@ const BodyContext = struct {
         const value = try self.lowerExpr(expr);
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
         const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
-            try self.addComptimeSite(.destructure, source_region, &.{})
+            try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
             null;
         if (!self.patternNeedsExplicitBinding(pattern)) {
@@ -9283,6 +9299,7 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
         .names = checked.importedNames(view),
         .types = view.checked_types,
         .bodies = view.checked_bodies,
+        .exhaustiveness_sites = view.exhaustiveness_sites,
         .checked_const_bodies = view.checked_const_bodies,
         .templates = view.checked_procedure_templates,
         .compile_time_roots = view.compile_time_roots,

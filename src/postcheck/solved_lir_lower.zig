@@ -974,7 +974,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, proc, source.branch_regions);
+        }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -4226,6 +4226,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: *const std.ArrayList
         cloned.appendAssumeCapacity(.{
             .kind = site.kind,
             .region = site.region,
+            .checked_site = site.checked_site,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
         });
     }

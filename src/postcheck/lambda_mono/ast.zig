@@ -109,6 +109,7 @@ pub const ComptimeSiteKind = Lifted.ComptimeSiteKind;
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
     region: base.Region,
+    checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
 };
 
@@ -490,6 +491,7 @@ pub const Program = struct {
         self: *Program,
         kind: ComptimeSiteKind,
         region: base.Region,
+        checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
@@ -498,6 +500,7 @@ pub const Program = struct {
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .region = region,
+            .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
         });
         return id;

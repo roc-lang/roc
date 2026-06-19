@@ -5,10 +5,14 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 
+const checked_ids = @import("../checked_ids.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
+const CIR = can.CIR;
+const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
 const Problem = types.Problem;
 const ExtraStringIdx = types.ExtraStringIdx;
 const MissingPatternsRange = types.MissingPatternsRange;
@@ -35,9 +39,16 @@ pub const Store = struct {
         empirical,
     };
 
+    pub const ExhaustivenessSiteSource = union(enum) {
+        match_expr: CIR.Expr.Idx,
+        destructure_pattern: CIR.Pattern.Idx,
+    };
+
     pub const PendingStaticExhaustiveness = struct {
         kind: EmpiricalSiteKind,
         mode: PendingStaticExhaustivenessMode,
+        source: ExhaustivenessSiteSource,
+        site: ?CheckedExhaustivenessSiteId = null,
         region: base.Region,
         problem: Problem,
     };
@@ -113,34 +124,49 @@ pub const Store = struct {
         gpa: Allocator,
         kind: EmpiricalSiteKind,
         mode: PendingStaticExhaustivenessMode,
+        source: ExhaustivenessSiteSource,
         region: base.Region,
         pending_problem: Problem,
     ) std.mem.Allocator.Error!void {
         try self.pending_static_exhaustiveness.append(gpa, .{
             .kind = kind,
             .mode = mode,
+            .source = source,
             .region = region,
             .problem = pending_problem,
         });
     }
 
-    pub fn resolvePendingStaticExhaustiveness(self: *Self, kind: EmpiricalSiteKind, region: base.Region) void {
+    pub fn assignPendingStaticExhaustivenessSite(
+        self: *Self,
+        source: ExhaustivenessSiteSource,
+        site: CheckedExhaustivenessSiteId,
+    ) void {
+        for (self.pending_static_exhaustiveness.items) |*pending| {
+            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
+            pending.site = site;
+            return;
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
+        }
+        unreachable;
+    }
+
+    pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
-            // Compile-time finalization may execute a source site that checking
-            // originally recorded as static, for example inside a runtime
-            // function body that became a hoisted root.
-            if (pending.kind == kind and regionsEqual(pending.region, region)) continue;
+            if (pending.site != null and pending.site.? == site) continue;
             self.pending_static_exhaustiveness.items[write] = pending;
             write += 1;
         }
         self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
     }
 
-    pub fn discardPendingStaticExhaustiveness(self: *Self, kind: EmpiricalSiteKind, region: base.Region) void {
+    pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.kind == kind and regionsEqual(pending.region, region)) continue;
+            if (pending.site != null and pending.site.? == site) continue;
             self.pending_static_exhaustiveness.items[write] = pending;
             write += 1;
         }
@@ -150,13 +176,12 @@ pub const Store = struct {
     pub fn appendEmpiricalExhaustivenessFailure(
         self: *Self,
         gpa: Allocator,
-        kind: EmpiricalSiteKind,
-        region: base.Region,
+        site: CheckedExhaustivenessSiteId,
     ) std.mem.Allocator.Error!bool {
         var index: usize = 0;
         while (index < self.pending_static_exhaustiveness.items.len) {
             const pending = self.pending_static_exhaustiveness.items[index];
-            if (pending.kind != kind or !regionsEqual(pending.region, region)) {
+            if (pending.site == null or pending.site.? != site) {
                 index += 1;
                 continue;
             }
@@ -222,6 +247,15 @@ pub const Store = struct {
     }
 };
 
-fn regionsEqual(a: base.Region, b: base.Region) bool {
-    return a.start.offset == b.start.offset and a.end.offset == b.end.offset;
+fn exhaustivenessSourcesEqual(a: Store.ExhaustivenessSiteSource, b: Store.ExhaustivenessSiteSource) bool {
+    return switch (a) {
+        .match_expr => |left| switch (b) {
+            .match_expr => |right| left == right,
+            .destructure_pattern => false,
+        },
+        .destructure_pattern => |left| switch (b) {
+            .destructure_pattern => |right| left == right,
+            .match_expr => false,
+        },
+    };
 }

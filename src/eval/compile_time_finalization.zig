@@ -504,7 +504,7 @@ fn lowerEvalAndFinishRoots(
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
-            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
+            try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
@@ -657,7 +657,7 @@ fn evalCompileTimeRoot(
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
-        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, lir_result, interpreter, proc),
+        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
@@ -667,6 +667,8 @@ fn evalCompileTimeRoot(
 fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    module: *const checked.CheckedModuleArtifact,
+    compile_time_root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     hits: []const Interpreter.ComptimeBranchHit,
     root_proc: lir.LIR.LirProcSpecId,
@@ -674,8 +676,12 @@ fn recordComptimeSiteHits(
     const problem_store = maybe_problem_store orelse return;
     for (hits) |hit| {
         const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
-        if (comptimeSiteEmpiricalKind(site.kind)) |kind| {
-            problem_store.resolvePendingStaticExhaustiveness(kind, site.region);
+        if (comptimeSiteEmpiricalKind(site.kind) != null) {
+            if (site.checked_site) |checked_site| {
+                if (comptimeSiteMayResolvePending(module, compile_time_root.id, checked_site)) {
+                    problem_store.resolvePendingStaticExhaustiveness(checked_site);
+                }
+            }
         }
         if (site.proc == root_proc) {
             try coverage.record(site, hit.branch_index);
@@ -686,6 +692,8 @@ fn recordComptimeSiteHits(
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     root_proc: lir.LIR.LirProcSpecId,
@@ -697,12 +705,25 @@ fn reportCompileTimeExhaustiveness(
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
     const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
-    const kind = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
+    _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
         .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
     };
-    discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, site_id);
-    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, kind, site.region);
+    const checked_site = site.checked_site orelse {
+        finalizationInvariant("empirical exhaustiveness failure had no checked site id");
+    };
+    discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, checked_site, module, site_id);
+    if (!comptimeSiteMayResolvePending(module, root.id, checked_site)) {
+        const site_record = module.exhaustiveness_sites.get(checked_site);
+        switch (site_record.policy) {
+            .runtime_reachable => {},
+            .not_pending,
+            .compile_time_only,
+            .compile_time_replaced_by_root,
+            => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
+        }
+    }
+    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, checked_site);
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
     }
@@ -713,14 +734,41 @@ fn discardUnreachedRootComptimeSites(
     problem_store: *check.problem.Store,
     lir_result: *const lir.Program.Result,
     root_proc: lir.LIR.LirProcSpecId,
+    failed_checked_site: checked.CheckedExhaustivenessSiteId,
+    module: *const checked.CheckedModuleArtifact,
     failed_site_id: lir.LIR.ComptimeSiteId,
 ) void {
     for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
         if (root_site.proc != root_proc) continue;
         if (raw_site_id == @intFromEnum(failed_site_id)) continue;
-        const root_site_kind = comptimeSiteEmpiricalKind(root_site.kind) orelse continue;
-        problem_store.discardPendingStaticExhaustiveness(root_site_kind, root_site.region);
+        if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
+        const checked_site = root_site.checked_site orelse continue;
+        if (checked_site == failed_checked_site) continue;
+        const site = module.exhaustiveness_sites.get(checked_site);
+        switch (site.policy) {
+            .compile_time_replaced_by_root,
+            .compile_time_only,
+            => problem_store.discardPendingStaticExhaustiveness(checked_site),
+            .runtime_reachable,
+            .not_pending,
+            => {},
+        }
     }
+}
+
+fn comptimeSiteMayResolvePending(
+    module: *const checked.CheckedModuleArtifact,
+    root_id: checked.ComptimeRootId,
+    checked_site: checked.CheckedExhaustivenessSiteId,
+) bool {
+    const site = module.exhaustiveness_sites.get(checked_site);
+    return switch (site.policy) {
+        .compile_time_replaced_by_root => |owner_root| owner_root == root_id,
+        .compile_time_only => true,
+        .runtime_reachable,
+        .not_pending,
+        => false,
+    };
 }
 
 fn comptimeSiteEmpiricalKind(

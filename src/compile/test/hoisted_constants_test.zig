@@ -168,6 +168,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
 
     try expectTopLevelCompileTimeRootsBeforeHoisted(app);
     try expectTopLevelCompileTimeRootsBeforeHoisted(app_view);
+    try expectExportedRuntimeEntrypoint(app_artifact);
 
     const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
     const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
@@ -725,6 +726,151 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     try std.testing.expect(!coord.hasUserErrors());
 }
 
+test "hoisted successful call does not clear runtime reachable helper exhaustiveness" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\helper : Try(I64, Str) -> I64
+        \\helper = |result|
+        \\    match result {
+        \\        Ok(n) => n
+        \\    }
+        \\
+        \\main! = |args| {
+        \\    x = helper(Ok(1.I64))
+        \\    runtime_input = if List.len(args) == 0 {
+        \\        Ok(2.I64)
+        \\    } else {
+        \\        Err("runtime")
+        \\    }
+        \\    _ = helper(runtime_input)
+        \\    _ = x + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "NON-EXHAUSTIVE MATCH")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "hoisted failing call into runtime reachable helper reports static diagnostic" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\helper : Try(I64, Str) -> I64
+        \\helper = |result|
+        \\    match result {
+        \\        Ok(n) => n
+        \\    }
+        \\
+        \\main! = |args| {
+        \\    x = helper(Err("compile-time"))
+        \\    runtime_input = if List.len(args) == 0 {
+        \\        Ok(2.I64)
+        \\    } else {
+        \\        Err("runtime")
+        \\    }
+        \\    _ = helper(runtime_input)
+        \\    _ = x + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "NON-EXHAUSTIVE MATCH")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportDoesNotContain(gpa, entry.report, "empirically during compile-time evaluation");
+    }
+    try std.testing.expect(found);
+}
+
 fn findHoistedArtifact(
     views: []const check.CheckedArtifact.ImportedModuleView,
     min_count: usize,
@@ -767,6 +913,21 @@ fn expectTopLevelCompileTimeRootsBeforeHoisted(
     try std.testing.expect(saw_top_level_constant);
     try std.testing.expect(saw_top_level_callable);
     try std.testing.expect(saw_hoisted_constant);
+}
+
+fn expectExportedRuntimeEntrypoint(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) !void {
+    for (artifact.root_requests.runtime_requests) |root| {
+        if (root.kind == .runtime_entrypoint and
+            root.abi == .roc and
+            root.exposure == .exported and
+            root.procedure_binding != null)
+        {
+            return;
+        }
+    }
+    return error.ExportedRuntimeEntrypointNotFound;
 }
 
 fn expectRootRequestBefore(
@@ -995,6 +1156,64 @@ fn expectPatternExtractionSyntheticRegions(
 fn expectRegionEqual(expected: base.Region, actual: base.Region) !void {
     try std.testing.expectEqual(expected.start.offset, actual.start.offset);
     try std.testing.expectEqual(expected.end.offset, actual.end.offset);
+}
+
+fn writeEchoPlatform(dir: anytype) !void {
+    try dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+}
+
+fn expectReportDoesNotContain(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) !void {
+    var rendered = std.array_list.Managed(u8).init(allocator);
+    defer rendered.deinit();
+
+    var unmanaged = rendered.moveToUnmanaged();
+    defer rendered = unmanaged.toManaged(allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| {
+        if (err == error.WriteFailed) return error.OutOfMemory;
+        return err;
+    };
+
+    try std.testing.expect(std.mem.indexOf(u8, writer_alloc.written(), needle) == null);
 }
 
 fn findStoredCompileTimeRootI64(
