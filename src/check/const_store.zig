@@ -72,6 +72,10 @@ pub const FnDef = union(enum) {
         owner: names.ProcTemplate,
         expr: checked_ids.CheckedExprId,
     },
+    encode_to_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked_ids.CheckedExprId,
+    },
 };
 
 /// Stored string value.

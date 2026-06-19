@@ -75,7 +75,7 @@ State := [
 Shape : { foo : Str }
 
 parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [MissingRequired])
-parse_shape = Shape.parser(Format.Default)
+parse_shape = Shape.parser_for(Format.Default)
 
 expect {
 	parsed = parse_shape(Key("fOo", "value"))?
@@ -102,7 +102,7 @@ parse_http_shape : State -> Try(
 	},
 	[MissingRequired],
 )
-parse_http_shape = HttpShape.parser(Format.Default)
+parse_http_shape = HttpShape.parser_for(Format.Default)
 
 expect {
 	parsed = parse_http_shape(Start)?

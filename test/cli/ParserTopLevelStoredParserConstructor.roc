@@ -38,11 +38,11 @@ State := [Present(Str), Done]
 
 make_parser : () -> (State -> Try({ value : a, rest : State }, [MissingRequired]))
 	where [
-		a.parser : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
 make_parser = || {
 	Shape : a
-	Shape.parser(Format.Default)
+	Shape.parser_for(Format.Default)
 }
 
 parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [MissingRequired])

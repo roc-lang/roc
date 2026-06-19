@@ -1,27 +1,27 @@
 Headers := { raw : Str }.{
 	DecodeErr := [MissingRequired, BadHeader].{}
 
-	parser : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
+	parser_for : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
 		where [
-			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
-	parser = || {
+	parser_for = || {
 		Output : output
 
 		parse_output : Headers -> Try({ value : output, rest : Headers }, DecodeErr)
-		parse_output = Output.parser(HeaderEncoding.Caseless)
+		parse_output = Output.parser_for(HeaderEncoding.Caseless)
 
 		parse_output
 	}
 
 	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser(HeaderEncoding.Caseless)
+		parse_output = Output.parser_for(HeaderEncoding.Caseless)
 		parsed = parse_output(Headers.{ raw })?
 
 		Ok(parsed.value)

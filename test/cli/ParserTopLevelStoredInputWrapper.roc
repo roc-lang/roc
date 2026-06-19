@@ -36,13 +36,13 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parser : () -> (Str -> Try(a, [MissingRequired]))
+parser_for : () -> (Str -> Try(a, [MissingRequired]))
 	where [
-		a.parser : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
-parser = || {
+parser_for = || {
 	Shape : a
-	parse_shape = Shape.parser(Format.Default)
+	parse_shape = Shape.parser_for(Format.Default)
 
 	|input| {
 		parsed = parse_shape(State.Present(input))?
@@ -51,7 +51,7 @@ parser = || {
 }
 
 parse_stored : Str -> Try({ foo : Str }, [MissingRequired])
-parse_stored = parser()
+parse_stored = parser_for()
 
 expect {
 	result = parse_stored("stored")?

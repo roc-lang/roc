@@ -6630,7 +6630,7 @@ fn typeDispatchOwnerStatement(
         }
     }
 
-    if (!method_name.eql(self.env.idents.parser)) return null;
+    if (!method_name.eql(self.env.idents.parser_for)) return null;
 
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(owner_name)) orelse return null;
     return switch (binding_location.binding.*) {

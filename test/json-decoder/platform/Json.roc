@@ -92,8 +92,8 @@ Json :: [].{
 	DecodeErr := [MissingRequired, InvalidJson].{}
 
 	Token := { raw : Str }.{
-		parser : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
-		parser = |_encoding| |state| {
+		parser_for : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
+		parser_for = |_encoding| |state| {
 			parsed = JsonEncoding.parse_str(state)?
 			Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
 		}
@@ -104,11 +104,11 @@ Json :: [].{
 
 	parse : Str -> Try(a, Json.DecodeErr)
 		where [
-			a.parser : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parse = |json| {
 		Shape : a
-		parse_shape = Shape.parser(JsonEncoding.Default)
+		parse_shape = Shape.parser_for(JsonEncoding.Default)
 		parsed = parse_shape(JsonState.Input(json))?
 
 		match parsed.rest {
@@ -123,11 +123,11 @@ Json :: [].{
 
 	parser_camel : () -> (Str -> Try(a, Json.DecodeErr))
 		where [
-			a.parser : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parser_camel = || {
 		Shape : a
-		parse_shape = Shape.parser(JsonCamelEncoding.Default)
+		parse_shape = Shape.parser_for(JsonCamelEncoding.Default)
 
 		|json| {
 			parsed = parse_shape(JsonState.Input(json))?
@@ -145,11 +145,11 @@ Json :: [].{
 
 	parse_camel : Str -> Try(a, Json.DecodeErr)
 		where [
-			a.parser : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parse_camel = |json| {
 		Shape : a
-		parse_shape = Shape.parser(JsonCamelEncoding.Default)
+		parse_shape = Shape.parser_for(JsonCamelEncoding.Default)
 		parsed = parse_shape(JsonState.Input(json))?
 
 		match parsed.rest {

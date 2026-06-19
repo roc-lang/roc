@@ -12003,7 +12003,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.ensureCustomInterpolationPartsChecked(constraint, env);
                         }
                     }
-                    if (constraint.fn_name.eql(self.cir.idents.parser) and
+                    if (constraint.fn_name.eql(self.cir.idents.parser_for) and
                         self.nominalIsBuiltinStrType(nominal_type))
                     {
                         try self.satisfyImplicitParserConstraint(
@@ -12266,7 +12266,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         }
                     }
-                    if (constraint.fn_name.eql(self.cir.idents.parser)) {
+                    if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
                             try self.satisfyImplicitParserConstraint(
@@ -12453,7 +12453,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 env,
                             );
                         }
-                    } else if (constraint.fn_name.eql(self.cir.idents.parser)) {
+                    } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
                         if (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             try self.satisfyImplicitParserConstraint(
@@ -14025,9 +14025,9 @@ fn validateDerivedParseNominal(
     const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
         nominal.sourceDeclOptional(),
-        self.cir.idents.parser,
+        self.cir.idents.parser_for,
     ) orelse {
-        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.parser, constraint, env);
+        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.parser_for, constraint, env);
     };
 
     const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);

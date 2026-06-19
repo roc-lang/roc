@@ -2798,6 +2798,10 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
             .owner = runtime.owner,
             .expr = runtime.expr,
         } },
+        .encode_to_runtime => |runtime| .{ .encode_to_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
     };
 }
 

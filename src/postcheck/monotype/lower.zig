@@ -1876,7 +1876,9 @@ const Builder = struct {
             .imported_template,
             .checked_generated,
             => |template| template,
-            .parser_runtime => Common.invariant("generated parser runtime function must be restored through ConstStore parser restore"),
+            .parser_runtime,
+            .encode_to_runtime,
+            => Common.invariant("generated serialization runtime function must be restored through ConstStore runtime restore"),
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
@@ -1936,7 +1938,9 @@ const Builder = struct {
             .imported_template,
             .checked_generated,
             => |template| template,
-            .parser_runtime => Common.invariant("generated parser runtime function must be restored through ConstStore parser restore"),
+            .parser_runtime,
+            .encode_to_runtime,
+            => Common.invariant("generated serialization runtime function must be restored through ConstStore runtime restore"),
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
@@ -2116,6 +2120,7 @@ const Builder = struct {
         return switch (fn_def) {
             .nested => |nested| self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
             .parser_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
+            .encode_to_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .local_template,
             .imported_template,
             .checked_generated,
@@ -2147,6 +2152,10 @@ const Builder = struct {
                 .owner = runtime.owner,
                 .expr = runtime.expr,
             } },
+            .encode_to_runtime => |runtime| .{ .encode_to_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
         };
     }
 
@@ -2162,6 +2171,9 @@ const Builder = struct {
         const fn_value = store_view.const_store.fns.items[raw];
         if (fn_value.fn_def == .parser_runtime) {
             return try self.restoreConstParserRuntimeFnExpr(store_view, fn_value, ty);
+        }
+        if (fn_value.fn_def == .encode_to_runtime) {
+            return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
@@ -2284,7 +2296,7 @@ const Builder = struct {
         fn_ctx.current_fn_key = fn_value.source_fn_key;
 
         const expr = fn_view.bodies.exprs[@intFromEnum(runtime.expr)];
-        const plan = parserDispatchPlanForExpr(fn_view, runtime.expr);
+        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         const callable_mono_ty = try fn_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, &fn_ctx, expr.ty, plan.args, ty);
         const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
         const arg_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(fn_data.args));
@@ -2357,6 +2369,122 @@ const Builder = struct {
 
         try self.drainSpecRequests(graph);
         return parser_expr;
+    }
+
+    fn restoreConstEncodeToRuntimeFnExpr(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const runtime = switch (fn_value.fn_def) {
+            .encode_to_runtime => |runtime| runtime,
+            else => Common.invariant("non-encode_to function reached encode_to runtime restore"),
+        };
+        const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names, &self.unsolved_monos);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+
+        var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, runtime.owner, graph);
+        defer fn_ctx.deinit();
+        fn_ctx.current_fn_key = fn_value.source_fn_key;
+
+        const expr = fn_view.bodies.exprs[@intFromEnum(runtime.expr)];
+        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        const callable_mono_ty = try fn_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, &fn_ctx, expr.ty, plan.args, ty);
+        const fn_data = self.functionShape(callable_mono_ty, "stored encode_to constructor had a non-function type");
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
+        if (arg_tys.len != 2) Common.invariant("stored encode_to constructor had an unexpected arity");
+        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored encode_to constructor result type differed from restored function type");
+
+        const runtime_fn = self.functionShape(ty, "stored encode_to runtime value had a non-function type");
+        const runtime_arg_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(runtime_fn.args));
+        defer self.allocator.free(runtime_arg_tys);
+        if (runtime_arg_tys.len != 1) Common.invariant("stored encode_to runtime function had an unexpected arity");
+
+        const shape_ty = try fn_ctx.lowerType(plan.dispatcher_ty);
+        const state_local = try self.program.addLocal(self.symbols.fresh(), runtime_arg_tys[0]);
+        const state_expr = try self.localExpr(state_local, runtime_arg_tys[0]);
+
+        var value_let: ?struct {
+            local: Ast.LocalId,
+            value: Ast.ExprId,
+        } = null;
+        const value_expr = if (constGeneratedCaptureNode(fn_value, encodeToValueCaptureId())) |node| blk: {
+            const local = try self.program.addLocal(self.symbols.fresh(), arg_tys[0]);
+            self.program.setLocalCaptureId(local, encodeToValueCaptureId());
+            value_let = .{
+                .local = local,
+                .value = try self.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[0]),
+            };
+            break :blk try self.localExpr(local, arg_tys[0]);
+        } else try fn_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+
+        var encoding_let: ?struct {
+            local: Ast.LocalId,
+            value: Ast.ExprId,
+        } = null;
+        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encodeToEncodingCaptureId())) |node| blk: {
+            const local = try self.program.addLocal(self.symbols.fresh(), arg_tys[1]);
+            self.program.setLocalCaptureId(local, encodeToEncodingCaptureId());
+            encoding_let = .{
+                .local = local,
+                .value = try self.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[1]),
+            };
+            break :blk try self.localExpr(local, arg_tys[1]);
+        } else try fn_ctx.lowerDispatchOperandAtType(plan.args[1], arg_tys[1]);
+
+        const str_ty = try self.primitiveType(.str);
+        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        precomputed_plan.next_capture_id = encodeToFirstFieldCaptureId();
+        try fn_ctx.buildEncodeRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, str_ty);
+
+        const encoded = try fn_ctx.lowerEncodeShapeToState(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            arg_tys[1],
+            state_expr,
+            runtime_arg_tys[0],
+            runtime_fn.ret,
+            &precomputed_plan,
+        );
+        const runtime_fn_id = try self.program.addFn(.{
+            .fn_def = .{ .encode_to_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
+            .source_fn_ty = fn_value.source_fn_ty,
+            .source_fn_key = fn_value.source_fn_key,
+            .mono_fn_ty = ty,
+        });
+        var encoder_expr = try self.program.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
+            .fn_id = runtime_fn_id,
+            .args = try self.program.addTypedLocalSpan(&.{
+                .{ .local = state_local, .ty = runtime_arg_tys[0] },
+            }),
+            .body = encoded,
+        } } });
+        var capture_index = precomputed_plan.captures.items.len;
+        while (capture_index > 0) {
+            capture_index -= 1;
+            const capture = precomputed_plan.captures.items[capture_index];
+            encoder_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, encoder_expr, ty);
+        }
+        if (encoding_let) |let_| {
+            encoder_expr = try fn_ctx.wrapLet(let_.local, arg_tys[1], let_.value, encoder_expr, ty);
+        }
+        if (value_let) |let_| {
+            encoder_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, encoder_expr, ty);
+        }
+
+        try self.drainSpecRequests(graph);
+        return encoder_expr;
     }
 
     fn restoreConstNode(
@@ -5591,6 +5719,29 @@ const BodyContext = struct {
         }
     }
 
+    fn buildEncodeRestoredPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (self.customEncodeToLookup(shape_ty) != null) return;
+        if (self.typeHasBuiltinOwner(shape_ty, .str) or self.typeHasBuiltinOwner(shape_ty, .u64)) return;
+
+        switch (self.builder.shapeContent(shape_ty)) {
+            .record, .zst => {
+                try self.buildEncodeRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty);
+                for (self.recordFieldsForShape(shape_ty)) |field| {
+                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
+                }
+            },
+            else => {},
+        }
+    }
+
     fn buildEncodeConstructionRecordPrecomputedPlan(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
@@ -5609,9 +5760,60 @@ const BodyContext = struct {
             self.allocator.free(values);
         };
 
+        const base_capture_id = plan.next_capture_id;
+        plan.next_capture_id += fields.len;
+        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("encode_to generated too many captures");
+
         for (fields, 0..) |field, index| {
             locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+            self.builder.program.setLocalCaptureId(
+                locals[index],
+                self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
+            );
             values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+        }
+
+        try plan.records.put(shape_ty, .{
+            .renamed_field_locals = locals,
+            .renamed_field_values = values,
+            .renamed_field_lengths = null,
+        });
+        inserted = true;
+
+        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+    }
+
+    fn buildEncodeRestoredRecordPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (plan.records.contains(shape_ty)) return;
+
+        const fields = self.recordFieldsForShape(shape_ty);
+        const locals = try self.allocator.alloc(Ast.LocalId, fields.len);
+        const values = try self.allocator.alloc(Ast.ExprId, fields.len);
+        var inserted = false;
+        errdefer if (!inserted) {
+            self.allocator.free(locals);
+            self.allocator.free(values);
+        };
+
+        const base_capture_id = plan.next_capture_id;
+        plan.next_capture_id += fields.len;
+        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("encode_to generated too many captures");
+
+        for (fields, 0..) |_, index| {
+            const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
+            const node = constGeneratedCaptureNode(fn_value, capture_id) orelse
+                Common.invariant("stored encode_to runtime function was missing a renamed field capture");
+            locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+            self.builder.program.setLocalCaptureId(locals[index], capture_id);
+            values[index] = try self.builder.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
         }
 
         try plan.records.put(shape_ty, .{
@@ -9645,10 +9847,13 @@ const BodyContext = struct {
         const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
         const encoding_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
         const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
+        self.builder.program.setLocalCaptureId(value_local, encodeToValueCaptureId());
+        self.builder.program.setLocalCaptureId(encoding_local, encodeToEncodingCaptureId());
 
         const str_ty = try self.builder.primitiveType(.str);
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
+        precomputed_plan.next_capture_id = encodeToFirstFieldCaptureId();
         try self.buildEncodeConstructionPrecomputedPlan(&precomputed_plan, shape_ty, arg_tys[1], str_ty);
 
         const encoded = try self.lowerEncodeShapeToState(
@@ -9662,7 +9867,10 @@ const BodyContext = struct {
             &precomputed_plan,
         );
         const fn_id = try self.builder.program.addFn(.{
-            .fn_def = .{ .checked_generated = self.owner_template },
+            .fn_def = .{ .encode_to_runtime = .{
+                .owner = self.owner_template,
+                .expr = plan.expr,
+            } },
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = generatedEncodeToRuntimeKey(self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
@@ -10138,8 +10346,8 @@ const BodyContext = struct {
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant("custom named parser type had no method owner");
-        return self.builder.lookupMethodTargetByName(owner, "parser") orelse
-            Common.invariant("checked method registry is missing custom parser target");
+        return self.builder.lookupMethodTargetByName(owner, "parser_for") orelse
+            Common.invariant("checked method registry is missing custom parser_for target");
     }
 
     fn customEncodeToLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
@@ -13933,6 +14141,18 @@ fn parserEncodingCaptureId() u32 {
     return 0;
 }
 
+fn encodeToValueCaptureId() u32 {
+    return 0;
+}
+
+fn encodeToEncodingCaptureId() u32 {
+    return 1;
+}
+
+fn encodeToFirstFieldCaptureId() usize {
+    return 2;
+}
+
 fn generatedRecordDirectDispatchKey(
     current_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
@@ -14042,17 +14262,17 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     };
 }
 
-fn parserDispatchPlanForExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
+fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
     const raw = @intFromEnum(expr_id);
-    if (raw >= view.bodies.exprs.len) Common.invariant("stored parser runtime expression is outside checked body store");
+    if (raw >= view.bodies.exprs.len) Common.invariant("stored serialization runtime expression is outside checked body store");
     const expr = view.bodies.exprs[raw];
     const plan_id = switch (expr.data) {
-        .dispatch_call => |maybe| maybe orelse Common.invariant("stored parser dispatch expression had no dispatch plan"),
-        .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored parser type dispatch expression had no dispatch plan"),
-        else => Common.invariant("stored parser runtime function did not reference a dispatch expression"),
+        .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
+        .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
+        else => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
     const plan_raw = @intFromEnum(plan_id);
-    if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored parser dispatch plan is outside plan table");
+    if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return view.static_dispatch_plans.plans[plan_raw];
 }
 

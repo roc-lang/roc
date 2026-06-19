@@ -37,8 +37,8 @@ Format := [Default].{
 State := [Present(Str), Done]
 
 Token := { raw : Str }.{
-	parser : Format -> (State -> Try({ value : Token, rest : State }, [MissingRequired]))
-	parser = |_| |state| {
+	parser_for : Format -> (State -> Try({ value : Token, rest : State }, [MissingRequired]))
+	parser_for = |_| |state| {
 		parsed = Format.parse_str(state)?
 		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
 	}
@@ -49,11 +49,11 @@ Token := { raw : Str }.{
 
 parse : State -> Try(a, [MissingRequired])
 	where [
-		a.parser : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
 parse = |input| {
 	Shape : a
-	parse_shape = Shape.parser(Format.Default)
+	parse_shape = Shape.parser_for(Format.Default)
 	parsed = parse_shape(input)?
 	Ok(parsed.value)
 }

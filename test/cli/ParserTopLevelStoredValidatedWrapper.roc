@@ -41,13 +41,13 @@ State := [Present(Str), Done]
 trailing_input : ParserTopLevelStoredValidatedWrapper.DecodeErr
 trailing_input = ParserTopLevelStoredValidatedWrapper.DecodeErr.TrailingInput
 
-parser : () -> (Str -> Try(a, ParserTopLevelStoredValidatedWrapper.DecodeErr))
+parser_for : () -> (Str -> Try(a, ParserTopLevelStoredValidatedWrapper.DecodeErr))
 	where [
-		a.parser : Format -> (State -> Try({ value : a, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)),
 	]
-parser = || {
+parser_for = || {
 	Shape : a
-	parse_shape = Shape.parser(Format.Default)
+	parse_shape = Shape.parser_for(Format.Default)
 
 	|input| {
 		parsed = parse_shape(State.Present(input))?
@@ -60,7 +60,7 @@ parser = || {
 }
 
 parse_stored : Str -> Try({ foo : Str }, ParserTopLevelStoredValidatedWrapper.DecodeErr)
-parse_stored = parser()
+parse_stored = parser_for()
 
 expect {
 	result = parse_stored("stored")?

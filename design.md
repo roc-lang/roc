@@ -911,11 +911,11 @@ state = Headers.{ raw }
 The underlying parse method is public and callable. It is deliberately curried:
 
 ```roc
-a.parser : encoding -> (state -> Try({ value : a, rest : state }, err))
+a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))
 a.encode_to : a, encoding -> (state -> Try(state, err))
 ```
 
-`parser` is a method on the value type being produced. `encode_to` is a method
+`parser_for` is a method on the value type being produced. `encode_to` is a method
 on the value being serialized. Structural types get these methods from the
 compiler. Nominal types may define them explicitly, and structural derivation
 uses those explicit nominal methods when a field, payload, list element, nested
@@ -937,12 +937,12 @@ Headers := { raw : Str }.{
 
 	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser(HeaderEncoding.Caseless)
+		parse_output = Output.parser_for(HeaderEncoding.Caseless)
 		parsed = parse_output(Headers.{ raw })?
 
 		Ok(parsed.value)
@@ -951,7 +951,7 @@ Headers := { raw : Str }.{
 ```
 
 The exact shape of `HeaderEncoding` is format-owned; it is not a compiler
-interface. The important split is that `Output.parser(HeaderEncoding.Caseless)`
+interface. The important split is that `Output.parser_for(HeaderEncoding.Caseless)`
 constructs the concrete parser and `Headers.{ raw }` is the runtime input state.
 Formats with no configurable behavior can still use a zero-sized encoding value.
 
@@ -961,7 +961,7 @@ When a concrete operation cannot fail, its error type is empty, so an exhaustive
 `Ok(value) = Json.encode(thing)` binding is accepted.
 
 Checking derives structural methods by emitting ordinary static-dispatch
-constraints. For example, deriving `a.parser` for a concrete shape asks the
+constraints. For example, deriving `a.parser_for` for a concrete shape asks the
 encoding and state types for exactly the methods needed by that shape:
 
 - `Str` calls the format's string method;
@@ -984,7 +984,7 @@ user-defined nominal method returning an error.
 
 Compile-time evaluation uses the ordinary Roc constant machinery. The
 serialization API does not add a special compile-time marker. A derived
-`parser` constructs its transformed field sets and nested parsers before it
+`parser_for` constructs its transformed field sets and nested parsers before it
 returns the runtime lambda. If that parser construction is evaluated during
 checking, those transformed values are stored as checked constants and restored
 later as ordinary Roc values. The returned runtime lambda then closes over only
@@ -1004,7 +1004,7 @@ field values, iterators, and slice-returning string/list APIs. The compiler does
 not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
 primitives as part of the serialization method surface.
 
-Record parsing is driven by the compiler-generated structural `parser` method.
+Record parsing is driven by the compiler-generated structural `parser_for` method.
 The compiler creates a `Fields(_shape)` value for each concrete record shape:
 
 ```roc
@@ -1032,12 +1032,12 @@ matching `Fields(_shape)`, then the compiler already knows every handle is in
 range for that record. There is no user-exposed `U64` slot to validate at
 runtime.
 
-The derived `parser` constructs field metadata before returning the runtime
+The derived `parser_for` constructs field metadata before returning the runtime
 lambda:
 
 ```roc
 renamed_fields = Fields.rename_fields(original_fields, |name| encoding.rename_field(name))
-parse_nested = Nested.parser(encoding)
+parse_nested = Nested.parser_for(encoding)
 ```
 
 `encoding.rename_field` is a pure format method. Every encoding provides it;

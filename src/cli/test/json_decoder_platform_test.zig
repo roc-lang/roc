@@ -135,6 +135,12 @@ test "JSON parsing platform derives structural parser without runtime allocation
     if (camel_direct_prebuilt_path == null) {
         try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
     }
+    try runJsonDecoderAndCheckOutput(
+        allocator,
+        camel_direct_output_path,
+        "{ \"cacheControl\" : \"no-cache\", \"userId\" : \"abc\" }\n",
+        "11\n",
+    );
 }
 
 fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) anyerror!?[]u8 {

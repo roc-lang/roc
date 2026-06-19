@@ -39,7 +39,7 @@ State := [Present(Str), Done]
 parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [MissingRequired])
 parse_stored = {
 	Shape : { foo : Str }
-	Shape.parser(Format.Default)
+	Shape.parser_for(Format.Default)
 }
 
 expect {

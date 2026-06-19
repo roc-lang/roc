@@ -29,7 +29,7 @@ parse_headers : Headers -> Try(
 	},
 	Headers.DecodeErr,
 )
-parse_headers = Headers.parser()
+parse_headers = Headers.parser_for()
 
 main! : Str => U64
 main! = |headers| {

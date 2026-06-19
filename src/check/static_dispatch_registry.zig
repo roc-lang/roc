@@ -945,7 +945,7 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
-    if (method_name.eql(common.parser)) {
+    if (method_name.eql(common.parser_for)) {
         return .{ .parser = .{
             .structural_allowed = true,
         } };

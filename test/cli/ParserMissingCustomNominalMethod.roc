@@ -40,11 +40,11 @@ State := [Present(Str), Done]
 
 parse : State -> Try(a, [MissingRequired])
 	where [
-		a.parser : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
 parse = |input| {
 	Shape : a
-	parse_shape = Shape.parser(Format.Default)
+	parse_shape = Shape.parser_for(Format.Default)
 	parsed = parse_shape(input)?
 	Ok(parsed.value)
 }

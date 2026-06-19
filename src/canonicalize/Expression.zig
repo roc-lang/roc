@@ -398,7 +398,7 @@ pub const Expr = union(enum) {
     /// Fmt.decode_str(format, source)
     ///
     /// Shape : { foo : Str }
-    /// Shape.parser(format)
+    /// Shape.parser_for(format)
     /// ```
     e_type_method_call: struct {
         type_dispatch_stmt: CIR.Statement.Idx,

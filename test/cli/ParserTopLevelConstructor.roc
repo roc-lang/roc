@@ -72,7 +72,7 @@ find_field = |fields, name| {
 Shape : { foo_bar : Str }
 
 parse_shape : State -> Try({ value : { foo_bar : Str }, rest : State }, [MissingRequired])
-parse_shape = Shape.parser(Format.Default)
+parse_shape = Shape.parser_for(Format.Default)
 
 expect {
 	parsed = parse_shape(State.Present("from top level"))?

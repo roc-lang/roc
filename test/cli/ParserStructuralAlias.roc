@@ -41,7 +41,7 @@ main = || {
 	Shape : { foo : Str }
 
 	parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [MissingRequired])
-	parse_shape = Shape.parser(Format.Default)
+	parse_shape = Shape.parser_for(Format.Default)
 
 	parsed = parse_shape(State.Present(""))?
 	Ok(parsed.value)
