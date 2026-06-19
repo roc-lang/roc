@@ -26,12 +26,12 @@ Node := [].{
 		transform : Box((NodeValue, NodeValue -> NodeValue)),
 	}
 
-	## Signal expression. `Ref` reads a binder's current value. `Const*` are
-	## literals. `Map`/`Map2`/`Combine` are derived nodes carrying boxed typed
+	## Signal expression. `Ref` reads a binder's current value. `ConstValue` is a
+	## literal. `Map`/`Map2`/`Combine` are derived nodes carrying boxed typed
 	## transforms (confined erasure) and a boxed `is_eq` thunk for change pruning.
 	SignalExpr := [
 		Ref(BinderRef),
-		Const(NodeValue),
+		ConstValue(NodeValue),
 		Map({ input : Box(SignalExpr), transform : Box((NodeValue -> NodeValue)) }),
 		Map2({ left : Box(SignalExpr), right : Box(SignalExpr), transform : Box((NodeValue, NodeValue -> NodeValue)) }),
 		Combine(List(SignalExpr)),

@@ -215,7 +215,7 @@ Ui := [].{
 						crash "Ui.each received a key value that does not match the key type"
 					}
 				}
-			row(key, Signal.from_expr(Node.SignalExpr.Const(item_nv)))
+			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(item_nv)))
 		}
 		Node.Elem.Each(
 			{

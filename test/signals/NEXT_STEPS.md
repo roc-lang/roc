@@ -213,7 +213,7 @@ The string-free, closure-binder API exists and typechecks end to end. New
 platform modules:
 
 - `platform/Node.roc` — pure immutable descriptor tree the host walks. `SignalExpr`
-  (`Ref(BinderRef)`/`Const`/`Map`/`Map2`/`Combine`), `Attr`, and the
+  (`Ref(BinderRef)`/`ConstValue`/`Map`/`Map2`/`Combine`), `Attr`, and the
   identity-bearing `Elem` scope binders `State`/`When`/`Each`. `State` and `Each`
   carry boxed `is_eq` / key-`is_eq` thunks (confined erasure). `Msg` is a type
   alias `{ binder : BinderRef, payload_kind : U64, transform : Box(...) }`.
@@ -254,6 +254,12 @@ In dependency order. Each sub-step ends green per `minici` discipline.
 2. **Regenerate `roc_platform_abi.zig`** after the boundary types change:
    `./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc`.
    Re-fix the `comptime` struct-size asserts.
+
+   Progress: `Node.Elem` is now reachable in the generated platform ABI through
+   `roc_ui_node_abi_probe`, giving the host generated `NodeElem`,
+   `NodeSignalExpr`, and `NodeAttr` layouts before the main app boundary flips.
+   `Node.SignalExpr.Const` was renamed to `ConstValue` because the generated Zig
+   payload field for `Const` collided with the `const` keyword.
 3. **Host scope forest + identity walk.** Pre-order walk of the descriptor tree
    that assigns construction-order ordinals to identity-bearing nodes only (state
    binders, `when` sites, `each` sites); ordinary markup does not advance the

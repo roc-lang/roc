@@ -7,6 +7,7 @@ platform ""
 		"roc_ui_recompute": ui_recompute,
 		"roc_ui_render": ui_render,
 		"roc_ui_drop": ui_drop,
+		"roc_ui_node_abi_probe": ui_node_abi_probe,
 	}
 	targets: {
 		inputs: "targets/",
@@ -17,6 +18,7 @@ platform ""
 import Elem exposing [Elem]
 import Reactive
 import NodeValue exposing [NodeValue]
+import Node
 import Signal
 import Html
 import Ui
@@ -40,3 +42,6 @@ ui_render = |runtime, input| {
 
 ui_drop : Box(UiRuntime.Runtime) -> {}
 ui_drop = |runtime| UiRuntime.drop(runtime)
+
+ui_node_abi_probe : {} -> Node.Elem
+ui_node_abi_probe = |_| Node.Elem.Element({ tag: "div", attrs: [], children: [] })
