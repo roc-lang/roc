@@ -2624,6 +2624,19 @@ const Lowerer = struct {
                 }
                 break :blk current;
             },
+            .list => |list| blk: {
+                var current = next;
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| current = try self.initUninitializedPattern(rest_pattern, current);
+                }
+                const pats = self.solved.lifted.patSpan(list.patterns);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
             .tag => |tag| blk: {
                 var current = next;
                 const payloads = self.solved.lifted.patSpan(tag.payloads);
@@ -2862,6 +2875,10 @@ const Lowerer = struct {
                 }
                 break :blk false;
             },
+            // A list pattern can fail unless it imposes no length constraint:
+            // only `[.. as rest]` / `[..]` (a rest with no fixed elements, which
+            // matches every list) is irrefutable.
+            .list => |list| list.patterns.len > 0 or list.rest == null,
             .nominal => |inner| self.patternCanMiss(inner),
             .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
@@ -2878,6 +2895,7 @@ const Lowerer = struct {
             },
             .record => |fields| try self.lowerRecordPatternThen(pat_ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
+            .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, continuation),
             .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .int_lit = value }, on_match, miss),
@@ -3018,6 +3036,116 @@ const Lowerer = struct {
         return current;
     }
 
+    /// Lower a list pattern as a sequence of tests that all share a single
+    /// `miss` target: a length test, then one extracted-and-matched element per
+    /// fixed pattern, then the optional captured rest slice. Because every miss
+    /// jumps to the one shared join, the lowered control flow is linear in the
+    /// pattern's size rather than duplicating the remainder of the match per
+    /// element.
+    fn lowerListPatternThen(
+        self: *Lowerer,
+        list: Lifted.ListPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        continuation: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const elems = self.solved.lifted.patSpan(list.patterns);
+        const fixed_count: i64 = @intCast(elems.len);
+
+        // The list length is read by the length test, by the indices of fixed
+        // elements that match from the back, and by the rest slice. It is
+        // assigned once at the head of the chain so every reader sees it.
+        const len_local = try self.addLocalForLayout(.u64);
+
+        var current = on_match;
+
+        // The captured rest binds the slice between the matched front and back
+        // elements. `[.. as rest]` with no fixed elements is the whole list and
+        // simply aliases the source; a bare `..` binds nothing.
+        if (list.rest) |rest| {
+            if (rest.pattern) |rest_pattern| {
+                if (elems.len == 0) {
+                    current = try self.bindPattern(rest_pattern, source, current);
+                } else {
+                    const source_layout = self.result.store.getLocal(source).layout_idx;
+                    const rest_local = try self.addLocalForLayout(source_layout);
+                    current = try self.bindPattern(rest_pattern, rest_local, current);
+                    // rest = take_first(take_last(source, len - rest.index), len - fixed_count)
+                    const front_dropped = try self.addLocalForLayout(source_layout);
+                    const keep_len = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(rest_local, .list_take_first, front_dropped, keep_len, current);
+                    current = try self.lenMinusConst(keep_len, len_local, fixed_count, current);
+                    const keep_after_front = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(front_dropped, .list_take_last, source, keep_after_front, current);
+                    current = try self.lenMinusConst(keep_after_front, len_local, @intCast(rest.index), current);
+                }
+            }
+        }
+
+        const rest_index: ?u32 = if (list.rest) |rest| rest.index else null;
+        var i = elems.len;
+        while (i > 0) {
+            i -= 1;
+            const elem_local = try self.addTemp(try self.lowerPatTy(elems[i]));
+            current = try self.lowerPatternThen(elems[i], elem_local, current, miss, continuation);
+            const index_local = try self.addLocalForLayout(.u64);
+            current = try self.assignBinaryLowLevel(elem_local, .list_get_unsafe, source, index_local, current);
+            const matches_from_back = if (rest_index) |ri| i >= ri else false;
+            if (matches_from_back) {
+                // Elements after the rest are indexed relative to the end:
+                // len - (fixed_count - i).
+                current = try self.lenMinusConst(index_local, len_local, fixed_count - @as(i64, @intCast(i)), current);
+            } else {
+                current = try self.assignU64Literal(index_local, @intCast(i), current);
+            }
+        }
+
+        // Length test at the head: an exact match needs `len == fixed_count`; a
+        // pattern with a rest needs `len >= fixed_count`.
+        const required = try self.addLocalForLayout(.u64);
+        const cond = try self.addLocalForLayout(.bool);
+        const cmp_op: LIR.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
+        const length_check = try self.boolSwitchNoContinuation(cond, current, try self.patternMissJump(miss));
+        var head = try self.assignBinaryLowLevel(cond, cmp_op, len_local, required, length_check);
+        head = try self.assignU64Literal(required, fixed_count, head);
+        head = try self.assignUnaryLowLevel(len_local, .list_len, source, head);
+        return head;
+    }
+
+    fn assignU64Literal(self: *Lowerer, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = next,
+        } });
+    }
+
+    fn assignBinaryLowLevel(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const args = [_]LIR.LocalId{ lhs, rhs };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
+    }
+
+    /// Emit `target = len_local - value` using a fresh u64 literal operand.
+    fn lenMinusConst(self: *Lowerer, target: LIR.LocalId, len_local: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const operand = try self.addLocalForLayout(.u64);
+        const subtract = try self.assignBinaryLowLevel(target, .num_minus, len_local, operand, next);
+        return try self.assignU64Literal(operand, value, subtract);
+    }
+
     fn bindPattern(self: *Lowerer, pat_id: Lifted.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const pat_data = self.pat(pat_id);
         const pat_ty = try self.lowerPatTy(pat_id);
@@ -3030,6 +3158,12 @@ const Lowerer = struct {
             },
             .record => |fields| try self.bindRecordPattern(pat_ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
+            // Only an irrefutable list pattern reaches binding: `[.. as rest]`
+            // binds the whole list (aliasing the source); `[..]` binds nothing.
+            .list => |list| if (list.rest) |rest| (if (rest.pattern) |rest_pattern|
+                try self.bindPattern(rest_pattern, source, next)
+            else
+                next) else next,
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
             .nominal => |inner| try self.bindPattern(inner, source, next),
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,

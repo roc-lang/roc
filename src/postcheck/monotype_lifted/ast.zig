@@ -42,6 +42,10 @@ pub const ComptimeSite = Mono.ComptimeSite;
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
 pub const RecordDestruct = Mono.RecordDestruct;
+/// List destructuring pattern.
+pub const ListPattern = Mono.ListPattern;
+/// `..`/`.. as name` portion of a list pattern.
+pub const ListRestPattern = Mono.ListRestPattern;
 
 /// Typed Monotype Lifted expression.
 pub const Expr = Mono.Expr;
