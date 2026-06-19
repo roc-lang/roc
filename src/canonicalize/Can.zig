@@ -12255,10 +12255,33 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         },
     }, region);
 
+    if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
+        const bool_stmt_idx = bool_info.statement_idx orelse {
+            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+        };
+        const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
+            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+        };
+        const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
+        const import_idx = try self.env.imports.getOrPutWithIdent(
+            self.env.gpa,
+            self.env.common.getStringStore(),
+            CIR.Import.compiler_builtin_import_name,
+            builtin_ident,
+        );
+        return try self.env.addExpr(CIR.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region);
+    }
+
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
         @panic("Bool type binding was absent during boolean operator canonicalization");
     };
-
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
@@ -18240,6 +18263,10 @@ pub fn introduceType(
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    const shadowed_external_region: ?Region = if (current_scope.type_bindings.get(name_ident)) |binding| switch (binding) {
+        .external_nominal => |external| external.origin_region,
+        else => null,
+    } else null;
 
     // Check for shadowing in parent scopes
     var shadowed_in_parent: ?Statement.Idx = null;
@@ -18267,6 +18294,15 @@ pub fn introduceType(
 
     switch (result) {
         .success => {
+            if (shadowed_external_region) |original_region| {
+                try self.env.pushDiagnostic(Diagnostic{
+                    .shadowing_warning = .{
+                        .ident = name_ident,
+                        .region = region,
+                        .original_region = original_region,
+                    },
+                });
+            }
             // Check if we're shadowing a type in a parent scope
             if (shadowed_in_parent) |shadowed_stmt| {
                 const original_region = self.env.store.getStatementRegion(shadowed_stmt);
