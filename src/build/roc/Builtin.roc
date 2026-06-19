@@ -1,6 +1,23 @@
 Builtin :: [].{
 	ParseTagUnionSpec(_shape) :: {}.{
-		parse : ParseTagUnionSpec(_shape), Str, _fmt, _err -> Try(_shape, _err)
+		parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try(_shape, _err)
+	}
+
+	# Compiler-generated structural record field metadata used by derived parsers.
+	# The phantom _shape ties a Field handle to the exact Fields value that
+	# produced it, so generated parsers can dispatch without user-visible slots.
+	# Field's backing payload is opaque outside Builtin; users can only observe it
+	# through Field.name, while compiler-generated code uses the hidden index.
+	Fields(_shape) :: {}.{
+		rename_fields : Fields(_shape), (Str -> Str) -> Fields(_shape)
+		shortest_name : Fields(_shape) -> U64
+		longest_name : Fields(_shape) -> U64
+		iter : Fields(_shape) -> Iter(Field(_shape))
+		for_size : Fields(_shape), U64 -> Iter(Field(_shape))
+	}
+
+	Field(_shape) :: { index : U64, name : Str, name_len : U64 }.{
+		name : Field(_shape) -> Str
 	}
 
 	Str :: [ProvidedByCompiler].{

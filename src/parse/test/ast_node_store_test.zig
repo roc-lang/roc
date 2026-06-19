@@ -829,6 +829,13 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .nominal_record = .{
+            .mapper = rand_idx(random, AST.Expr.Idx),
+            .backing = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .ellipsis = .{ .region = rand_region(random) },
     });
     try expressions.append(gpa, AST.Expr{

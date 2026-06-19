@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -10,6 +11,7 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
+const static_dispatch = check.StaticDispatchRegistry;
 
 const UnifyPair = struct {
     first: Type.TypeVarId,
@@ -201,6 +203,7 @@ const Solver = struct {
                 .local = capture.local,
                 .symbol = local.symbol,
                 .binder = local.binder,
+                .capture_id = local.capture_id,
                 .ty = self.localTy(capture.local),
             };
         }
@@ -409,7 +412,11 @@ const Solver = struct {
             },
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    _ = try self.expectExpr(backing, backing_ty);
+                    if (self.hasBuiltinOwner(expected, .fields)) {
+                        _ = try self.inferExpr(backing);
+                    } else {
+                        _ = try self.expectExpr(backing, backing_ty);
+                    }
                 } else {
                     _ = try self.inferExpr(backing);
                 }
@@ -806,6 +813,13 @@ const Solver = struct {
         };
     }
 
+    fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) bool {
+        return switch (self.program.types.rootContent(ty)) {
+            .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
+            else => false,
+        };
+    }
+
     fn bindLowLevelTypes(
         self: *Solver,
         op: can.CIR.Expr.LowLevel,
@@ -1079,12 +1093,14 @@ const Solver = struct {
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
-                    if (left_named.backing) |left_backing| {
-                        const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                        if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                        try self.unify(left_backing.ty, right_backing.ty);
-                    } else if (right_named.backing != null) {
-                        Common.invariant("named type backing differed during Lambda Solved unification");
+                    if (!sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields)) {
+                        if (left_named.backing) |left_backing| {
+                            const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
+                            if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
+                            try self.unify(left_backing.ty, right_backing.ty);
+                        } else if (right_named.backing != null) {
+                            Common.invariant("named type backing differed during Lambda Solved unification");
+                        }
                     }
                     self.program.types.set(b, .{ .link = a });
                 },
@@ -1161,7 +1177,8 @@ const Solver = struct {
             const right_capture = self.program.types.captureItem(rhs, i);
             if (left_capture.local != right_capture.local or
                 left_capture.symbol != right_capture.symbol or
-                left_capture.binder != right_capture.binder)
+                left_capture.binder != right_capture.binder or
+                left_capture.capture_id != right_capture.capture_id)
             {
                 Common.invariant("capture identity failed Lambda Solved unification");
             }
@@ -1388,6 +1405,12 @@ const TypeCloner = struct {
         return lowered;
     }
 };
+
+fn sameBuiltinOwner(left: ?static_dispatch.BuiltinOwner, right: ?static_dispatch.BuiltinOwner, owner: static_dispatch.BuiltinOwner) bool {
+    const left_owner = left orelse return false;
+    const right_owner = right orelse return false;
+    return left_owner == owner and right_owner == owner;
+}
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());

@@ -128,6 +128,8 @@ pub fn main(process_init: std.process.Init) !void {
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
     const parse_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseTagUnionSpec");
+    const fields_type_idx = try findTypeDeclaration(gpa, env, "Fields");
+    const field_type_idx = try findTypeDeclaration(gpa, env, "Field");
     const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
     const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
     const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
@@ -167,6 +169,8 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .list_type = list_type_idx,
         .box_type = box_type_idx,
         .parse_tag_union_spec_type = parse_tag_union_spec_type_idx,
+        .fields_type = fields_type_idx,
+        .field_type = field_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
@@ -184,6 +188,8 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .numeral_type = numeral_type_idx,
         .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
         .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.ParseTagUnionSpec"),
+        .fields_ident = expectBuiltinIdent(env, "Builtin.Fields"),
+        .field_ident = expectBuiltinIdent(env, "Builtin.Field"),
         .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
         .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
         .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
@@ -229,6 +235,8 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setTypeNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.parse_tag_union_spec_ident, @intCast(@intFromEnum(indices.parse_tag_union_spec_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.fields_ident, @intCast(@intFromEnum(indices.fields_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.field_ident, @intCast(@intFromEnum(indices.field_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));

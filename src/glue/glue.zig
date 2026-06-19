@@ -1109,6 +1109,8 @@ const TypeTable = struct {
                     return .{ .unknown = try self.gpa.dupe(u8, "Box") };
                 },
                 .parse_tag_union_spec,
+                .fields,
+                .field,
                 => return .unit,
                 .str => return .str_,
                 .bool => return .bool_,

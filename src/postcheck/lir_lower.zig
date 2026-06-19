@@ -586,7 +586,12 @@ const Lowerer = struct {
         errdefer self.allocator.free(slots);
         for (fields, 0..) |field, index| {
             slots[index] = .{
-                .binder = field.binder orelse Common.invariant("function result capture had no checked binder"),
+                .id = if (field.binder) |binder|
+                    .{ .binder = binder }
+                else if (field.capture_id) |capture_id|
+                    .{ .generated = capture_id }
+                else
+                    .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
                 .plan = try self.constPlanOfType(field.ty),
             };
@@ -2637,6 +2642,8 @@ const Lowerer = struct {
             .list,
             .box,
             .parse_tag_union_spec,
+            .fields,
+            .field,
             => null,
         };
     }
@@ -2787,6 +2794,10 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
         .checked_generated => |template| .{ .checked_generated = template },
+        .parser_runtime => |runtime| .{ .parser_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
     };
 }
 

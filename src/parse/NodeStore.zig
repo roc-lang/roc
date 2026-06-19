@@ -1053,6 +1053,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(rb.mapper));
             node.data.lhs = data_start;
         },
+        .nominal_record => |nr| {
+            node.tag = .nominal_record;
+            node.region = nr.region;
+            node.data.lhs = @intFromEnum(nr.mapper);
+            node.data.rhs = @intFromEnum(nr.backing);
+        },
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
@@ -2158,6 +2164,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = fields_start,
                     .len = fields_len,
                 } },
+                .region = node.region,
+            } };
+        },
+        .nominal_record => {
+            return .{ .nominal_record = .{
+                .mapper = @enumFromInt(node.data.lhs),
+                .backing = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },

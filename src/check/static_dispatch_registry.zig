@@ -22,6 +22,14 @@ const CheckedExprId = checked_ids.CheckedExprId;
 const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 
+fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Var {
+    return switch (module.getStatement(stmt_idx)) {
+        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
+        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
+        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+    };
+}
+
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
@@ -69,6 +77,8 @@ pub const MethodOwner = union(enum) {
 pub const BuiltinOwner = enum {
     list,
     box,
+    fields,
+    field,
     bool,
     str,
     u8,
@@ -342,6 +352,8 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
+    if (type_ident.eql(common.builtin_fields)) return .fields;
+    if (type_ident.eql(common.builtin_field)) return .field;
     if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     return null;
 }
@@ -435,7 +447,7 @@ pub const StaticDispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
-    parse_from: struct {
+    parser: struct {
         structural_allowed: bool,
     },
 };
@@ -601,14 +613,13 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
-                    const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
@@ -931,8 +942,8 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
-    if (method_name.eql(common.parse_from)) {
-        return .{ .parse_from = .{
+    if (method_name.eql(common.parser)) {
+        return .{ .parser = .{
             .structural_allowed = true,
         } };
     }

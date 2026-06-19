@@ -2,18 +2,56 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Headers
 
-main! : Str => U64
-main! = |headers| {
-	decoded_result : Try(
-		{
+Shape : {
+	cache_control : Str,
+	content_length : U64,
+	explicit_optional : Try(Str, [Missing]),
+	foo : Str,
+	question_optional : Try(Str, [Missing]),
+	request_count : U64,
+	wildcard_optional : Try(Str, [Missing]),
+	x_auth_token : Try(Str, [Missing]),
+}
+
+parse_headers : Headers -> Try(
+	{
+		value : {
+			cache_control : Str,
+			content_length : U64,
 			explicit_optional : Try(Str, [Missing]),
 			foo : Str,
 			question_optional : Try(Str, [Missing]),
+			request_count : U64,
+			wildcard_optional : Try(Str, [Missing]),
+			x_auth_token : Try(Str, [Missing]),
+		},
+		rest : Headers,
+	},
+	Headers.DecodeErr,
+)
+parse_headers = Headers.parser()
+
+main! : Str => U64
+main! = |headers| {
+	state = Headers.{ raw: headers }
+
+	decoded_result : Try(
+		{
+			cache_control : Str,
+			content_length : U64,
+			explicit_optional : Try(Str, [Missing]),
+			foo : Str,
+			question_optional : Try(Str, [Missing]),
+			request_count : U64,
 			wildcard_optional : Try(Str, _),
+			x_auth_token : Try(Str, [Missing]),
 		},
 		Headers.DecodeErr,
 	)
-	decoded_result = Headers.parse(headers)
+	decoded_result = match parse_headers(state) {
+		Ok(parsed) => Ok(parsed.value)
+		Err(err) => Err(err)
+	}
 
 	match decoded_result {
 		Ok(decoded) => {
@@ -33,7 +71,19 @@ main! = |headers| {
 				Err(Missing) => 0
 			}
 
-			Str.count_utf8_bytes(decoded.foo) + explicit_optional_length + wildcard_optional_length + question_optional_length
+			x_auth_token_length = match decoded.x_auth_token {
+				Ok(value) => Str.count_utf8_bytes(value)
+				Err(Missing) => 0
+			}
+
+			decoded.content_length
+				+ decoded.request_count
+				+ Str.count_utf8_bytes(decoded.cache_control)
+				+ Str.count_utf8_bytes(decoded.foo)
+				+ explicit_optional_length
+				+ wildcard_optional_length
+				+ question_optional_length
+				+ x_auth_token_length
 		}
 		Err(_) => 999999
 	}

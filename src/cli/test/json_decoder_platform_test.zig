@@ -49,49 +49,18 @@ test "JSON parsing platform derives structural parser without runtime allocation
     const output_path = try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
     defer allocator.free(output_path);
 
+    const camel_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel.exe" else "json_decoder_camel";
+    const camel_output_path = try std.fs.path.join(allocator, &.{ tmp_path, camel_exe_name });
+    defer allocator.free(camel_output_path);
+
+    const camel_direct_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel_direct.exe" else "json_decoder_camel_direct";
+    const camel_direct_output_path = try std.fs.path.join(allocator, &.{ tmp_path, camel_direct_exe_name });
+    defer allocator.free(camel_direct_output_path);
+
     var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
     defer env_map.deinit();
 
-    const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
-    defer allocator.free(target_arg);
-
-    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
-    defer allocator.free(output_arg);
-
-    const build_result = try util.runChildWithTimeout(io, allocator, &.{
-        util.roc_binary_path,
-        "build",
-        "--opt=speed",
-        target_arg,
-        output_arg,
-        "test/json-decoder/app.roc",
-    }, .{
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024,
-    });
-    defer allocator.free(build_result.stdout);
-    defer allocator.free(build_result.stderr);
-
-    switch (build_result.term) {
-        .exited => |code| {
-            if (code != 0) {
-                std.debug.print("roc build failed with exit code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
-                    code,
-                    build_result.stdout,
-                    build_result.stderr,
-                });
-                return error.RocBuildFailed;
-            }
-        },
-        else => {
-            std.debug.print("roc build terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
-                build_result.term,
-                build_result.stdout,
-                build_result.stderr,
-            });
-            return error.RocBuildFailed;
-        },
-    }
+    try buildRocApp(allocator, &env_map, target_name, output_path, "test/json-decoder/app.roc");
 
     for (0..8) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -105,11 +74,29 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try runJsonDecoderAndCheckOutput(allocator, output_path, json, expected_stdout);
     }
 
+    const record_order_json = try buildRecordOrderJson(allocator);
+    defer allocator.free(record_order_json);
+    const record_order_expected_stdout = try buildExpectedStdout(allocator, expectedJsonLength(7, 0, 0));
+    defer allocator.free(record_order_expected_stdout);
+    try runJsonDecoderAndCheckOutput(allocator, output_path, record_order_json, record_order_expected_stdout);
+
+    const reverse_order_json = try buildReverseOrderJson(allocator);
+    defer allocator.free(reverse_order_json);
+    const reverse_order_expected_stdout = try buildExpectedStdout(allocator, expectedJsonLength(7, 1, 1));
+    defer allocator.free(reverse_order_expected_stdout);
+    try runJsonDecoderAndCheckOutput(allocator, output_path, reverse_order_json, reverse_order_expected_stdout);
+
     const reordered_json = try buildReorderedJson(allocator);
     defer allocator.free(reordered_json);
     const reordered_expected_stdout = try buildExpectedStdout(allocator, expectedJsonLength(7, 1, 1));
     defer allocator.free(reordered_expected_stdout);
     try runJsonDecoderAndCheckOutput(allocator, output_path, reordered_json, reordered_expected_stdout);
+
+    const duplicate_json = try buildDuplicateJson(allocator);
+    defer allocator.free(duplicate_json);
+    const duplicate_expected_stdout = try buildExpectedStdout(allocator, expectedJsonLength(0, 1, 1));
+    defer allocator.free(duplicate_expected_stdout);
+    try runJsonDecoderAndCheckOutput(allocator, output_path, duplicate_json, duplicate_expected_stdout);
 
     const missing_required_json = try buildMissingRequiredJson(allocator);
     defer allocator.free(missing_required_json);
@@ -118,6 +105,80 @@ test "JSON parsing platform derives structural parser without runtime allocation
     try runJsonDecoderAndCheckOutput(allocator, output_path, missing_required_json, missing_required_stdout);
 
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
+
+    try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
+    try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "user_id" });
+    try runJsonDecoderAndCheckOutput(
+        allocator,
+        camel_output_path,
+        "{ \"cacheControl\" : \"no-cache\", \"userId\" : \"abc\" }\n",
+        "11\n",
+    );
+
+    try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
+}
+
+fn buildRocApp(
+    allocator: std.mem.Allocator,
+    env_map: *const std.process.Environ.Map,
+    target_name: []const u8,
+    output_path: []const u8,
+    roc_file: []const u8,
+) anyerror!void {
+    const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
+    defer allocator.free(target_arg);
+
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
+    const build_result = try util.runChildWithTimeout(io, allocator, &.{
+        util.roc_binary_path,
+        "build",
+        "--opt=speed",
+        target_arg,
+        output_arg,
+        roc_file,
+    }, .{
+        .env_map = env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    switch (build_result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("roc build failed for {s} with exit code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                    roc_file,
+                    code,
+                    build_result.stdout,
+                    build_result.stderr,
+                });
+                return error.RocBuildFailed;
+            }
+        },
+        else => {
+            std.debug.print("roc build for {s} terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                roc_file,
+                build_result.term,
+                build_result.stdout,
+                build_result.stderr,
+            });
+            return error.RocBuildFailed;
+        },
+    }
+}
+
+fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) anyerror!void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(256 * 1024 * 1024));
+    defer allocator.free(bytes);
+
+    for (needles) |needle| {
+        if (std.mem.find(u8, bytes, needle)) |_| {
+            std.debug.print("optimized app binary {s} unexpectedly contains {s}\n", .{ exe_path, needle });
+            return error.BinaryContainsOriginalFieldName;
+        }
+    }
 }
 
 fn buildJson(
@@ -164,6 +225,55 @@ fn buildJson(
     return json.toOwnedSlice(allocator);
 }
 
+fn buildRecordOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    try json.appendSlice(allocator, "{\n");
+    try json.appendSlice(allocator, "  \"explicit_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[0].value);
+    try json.appendSlice(allocator, "\",\n  \"foo\" : \"");
+    try json.appendSlice(allocator, required_foo_value);
+    try json.appendSlice(allocator, "\",\n  \"nested\" : {\n    \"bar\" : \"");
+    try json.appendSlice(allocator, nested_bar_value);
+    try json.appendSlice(allocator, "\",\n    \"mode\" : { \"Warm\" : {} }\n  },\n");
+    try json.appendSlice(allocator, "  \"pair\" : { \"Pair\" : { \"first\" : \"left\", \"second\" : \"right\" } },\n");
+    try json.appendSlice(allocator, "  \"question_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[2].value);
+    try json.appendSlice(allocator, "\",\n  \"status\" : { \"Active\" : {} },\n");
+    try json.appendSlice(allocator, "  \"token\" : \"");
+    try json.appendSlice(allocator, token_input_value);
+    try json.appendSlice(allocator, "\",\n  \"wildcard_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[1].value);
+    try json.appendSlice(allocator, "\"\n}\n");
+
+    return json.toOwnedSlice(allocator);
+}
+
+fn buildReverseOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    try json.appendSlice(allocator, "{\n");
+    try json.appendSlice(allocator, "  \"wildcard_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[1].value);
+    try json.appendSlice(allocator, "\",\n  \"token\" : \"");
+    try json.appendSlice(allocator, token_input_value);
+    try json.appendSlice(allocator, "\",\n  \"status\" : { \"Paused\" : {} },\n");
+    try json.appendSlice(allocator, "  \"question_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[2].value);
+    try json.appendSlice(allocator, "\",\n  \"pair\" : { \"Pair\" : { \"second\" : \"right\", \"first\" : \"left\" } },\n");
+    try json.appendSlice(allocator, "  \"nested\" : {\n    \"mode\" : { \"Cold\" : {} },\n    \"bar\" : \"");
+    try json.appendSlice(allocator, nested_bar_value);
+    try json.appendSlice(allocator, "\"\n  },\n  \"foo\" : \"");
+    try json.appendSlice(allocator, required_foo_value);
+    try json.appendSlice(allocator, "\",\n  \"explicit_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[0].value);
+    try json.appendSlice(allocator, "\"\n}\n");
+
+    return json.toOwnedSlice(allocator);
+}
+
 fn buildReorderedJson(allocator: std.mem.Allocator) anyerror![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
@@ -198,6 +308,31 @@ fn buildReorderedJson(allocator: std.mem.Allocator) anyerror![]u8 {
     try json.appendSlice(allocator, long_unknown_key);
     try json.appendSlice(allocator, "\" : { \"nested\" : \"ignored\" }");
     try json.appendSlice(allocator, "\n}\n");
+
+    return json.toOwnedSlice(allocator);
+}
+
+fn buildDuplicateJson(allocator: std.mem.Allocator) anyerror![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    try json.appendSlice(allocator, "{\n");
+    try json.appendSlice(allocator, "  \"foo\" : \"short\",\n");
+    try json.appendSlice(allocator, "  \"nested\" : { \"bar\" : \"old\", \"mode\" : { \"Warm\" : {} } },\n");
+    try json.appendSlice(allocator, "  \"token\" : \"old-token\",\n");
+    try json.appendSlice(allocator, "  \"status\" : { \"Active\" : {} },\n");
+    try json.appendSlice(allocator, "  \"pair\" : { \"Pair\" : { \"first\" : \"left\", \"second\" : \"right\" } },\n");
+    try json.appendSlice(allocator, "  \"foo\" : \"");
+    try json.appendSlice(allocator, required_foo_value);
+    try json.appendSlice(allocator, "\",\n");
+    try json.appendSlice(allocator, "  \"token\" : \"");
+    try json.appendSlice(allocator, token_input_value);
+    try json.appendSlice(allocator, "\",\n");
+    try json.appendSlice(allocator, "  \"nested\" : { \"bar\" : \"");
+    try json.appendSlice(allocator, nested_bar_value);
+    try json.appendSlice(allocator, "\", \"mode\" : { \"Cold\" : {} } },\n");
+    try json.appendSlice(allocator, "  \"status\" : { \"Paused\" : {} }\n");
+    try json.appendSlice(allocator, "}\n");
 
     return json.toOwnedSlice(allocator);
 }

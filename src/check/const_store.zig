@@ -31,9 +31,15 @@ pub const ConstScalar = union(enum) {
     dec_bits: i128,
 };
 
+/// Identity for a captured value inside a compile-time function value.
+pub const CaptureId = union(enum) {
+    binder: checked_ids.PatternBinderId,
+    generated: u32,
+};
+
 /// Captured checked value inside a compile-time function value.
 pub const ConstCapture = struct {
-    binder: checked_ids.PatternBinderId,
+    id: CaptureId,
     value: ConstNodeId,
 };
 
@@ -62,6 +68,10 @@ pub const FnDef = union(enum) {
     local_hosted: names.ProcTemplate,
     imported_hosted: names.ProcTemplate,
     checked_generated: names.ProcTemplate,
+    parser_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked_ids.CheckedExprId,
+    },
 };
 
 /// Stored string value.

@@ -64,6 +64,10 @@ pub const FnDef = union(enum) {
     local_hosted: HostedFn,
     imported_hosted: HostedFn,
     checked_generated: names.ProcTemplate,
+    parser_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked.CheckedExprId,
+    },
 };
 
 /// Hosted function metadata output by checking and carried through lowering.
@@ -138,6 +142,11 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeBytes(hasher, "checked_generated");
             writeProcTemplate(hasher, template);
         },
+        .parser_runtime => |runtime| {
+            writeBytes(hasher, "parser_runtime");
+            writeProcTemplate(hasher, runtime.owner);
+            writeU32(hasher, @intFromEnum(runtime.expr));
+        },
     }
 }
 
@@ -170,6 +179,7 @@ pub const Local = struct {
     symbol: Common.Symbol,
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
+    capture_id: ?u32 = null,
 };
 
 /// Local id paired with its monomorphic type.
@@ -698,6 +708,10 @@ pub const Program = struct {
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
         try self.local_names.append(self.allocator, "");
         return id;
+    }
+
+    pub fn setLocalCaptureId(self: *Program, id: LocalId, capture_id: u32) void {
+        self.locals.items[@intFromEnum(id)].capture_id = capture_id;
     }
 
     /// Record the source-level name of a local (dupes; empty means none).

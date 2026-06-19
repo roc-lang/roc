@@ -668,13 +668,13 @@ pub const Payload = extern union {
     };
 
     pub const ExprTypeMethodCall = extern struct {
-        type_var_alias_stmt: u32,
+        type_dispatch_stmt: u32,
         method_name: u32,
         method_call_data_idx: u32,
     };
 
     pub const ExprTypeDispatchCall = extern struct {
-        type_var_alias_stmt: u32,
+        type_dispatch_stmt: u32,
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,

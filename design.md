@@ -875,18 +875,19 @@ concrete monomorphic dispatcher type has already determined the owner.
 ### Structural Serialization Methods
 
 Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
-builtin serialization interface type, nor builtin serialization type names such
-as `Parser` or `Decoder`; the public model is method-based.
+builtin serialization interface type; the public model is method-based.
 
 The performance target is the same shape as hand-written systems parsers:
 formats keep input state as cursors and slices, avoid runtime allocation during
 parsing, receive the whole requested structural shape before scanning, and lower
 to direct calls rather than callback tables, shape interpreters, or temporary
-maps built for convenience.
+maps built for convenience. The compiler knows Roc structural shapes and method
+requirements. It does not know JSON, HTTP headers, CSV, XML, or any other
+serialized format.
 
-A format is a normal Roc value. Its type owns the methods that describe how that
-format reads or writes each shape. Public modules normally expose small
-convenience functions:
+A format is ordinary Roc code. Its type owns the methods that describe how that
+format reads or writes each shape. Public modules expose small convenience
+functions:
 
 ```roc
 thing = Json.parse(json_str)?
@@ -898,34 +899,61 @@ json_bytes = Json.Utf8.encode(thing)?
 headers = Headers.parse(raw_headers)?
 ```
 
-The convenience functions initialize a format state, call the value or type's
-ordinary method, finish the state, and return the final `Try`. The underlying
-methods are public and callable:
+The convenience functions construct the format state directly, call the value or
+type's ordinary method, validate the remaining state if the format requires it,
+and return the final `Try`. They do not need a required `init`, `finish`, or
+`default` hook. A header helper can build the initial state as ordinary Roc data:
 
 ```roc
-parsed = Shape.parse_from(format_state)?
-next_state = value.encode_to(output_state)?
+state = Headers.{ raw }
 ```
 
-`parse_from` is a method on the value type being produced. `encode_to` is a
-method on the value being serialized. Structural types get these methods from
-the compiler. Nominal types may define them explicitly, and structural
-derivation uses those explicit nominal methods when a field, payload, list
-element, or nested value has that nominal type.
-
-The core method shapes are:
+The underlying parse method is public and callable. It is deliberately curried:
 
 ```roc
-a.parse_from : fmt -> Try({ value : a, rest : fmt }, err)
-a.encode_to : a, fmt -> Try(fmt, err)
+a.parser : encoding -> (state -> Try({ value : a, rest : state }, err))
+a.encode_to : a, encoding -> (state -> Try(state, err))
 ```
 
-The `fmt` value is the pure state of the format. It may contain an input cursor,
-an output buffer, record-field state, selected tag state, or any other ordinary
-Roc data needed by the format. Methods do not mutate it; every parse or encode
-step returns the next state. Public functions such as `Json.parse` and
-`Json.encode` hide this state threading by calling the format's init and finish
-methods around the structural method call.
+`parser` is a method on the value type being produced. `encode_to` is a method
+on the value being serialized. Structural types get these methods from the
+compiler. Nominal types may define them explicitly, and structural derivation
+uses those explicit nominal methods when a field, payload, list element, nested
+value, or other sub-shape has that nominal type.
+
+The `encoding` argument is the pure format/configuration value used to construct
+the specialized parser. It may represent choices such as JSON object field
+renaming, JSON tag representation, or a header matching mode. The `state`
+argument is the runtime cursor or output state. Keeping these separate matters:
+parser construction can transform the requested structural shape before the
+runtime scan starts, while the returned runtime function threads only the cursor
+state and parsed values.
+
+For example, a public HTTP header helper has this shape:
+
+```roc
+Headers := { raw : Str }.{
+	DecodeErr := [MissingRequired, BadHeader].{}
+
+	parse : Str -> Try(output, DecodeErr)
+		where [
+			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+		]
+	parse = |raw| {
+		Output : output
+
+		parse_output = Output.parser(HeaderEncoding.Caseless)
+		parsed = parse_output(Headers.{ raw })?
+
+		Ok(parsed.value)
+	}
+}
+```
+
+The exact shape of `HeaderEncoding` is format-owned; it is not a compiler
+interface. The important split is that `Output.parser(HeaderEncoding.Caseless)`
+constructs the concrete parser and `Headers.{ raw }` is the runtime input state.
+Formats with no configurable behavior can still use a zero-sized encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
@@ -933,12 +961,12 @@ When a concrete operation cannot fail, its error type is empty, so an exhaustive
 `Ok(value) = Json.encode(thing)` binding is accepted.
 
 Checking derives structural methods by emitting ordinary static-dispatch
-constraints. For example, deriving `a.parse_from` for a concrete shape asks the
-format for exactly the methods needed by that shape:
+constraints. For example, deriving `a.parser` for a concrete shape asks the
+encoding and state types for exactly the methods needed by that shape:
 
 - `Str` calls the format's string method;
-- records call the format's record method with a compiler-generated record
-  spec;
+- records use compiler-generated field sets and the format's record-field
+  method;
 - tag unions call the format's tag-union method with a compiler-generated
   tag-union spec;
 - lists, numbers, booleans, tuples, and other structural forms call the
@@ -954,6 +982,16 @@ the format can only know while processing bytes or values, such as a malformed
 header line, invalid JSON syntax, invalid UTF-8 in a byte input, or a
 user-defined nominal method returning an error.
 
+Compile-time evaluation uses the ordinary Roc constant machinery. The
+serialization API does not add a special compile-time marker. A derived
+`parser` constructs its transformed field sets and nested parsers before it
+returns the runtime lambda. If that parser construction is evaluated during
+checking, those transformed values are stored as checked constants and restored
+later as ordinary Roc values. The returned runtime lambda then closes over only
+the transformed field sets and nested parser functions. For a parser constructed
+at compile time, original record field names that were renamed during
+construction do not need to appear in the final runtime data.
+
 Tag-union specs are opaque compiler values. They describe the concrete
 structural shape being derived: tag names, payload shapes, and the concrete
 payload result positions. They are not arity-specific user APIs, and userspace
@@ -961,123 +999,202 @@ code does not construct or pattern match on them. The compiler specializes every
 use with the concrete tag-union type, so opaque spec operations lower to direct
 tag code.
 
-Userspace format code operates through safe Roc values, opaque specs, and
-slice-returning string/list APIs. The compiler does not expose raw field-slot
-indices, unsafe byte indexing, or unchecked memory primitives as part of the
-serialization method surface.
+Userspace format code operates through safe Roc values, opaque specs, opaque
+field values, iterators, and slice-returning string/list APIs. The compiler does
+not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
+primitives as part of the serialization method surface.
 
-Record parsing is driven by the compiler-generated structural `parse_from`
-method. The format exposes a method that parses the next record field event from
-its current state:
+Record parsing is driven by the compiler-generated structural `parser` method.
+The compiler creates a `Fields(_shape)` value for each concrete record shape:
 
 ```roc
-fmt.parse_record_field : U64, fmt -> Try(
-    [
-        Field({ name : Str, value : fmt, rest : fmt }),
-        Continue({ rest : fmt }),
-        Done({ rest : fmt }),
-    ],
-    err,
-)
+Fields(_shape) : opaque
+Field(_shape) : opaque
 
-fmt.missing_record_field : Str, fmt -> err
+Fields.rename_fields : Fields(_shape), (Str -> Str) -> Fields(_shape)
+Fields.shortest_name : Fields(_shape) -> U64
+Fields.longest_name : Fields(_shape) -> U64
+Fields.iter : Fields(_shape) -> Iter(Field(_shape))
+Fields.for_size : Fields(_shape), U64 -> Iter(Field(_shape))
+
+Field.name : Field(_shape) -> Str
 ```
 
-The first argument is the longest target record field name in bytes. Formats may
-use it to prove that an input key cannot possibly match before doing
-allocation-prone conversion to record-field-name form. The value is metadata
-about the concrete target record; it does not encode any format-specific rule.
+`Fields(_shape)` contains the requested field names and compiler-owned result
+positions for one concrete record shape. `Field(_shape)` is an opaque handle to
+one field in that same shape. The `_shape` parameter is a phantom type: it is
+not runtime data, but it ties a field handle to the exact field set that created
+it. A parser for `{ cache_control : Str, content_length : U64 }` cannot accept a
+`Field` produced from `{ foo : Str }`, because the phantom types do not unify.
+That type-level tie is what lets generated record parsers avoid runtime bounds
+checks on field handles. If the only way to obtain a `Field(_shape)` is from the
+matching `Fields(_shape)`, then the compiler already knows every handle is in
+range for that record. There is no user-exposed `U64` slot to validate at
+runtime.
 
-`Field.name` is the input key after conversion to Roc record-field-name form,
-such as `cache_control` for an HTTP `Cache-Control` header. `Field.value` is the
-format state used to parse that field's value if the generated record dispatcher
-matches the name to a field in the target record. `Field.rest` is the state from
-which the next record field event should be parsed. `Continue.rest` advances the
-record loop after the format has consumed an input field that it knows cannot
-match any target field. `Done.rest` is the state remaining after the record ends.
-If the generated finisher sees that a required field was never filled, it calls
-`fmt.missing_record_field(field_name, rest)` to produce the format's concrete
-error value.
+The derived `parser` constructs field metadata before returning the runtime
+lambda:
 
-The compiler owns the record loop, the field-name dispatch, the per-field
-missing/present state, and final record construction. Unknown fields are ignored
-by the generated dispatcher after the format has consumed enough input to return
-`Field.rest`. Required fields that were not filled produce the format's
-required-field error. Optional fields are expressed by their field type, for
-example `Try(Str, [Missing])`; `Missing` is an ordinary userspace tag carried by
-the format's absence state and field type, not a compiler-known concept.
+```roc
+renamed_fields = Fields.rename_fields(original_fields, |name| encoding.rename_field(name))
+parse_nested = Nested.parser(encoding)
+```
 
-Record-key dispatch is optimized around the assumption that serialized record
+`encoding.rename_field` is a pure format method. Every encoding provides it;
+identity is the normal implementation. `Fields.rename_fields` applies that
+function to every requested record field, discards the original names from the
+returned `Fields`, and rebuilds the length buckets used by `Fields.for_size`,
+`Fields.shortest_name`, and `Fields.longest_name`. If parser construction is
+compile-time evaluated, the renaming work is also compile-time work. For JSON
+camel-case decoding, the final runtime parser can contain only `camelCase`
+field names. For HTTP header decoding, the final runtime parser can contain only
+lowercase kebab-case header names such as `cache-control`.
+
+The format exposes a method that parses the next record-field event from the
+current state:
+
+```roc
+encoding.parse_record_field : Fields(_shape), state -> Try(
+	[
+		Field({ field : Field(_shape), rest : state }),
+		TryField({ name : Str, rest : state }),
+		TryFieldCaseless({ name : Str, rest : state }),
+		Continue({ rest : state }),
+		Done({ rest : state }),
+	],
+	err,
+)
+
+encoding.skip_record_field : state -> Try(state, err)
+encoding.missing_record_field : Str, state -> err
+encoding.missing_optional_field : Str, state -> optional_err
+encoding.rename_field : Str -> Str
+```
+
+For `Field`, `TryField`, and `TryFieldCaseless`, `rest` is the state positioned
+at the field's value. If the field matches the target record, the generated
+parser calls the parser for that field's type from that value-start state and
+continues from the value parser's returned `rest`. This is what allows records
+with different field shapes:
+
+```roc
+{
+	content_length : U64,
+	x_auth_token : Try(Str, [Missing]),
+	cache_control : Str,
+}
+```
+
+The record loop does not store every value as `Str` first. When it sees the
+`content_length` field, it calls the `U64` parser from the value-start state and
+continues from that parser's returned state. When it sees `cache_control`, it
+calls the `Str` parser. The value parser owns value consumption.
+
+`Field` means the format already matched the input field name against the
+provided `Fields(_shape)`, usually by iterating `Fields.for_size(fields, len)`
+or another field iterator. `TryField` means the format parsed a field name and
+asks the generated record parser to exact-match it against the transformed
+fields. `TryFieldCaseless` is the same, but uses ASCII caseless matching. If a
+`TryField` or `TryFieldCaseless` name does not match any target field, generated
+code calls `encoding.skip_record_field(rest)` and continues with the returned
+state. This avoids scanning matched values twice while still letting unknown
+fields be skipped correctly.
+
+`Continue.rest` advances the record loop after the format has consumed input
+that cannot be a relevant field. `Done.rest` is the state remaining after the
+record ends. If the generated finisher sees that a required field was never
+filled, it calls `encoding.missing_record_field(field_name, rest)` to produce
+the format's concrete parse error value. Optional fields are expressed by their
+field type, for example `Try(Str, [Missing])`. If an optional field is absent,
+the generated finisher calls
+`encoding.missing_optional_field(field_name, rest)` at the optional field's
+error type and stores `Err(missing)` in that field. This lets the format define
+the absence tag; `Missing`, `Absent`, or any other tag name is ordinary
+userspace data, not a compiler-known concept. A field annotated as
+`Try(Str, _)` can infer that error type from the format method's return type.
+
+Record-field dispatch is optimized around the assumption that serialized record
 field names are overwhelmingly small. JSON object keys, HTTP headers, CSV
 column names, XML attributes, environment variables, and similar schema fields
 are expected to land in Roc's small-string representation almost all the time on
 64-bit targets, and still most of the time on 32-bit targets. The optimization
 strategy treats this as the hot path, not as a correctness requirement: long
-keys remain supported, but generated code is arranged so that small keys take
-the shortest route.
+field names remain supported, but generated code is arranged so that small names
+take the shortest route.
 
-Formats own conversion from input keys to record field names. HTTP header
-parsing may lowercase ASCII and map `-` to `_`; a JSON format may later choose
-to map `camelCase` input keys to `snake_case` record fields; the compiler does
-not know those policies. The format returns the converted key in each `Field`
-event, and the compiler-generated record dispatcher performs exact matching
-against the concrete record field names. Allocation-free formats must avoid heap
-allocation while converting keys. For the common small-key case this means
-producing an SSO `Str`. If `longest_field_len` and the format's own conversion
-rules prove a key cannot possibly match any field in this target record, the
-format may return `Continue` after consuming that field and avoid constructing a
-converted heap string. This is not a parse failure: for formats such as HTTP
-headers and JSON objects, unknown keys remain ordinary input according to that
-format's rules. If the target record actually contains a long field name, the
-long input key remains matchable. A general `Str -> Str` conversion to record
-field name form is allowed to allocate when its result does not fit in SSO, so
-it is not the fallback for allocation-free long-key handling. Formats that
-promise zero allocation must either prove the transformed key fits in SSO before
-materializing it, return `Continue` for impossible keys, or use a
-non-materializing comparison/hash path for long possible keys.
+Formats own conversion from Roc record field names to serialized field names.
+HTTP header parsing can rename `cache_control` to `cache-control` at parser
+construction time and then use `TryFieldCaseless("Cache-Control")` at runtime.
+JSON camel-case parsing can rename `user_id` to `userId` at parser construction
+time and then use `TryField("userId")` at runtime. The compiler does not know
+those policies; it only knows that it has a transformed `Fields(_shape)` value
+and a requested matching mode.
 
-For SSO converted keys, generated record dispatch compares the packed small
-string representation directly. Roc zeroes unused SSO bytes, so equality can use
-fixed-width word comparisons without masking garbage tail bytes. On 64-bit
-targets, the generated dispatcher groups fields into 1-8, 9-16, and 17-23 byte
-size classes; on 32-bit targets, the groups are scaled to that target's smaller
-SSO capacity. The group selection can be implemented with a branchless or
-near-branchless table lookup instead of a source-level length switch.
+`Fields.shortest_name` and `Fields.longest_name` are computed after renaming.
+Formats may use them to skip impossible fields before doing more expensive work.
+For example, if a header name is longer than `Fields.longest_name(fields)` and
+the format's `rename_field` never increases field length for headers, the
+format can consume the line and return `Continue` without constructing any
+temporary field name. This is not a parse failure: for formats such as HTTP
+headers and JSON objects, unknown fields remain ordinary input according to that
+format's rules. If the target record actually contains a long renamed field
+name, the long input field remains matchable through the same `Fields`
+iteration APIs.
+
+For small fields, generated record dispatch compares the packed small string
+representation directly. Roc zeroes unused SSO bytes, so equality can use
+fixed-width word comparisons without masking tail bytes. On 64-bit targets, the
+generated dispatcher groups fields into 1-8, 9-16, and 17-23 byte size classes;
+on 32-bit targets, the groups are scaled to that target's smaller SSO capacity.
+The group selection can be implemented with a branchless or near-branchless
+table lookup instead of a source-level length switch.
 
 Within each size class, the compiler chooses the most discriminating word lane
 for the concrete field set. For example, if several fields share the same first
 eight bytes, the generated code can use the second or third word as the first
 comparison instead. The hot miss path compares one machine word per candidate in
 that class. Only after a discriminator hit does the code verify the full SSO key
-with one, two, or three word comparisons and write the matched value state into
-the corresponding slot. Collision-heavy classes may use another discriminating
-lane or a generated perfect hash over the packed SSO words before final
-verification.
+with one, two, or three word comparisons and dispatch to the matched field's
+already-constructed value parser. Collision-heavy classes may use another
+discriminating lane or a generated perfect hash over the packed SSO words before
+final verification.
 
 This keeps the performance center on the common case: no heap allocation, no
 runtime field map, no interpretation of a record plan, and no byte-by-byte
 string comparison unless the selected format's field-name conversion itself
-requires it. Long-key paths must preserve the same public behavior and memory
-invariants. If a format must handle long transformed keys without allocation,
-that path must avoid constructing a transformed heap `Str`; it is not allowed to
-make the SSO path slower for the sake of generality.
+requires it. Long-field paths must preserve the same public behavior and memory
+invariants. If a format must handle long fields without allocation, that path
+must use field iteration and slice comparisons rather than constructing a
+transformed heap `Str`; it is not allowed to make the SSO path slower for the
+sake of generality.
 
-Tag-union parsing follows the same separation. The format's tag-union method receives
-the complete tag spec, identifies the input tag according to that format's own
-rules, and uses opaque spec operations to parse and assemble the selected
-payload. Recursive tag unions are ordinary recursive method calls through the
-selected payload type. The compiler knows the Roc shape and the static-dispatch
-requirements; it does not know any format-specific tag representation.
+Nested records follow the same construction/runtime split. The outer derived
+`parser` eagerly calls every nested parser constructor before returning its
+runtime lambda. A nested record gets its own `Fields(_nested_shape)` value, then
+renames and rebuckets that field set through the same `encoding.rename_field`
+method. A custom nominal field calls that nominal type's explicit `parser`
+method during parser construction. At runtime the outer record parser dispatches
+to the already-constructed field parser for the matched field shape.
+
+Tag-union parsing follows the same separation. The format's tag-union method
+receives the complete tag spec, identifies the input tag according to that
+format's own rules, and uses opaque spec operations to parse and assemble the
+selected payload. Recursive tag unions are ordinary recursive method calls
+through the selected payload type. The compiler knows the Roc shape and the
+static-dispatch requirements; it does not know any format-specific tag
+representation. Tag-name renaming can use an analogous construction-time
+transformation later; record field renaming does not require the compiler to
+know any tag-union convention.
 
 The generated code uses direct static calls. Tag spec matching is compiler-
 generated exact matching over the concrete tag labels; userspace does not pass a
 matcher function to spec operations. It does not pass user callbacks,
 does not build a runtime interpretation plan, and does not route shape handling
 through a central dispatch function. Generic userspace format code produces
-record field events and calls opaque tag spec operations. The record loop and
-field dispatch are compiler-generated for the concrete shape; tag spec
-operations are compiler primitives specialized for the concrete tag-union shape
-and lower to direct code.
+record field events, iterates opaque field sets, and calls opaque tag spec
+operations. The record loop and field dispatch are compiler-generated for the
+concrete shape; tag spec operations are compiler primitives specialized for the
+concrete tag-union shape and lower to direct code.
 
 Input formats return seamless slices whenever the value being produced is a
 slice of the original input. Parsing a `Str` from a larger `Str` or validated
@@ -1090,17 +1207,41 @@ first and keep it alive for the duration of the request.
 The HTTP header format receives only the raw header section, starting at the
 first header line and ending before the blank line. Its record-field method
 parses one CRLF-delimited line at a time. Each non-empty line must contain `:`;
-otherwise the method returns the header format's bad-header error. Header names
-are converted to record-field-name form in userspace by ASCII lowercasing and
-mapping `-` to `_`; the compiler-generated record dispatcher then exact-matches
-that converted name against the target record fields. Header values are trimmed
-and passed to field parsing as seamless `Str` slices. The format does not
-allocate a header map.
+otherwise the method returns the header format's bad-header error.
+
+The header encoding's `rename_field` maps Roc field names to lowercase
+kebab-case at parser construction time:
+
+```roc
+cache_control -> cache-control
+content_length -> content-length
+x_auth_token -> x-auth-token
+```
+
+At runtime the header parser can parse the input line name as a seamless slice
+and return `TryFieldCaseless({ name, rest: value_start })`. Matching
+`Cache-Control`, `cache-control`, and `CACHE-CONTROL` against the transformed
+`cache-control` field set does not require allocating a lowercased copy. Header
+values are trimmed and passed to field parsing as seamless `Str` slices. The
+format does not allocate a header map.
 
 The JSON `Str` format receives valid UTF-8 text. The JSON `Utf8` format receives
 bytes and validates UTF-8 before producing any `Str`. JSON record parsing scans
 an object one field event at a time through the compiler-generated record loop,
-so object key order does not affect performance beyond normal key matching.
+so object key order does not affect performance beyond normal key matching. A
+plain JSON encoding can use identity `rename_field`. A camel-case JSON
+encoding can rename Roc fields at parser construction time:
+
+```roc
+user_id -> userId
+cache_control -> cacheControl
+```
+
+The runtime JSON scanner then returns `TryField({ name, rest: value_start })`
+for each object field name. Generated matching compares the input object name
+against the already-renamed field set, and the matched field's parser consumes
+the JSON value from `value_start`.
+
 JSON tag unions use the externally tagged object representation:
 
 ```json
@@ -3072,8 +3213,13 @@ const ConstFn = struct {
     captures: Span(ConstCapture),
 };
 
-const ConstCapture = struct {
+const CaptureId = union(enum) {
     binder: PatternBinderId,
+    generated: u32,
+};
+
+const ConstCapture = struct {
+    id: CaptureId,
     value: ConstNodeId,
 };
 ```
@@ -3081,8 +3227,11 @@ const ConstCapture = struct {
 `fn_def` names a checked, imported, nested, hosted, promoted, or checked-stage
 generated procedure template that the checked module owns or references
 explicitly.
-`captures` bind the exact checked pattern binders required by that function to
-stored const nodes. A stored function does not store a lambda set, callable-set
+`captures` bind the exact capture identities required by that function to
+stored const nodes. Source lambdas use checked pattern binders. Compiler-
+generated functions whose captures have no source pattern, such as structural
+parser runtime functions, use explicit generated capture ids assigned by the
+generator. A stored function does not store a lambda set, callable-set
 descriptor, call specialization id, erased ABI, capture layout, runtime tag, or
 LIR proc id.
 
@@ -3129,7 +3278,7 @@ const FnTemplate = struct {
 };
 
 const CaptureSlot = struct {
-    binder: PatternBinderId,
+    id: CaptureId,
     slot: u32,
 };
 ```
@@ -3145,9 +3294,12 @@ procedure from the runtime value and looks it up inside the explicit
 `ErasedFns` context.
 
 `CaptureSlot` says which committed capture-payload slot contains the value for
-one captured checked binder. The direct LIR builder outputs these slots while
-lowering the generated function value. The `ConstStore` writer recursively
-stores each captured runtime value, then stores the resulting `ConstFn`.
+one captured identity. For source lambdas, the identity is the checked binder.
+For generated functions, the identity is a generator-assigned capture id with a
+documented role in that generated function kind. The direct LIR builder outputs
+these slots while lowering the generated function value. The `ConstStore`
+writer recursively stores each captured runtime value, then stores the
+resulting `ConstFn`.
 
 Storing an eval result never uses a global id made only of layout,
 discriminant, variant slot, byte pattern, display name, object symbol, or
@@ -3165,6 +3317,11 @@ When a later compilation restores a cached const, Monotype lowering turns
   alpha-renaming its parameters, and binding each captured symbol to the
   ordinary Monotype expression restored from the corresponding captured
   `ConstNodeId`
+- generated parser runtime functions restore through their explicit generated
+  function kind: Monotype lowering recovers the checked static-dispatch plan,
+  restores generated captures such as transformed field-name strings by their
+  generated capture ids, and regenerates the runtime parser lambda directly
+  around those restored constants
 
 Restoring a cached const does not synthesize a wrapper that calls an
 already-packed runtime function value. It builds an ordinary Monotype callable

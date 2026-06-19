@@ -27,6 +27,14 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 
+fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
+    return switch (module.getStatement(stmt_idx)) {
+        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
+        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
+        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+    };
+}
+
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
@@ -825,6 +833,8 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .list,
                     .box,
                     .parse_tag_union_spec,
+                    .fields,
+                    .field,
                     => break :blk true,
                     .bool_tag_union => {},
                 },
@@ -1544,6 +1554,8 @@ pub const CheckedBuiltinNominal = enum {
     list,
     box,
     parse_tag_union_spec,
+    fields,
+    field,
 };
 
 /// Public `CheckedPrimitive` declaration.
@@ -1572,6 +1584,8 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     list,
     box,
     parse_tag_union_spec,
+    fields,
+    field,
 };
 
 /// Public `builtinRuntimeEncoding` function.
@@ -1595,6 +1609,8 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .list => .list,
         .box => .box,
         .parse_tag_union_spec => .parse_tag_union_spec,
+        .fields => .fields,
+        .field => .field,
     };
 }
 
@@ -3969,8 +3985,7 @@ fn appendStaticDispatchTypeRoots(
                 );
             },
             .e_type_dispatch_call => |dispatch_call| {
-                const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt));
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, dispatch_call.constraint_fn_var);
             },
             .e_method_eq => |eq| {
@@ -4504,6 +4519,8 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
     if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
+    if (ident.eql(common.builtin_fields)) return .fields;
+    if (ident.eql(common.builtin_field)) return .field;
     return null;
 }
 
@@ -5464,11 +5481,11 @@ const CheckedSourceNodes = struct {
                 try self.markExpr(eq.rhs, work);
             },
             .e_type_method_call => |call| {
-                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markStatement(call.type_dispatch_stmt, work);
                 try self.markExprSpan(module, call.args, work);
             },
             .e_type_dispatch_call => |call| {
-                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markStatement(call.type_dispatch_stmt, work);
                 try self.markExprSpan(module, call.args, work);
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
@@ -12864,6 +12881,8 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .dec,
                     .bool,
                     .parse_tag_union_spec,
+                    .fields,
+                    .field,
                     => break :blk true,
                     .list,
                     .box,

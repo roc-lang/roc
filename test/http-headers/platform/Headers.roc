@@ -1,100 +1,149 @@
-Headers :: [].{
+Headers := { raw : Str }.{
 	DecodeErr := [MissingRequired, BadHeader].{}
+
+	parser : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
+		where [
+			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+		]
+	parser = || {
+		Output : output
+
+		parse_output : Headers -> Try({ value : output, rest : Headers }, DecodeErr)
+		parse_output = Output.parser(HeaderEncoding.Caseless)
+
+		parse_output
+	}
 
 	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parse_from : HeaderFormat -> Try({ value : output, rest : HeaderFormat }, DecodeErr),
+			output.parser : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
-	parse = |headers| {
+	parse = |raw| {
 		Output : output
 
-		{ value, rest: _ } = Output.parse_from(HeaderFormat.Headers(headers))?
+		parse_output = Output.parser(HeaderEncoding.Caseless)
+		parsed = parse_output(Headers.{ raw })?
 
-		Ok(value)
+		Ok(parsed.value)
 	}
 }
 
-HeaderFormat :: [Headers(Str), Value(Str)].{
-	parse_str : HeaderFormat -> Try({ value : Str, rest : HeaderFormat }, Headers.DecodeErr)
-	parse_str = |slot|
-		match slot {
-			Value(value) => Ok({ value, rest: Value("") })
-			Headers(_) => Err(Headers.DecodeErr.BadHeader)
-		}
+HeaderEncoding := [Caseless].{
+	rename_field : Str -> Str
+	rename_field = |name| underscores_to_dashes(name)
 
-	parse_record_field : U64, HeaderFormat -> Try(
+	parse_str : Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
+	parse_str = |state| {
+		value_parts = take_header_value(state.raw)?
+		Ok({ value: value_parts.value, rest: { raw: value_parts.after } })
+	}
+
+	parse_u64 : Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
+	parse_u64 = |state| {
+		value_parts = take_header_value(state.raw)?
+
+		match U64.from_str(value_parts.value) {
+			Ok(value) => Ok({ value, rest: { raw: value_parts.after } })
+			Err(_) => Err(Headers.DecodeErr.BadHeader)
+		}
+	}
+
+	parse_record_field : Fields(_shape), Headers -> Try(
 		[
-			Field({ name : Str, value : HeaderFormat, rest : HeaderFormat }),
-			Continue({ rest : HeaderFormat }),
-			Done({ rest : HeaderFormat }),
+			Field({ field : Field(_shape), rest : Headers }),
+			TryField({ name : Str, rest : Headers }),
+			TryFieldCaseless({ name : Str, rest : Headers }),
+			Continue({ rest : Headers }),
+			Done({ rest : Headers }),
 		],
 		Headers.DecodeErr,
 	)
-	parse_record_field = |longest_field_len, slot|
-		match slot {
-			Headers(headers) => parse_record_field_from_headers(longest_field_len, headers)
-			Value(_) => Err(Headers.DecodeErr.BadHeader)
-		}
+	parse_record_field = |fields, state|
+		parse_record_field_from_headers(fields, state.raw)
 
-	missing_record_field : Str, HeaderFormat -> Headers.DecodeErr
+	skip_record_field : Headers -> Try(Headers, Headers.DecodeErr)
+	skip_record_field = |state| {
+		parts = take_header_value(state.raw)?
+		Ok({ raw: parts.after })
+	}
+
+	missing_record_field : Str, Headers -> Headers.DecodeErr
 	missing_record_field = |_, _| Headers.DecodeErr.MissingRequired
 
-	parse_tag_union : ParseTagUnionSpec(a), HeaderFormat -> Try({ value : a, rest : HeaderFormat }, Headers.DecodeErr)
-	parse_tag_union = |spec, slot|
-		match slot {
-			Value(tag_name) => {
-				value = parse_tag_union_from_header(tag_name, spec)?
-				Ok({ value, rest: Value("") })
-			}
-			Headers(_) => Err(Headers.DecodeErr.BadHeader)
-		}
+	missing_optional_field : Str, Headers -> [Missing]
+	missing_optional_field = |_, _| Missing
+
+	parse_tag_union : ParseTagUnionSpec(a), Headers -> Try({ value : a, rest : Headers }, Headers.DecodeErr)
+	parse_tag_union = |spec, state| {
+		value_parts = take_header_value(state.raw)?
+		value = ParseTagUnionSpec.parse(spec, {
+			tag: value_parts.value,
+			encoding: HeaderEncoding.Caseless,
+			state: { raw: value_parts.value },
+			missing: Headers.DecodeErr.MissingRequired,
+		})?
+		Ok({ value, rest: { raw: value_parts.after } })
+	}
 }
 
-parse_record_field_from_headers : U64, Str -> Try(
+parse_record_field_from_headers : Fields(_shape), Str -> Try(
 	[
-		Field({ name : Str, value : HeaderFormat, rest : HeaderFormat }),
-		Continue({ rest : HeaderFormat }),
-		Done({ rest : HeaderFormat }),
+		Field({ field : Field(_shape), rest : Headers }),
+		TryField({ name : Str, rest : Headers }),
+		TryFieldCaseless({ name : Str, rest : Headers }),
+		Continue({ rest : Headers }),
+		Done({ rest : Headers }),
 	],
 	Headers.DecodeErr,
 )
-parse_record_field_from_headers = |longest_field_len, headers|
+parse_record_field_from_headers = |fields, headers|
 	match headers.find_first("\r\n") {
 		Ok({ before, after }) if !before.is_empty() =>
-			match before.find_first(":") {
-				Ok({ before: name, after: value }) =>
-					if Str.count_utf8_bytes(name) > longest_field_len {
-						Ok(Continue({ rest: HeaderFormat.Headers(after) }))
-					} else {
-						Ok(Field({
-							name: header_name_to_record_field_name(name),
-							value: HeaderFormat.Value(value.trim()),
-							rest: HeaderFormat.Headers(after),
-						}))
-					}
+			match headers.find_first(":") {
+				Ok({ before: name, after: value_start }) => {
+					name_len = Str.count_utf8_bytes(name)
+					line_len = Str.count_utf8_bytes(before)
 
-				Err(NotFound) => Err(BadHeader)
+					if name_len < line_len {
+						shorter_than_any_field = name_len < Fields.shortest_name(fields)
+						longer_than_any_field = name_len > Fields.longest_name(fields)
+
+						if shorter_than_any_field {
+							Ok(Continue({ rest: { raw: after } }))
+						} else if longer_than_any_field {
+							Ok(Continue({ rest: { raw: after } }))
+						} else {
+							Ok(TryFieldCaseless({
+								name,
+								rest: { raw: value_start },
+							}))
+						}
+					} else {
+						Err(Headers.DecodeErr.BadHeader)
+					}
+				}
+
+				Err(NotFound) => Err(Headers.DecodeErr.BadHeader)
 			}
 
-		Err(NotFound) | Ok(_) =>
+	Err(NotFound) | Ok(_) =>
 			Ok(Done({
-				rest: HeaderFormat.Value(""),
+				rest: { raw: "" },
 			}))
 	}
 
-parse_tag_union_from_header : Str, ParseTagUnionSpec(a) -> Try(a, Headers.DecodeErr)
-parse_tag_union_from_header = |tag_name, spec|
-	ParseTagUnionSpec.parse(spec, tag_name, HeaderFormat.Value(tag_name), Headers.DecodeErr.MissingRequired)
+take_header_value : Str -> Try({ value : Str, after : Str }, Headers.DecodeErr)
+take_header_value = |raw|
+	match raw.find_first("\r\n") {
+		Ok({ before, after }) => Ok({ value: before.trim(), after })
+		Err(NotFound) => Err(Headers.DecodeErr.BadHeader)
+	}
 
-header_name_to_record_field_name : Str -> Str
-header_name_to_record_field_name = |header_name|
-	dashes_to_underscores(header_name.with_ascii_lowercased())
-
-dashes_to_underscores : Str -> Str
-dashes_to_underscores = |text|
-	match text.find_first("-") {
+underscores_to_dashes : Str -> Str
+underscores_to_dashes = |text|
+	match text.find_first("_") {
 		Ok({ before, after }) =>
-			before.concat("_").concat(dashes_to_underscores(after))
+			before.concat("-").concat(underscores_to_dashes(after))
 
 		Err(NotFound) => text
 	}

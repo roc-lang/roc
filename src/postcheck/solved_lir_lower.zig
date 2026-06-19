@@ -708,7 +708,7 @@ const Lowerer = struct {
         if (captures.len != fields.len) Common.invariant("function capture argument arity differed from capture slots");
 
         for (captures, fields) |capture, field| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("function capture argument fields differed from capture slots");
             }
             try self.captures.put(capture.local, .{
@@ -815,6 +815,7 @@ const Lowerer = struct {
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
+                .capture_id = capture.capture_id,
                 .ty = try self.lowerType(capture.ty),
             };
         }
@@ -1232,7 +1233,12 @@ const Lowerer = struct {
         errdefer self.allocator.free(slots);
         for (fields, 0..) |field, index| {
             slots[index] = .{
-                .binder = field.binder orelse Common.invariant("function result capture had no checked binder"),
+                .id = if (field.binder) |binder|
+                    .{ .binder = binder }
+                else if (field.capture_id) |capture_id|
+                    .{ .generated = capture_id }
+                else
+                    .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
                 .plan = try self.constPlanOfType(field.ty),
             };
@@ -1677,7 +1683,7 @@ const Lowerer = struct {
 
         const target_is_zst = self.isZstLocal(target);
         for (captures, fields, 0..) |capture, field, i| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
             }
             expr_locals[i] = try self.addTemp(field.ty);
@@ -3698,6 +3704,8 @@ const Lowerer = struct {
             .list,
             .box,
             .parse_tag_union_spec,
+            .fields,
+            .field,
             => null,
         };
     }
@@ -3891,6 +3899,7 @@ const TypeEquivalence = struct {
         for (lhs, rhs) |a, b| {
             if (a.symbol != b.symbol) return false;
             if (!std.meta.eql(a.binder, b.binder)) return false;
+            if (!std.meta.eql(a.capture_id, b.capture_id)) return false;
             if (!try self.equivalent(a.ty, b.ty)) return false;
         }
         return true;
@@ -4151,6 +4160,10 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
         .checked_generated => |template| .{ .checked_generated = template },
+        .parser_runtime => |runtime| .{ .parser_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
     };
 }
 

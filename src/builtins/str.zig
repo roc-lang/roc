@@ -290,21 +290,13 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        // Now we have to look at the string contents
-        const self_bytes = self.asU8ptr();
-        const other_bytes = other.asU8ptr();
-        // TODO: we can make an optimization like memcmp does in glibc.
-        // We can check the min shared alignment 1, 2, 4, or 8.
-        // Then do a copy at that alignment before falling back on one byte at a time.
-        // Currently we have to be unaligned because slices can be at any alignment.
-        var b: usize = 0;
-        while (b < self_len) : (b += 1) {
-            if (self_bytes[b] != other_bytes[b]) {
-                return false;
-            }
+        if (self.isSmallStr() and other.isSmallStr()) {
+            const self_bytes: [@sizeOf(RocStr)]u8 = @bitCast(self);
+            const other_bytes: [@sizeOf(RocStr)]u8 = @bitCast(other);
+            return smallBytesEqual(self_bytes, other_bytes, self_len);
         }
 
-        return true;
+        return bytesEqualFast(self.asU8ptr(), other.asU8ptr(), self_len);
     }
 
     /// Compare this RocStr with a byte slice for equality.
@@ -315,15 +307,7 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_bytes = self.asU8ptr();
-        var b: usize = 0;
-        while (b < self_len) : (b += 1) {
-            if (self_bytes[b] != slice[b]) {
-                return false;
-            }
-        }
-
-        return true;
+        return bytesEqualFast(self.asU8ptr(), slice.ptr, self_len);
     }
 
     pub fn clone(
@@ -559,6 +543,47 @@ pub const RocStr = extern struct {
         @memcpy(dest[0..self.len()], src[0..self.len()]);
     }
 };
+
+inline fn bytesEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
+    const word_size = @sizeOf(usize);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
+        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        if (left_word != right_word) return false;
+    }
+
+    while (index < len) : (index += 1) {
+        if (left[index] != right[index]) return false;
+    }
+
+    return true;
+}
+
+inline fn smallBytesEqual(left: [@sizeOf(RocStr)]u8, right: [@sizeOf(RocStr)]u8, len: usize) bool {
+    const word_size = @sizeOf(usize);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
+        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        if (left_word != right_word) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len == 0) return true;
+
+    const left_tail = std.mem.readInt(usize, left[index..][0..word_size], .native);
+    const right_tail = std.mem.readInt(usize, right[index..][0..word_size], .native);
+    const mask = lowBytesMask(tail_len);
+    return (left_tail & mask) == (right_tail & mask);
+}
+
+inline fn lowBytesMask(byte_count: usize) usize {
+    if (byte_count >= @sizeOf(usize)) return std.math.maxInt(usize);
+    return (@as(usize, 1) << @intCast(byte_count * 8)) - 1;
+}
 
 pub fn init(
     bytes_ptr: [*]const u8,
@@ -1845,7 +1870,45 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
         return true;
     }
 
-    return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
+    const self_len = self.len();
+    if (self_len != other.len()) return false;
+
+    return bytesCaselessAsciiEqualFast(self.asU8ptr(), other.asU8ptr(), self_len);
+}
+
+inline fn bytesCaselessAsciiEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
+    const word_size = @sizeOf(usize);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
+        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        if (left_word != right_word and !wordCaselessAsciiEqual(left_word, right_word)) return false;
+    }
+
+    while (index < len) : (index += 1) {
+        if (!byteCaselessAsciiEqual(left[index], right[index])) return false;
+    }
+
+    return true;
+}
+
+inline fn wordCaselessAsciiEqual(left: usize, right: usize) bool {
+    inline for (0..@sizeOf(usize)) |byte_index| {
+        const shift = byte_index * 8;
+        const left_byte: u8 = @truncate(left >> shift);
+        const right_byte: u8 = @truncate(right >> shift);
+        if (!byteCaselessAsciiEqual(left_byte, right_byte)) return false;
+    }
+    return true;
+}
+
+inline fn byteCaselessAsciiEqual(left: u8, right: u8) bool {
+    if (left == right) return true;
+    if ((left ^ right) != 0x20) return false;
+
+    const lower = left | 0x20;
+    return lower >= 'a' and lower <= 'z';
 }
 
 /// A backwards version of Utf8View from std.unicode
@@ -3453,6 +3516,21 @@ test "caselessAsciiEquals: seamless slice" {
     const are_equal = strCaselessAsciiEquals(str1, str2);
 
     try std.testing.expect(are_equal);
+}
+
+test "caselessAsciiEquals: punctuation with ascii case bit is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("@[\\]^_", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("`{|}~\x7F", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try std.testing.expect(!are_equal);
 }
 
 test "strTrim: empty" {

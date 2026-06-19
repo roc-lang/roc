@@ -540,9 +540,11 @@ pub const InstGraph = struct {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
                             try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
                         }
-                        if (left_named.backing) |left_backing| {
-                            if (right_named.backing) |right_backing| {
-                                try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                        if (!sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields)) {
+                            if (left_named.backing) |left_backing| {
+                                if (right_named.backing) |right_backing| {
+                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                                }
                             }
                         }
                         try self.union_(left, right);
@@ -1198,6 +1200,12 @@ pub const InstGraph = struct {
         return ty;
     }
 
+    pub fn refreshedMonoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        const ty = try self.monoFor(node);
+        try self.fillMono(self.find(node), ty);
+        return ty;
+    }
+
     /// Write a node's current content into one of its Monotype views.
     fn fillMono(self: *InstGraph, raw_root: NodeId, ty: Type.TypeId) Allocator.Error!void {
         const root = self.find(raw_root);
@@ -1535,6 +1543,12 @@ fn backingEql(left: ?InstBacking, right: ?InstBacking) bool {
         return left_backing.node == right_backing.node and left_backing.use == right_backing.use;
     }
     return right == null;
+}
+
+fn sameBuiltinOwner(left: ?static_dispatch.BuiltinOwner, right: ?static_dispatch.BuiltinOwner, owner: static_dispatch.BuiltinOwner) bool {
+    const left_owner = left orelse return false;
+    const right_owner = right orelse return false;
+    return left_owner == owner and right_owner == owner;
 }
 
 fn testCheckedTypeId(comptime value: u32) checked.CheckedTypeId {

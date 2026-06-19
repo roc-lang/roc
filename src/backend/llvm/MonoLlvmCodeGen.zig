@@ -2975,10 +2975,23 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitStrCountUtf8Bytes(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
-        var call_args = try self.rocStrArgs1(arg);
-        defer call_args.deinit(self.allocator);
-        const result = try self.callBuiltin("roc_builtins_str_count_utf8_bytes", self.ptrSizedIntType(), call_args.types.items, call_args.values.items);
-        try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const str_ptr = self.slot(arg).ptr;
+        const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
+        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const last_byte = wip.load(
+            .normal,
+            .i8,
+            try self.offsetPtr(str_ptr, self.targetWordSize() * 3 - 1),
+            LlvmBuilder.Alignment.fromByteUnits(1),
+            "",
+        ) catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
+        const len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
+        try self.storeIntToLayout(self.slot(target).ptr, len, self.localLayout(target));
     }
 
     fn emitStrFindFirst(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {

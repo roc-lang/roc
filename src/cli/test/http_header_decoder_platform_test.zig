@@ -8,12 +8,16 @@ const testing = std.testing;
 const io = std.testing.io;
 
 const required_foo_value = "abcdefghijklmnopqrstuvwxyz";
+const cache_control_value = "no-cache";
+const request_body = "hello";
+const request_count_value: u64 = 17;
 const long_unknown_header_name = "X-Super-Long-Unknown-Header-Name-That-Would-Allocate-If-Converted";
 
 const optional_headers = [_]OptionalHeader{
     .{ .name = "Explicit-Optional", .value = "abc" },
     .{ .name = "Wildcard-Optional", .value = "vwxyz" },
     .{ .name = "Question-Optional", .value = "1234567" },
+    .{ .name = "X-Auth-Token", .value = "token1234" },
 };
 
 const OptionalHeader = struct {
@@ -93,7 +97,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
         },
     }
 
-    for (0..8) |case_index| {
+    for (0..(@as(usize, 1) << optional_headers.len)) |case_index| {
         const mask: u8 = @intCast(case_index);
         const request = try buildRequest(allocator, mask);
         defer allocator.free(request);
@@ -102,6 +106,26 @@ test "HTTP header parsing platform derives structural parser without runtime all
 
         try runServerAndCheckResponse(allocator, output_path, request, expected_response);
     }
+
+    const all_optional_mask: u8 = (@as(u8, 1) << optional_headers.len) - 1;
+
+    const record_order_request = try buildKnownHeadersRecordOrderRequest(allocator);
+    defer allocator.free(record_order_request);
+    const record_order_response = try buildExpectedResponse(allocator, expectedHeaderLength(all_optional_mask));
+    defer allocator.free(record_order_response);
+    try runServerAndCheckResponse(allocator, output_path, record_order_request, record_order_response);
+
+    const reverse_order_request = try buildKnownHeadersReverseOrderRequest(allocator);
+    defer allocator.free(reverse_order_request);
+    const reverse_order_response = try buildExpectedResponse(allocator, expectedHeaderLength(all_optional_mask));
+    defer allocator.free(reverse_order_response);
+    try runServerAndCheckResponse(allocator, output_path, reverse_order_request, reverse_order_response);
+
+    const duplicate_known_request = try buildDuplicateKnownRequest(allocator);
+    defer allocator.free(duplicate_known_request);
+    const duplicate_known_response = try buildExpectedResponse(allocator, request_body.len + request_count_value + cache_control_value.len + required_foo_value.len);
+    defer allocator.free(duplicate_known_response);
+    try runServerAndCheckResponse(allocator, output_path, duplicate_known_request, duplicate_known_response);
 
     const missing_required_request = try buildMissingRequiredRequest(allocator);
     defer allocator.free(missing_required_request);
@@ -115,6 +139,20 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(bad_header_response);
     try runServerAndCheckResponse(allocator, output_path, bad_header_request, bad_header_response);
 
+    const empty_request_count = try buildInvalidRequestCountRequest(allocator, "");
+    defer allocator.free(empty_request_count);
+    const invalid_request_count_response = try buildExpectedResponse(allocator, 999999);
+    defer allocator.free(invalid_request_count_response);
+    try runServerAndCheckResponse(allocator, output_path, empty_request_count, invalid_request_count_response);
+
+    const nondigit_request_count = try buildInvalidRequestCountRequest(allocator, "12x");
+    defer allocator.free(nondigit_request_count);
+    try runServerAndCheckResponse(allocator, output_path, nondigit_request_count, invalid_request_count_response);
+
+    const overflow_request_count = try buildInvalidRequestCountRequest(allocator, "18446744073709551616");
+    defer allocator.free(overflow_request_count);
+    try runServerAndCheckResponse(allocator, output_path, overflow_request_count, invalid_request_count_response);
+
     try runServerAndCheckInvalidUtf8(allocator, output_path);
     try runServerAndCheckRequestFailure(allocator, output_path, too_large_content_length_request, "RequestTooLarge");
 }
@@ -126,6 +164,7 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
     try request.appendSlice(allocator, "GET /header-lengths HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
     try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
 
     if ((optional_mask & 1) == 0) {
         try appendHeader(&request, allocator, "fOo", required_foo_value);
@@ -149,8 +188,69 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
         try appendHeader(&request, allocator, "fOo", required_foo_value);
     }
 
-    try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try appendHeader(&request, allocator, "Request-Count", "17");
     try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /record-order HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try appendHeader(&request, allocator, optional_headers[0].name, optional_headers[0].value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, optional_headers[2].name, optional_headers[2].value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, optional_headers[1].name, optional_headers[1].value);
+    try appendHeader(&request, allocator, optional_headers[3].name, optional_headers[3].value);
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildKnownHeadersReverseOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /reverse-order HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, optional_headers[3].name, optional_headers[3].value);
+    try appendHeader(&request, allocator, optional_headers[1].name, optional_headers[1].value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, optional_headers[2].name, optional_headers[2].value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, optional_headers[0].name, optional_headers[0].value);
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildDuplicateKnownRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /duplicate-known HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Foo", "short");
+    try appendHeader(&request, allocator, "Cache-Control", "stale");
+    try appendHeader(&request, allocator, "Request-Count", "1");
+    try appendHeader(&request, allocator, "fOo", required_foo_value);
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
 
     return request.toOwnedSlice(allocator);
 }
@@ -168,6 +268,8 @@ fn buildMissingRequiredRequest(allocator: std.mem.Allocator) anyerror![]u8 {
 
     try request.appendSlice(allocator, "GET /missing-required HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
 
@@ -180,9 +282,11 @@ fn buildBadHeaderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
 
     try request.appendSlice(allocator, "GET /bad-header HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
     try request.appendSlice(allocator, "Foo: ");
     try request.appendSlice(allocator, required_foo_value);
     try request.appendSlice(allocator, "\r\n");
+    try appendHeader(&request, allocator, "Request-Count", "17");
     try request.appendSlice(allocator, "BrokenHeaderLine\r\n");
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
@@ -190,8 +294,23 @@ fn buildBadHeaderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
+fn buildInvalidRequestCountRequest(allocator: std.mem.Allocator, value: []const u8) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /bad-request-count HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Request-Count", value);
+    try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
 fn expectedHeaderLength(optional_mask: u8) u64 {
-    var total: u64 = required_foo_value.len;
+    var total: u64 = request_body.len + request_count_value + cache_control_value.len + required_foo_value.len;
     for (optional_headers, 0..) |header, index| {
         const bit = @as(u8, 1) << @intCast(index);
         if ((optional_mask & bit) != 0) {

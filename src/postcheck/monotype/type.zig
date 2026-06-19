@@ -251,6 +251,14 @@ pub const Store = struct {
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
                     writeBytes(hasher, @tagName(owner));
+                    if (owner == .fields) {
+                        writeBytes(hasher, "fields-backing");
+                        if (named.backing) |backing| {
+                            self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
+                        } else {
+                            writeBytes(hasher, "none");
+                        }
+                    }
                 } else {
                     writeBytes(hasher, "not-builtin");
                 }

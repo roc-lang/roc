@@ -226,11 +226,17 @@ const LoweredTemplateStatus = enum {
     ready,
 };
 
-/// A procedure template specialization together with the Monotype function
-/// type its body is reserved or lowered at.
+/// A procedure template specialization together with both the Monotype function
+/// type requested by the call site that reserved it and the solved function type
+/// produced after lowering the body. The request type remains a valid cache key
+/// after the body solves previously-unresolved slots; recursive requests made
+/// from another graph can still arrive with the same request shape.
 const LoweredTemplate = struct {
     def: Ast.DefId,
-    fn_ty: Type.TypeId,
+    request_fn_ty: Type.TypeId,
+    request_digest: names.TypeDigest,
+    solved_fn_ty: Type.TypeId,
+    solved_digest: names.TypeDigest,
     status: LoweredTemplateStatus,
 };
 
@@ -276,8 +282,24 @@ const LoweredCall = struct {
     data: Ast.ExprData,
 };
 
-const DecoderIntrinsic = enum {
+const ParseIntrinsic = enum {
     tag_union_parse,
+    fields_rename_fields,
+    fields_shortest_name,
+    fields_longest_name,
+    fields_iter,
+    fields_for_size,
+    field_name,
+};
+
+const FieldNameBound = enum {
+    shortest,
+    longest,
+};
+
+const FieldsIterMode = enum {
+    all,
+    for_size,
 };
 
 const ConstExprAddress = struct {
@@ -968,13 +990,12 @@ const Builder = struct {
         return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null);
     }
 
-    /// Specializations of one template family are deduplicated by the CURRENT
-    /// structural digest of their function types: both sides of the comparison
-    /// are live, so a specialization whose function type was refined after it
-    /// was registered still deduplicates its own recursive requests. A hit from
-    /// a requesting specialization unifies the requested function type with the
-    /// cached one, so a requester that later diverges from a reused body is a
-    /// unification conflict rather than a silent mismatch.
+    /// Specializations of one template family are deduplicated by structural
+    /// function type. The request type is kept as a cache key even after the
+    /// body solves that type to a more precise definition type, because
+    /// deferred requests from other graphs can still carry the original request
+    /// shape. Ready entries flow their solved type back into requesters so call
+    /// sites and definitions stay in the same Monotype class.
     fn lowerTemplateWithMonoFor(
         self: *Builder,
         template_ref: names.ProcTemplate,
@@ -991,13 +1012,28 @@ const Builder = struct {
         var reserved_def: ?Ast.DefId = null;
         var lower_fn_ty = fn_ty;
         for (family_entry.value_ptr.items) |*existing| {
-            if (existing.fn_ty != fn_ty) {
-                const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
-                if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
-                if (requester) |graph| {
-                    try graph.unify(try graph.importMono(fn_ty), try graph.importMono(existing.fn_ty));
-                    try graph.drainDirty();
+            var matched_ty: ?Type.TypeId = null;
+            if (existing.request_fn_ty == fn_ty) {
+                matched_ty = existing.request_fn_ty;
+            } else if (std.mem.eql(u8, existing.request_digest.bytes[0..], fn_ty_digest.bytes[0..])) {
+                matched_ty = existing.request_fn_ty;
+            }
+            if (matched_ty == null and existing.status == .ready) {
+                if (existing.solved_fn_ty == fn_ty) {
+                    matched_ty = existing.solved_fn_ty;
+                } else if (std.mem.eql(u8, existing.solved_digest.bytes[0..], fn_ty_digest.bytes[0..])) {
+                    matched_ty = existing.solved_fn_ty;
                 }
+            }
+            const match_ty = matched_ty orelse continue;
+            if (requester) |graph| {
+                if (match_ty != fn_ty) {
+                    try graph.unify(try graph.importMono(fn_ty), try graph.importMono(match_ty));
+                }
+                if (existing.status == .ready and existing.solved_fn_ty != fn_ty) {
+                    try graph.unify(try graph.importMono(fn_ty), try graph.importMono(existing.solved_fn_ty));
+                }
+                try graph.drainDirty();
             }
             switch (existing.status) {
                 .ready,
@@ -1005,7 +1041,7 @@ const Builder = struct {
                 => return existing.def,
                 .reserved => {
                     reserved_def = existing.def;
-                    lower_fn_ty = existing.fn_ty;
+                    lower_fn_ty = existing.request_fn_ty;
                     existing.status = .lowering;
                     break;
                 },
@@ -1050,7 +1086,10 @@ const Builder = struct {
             });
             try family_entry.value_ptr.append(self.allocator, .{
                 .def = def_id,
-                .fn_ty = lower_fn_ty,
+                .request_fn_ty = lower_fn_ty,
+                .request_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
+                .solved_fn_ty = lower_fn_ty,
+                .solved_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
                 .status = .lowering,
             });
             break :blk .{
@@ -1154,12 +1193,27 @@ const Builder = struct {
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
         for (family_entry.value_ptr.items) |existing| {
-            if (existing.fn_ty != fn_ty) {
-                const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
-                if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
-                try requester.unify(try requester.importMono(fn_ty), try requester.importMono(existing.fn_ty));
-                try requester.drainDirty();
+            var matched_ty: ?Type.TypeId = null;
+            if (existing.request_fn_ty == fn_ty) {
+                matched_ty = existing.request_fn_ty;
+            } else if (std.mem.eql(u8, existing.request_digest.bytes[0..], fn_ty_digest.bytes[0..])) {
+                matched_ty = existing.request_fn_ty;
             }
+            if (matched_ty == null and existing.status == .ready) {
+                if (existing.solved_fn_ty == fn_ty) {
+                    matched_ty = existing.solved_fn_ty;
+                } else if (std.mem.eql(u8, existing.solved_digest.bytes[0..], fn_ty_digest.bytes[0..])) {
+                    matched_ty = existing.solved_fn_ty;
+                }
+            }
+            const match_ty = matched_ty orelse continue;
+            if (match_ty != fn_ty) {
+                try requester.unify(try requester.importMono(fn_ty), try requester.importMono(match_ty));
+            }
+            if (existing.status == .ready and existing.solved_fn_ty != fn_ty) {
+                try requester.unify(try requester.importMono(fn_ty), try requester.importMono(existing.solved_fn_ty));
+            }
+            try requester.drainDirty();
             const def = self.program.defs.items[@intFromEnum(existing.def)];
             return .{
                 .fn_id = def.fn_id orelse
@@ -1184,7 +1238,10 @@ const Builder = struct {
         });
         try family_entry.value_ptr.append(self.allocator, .{
             .def = def_id,
-            .fn_ty = fn_ty,
+            .request_fn_ty = fn_ty,
+            .request_digest = fn_ty_digest,
+            .solved_fn_ty = fn_ty,
+            .solved_digest = fn_ty_digest,
             .status = .reserved,
         });
         return .{
@@ -1198,7 +1255,8 @@ const Builder = struct {
             Common.invariant("lowered procedure template family disappeared before completion");
         for (entries.items) |*entry| {
             if (entry.def != def) continue;
-            entry.fn_ty = fn_ty;
+            entry.solved_fn_ty = fn_ty;
+            entry.solved_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
             entry.status = .ready;
             return;
         }
@@ -1371,6 +1429,8 @@ const Builder = struct {
                             break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
                         },
                         .parse_tag_union_spec,
+                        .fields,
+                        .field,
                         => {},
                     },
                     else => {},
@@ -1451,7 +1511,7 @@ const Builder = struct {
     }
 
     fn generatedRecordSlotType(self: *Builder, fmt_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        const missing_name = try self.program.names.internTagLabel("Missing");
+        const missing_name = try self.program.names.internTagLabel("Absent");
         const present_name = try self.program.names.internTagLabel("Present");
         const present_payloads = try self.program.types.addSpan(&.{fmt_ty});
         const tags = [_]Type.Tag{
@@ -1816,6 +1876,7 @@ const Builder = struct {
             .imported_template,
             .checked_generated,
             => |template| template,
+            .parser_runtime => Common.invariant("generated parser runtime function must be restored through ConstStore parser restore"),
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
@@ -1875,6 +1936,7 @@ const Builder = struct {
             .imported_template,
             .checked_generated,
             => |template| template,
+            .parser_runtime => Common.invariant("generated parser runtime function must be restored through ConstStore parser restore"),
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
@@ -2053,6 +2115,7 @@ const Builder = struct {
     fn moduleForConstFnDef(self: *Builder, fn_def: anytype) ModuleView {
         return switch (fn_def) {
             .nested => |nested| self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
+            .parser_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .local_template,
             .imported_template,
             .checked_generated,
@@ -2080,6 +2143,10 @@ const Builder = struct {
             .local_hosted => |template| .{ .local_hosted = self.hostedFn(template) },
             .imported_hosted => |template| .{ .imported_hosted = self.hostedFn(template) },
             .checked_generated => |template| .{ .checked_generated = template },
+            .parser_runtime => |runtime| .{ .parser_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
         };
     }
 
@@ -2093,6 +2160,9 @@ const Builder = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.fns.items[raw];
+        if (fn_value.fn_def == .parser_runtime) {
+            return try self.restoreConstParserRuntimeFnExpr(store_view, fn_value, ty);
+        }
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
@@ -2110,6 +2180,7 @@ const Builder = struct {
         defer self.active_graph = saved_graph;
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
+        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = fn_view.bodies.exprs[@intFromEnum(lambda_expr_id)];
@@ -2137,16 +2208,17 @@ const Builder = struct {
         defer self.allocator.free(captures);
 
         for (fn_value.captures, 0..) |capture, index| {
-            const capture_ty = checkedBinderType(fn_view, capture.binder);
-            const lowered_ty = try self.lowerType(fn_view, capture_ty);
-            const value_expr = try fn_ctx.restoreConstNode(store_view, fn_view, capture.value, capture_ty);
-            const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, capture.binder);
-            try bindLocalName(self.program, fn_view, local, capture.binder);
+            const binder = constCaptureBinder(capture.id);
+            const capture_ty = checkedBinderType(fn_view, binder);
+            const lowered_ty = try fn_ctx.lowerType(capture_ty);
+            const value_expr = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
+            const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            try bindLocalName(self.program, fn_view, local, binder);
             const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
-            const previous = fn_ctx.binders.get(capture.binder);
-            try fn_ctx.binders.put(capture.binder, local);
+            const previous = fn_ctx.binders.get(binder);
+            try fn_ctx.binders.put(binder, local);
             captures[index] = .{
-                .binder = capture.binder,
+                .binder = binder,
                 .previous = previous,
                 .value = value_expr,
                 .pat = pat,
@@ -2188,6 +2260,131 @@ const Builder = struct {
         }
         try self.drainSpecRequests(graph);
         return expr;
+    }
+
+    fn restoreConstParserRuntimeFnExpr(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const runtime = switch (fn_value.fn_def) {
+            .parser_runtime => |runtime| runtime,
+            else => Common.invariant("non-parser function reached parser runtime restore"),
+        };
+        const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names, &self.unsolved_monos);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+
+        var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, runtime.owner, graph);
+        defer fn_ctx.deinit();
+        fn_ctx.current_fn_key = fn_value.source_fn_key;
+
+        const expr = fn_view.bodies.exprs[@intFromEnum(runtime.expr)];
+        const plan = parserDispatchPlanForExpr(fn_view, runtime.expr);
+        const callable_mono_ty = try fn_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, &fn_ctx, expr.ty, plan.args, ty);
+        const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
+        if (arg_tys.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
+        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored parser constructor result type differed from restored function type");
+
+        const runtime_fn = self.functionShape(ty, "stored parser runtime value had a non-function type");
+        const runtime_arg_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(runtime_fn.args));
+        defer self.allocator.free(runtime_arg_tys);
+        if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
+
+        const shape_ty = try fn_ctx.lowerType(plan.dispatcher_ty);
+        const state_local = try self.program.addLocal(self.symbols.fresh(), runtime_arg_tys[0]);
+        const state_expr = try self.localExpr(state_local, runtime_arg_tys[0]);
+
+        var encoding_let: ?struct {
+            local: Ast.LocalId,
+            value: Ast.ExprId,
+        } = null;
+        const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
+            const local = try self.program.addLocal(self.symbols.fresh(), arg_tys[0]);
+            self.program.setLocalCaptureId(local, parserEncodingCaptureId());
+            encoding_let = .{
+                .local = local,
+                .value = try self.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[0]),
+            };
+            break :blk try self.localExpr(local, arg_tys[0]);
+        } else try fn_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+
+        var renamed_field_locals: ?[]Ast.LocalId = null;
+        defer if (renamed_field_locals) |locals| self.allocator.free(locals);
+        var renamed_field_values: ?[]Ast.ExprId = null;
+        defer if (renamed_field_values) |values| self.allocator.free(values);
+        var renamed_field_lengths: ?[]u32 = null;
+        defer if (renamed_field_lengths) |lengths| self.allocator.free(lengths);
+
+        const str_ty = try self.primitiveType(.str);
+        switch (self.shapeContent(shape_ty)) {
+            .record, .zst => {
+                const record_fields = fn_ctx.recordFieldsForShape(shape_ty);
+                const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
+                const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
+                const lengths = try self.allocator.alloc(u32, record_fields.len);
+                renamed_field_locals = locals;
+                renamed_field_values = values;
+                renamed_field_lengths = lengths;
+                for (record_fields, 0..) |_, index| {
+                    const capture_id = fn_ctx.parserFieldCaptureIdForRecordField(record_fields, index);
+                    const node = constGeneratedCaptureNode(fn_value, capture_id) orelse
+                        Common.invariant("stored parser runtime function was missing a renamed field capture");
+                    locals[index] = try self.program.addLocal(self.symbols.fresh(), str_ty);
+                    self.program.setLocalCaptureId(locals[index], capture_id);
+                    values[index] = try self.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
+                    lengths[index] = constStrNodeByteLen(store_view, node);
+                }
+            },
+            else => {},
+        }
+
+        const parsed = try fn_ctx.lowerParseShapeFromState(
+            shape_ty,
+            encoding_expr,
+            arg_tys[0],
+            state_expr,
+            runtime_arg_tys[0],
+            runtime_fn.ret,
+            renamed_field_locals,
+            renamed_field_lengths,
+        );
+        const runtime_fn_id = try self.program.addFn(.{
+            .fn_def = .{ .parser_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
+            .source_fn_ty = fn_value.source_fn_ty,
+            .source_fn_key = fn_value.source_fn_key,
+            .mono_fn_ty = ty,
+        });
+        var parser_expr = try self.program.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
+            .fn_id = runtime_fn_id,
+            .args = try self.program.addTypedLocalSpan(&.{
+                .{ .local = state_local, .ty = runtime_arg_tys[0] },
+            }),
+            .body = parsed,
+        } } });
+        if (renamed_field_values) |values| {
+            const locals = renamed_field_locals orelse Common.invariant("renamed field values existed without locals");
+            var index = values.len;
+            while (index > 0) {
+                index -= 1;
+                parser_expr = try fn_ctx.wrapLet(locals[index], str_ty, values[index], parser_expr, ty);
+            }
+        }
+        if (encoding_let) |let_| {
+            parser_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, parser_expr, ty);
+        }
+
+        try self.drainSpecRequests(graph);
+        return parser_expr;
     }
 
     fn restoreConstNode(
@@ -3118,6 +3315,8 @@ const BodyContext = struct {
                     return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
                 .parse_tag_union_spec,
+                .fields,
+                .field,
                 => {},
             },
             else => {},
@@ -3451,7 +3650,7 @@ const BodyContext = struct {
         defer self.builder.program.current_loc = saved_loc;
         self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
-            .call => |call| return try self.lowerCallExpr(expr.ty, call),
+            .call => |call| return try self.lowerCallExpr(expr_id, expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .interpolation => |interpolation| return try self.lowerDispatchExpr(expr.ty, interpolation.plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
@@ -3648,8 +3847,8 @@ const BodyContext = struct {
         return lowered;
     }
 
-    fn lowerCallExpr(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!Ast.ExprId {
-        if (try self.lowerDecoderIntrinsicCallExpr(checked_ret_ty, call, null)) |expr| return expr;
+    fn lowerCallExpr(self: *BodyContext, checked_expr_id: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!Ast.ExprId {
+        if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| return expr;
         const lowered = try self.lowerCall(checked_ret_ty, call);
         return try self.builder.program.addExpr(.{
             .ty = lowered.ret_ty,
@@ -3668,33 +3867,41 @@ const BodyContext = struct {
         return self.builder.functionShape(fn_ty, "checked call function type was not a function").ret;
     }
 
-    fn lowerDecoderIntrinsicCallExpr(
+    fn lowerParseIntrinsicCallExpr(
         self: *BodyContext,
+        checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Ast.ExprId {
         const target = call.direct_target orelse return null;
-        const intrinsic = self.decoderIntrinsicForResolvedTarget(target) orelse return null;
+        const intrinsic = self.parseIntrinsicForResolvedTarget(target) orelse return null;
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
 
         const arg_tys = try self.allocator.alloc(Type.TypeId, call.args.len);
         defer self.allocator.free(arg_tys);
         for (call.args, 0..) |arg, index| {
-            arg_tys[index] = try self.decoderIntrinsicArgumentMonoType(arg);
+            arg_tys[index] = try self.parseIntrinsicArgumentMonoType(arg);
         }
-        const ret_ty = try self.decoderIntrinsicReturnType(intrinsic, checked_ret_ty, call.args, arg_tys, expected_ret_ty);
+        const ret_ty = try self.parseIntrinsicReturnType(intrinsic, checked_ret_ty, call.args, arg_tys, expected_ret_ty);
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, ret_ty)) Common.invariant("checked decoder intrinsic lowered at a type different from its context type");
+            if (!self.sameType(expected, ret_ty)) Common.invariant("checked parse intrinsic lowered at a type different from its context type");
         }
 
         return switch (intrinsic) {
-            .tag_union_parse => try self.lowerDecoderTagUnionDecode(call.args, arg_tys, ret_ty),
+            .tag_union_parse => try self.lowerParseTagUnionDecode(call.args, arg_tys, ret_ty),
+            .fields_rename_fields => try self.lowerFieldsRenameFields(call.args, arg_tys, ret_ty),
+            .fields_shortest_name => try self.lowerFieldsNameBound(call.args, arg_tys, ret_ty, .shortest),
+            .fields_longest_name => try self.lowerFieldsNameBound(call.args, arg_tys, ret_ty, .longest),
+            .fields_iter => try self.lowerFieldsIter(checked_expr_id, source_fn_ty, call.args, arg_tys, ret_ty, .all),
+            .fields_for_size => try self.lowerFieldsIter(checked_expr_id, source_fn_ty, call.args, arg_tys, ret_ty, .for_size),
+            .field_name => try self.lowerFieldName(call.args, arg_tys, ret_ty),
         };
     }
 
-    fn decoderIntrinsicReturnType(
+    fn parseIntrinsicReturnType(
         self: *BodyContext,
-        intrinsic: DecoderIntrinsic,
+        intrinsic: ParseIntrinsic,
         checked_ret_ty: checked.CheckedTypeId,
         args: []const checked.CheckedExprId,
         arg_tys: []const Type.TypeId,
@@ -3702,20 +3909,35 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const derived = switch (intrinsic) {
             .tag_union_parse => blk: {
-                if (args.len != 4 or arg_tys.len != 4) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
+                if (expected_ret_ty) |expected| break :blk expected;
+                break :blk try self.lowerType(checked_ret_ty);
+            },
+            .fields_rename_fields => blk: {
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Fields.rename_fields reached Monotype with an unexpected arity");
+                if (self.generatedFieldsBackingValueFields(arg_tys[0]) != null) break :blk arg_tys[0];
+                if (expected_ret_ty) |expected| break :blk expected;
+                break :blk try self.lowerType(checked_ret_ty);
+            },
+            .fields_shortest_name, .fields_longest_name, .fields_iter, .field_name => blk: {
+                if (args.len != 1 or arg_tys.len != 1) Common.invariant("field metadata intrinsic reached Monotype with an unexpected arity");
+                if (expected_ret_ty) |expected| break :blk expected;
+                break :blk try self.lowerType(checked_ret_ty);
+            },
+            .fields_for_size => blk: {
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Fields.for_size reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerType(checked_ret_ty);
             },
         };
 
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, derived)) Common.invariant("checked decoder intrinsic result differed from expected result type");
-            return expected;
+            if (!self.sameType(expected, derived)) Common.invariant("checked parse intrinsic result differed from expected result type");
         }
         return derived;
     }
 
-    fn decoderIntrinsicArgumentMonoType(
+    fn parseIntrinsicArgumentMonoType(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
     ) Allocator.Error!Type.TypeId {
@@ -3738,10 +3960,10 @@ const BodyContext = struct {
             },
             else => {},
         }
-        return (try self.callArgumentMonoType(checked_arg, null)) orelse Common.invariant("checked decoder intrinsic argument did not lower to a monotype");
+        return (try self.callArgumentMonoType(checked_arg, null)) orelse Common.invariant("checked parse intrinsic argument did not lower to a monotype");
     }
 
-    fn lowerDecoderIntrinsicArgAtType(
+    fn lowerParseIntrinsicArgAtType(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
         ty: Type.TypeId,
@@ -3757,7 +3979,7 @@ const BodyContext = struct {
             if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
                 if (!self.sameType(ty, local_ty)) {
-                    Common.invariant("checked decoder intrinsic local argument type differed from its concrete local type");
+                    Common.invariant("checked parse intrinsic local argument type differed from its concrete local type");
                 }
                 return try self.builder.program.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } });
             }
@@ -3808,7 +4030,7 @@ const BodyContext = struct {
             },
             .hosted => |hosted| blk: {
                 const source_fn_ty = proc.source_fn_ty_payload orelse
-                    Common.invariant("hosted procedure value reached decoder intrinsic callback lowering without source type");
+                    Common.invariant("hosted procedure value reached parse intrinsic callback lowering without source type");
                 const fn_template = self.builder.fnDefForTemplate(
                     self.builder.moduleForId(moduleIdFromDigest(names.procTemplateModuleDigest(hosted.template))),
                     hosted.template,
@@ -3819,11 +4041,11 @@ const BodyContext = struct {
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
                 break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
             },
-            .platform_required => Common.invariant("platform required procedure reached decoder intrinsic callback lowering"),
+            .platform_required => Common.invariant("platform required procedure reached parse intrinsic callback lowering"),
         };
     }
 
-    fn decoderIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?DecoderIntrinsic {
+    fn parseIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?ParseIntrinsic {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
@@ -3837,10 +4059,10 @@ const BodyContext = struct {
             else => return null,
         };
         const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
-        return self.decoderIntrinsicForBuiltinDef(view, imported.def);
+        return self.parseIntrinsicForBuiltinDef(view, imported.def);
     }
 
-    fn decoderIntrinsicForBuiltinDef(_: *BodyContext, view: ModuleView, def_idx: can.CIR.Def.Idx) ?DecoderIntrinsic {
+    fn parseIntrinsicForBuiltinDef(_: *BodyContext, view: ModuleView, def_idx: can.CIR.Def.Idx) ?ParseIntrinsic {
         if (view.module_env.module_role != .builtin) return null;
 
         const def = view.module_env.store.getDef(def_idx);
@@ -3851,38 +4073,1418 @@ const BodyContext = struct {
         };
         const text = view.module_env.getIdentText(ident);
         if (Ident.textEql(text, "Builtin.ParseTagUnionSpec.parse")) return .tag_union_parse;
+        if (Ident.textEql(text, "Builtin.Fields.rename_fields")) return .fields_rename_fields;
+        if (Ident.textEql(text, "Builtin.Fields.shortest_name")) return .fields_shortest_name;
+        if (Ident.textEql(text, "Builtin.Fields.longest_name")) return .fields_longest_name;
+        if (Ident.textEql(text, "Builtin.Fields.iter")) return .fields_iter;
+        if (Ident.textEql(text, "Builtin.Fields.for_size")) return .fields_for_size;
+        if (Ident.textEql(text, "Builtin.Field.name")) return .field_name;
         return null;
     }
 
-    fn lowerParseShapeFromSlot(
+    fn lowerFieldsRenameFields(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 2 or arg_tys.len != 2) Common.invariant("Fields.rename_fields reached Monotype with an unexpected arity");
+        if (!self.sameType(arg_tys[0], ret_ty)) Common.invariant("Fields.rename_fields result type differed from its field set argument");
+
+        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const rename_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        if (self.generatedFieldsBackingValueFields(arg_tys[0])) |backing_fields| {
+            const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ret_ty);
+            const rename_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+            var body = try self.lowerGeneratedFieldsRenameFields(
+                backing_fields,
+                ret_ty,
+                fields_local,
+                rename_local,
+                arg_tys[1],
+            );
+            body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
+            return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
+        }
+
+        const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ret_ty);
+        var body = try self.builder.localExpr(fields_local, ret_ty);
+        body = try self.wrapWildcardLet(arg_tys[1], rename_value, body, ret_ty);
+        return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
+    }
+
+    fn lowerGeneratedFieldsRenameFields(
+        self: *BodyContext,
+        backing_fields: []const Type.Field,
+        fields_ty: Type.TypeId,
+        fields_local: Ast.LocalId,
+        rename_local: Ast.LocalId,
+        rename_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields_backing_ty = self.builder.namedBackingType(fields_ty) orelse
+            Common.invariant("generated Fields value expected a named backing type");
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), fields_backing_ty);
+        const body = try self.lowerGeneratedFieldsRenameBackingRecord(
+            backing_fields,
+            fields_ty,
+            fields_backing_ty,
+            backing_local,
+            rename_local,
+            rename_fn_ty,
+        );
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = fields_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, fields_backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = body };
+        return try self.builder.program.addExpr(.{ .ty = fields_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(fields_local, fields_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn lowerGeneratedFieldsRenameBackingRecord(
+        self: *BodyContext,
+        backing_fields: []const Type.Field,
+        fields_ty: Type.TypeId,
+        fields_backing_ty: Type.TypeId,
+        backing_local: Ast.LocalId,
+        rename_local: Ast.LocalId,
+        rename_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const info = self.generatedFieldsBackingInfoFromBacking(fields_backing_ty) orelse
+            Common.invariant("generated Fields value expected a generated backing type");
+        if (backing_fields.len != info.item_fields.len) Common.invariant("generated Fields rename arity differed from item count");
+        const str_ty = try self.builder.primitiveType(.str);
+        const lowered_items = try self.allocator.alloc(Ast.FieldExpr, info.item_fields.len);
+        defer self.allocator.free(lowered_items);
+        const item_locals = try self.allocator.alloc(Ast.LocalId, info.item_fields.len);
+        defer self.allocator.free(item_locals);
+        const item_exprs = try self.allocator.alloc(Ast.ExprId, info.item_fields.len);
+        defer self.allocator.free(item_exprs);
+        const renamed_name_locals = try self.allocator.alloc(Ast.LocalId, info.item_fields.len);
+        defer self.allocator.free(renamed_name_locals);
+        const renamed_name_exprs = try self.allocator.alloc(Ast.ExprId, info.item_fields.len);
+        defer self.allocator.free(renamed_name_exprs);
+
+        const items_expr = try self.builder.program.addExpr(.{
+            .ty = info.items_field.ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, fields_backing_ty),
+                .field = info.items_field.name,
+            } },
+        });
+        const items_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), info.items_field.ty);
+
+        for (info.item_fields, 0..) |field, index| {
+            const field_ty = field.ty;
+            item_exprs[index] = try self.builder.program.addExpr(.{
+                .ty = field_ty,
+                .data = .{ .field_access = .{
+                    .receiver = try self.builder.localExpr(items_local, info.items_field.ty),
+                    .field = field.name,
+                } },
+            });
+            item_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_ty);
+            const current_name = try self.fieldNameFromLocal(item_locals[index], field_ty, str_ty);
+            renamed_name_exprs[index] = try self.builder.program.addExpr(.{
+                .ty = str_ty,
+                .data = .{ .call_value = .{
+                    .callee = try self.builder.localExpr(rename_local, rename_fn_ty),
+                    .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{current_name}),
+                } },
+            });
+            renamed_name_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+            const renamed_handle = try self.lowerRecordFieldHandleWithName(
+                field_ty,
+                try self.builder.localExpr(renamed_name_locals[index], str_ty),
+                try self.builder.lowLevelExpr(
+                    .str_count_utf8_bytes,
+                    &.{try self.builder.localExpr(renamed_name_locals[index], str_ty)},
+                    try self.builder.primitiveType(.u64),
+                ),
+                index,
+            );
+            lowered_items[index] = .{
+                .name = field.name,
+                .value = renamed_handle,
+            };
+        }
+
+        const items_record_expr = try self.builder.program.addExpr(.{
+            .ty = info.items_field.ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered_items) },
+        });
+        const bound_exprs = try self.fieldNameBoundExprsFromLocals(renamed_name_locals, null, info.shortest_field.ty);
+        const shortest_expr = bound_exprs[0];
+        const longest_expr = bound_exprs[1];
+        const backing_type_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(fields_backing_ty));
+        const backing_values = try self.allocator.alloc(Ast.FieldExpr, backing_type_fields.len);
+        defer self.allocator.free(backing_values);
+        for (backing_type_fields, 0..) |field, index| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            backing_values[index] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "items"))
+                    items_record_expr
+                else if (Ident.textEql(label, "shortest_name"))
+                    shortest_expr
+                else if (Ident.textEql(label, "longest_name"))
+                    longest_expr
+                else
+                    Common.invariant("generated Fields backing contained an unexpected field"),
+            };
+        }
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = fields_backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(backing_values) },
+        });
+        const renamed_fields = try self.builder.program.addExpr(.{
+            .ty = fields_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+        var body = renamed_fields;
+        var index = info.item_fields.len;
+        while (index > 0) {
+            index -= 1;
+            body = try self.wrapLet(
+                renamed_name_locals[index],
+                str_ty,
+                renamed_name_exprs[index],
+                body,
+                fields_ty,
+            );
+            body = try self.wrapLet(
+                item_locals[index],
+                info.item_fields[index].ty,
+                item_exprs[index],
+                body,
+                fields_ty,
+            );
+        }
+        return try self.wrapLet(items_local, info.items_field.ty, items_expr, body, fields_ty);
+    }
+
+    fn lowerFieldsNameBound(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+        bound: FieldNameBound,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 1 or arg_tys.len != 1) Common.invariant("Fields name bound reached Monotype with an unexpected arity");
+        if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("Fields name bound result was not U64");
+
+        const shape_ty = self.fieldsShapeType(arg_tys[0]);
+        const fields = self.recordFieldsForShape(shape_ty);
+        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        if (self.generatedFieldsBackingInfo(arg_tys[0])) |info| {
+            const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+            const body = try self.lowerGeneratedFieldsNameBound(
+                info,
+                arg_tys[0],
+                fields_local,
+                ret_ty,
+                bound,
+            );
+            return try self.wrapLet(fields_local, arg_tys[0], fields_value, body, ret_ty);
+        }
+
+        var value: u64 = 0;
+        if (fields.len > 0) {
+            value = @intCast(self.builder.program.names.recordFieldLabelText(fields[0].name).len);
+            for (fields[1..]) |field| {
+                const len: u64 = @intCast(self.builder.program.names.recordFieldLabelText(field.name).len);
+                value = switch (bound) {
+                    .shortest => @min(value, len),
+                    .longest => @max(value, len),
+                };
+            }
+        }
+
+        const bound_expr = try self.builder.intLiteralExpr(value, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], fields_value, bound_expr, ret_ty);
+    }
+
+    fn lowerGeneratedFieldsNameBound(
+        self: *BodyContext,
+        info: GeneratedFieldsBackingInfo,
+        fields_ty: Type.TypeId,
+        fields_local: Ast.LocalId,
+        ret_ty: Type.TypeId,
+        bound: FieldNameBound,
+    ) Allocator.Error!Ast.ExprId {
+        const fields_backing_ty = self.builder.namedBackingType(fields_ty) orelse
+            Common.invariant("generated Fields value expected a named backing type");
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), fields_backing_ty);
+        const bound_field = switch (bound) {
+            .shortest => info.shortest_field,
+            .longest => info.longest_field,
+        };
+        if (!self.sameType(bound_field.ty, ret_ty)) Common.invariant("generated Fields bound metadata type differed from result type");
+        const bound_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, fields_backing_ty),
+                .field = bound_field.name,
+            } },
+        });
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = fields_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, fields_backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = bound_expr };
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(fields_local, fields_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn lowerFieldName(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 1 or arg_tys.len != 1) Common.invariant("Field.name reached Monotype with an unexpected arity");
+        if (!self.typeHasBuiltinOwner(ret_ty, .str)) Common.invariant("Field.name result was not Str");
+
+        const field_ty = arg_tys[0];
+        const backing_ty = self.builder.namedBackingType(field_ty) orelse
+            Common.invariant("Field.name argument had no backing type");
+        const name_field = self.recordFieldByText(backing_ty, "name");
+        if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
+
+        const field_value = try self.lowerParseIntrinsicArgAtType(args[0], field_ty);
+        const field_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_ty);
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const name_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, backing_ty),
+                .field = name_field.name,
+            } },
+        });
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = name_expr };
+        const matched = try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(field_local, field_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+        return try self.wrapLet(field_local, field_ty, field_value, matched, ret_ty);
+    }
+
+    fn generatedFieldsBackingType(
+        self: *BodyContext,
+        field_count: usize,
+        field_handle_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const item_fields = try self.allocator.alloc(Type.Field, field_count);
+        defer self.allocator.free(item_fields);
+
+        for (item_fields, 0..) |*field, index| {
+            const label = try std.fmt.allocPrint(self.allocator, "field_{d}", .{index});
+            defer self.allocator.free(label);
+
+            field.* = .{
+                .name = try self.builder.program.names.internRecordFieldLabel(label),
+                .ty = field_handle_ty,
+            };
+        }
+
+        const items_ty = try self.builder.program.types.add(.{
+            .record = try self.builder.program.types.addFields(item_fields),
+        });
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const fields = [_]Type.Field{
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("items"),
+                .ty = items_ty,
+            },
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"),
+                .ty = u64_ty,
+            },
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("longest_name"),
+                .ty = u64_ty,
+            },
+        };
+
+        return try self.builder.program.types.add(.{
+            .record = try self.builder.program.types.addFields(&fields),
+        });
+    }
+
+    fn generatedFieldHandleBackingType(self: *BodyContext) Allocator.Error!Type.TypeId {
+        const fields = [_]Type.Field{
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("index"),
+                .ty = try self.builder.primitiveType(.u64),
+            },
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("name"),
+                .ty = try self.builder.primitiveType(.str),
+            },
+            .{
+                .name = try self.builder.program.names.internRecordFieldLabel("name_len"),
+                .ty = try self.builder.primitiveType(.u64),
+            },
+        };
+
+        return try self.builder.program.types.add(.{
+            .record = try self.builder.program.types.addFields(&fields),
+        });
+    }
+
+    fn lowerFieldsValue(
+        self: *BodyContext,
+        fields_ty: Type.TypeId,
+        fields_backing_ty: Type.TypeId,
+        field_handle_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+    ) Allocator.Error!Ast.ExprId {
+        const info = self.generatedFieldsBackingInfoFromBacking(fields_backing_ty) orelse
+            Common.invariant("generated Fields backing did not have the expected shape");
+        if (info.item_fields.len != renamed_field_locals.len) Common.invariant("generated Fields backing arity differed from renamed field count");
+        if (renamed_field_lengths) |lengths| {
+            if (lengths.len != renamed_field_locals.len) Common.invariant("generated Fields backing length arity differed from renamed field count");
+        }
+
+        const str_ty = try self.builder.primitiveType(.str);
+        const item_values = try self.allocator.alloc(Ast.FieldExpr, info.item_fields.len);
+        defer self.allocator.free(item_values);
+
+        for (info.item_fields, 0..) |field, index| {
+            const name_expr = try self.builder.localExpr(renamed_field_locals[index], str_ty);
+            const name_len_expr = if (renamed_field_lengths) |lengths|
+                try self.builder.intLiteralExpr(lengths[index], try self.builder.primitiveType(.u64))
+            else
+                try self.builder.lowLevelExpr(
+                    .str_count_utf8_bytes,
+                    &.{try self.builder.localExpr(renamed_field_locals[index], str_ty)},
+                    try self.builder.primitiveType(.u64),
+                );
+            item_values[index] = .{
+                .name = field.name,
+                .value = try self.lowerRecordFieldHandleWithName(field_handle_ty, name_expr, name_len_expr, index),
+            };
+        }
+
+        const items_expr = try self.builder.program.addExpr(.{
+            .ty = info.items_field.ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(item_values) },
+        });
+        const bound_exprs = try self.fieldNameBoundExprsFromLocals(
+            renamed_field_locals,
+            renamed_field_lengths,
+            info.shortest_field.ty,
+        );
+        const shortest_expr = bound_exprs[0];
+        const longest_expr = bound_exprs[1];
+        const backing_type_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(fields_backing_ty));
+        const backing_values = try self.allocator.alloc(Ast.FieldExpr, backing_type_fields.len);
+        defer self.allocator.free(backing_values);
+        for (backing_type_fields, 0..) |field, index| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            backing_values[index] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "items"))
+                    items_expr
+                else if (Ident.textEql(label, "shortest_name"))
+                    shortest_expr
+                else if (Ident.textEql(label, "longest_name"))
+                    longest_expr
+                else
+                    Common.invariant("generated Fields backing contained an unexpected field"),
+            };
+        }
+
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = fields_backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(backing_values) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = fields_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn fieldNameBoundExprsFromLocals(
+        self: *BodyContext,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!struct { Ast.ExprId, Ast.ExprId } {
+        if (renamed_field_lengths) |lengths| {
+            if (lengths.len != renamed_field_locals.len) Common.invariant("renamed field length arity differed from locals");
+            var shortest: u64 = 0;
+            var longest: u64 = 0;
+            if (lengths.len > 0) {
+                shortest = lengths[0];
+                longest = lengths[0];
+                for (lengths[1..]) |len| {
+                    shortest = @min(shortest, len);
+                    longest = @max(longest, len);
+                }
+            }
+            return .{
+                try self.builder.intLiteralExpr(shortest, u64_ty),
+                try self.builder.intLiteralExpr(longest, u64_ty),
+            };
+        }
+
+        if (renamed_field_locals.len == 0) {
+            const zero = try self.builder.intLiteralExpr(0, u64_ty);
+            return .{ zero, zero };
+        }
+
+        return .{
+            try self.fieldNameBoundExprFromLocals(renamed_field_locals, u64_ty, .shortest),
+            try self.fieldNameBoundExprFromLocals(renamed_field_locals, u64_ty, .longest),
+        };
+    }
+
+    fn fieldNameBoundExprFromLocals(
+        self: *BodyContext,
+        renamed_field_locals: []const Ast.LocalId,
+        u64_ty: Type.TypeId,
+        bound: FieldNameBound,
+    ) Allocator.Error!Ast.ExprId {
+        if (renamed_field_locals.len == 0) return try self.builder.intLiteralExpr(0, u64_ty);
+
+        const str_ty = try self.builder.primitiveType(.str);
+        var body = try self.builder.lowLevelExpr(
+            .str_count_utf8_bytes,
+            &.{try self.builder.localExpr(renamed_field_locals[0], str_ty)},
+            u64_ty,
+        );
+        for (renamed_field_locals[1..]) |field_local| {
+            const current_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+            const candidate_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+            const len_expr = try self.builder.lowLevelExpr(
+                .str_count_utf8_bytes,
+                &.{try self.builder.localExpr(field_local, str_ty)},
+                u64_ty,
+            );
+            const cond = try self.builder.lowLevelExpr(switch (bound) {
+                .shortest => .num_is_lt,
+                .longest => .num_is_gt,
+            }, &.{
+                try self.builder.localExpr(candidate_local, u64_ty),
+                try self.builder.localExpr(current_local, u64_ty),
+            }, try self.builder.primitiveType(.bool));
+            const selected = try self.builder.ifExpr(
+                cond,
+                try self.builder.localExpr(candidate_local, u64_ty),
+                try self.builder.localExpr(current_local, u64_ty),
+                u64_ty,
+            );
+            body = try self.wrapLet(
+                current_local,
+                u64_ty,
+                body,
+                try self.wrapLet(candidate_local, u64_ty, len_expr, selected, u64_ty),
+                u64_ty,
+            );
+        }
+        return body;
+    }
+
+    fn fieldHandleIndexExpr(
+        self: *BodyContext,
+        field_local: Ast.LocalId,
+        field_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("Field index result was not U64");
+        const backing_ty = self.builder.namedBackingType(field_ty) orelse
+            Common.invariant("Field index argument had no backing type");
+        const index_field = self.recordFieldByText(backing_ty, "index");
+        if (!self.sameType(index_field.ty, ret_ty)) Common.invariant("Field backing index field differed from U64");
+
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const index_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, backing_ty),
+                .field = index_field.name,
+            } },
+        });
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = index_expr };
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(field_local, field_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn fieldNameLenFromLocal(
+        self: *BodyContext,
+        field_local: Ast.LocalId,
+        field_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("Field name length result was not U64");
+        const backing_ty = self.builder.namedBackingType(field_ty) orelse
+            Common.invariant("Field name length argument had no backing type");
+        const name_len_field = self.recordFieldByText(backing_ty, "name_len");
+        if (!self.sameType(name_len_field.ty, ret_ty)) Common.invariant("Field backing name_len field differed from U64");
+
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const name_len_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, backing_ty),
+                .field = name_len_field.name,
+            } },
+        });
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = name_len_expr };
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(field_local, field_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn lowerFieldsIter(
+        self: *BodyContext,
+        checked_expr_id: checked.CheckedExprId,
+        checked_source_ty: checked.CheckedTypeId,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+        mode: FieldsIterMode,
+    ) Allocator.Error!Ast.ExprId {
+        const expected_arity: usize = switch (mode) {
+            .all => 1,
+            .for_size => 2,
+        };
+        if (args.len != expected_arity or arg_tys.len != expected_arity) Common.invariant("Fields iterator reached Monotype with an unexpected arity");
+
+        const shape_ty = self.fieldsShapeType(arg_tys[0]);
+        const fields = self.recordFieldsForShape(shape_ty);
+        const backing_ty = self.builder.namedBackingType(ret_ty) orelse
+            Common.invariant("Fields iterator result was not an Iter nominal type");
+        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
+        const step_field = self.recordFieldByText(backing_ty, "step");
+        const step_fn_ty = step_field.ty;
+        const step_shape = self.builder.functionShape(step_fn_ty, "Fields iterator step field was not a function");
+        if (self.builder.program.types.span(step_shape.args).len != 0) {
+            Common.invariant("Fields iterator step function was not zero-argument");
+        }
+        const field_handle_ty = self.iterItemType(ret_ty);
+
+        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const size_local: ?Ast.LocalId = if (mode == .for_size) blk: {
+            if (!self.typeHasBuiltinOwner(arg_tys[1], .u64)) Common.invariant("Fields.for_size size argument was not U64");
+            break :blk try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        } else null;
+
+        var iter_expr = if (self.generatedFieldsBackingFields(arg_tys[0], field_handle_ty, fields.len)) |backing_fields|
+            try self.lowerFieldsValueIter(
+                backing_fields,
+                arg_tys[0],
+                fields_local,
+                field_handle_ty,
+                ret_ty,
+                backing_ty,
+                len_field.ty,
+                step_fn_ty,
+                step_shape.ret,
+                size_local,
+                arg_tys,
+                checked_source_ty,
+                checked_expr_id,
+            )
+        else if (mode == .all)
+            try self.lowerFieldsStaticIterFromIndex(
+                fields,
+                0,
+                field_handle_ty,
+                ret_ty,
+                backing_ty,
+                len_field.ty,
+                step_fn_ty,
+                step_shape.ret,
+                checked_source_ty,
+                checked_expr_id,
+            )
+        else
+            try self.lowerFieldsForSizeIter(
+                fields,
+                field_handle_ty,
+                ret_ty,
+                backing_ty,
+                len_field.ty,
+                step_fn_ty,
+                step_shape.ret,
+                size_local.?,
+                arg_tys[1],
+                checked_source_ty,
+                checked_expr_id,
+            );
+        if (mode == .for_size) {
+            const size_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+            iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
+        }
+        return try self.wrapLet(fields_local, arg_tys[0], fields_value, iter_expr, ret_ty);
+    }
+
+    const GeneratedFieldsBackingInfo = struct {
+        items_field: Type.Field,
+        shortest_field: Type.Field,
+        longest_field: Type.Field,
+        item_fields: []const Type.Field,
+    };
+
+    fn generatedFieldsBackingInfo(
+        self: *BodyContext,
+        fields_ty: Type.TypeId,
+    ) ?GeneratedFieldsBackingInfo {
+        if (!self.typeHasBuiltinOwner(fields_ty, .fields)) return null;
+        const backing_ty = self.builder.namedBackingType(fields_ty) orelse return null;
+        return self.generatedFieldsBackingInfoFromBacking(backing_ty);
+    }
+
+    fn generatedFieldsBackingInfoFromBacking(
+        self: *BodyContext,
+        backing_ty: Type.TypeId,
+    ) ?GeneratedFieldsBackingInfo {
+        const items_field = self.recordFieldByTextOptional(backing_ty, "items") orelse return null;
+        const shortest_field = self.recordFieldByTextOptional(backing_ty, "shortest_name") orelse return null;
+        const longest_field = self.recordFieldByTextOptional(backing_ty, "longest_name") orelse return null;
+        if (!self.typeHasBuiltinOwner(shortest_field.ty, .u64)) return null;
+        if (!self.typeHasBuiltinOwner(longest_field.ty, .u64)) return null;
+        const item_fields = switch (self.builder.shapeContent(items_field.ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => return null,
+        };
+        return .{
+            .items_field = items_field,
+            .shortest_field = shortest_field,
+            .longest_field = longest_field,
+            .item_fields = item_fields,
+        };
+    }
+
+    fn generatedFieldsBackingFields(
+        self: *BodyContext,
+        fields_ty: Type.TypeId,
+        field_handle_ty: Type.TypeId,
+        expected_count: usize,
+    ) ?[]const Type.Field {
+        const info = self.generatedFieldsBackingInfo(fields_ty) orelse return null;
+        if (info.item_fields.len != expected_count) return null;
+        for (info.item_fields) |field| {
+            if (!self.sameType(field.ty, field_handle_ty)) return null;
+        }
+        return info.item_fields;
+    }
+
+    fn generatedFieldsBackingValueFields(
+        self: *BodyContext,
+        fields_ty: Type.TypeId,
+    ) ?[]const Type.Field {
+        const info = self.generatedFieldsBackingInfo(fields_ty) orelse return null;
+        for (info.item_fields) |field| {
+            if (!self.typeHasBuiltinOwner(field.ty, .field)) return null;
+        }
+        return info.item_fields;
+    }
+
+    fn isGeneratedFieldsEvidenceType(self: *BodyContext, fields_ty: Type.TypeId) bool {
+        return self.generatedFieldsBackingInfo(fields_ty) != null;
+    }
+
+    fn lowerFieldsValueIter(
+        self: *BodyContext,
+        backing_fields: []const Type.Field,
+        fields_ty: Type.TypeId,
+        fields_local: Ast.LocalId,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        iter_backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        size_local: ?Ast.LocalId,
+        arg_tys: []const Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields_backing_ty = self.builder.namedBackingType(fields_ty) orelse
+            Common.invariant("generated Fields value expected a named backing type");
+        const info = self.generatedFieldsBackingInfoFromBacking(fields_backing_ty) orelse
+            Common.invariant("generated Fields value expected a generated backing type");
+        if (backing_fields.len != info.item_fields.len) Common.invariant("generated Fields iterator arity differed from item count");
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), fields_backing_ty);
+        const items_expr = try self.builder.program.addExpr(.{
+            .ty = info.items_field.ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, fields_backing_ty),
+                .field = info.items_field.name,
+            } },
+        });
+        const items_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), info.items_field.ty);
+        const body = try self.lowerFieldsValueIterFromIndex(
+            info.item_fields,
+            info.items_field.ty,
+            items_local,
+            0,
+            field_handle_ty,
+            iter_ty,
+            iter_backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            size_local,
+            arg_tys,
+            checked_source_ty,
+            source_expr_id,
+        );
+        const body_with_items = try self.wrapLet(items_local, info.items_field.ty, items_expr, body, iter_ty);
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = fields_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, fields_backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = body_with_items };
+        return try self.builder.program.addExpr(.{ .ty = iter_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(fields_local, fields_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn lowerFieldsValueIterFromIndex(
+        self: *BodyContext,
+        backing_fields: []const Type.Field,
+        items_ty: Type.TypeId,
+        items_local: Ast.LocalId,
+        index: usize,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        iter_backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        size_local: ?Ast.LocalId,
+        arg_tys: []const Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const len_expr = try self.lowerFieldsIterLen(backing_fields.len - index, len_ty, if (size_local == null) .all else .for_size);
+
+        if (index == backing_fields.len) {
+            const step_expr = try self.lowerFieldsDoneStep(checked_source_ty, source_expr_id, index, if (size_local == null) .all else .for_size, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, len_expr, step_expr);
+        }
+
+        const rest_expr = try self.lowerFieldsValueIterFromIndex(
+            backing_fields,
+            items_ty,
+            items_local,
+            index + 1,
+            field_handle_ty,
+            iter_ty,
+            iter_backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            size_local,
+            arg_tys,
+            checked_source_ty,
+            source_expr_id,
+        );
+        const item_expr = try self.builder.program.addExpr(.{
+            .ty = field_handle_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(items_local, items_ty),
+                .field = backing_fields[index].name,
+            } },
+        });
+        const step_expr = if (size_local) |local|
+            try self.lowerFieldsSizeFilteredStep(
+                checked_source_ty,
+                source_expr_id,
+                index,
+                item_expr,
+                rest_expr,
+                step_fn_ty,
+                step_ret_ty,
+                local,
+                arg_tys[1],
+            )
+        else
+            try self.lowerFieldsOneStep(
+                checked_source_ty,
+                source_expr_id,
+                index,
+                item_expr,
+                rest_expr,
+                step_fn_ty,
+                step_ret_ty,
+            );
+        return try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, len_expr, step_expr);
+    }
+
+    fn lowerFieldsStaticIterFromIndex(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        index: usize,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const len_expr = try self.lowerFieldsIterLen(fields.len - index, len_ty, .all);
+
+        if (index == fields.len) {
+            const step_expr = try self.lowerFieldsDoneStep(checked_source_ty, source_expr_id, index, .all, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        }
+
+        const rest_expr = try self.lowerFieldsStaticIterFromIndex(
+            fields,
+            index + 1,
+            field_handle_ty,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            checked_source_ty,
+            source_expr_id,
+        );
+        const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[index], index);
+        const step_expr = try self.lowerFieldsOneStep(
+            checked_source_ty,
+            source_expr_id,
+            index,
+            item_expr,
+            rest_expr,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+    }
+
+    fn lowerFieldsForSizeIter(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        size_local: Ast.LocalId,
+        size_ty: Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        var body = try self.lowerFieldsStaticIterForLen(
+            fields,
+            field_handle_ty,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            checked_source_ty,
+            source_expr_id,
+            null,
+        );
+
+        var seen = std.ArrayList(usize).empty;
+        defer seen.deinit(self.allocator);
+        for (fields) |field| {
+            const len = self.builder.program.names.recordFieldLabelText(field.name).len;
+            var already_seen = false;
+            for (seen.items) |seen_len| {
+                if (seen_len == len) {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if (already_seen) continue;
+            try seen.append(self.allocator, len);
+
+            const bucket = try self.lowerFieldsStaticIterForLen(
+                fields,
+                field_handle_ty,
+                iter_ty,
+                backing_ty,
+                len_ty,
+                step_fn_ty,
+                step_ret_ty,
+                checked_source_ty,
+                source_expr_id,
+                len,
+            );
+            const size_expr = try self.builder.localExpr(size_local, size_ty);
+            const len_expr = try self.builder.intLiteralExpr(@intCast(len), size_ty);
+            const cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ size_expr, len_expr }, try self.builder.primitiveType(.bool));
+            body = try self.builder.ifExpr(cond, bucket, body, iter_ty);
+        }
+        return body;
+    }
+
+    fn lowerFieldsStaticIterForLen(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        target_len: ?usize,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.lowerFieldsStaticFilteredIterFromIndex(
+            fields,
+            0,
+            target_len,
+            field_handle_ty,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            checked_source_ty,
+            source_expr_id,
+        );
+    }
+
+    fn lowerFieldsStaticFilteredIterFromIndex(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        start_index: usize,
+        target_len: ?usize,
+        field_handle_ty: Type.TypeId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const next_index = self.nextFieldIndexForLen(fields, start_index, target_len);
+        const remaining = self.countFieldsForLenFrom(fields, start_index, target_len);
+        const len_expr = try self.lowerFieldsIterLen(remaining, len_ty, .all);
+
+        if (next_index == null) {
+            const step_expr = try self.lowerFieldsDoneStep(checked_source_ty, source_expr_id, start_index, .all, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        }
+
+        const index = next_index.?;
+        const rest_expr = try self.lowerFieldsStaticFilteredIterFromIndex(
+            fields,
+            index + 1,
+            target_len,
+            field_handle_ty,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+            checked_source_ty,
+            source_expr_id,
+        );
+        const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[index], index);
+        const step_expr = try self.lowerFieldsOneStep(
+            checked_source_ty,
+            source_expr_id,
+            index,
+            item_expr,
+            rest_expr,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+    }
+
+    fn nextFieldIndexForLen(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        start_index: usize,
+        target_len: ?usize,
+    ) ?usize {
+        var index = start_index;
+        while (index < fields.len) : (index += 1) {
+            if (target_len) |len| {
+                if (self.builder.program.names.recordFieldLabelText(fields[index].name).len != len) continue;
+            }
+            return index;
+        }
+        return null;
+    }
+
+    fn countFieldsForLenFrom(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        start_index: usize,
+        target_len: ?usize,
+    ) usize {
+        var count: usize = 0;
+        for (fields[start_index..]) |field| {
+            if (target_len) |len| {
+                if (self.builder.program.names.recordFieldLabelText(field.name).len != len) continue;
+            }
+            count += 1;
+        }
+        return count;
+    }
+
+    fn lowerFieldsIterLen(
+        self: *BodyContext,
+        remaining: usize,
+        ty: Type.TypeId,
+        mode: FieldsIterMode,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (mode) {
+            .all => try self.lowerInterpolationLenIfKnown(remaining, ty),
+            .for_size => blk: {
+                const unknown_tag = self.monoTagByText(ty, "Unknown");
+                break :blk try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .tag = .{
+                    .name = unknown_tag.name,
+                    .payloads = .empty(),
+                } } });
+            },
+        };
+    }
+
+    fn lowerFieldsDoneStep(
+        self: *BodyContext,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        mode: FieldsIterMode,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = .empty(),
+        } } });
+        return try self.lowerFieldsStepLambda(checked_source_ty, source_expr_id, index, mode, step_fn_ty, body);
+    }
+
+    fn lowerFieldsOneStep(
+        self: *BodyContext,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        item_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const one_payloads = self.builder.program.types.span(one_tag.payloads);
+        if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+        const one_payload = try self.lowerInterpolationOnePayload(one_payloads[0], item_expr, rest_expr);
+        const one_body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = one_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{one_payload}),
+        } } });
+
+        return try self.lowerFieldsStepLambda(checked_source_ty, source_expr_id, index, .all, step_fn_ty, one_body);
+    }
+
+    fn lowerFieldsSizeFilteredStep(
+        self: *BodyContext,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        item_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        size_local: Ast.LocalId,
+        size_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const field_handle_ty = self.builder.program.exprs.items[@intFromEnum(item_expr)].ty;
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_handle_ty);
+        const item_local_expr = try self.builder.localExpr(item_local, field_handle_ty);
+
+        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const one_payloads = self.builder.program.types.span(one_tag.payloads);
+        if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+        const one_payload = try self.lowerInterpolationOnePayload(one_payloads[0], item_local_expr, rest_expr);
+        const one_body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = one_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{one_payload}),
+        } } });
+
+        const skip_tag = self.monoTagByText(step_ret_ty, "Skip");
+        const skip_payloads = self.builder.program.types.span(skip_tag.payloads);
+        if (skip_payloads.len != 1) Common.invariant("Iter step Skip tag did not have one record payload");
+        const skip_payload = try self.lowerInterpolationSkipPayload(skip_payloads[0], rest_expr);
+        const skip_body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = skip_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{skip_payload}),
+        } } });
+
+        const len_expr = try self.fieldNameLenFromLocal(item_local, field_handle_ty, size_ty);
+        const cond = try self.builder.lowLevelExpr(.num_is_eq, &.{
+            len_expr,
+            try self.builder.localExpr(size_local, size_ty),
+        }, try self.builder.primitiveType(.bool));
+        const body = try self.wrapLet(
+            item_local,
+            field_handle_ty,
+            item_expr,
+            try self.builder.ifExpr(cond, one_body, skip_body, step_ret_ty),
+            step_ret_ty,
+        );
+        return try self.lowerFieldsStepLambda(checked_source_ty, source_expr_id, index, .for_size, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationSkipPayload(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "rest"))
+                    rest_expr
+                else
+                    Common.invariant("Iter step Skip payload contained an unexpected field"),
+            };
+        }
+
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn fieldNameFromLocal(
+        self: *BodyContext,
+        field_local: Ast.LocalId,
+        field_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const backing_ty = self.builder.namedBackingType(field_ty) orelse
+            Common.invariant("Field.name argument had no backing type");
+        const name_field = self.recordFieldByText(backing_ty, "name");
+        if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
+
+        const backing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const name_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(backing_local, backing_ty),
+                .field = name_field.name,
+            } },
+        });
+        const field_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = try self.builder.bindPat(backing_local, backing_ty) },
+        });
+        const branch = Ast.Branch{ .pat = field_pat, .body = name_expr };
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(field_local, field_ty),
+            .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+        } } });
+    }
+
+    fn lowerFieldsStepLambda(
+        self: *BodyContext,
+        checked_source_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        mode: FieldsIterMode,
+        step_fn_ty: Type.TypeId,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = checked_source_ty,
+            .source_fn_key = generatedFieldsIterStepKey(self.current_fn_key, source_expr_id, index, mode),
+            .mono_fn_ty = step_fn_ty,
+        });
+        return try self.builder.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
+            .fn_id = fn_id,
+            .args = try self.builder.program.addTypedLocalSpan(&.{}),
+            .body = body,
+        } } });
+    }
+
+    fn lowerRecordFieldHandle(
+        self: *BodyContext,
+        field_handle_ty: Type.TypeId,
+        record_field: Type.Field,
+        index: usize,
+    ) Allocator.Error!Ast.ExprId {
+        const str_ty = try self.builder.primitiveType(.str);
+        const field_text = self.builder.program.names.recordFieldLabelText(record_field.name);
+        return try self.lowerRecordFieldHandleWithName(
+            field_handle_ty,
+            try self.builder.stringExpr(field_text, str_ty),
+            try self.builder.intLiteralExpr(@intCast(field_text.len), try self.builder.primitiveType(.u64)),
+            index,
+        );
+    }
+
+    fn lowerRecordFieldHandleWithName(
+        self: *BodyContext,
+        field_handle_ty: Type.TypeId,
+        name_expr: Ast.ExprId,
+        name_len_expr: Ast.ExprId,
+        index: usize,
+    ) Allocator.Error!Ast.ExprId {
+        const backing_ty = self.builder.namedBackingType(field_handle_ty) orelse
+            Common.invariant("generated Field handle expected a named backing type");
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        var saw_name = false;
+        var saw_index = false;
+        var saw_name_len = false;
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "name")) blk: {
+                    saw_name = true;
+                    if (!self.typeHasBuiltinOwner(field.ty, .str)) Common.invariant("Field backing name was not Str");
+                    break :blk name_expr;
+                } else if (Ident.textEql(label, "index")) blk: {
+                    saw_index = true;
+                    if (!self.typeHasBuiltinOwner(field.ty, .u64)) Common.invariant("Field backing index was not U64");
+                    break :blk try self.builder.intLiteralExpr(@intCast(index), field.ty);
+                } else if (Ident.textEql(label, "name_len")) blk: {
+                    saw_name_len = true;
+                    if (!self.typeHasBuiltinOwner(field.ty, .u64)) Common.invariant("Field backing name_len was not U64");
+                    break :blk name_len_expr;
+                } else {
+                    Common.invariant("Field backing record contained an unexpected field");
+                },
+            };
+        }
+        if (!saw_name or !saw_index or !saw_name_len) Common.invariant("Field backing record did not contain name, index, and name_len");
+
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = field_handle_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn fieldsShapeType(self: *BodyContext, fields_ty: Type.TypeId) Type.TypeId {
+        if (!self.typeHasBuiltinOwner(fields_ty, .fields)) Common.invariant("expected Fields(_shape) type");
+        return switch (self.builder.program.types.get(fields_ty)) {
+            .named => |named| blk: {
+                const args = self.builder.program.types.span(named.args);
+                if (args.len != 1) Common.invariant("Fields nominal did not have one type argument");
+                break :blk args[0];
+            },
+            else => Common.invariant("Fields value was not a named type"),
+        };
+    }
+
+    fn recordFieldsForShape(self: *BodyContext, shape_ty: Type.TypeId) []const Type.Field {
+        return switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("Fields metadata requested for a non-record shape"),
+        };
+    }
+
+    fn parserFieldCaptureIdForRecordField(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        field_index: usize,
+    ) u32 {
+        if (field_index >= fields.len) Common.invariant("parser field capture requested for a missing record field");
+        const target = self.builder.program.names.recordFieldLabelText(fields[field_index].name);
+        var rank: usize = 0;
+        for (fields, 0..) |field, index| {
+            if (index == field_index) continue;
+            const name = self.builder.program.names.recordFieldLabelText(field.name);
+            if (std.mem.order(u8, name, target) == .lt) rank += 1;
+        }
+        return parserFieldCaptureId(rank);
+    }
+
+    fn lowerParseShapeFromState(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_renamed_field_locals: ?[]const Ast.LocalId,
+        precomputed_renamed_field_lengths: ?[]const u32,
     ) Allocator.Error!Ast.ExprId {
         const selected = self.parseShapeSelection(shape_ty);
         if (Ident.textEql(selected.tag_text, "Record")) {
-            return try self.lowerParseRecordFromSlot(shape_ty, slot_expr, slot_ty, ret_ty);
+            return try self.lowerParseRecordFromState(
+                shape_ty,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+                precomputed_renamed_field_locals,
+                precomputed_renamed_field_lengths,
+            );
         }
 
-        const method_name: []const u8 = if (Ident.textEql(selected.tag_text, "Str"))
-            "parse_str"
-        else if (Ident.textEql(selected.tag_text, "TagUnion"))
-            "parse_tag_union"
-        else
-            Common.invariant("parse_from selected an unsupported shape");
+        const method_name: []const u8 =
+            if (Ident.textEql(selected.tag_text, "Str"))
+                "parse_str"
+            else if (Ident.textEql(selected.tag_text, "U64"))
+                "parse_u64"
+            else if (Ident.textEql(selected.tag_text, "TagUnion"))
+                "parse_tag_union"
+            else
+                Common.invariant("parser selected an unsupported shape");
 
-        const parse_lookup = self.methodLookupForTypeName(slot_ty, method_name);
-        const slot_arg_index: usize = if (Ident.textEql(selected.tag_text, "Str")) 0 else 1;
-        const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, slot_arg_index, slot_ty, ret_ty);
-        const parse_fn = self.builder.functionShape(parse_mono_ty, "parse_from target method was not a function");
+        const parse_lookup = self.methodLookupForTypeName(encoding_ty, method_name);
+        const state_arg_index: usize = if (Ident.textEql(selected.tag_text, "TagUnion")) 1 else 0;
+        const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, state_arg_index, state_ty, ret_ty);
+        const parse_fn = self.builder.functionShape(parse_mono_ty, "parser target method was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
-        if (Ident.textEql(selected.tag_text, "Str")) {
-            if (parse_arg_tys.len != 1) Common.invariant("parse_from target Str method had an unexpected arity");
-            if (!self.sameType(parse_arg_tys[0], slot_ty)) Common.invariant("parse_from target Str slot type differed from input slot type");
+        if (!Ident.textEql(selected.tag_text, "TagUnion")) {
+            if (parse_arg_tys.len != 1) Common.invariant("parser target scalar method had an unexpected arity");
+            if (!self.sameType(parse_arg_tys[0], state_ty)) Common.invariant("parser target state type differed from input state type");
 
-            const parse_args = [_]Ast.ExprId{slot_expr};
+            const parse_args = [_]Ast.ExprId{state_expr};
             return try self.builder.program.addExpr(.{
                 .ty = ret_ty,
                 .data = .{ .call_proc = .{
@@ -3891,14 +5493,14 @@ const BodyContext = struct {
                 } },
             });
         }
-        if (parse_arg_tys.len != 2) Common.invariant("parse_from target structural method had an unexpected arity");
-        if (!self.sameType(parse_arg_tys[1], slot_ty)) Common.invariant("parse_from target structural slot type differed from input slot type");
+        if (parse_arg_tys.len != 2) Common.invariant("parser target tag-union method had an unexpected arity");
+        if (!self.sameType(parse_arg_tys[1], state_ty)) Common.invariant("parser target tag-union state type differed from input state type");
 
         const spec_expr = try self.builder.program.addExpr(.{
             .ty = parse_arg_tys[0],
             .data = .unit,
         });
-        const parse_args = [_]Ast.ExprId{ spec_expr, slot_expr };
+        const parse_args = [_]Ast.ExprId{ spec_expr, state_expr };
         return try self.builder.program.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
@@ -3908,82 +5510,155 @@ const BodyContext = struct {
         });
     }
 
-    fn lowerParseRecordFromSlot(
+    fn lowerParseRecordFromState(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_renamed_field_locals: ?[]const Ast.LocalId,
+        precomputed_renamed_field_lengths: ?[]const u32,
     ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const parse_ok_ty = try self.parseResultOkType(shape_ty, slot_ty);
-        if (!self.sameType(ret_info.ok_ty, parse_ok_ty)) Common.invariant("record parse_from return Ok type differed from generated parse result");
+        const parse_ok_ty = try self.parseResultOkType(shape_ty, state_ty);
+        if (!self.sameType(ret_info.ok_ty, parse_ok_ty)) Common.invariant("record parser return Ok type differed from generated parse result");
 
-        const state_ty = try self.generatedRecordStateType(shape_ty, slot_ty);
-        const initial_state = try self.parseRecordInitialState(state_ty);
-        const event_ty = try self.parseRecordFieldEventType(slot_ty);
+        const record_fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("record parser requested for a non-record shape"),
+        });
+        defer self.allocator.free(record_fields);
+
+        const record_state_ty = try self.generatedRecordStateType(shape_ty);
+        const initial_record_state = try self.parseRecordInitialState(record_state_ty);
+        const parse_lookup = self.methodLookupForTypeName(encoding_ty, "parse_record_field");
+        const generic_callable_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(parse_lookup, 1, state_ty);
+        const generic_parse_fn = self.builder.functionShape(generic_callable_ty, "parse_record_field target method was not a function");
+        const generic_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(generic_parse_fn.args));
+        defer self.allocator.free(generic_arg_tys);
+        if (generic_arg_tys.len != 2) Common.invariant("parse_record_field target method had an unexpected arity");
+        if (!self.sameType(generic_arg_tys[1], state_ty)) Common.invariant("parse_record_field state type differed from input state type");
+
+        const generic_event_ty = self.tryInfo(generic_parse_fn.ret).ok_ty;
+        const field_handle_template_ty = try self.recordEventFieldHandleTemplate(generic_event_ty);
+        const field_handle_ty = try self.cloneNamedTypeWithArgs(
+            field_handle_template_ty,
+            &.{shape_ty},
+            try self.generatedFieldHandleBackingType(),
+        );
+        const fields_backing_ty = try self.generatedFieldsBackingType(record_fields.len, field_handle_ty);
+        const fields_ty = try self.cloneNamedTypeWithArgs(generic_arg_tys[0], &.{shape_ty}, fields_backing_ty);
+        const event_ty = try self.parseRecordFieldEventType(state_ty, field_handle_ty);
         const step_try_ty = try self.tryTypeLike(ret_ty, event_ty, ret_info.err_ty);
 
-        const parse_lookup = self.methodLookupForTypeName(slot_ty, "parse_record_field");
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(parse_lookup, &.{ u64_ty, slot_ty }, step_try_ty);
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgsPreservingArgs(parse_lookup, &.{ fields_ty, state_ty }, step_try_ty);
         const parse_fn = self.builder.functionShape(callable_mono_ty, "parse_record_field target method was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
         if (parse_arg_tys.len != 2) Common.invariant("parse_record_field target method had an unexpected arity");
-        if (!self.sameType(parse_arg_tys[0], u64_ty)) Common.invariant("parse_record_field longest-field type differed from U64");
-        if (!self.sameType(parse_arg_tys[1], slot_ty)) Common.invariant("parse_record_field slot type differed from input slot type");
+        if (!self.sameType(parse_arg_tys[0], fields_ty)) Common.invariant("parse_record_field fields type differed from generated field set type");
+        if (!self.sameType(parse_arg_tys[1], state_ty)) Common.invariant("parse_record_field state type differed from input state type");
 
-        const cursor_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_ty);
-        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
-        const longest_field_len = try self.builder.intLiteralExpr(try self.longestRecordFieldByteLen(shape_ty), u64_ty);
+        const str_ty = try self.builder.primitiveType(.str);
+        var owned_renamed_field_locals: ?[]Ast.LocalId = null;
+        defer if (owned_renamed_field_locals) |locals| self.allocator.free(locals);
+        var owned_renamed_field_values: ?[]Ast.ExprId = null;
+        defer if (owned_renamed_field_values) |values| self.allocator.free(values);
+
+        const renamed_field_locals = if (precomputed_renamed_field_locals) |locals| blk: {
+            if (locals.len != record_fields.len) Common.invariant("precomputed renamed field arity differed from record field count");
+            break :blk locals;
+        } else blk: {
+            const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
+            const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
+            owned_renamed_field_locals = locals;
+            owned_renamed_field_values = values;
+
+            for (record_fields, 0..) |field, index| {
+                locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+                values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+            }
+
+            break :blk locals;
+        };
+        const renamed_field_lengths = if (precomputed_renamed_field_lengths) |lengths| blk: {
+            if (lengths.len != record_fields.len) Common.invariant("precomputed renamed field length arity differed from record field count");
+            break :blk lengths;
+        } else null;
+
+        const cursor_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const record_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), record_state_ty);
+        const fields_expr = try self.lowerFieldsValue(fields_ty, fields_backing_ty, field_handle_ty, renamed_field_locals, renamed_field_lengths);
         const step_expr = try self.builder.program.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ longest_field_len, try self.builder.localExpr(cursor_local, slot_ty) }),
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ fields_expr, try self.builder.localExpr(cursor_local, state_ty) }),
             } },
         });
 
         const event_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), event_ty);
         const event_body = try self.lowerParseRecordEvent(
             shape_ty,
-            slot_ty,
-            ret_ty,
-            state_local,
+            encoding_expr,
+            encoding_ty,
             state_ty,
+            ret_ty,
+            record_state_local,
+            record_state_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
             event_local,
             event_ty,
         );
         const loop_body = try self.sequenceTry(step_expr, step_try_ty, event_local, event_body, ret_ty);
 
         const params = [_]Ast.TypedLocal{
-            .{ .local = cursor_local, .ty = slot_ty },
-            .{ .local = state_local, .ty = state_ty },
+            .{ .local = cursor_local, .ty = state_ty },
+            .{ .local = record_state_local, .ty = record_state_ty },
         };
-        const initial_values = [_]Ast.ExprId{ slot_expr, initial_state };
-        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
+        const initial_values = [_]Ast.ExprId{ state_expr, initial_record_state };
+        var loop_expr = try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
             .params = try self.builder.program.addTypedLocalSpan(&params),
             .initial_values = try self.builder.program.addExprSpan(&initial_values),
             .body = loop_body,
         } } });
+        if (owned_renamed_field_values) |renamed_field_values| {
+            var index = renamed_field_locals.len;
+            while (index > 0) {
+                index -= 1;
+                loop_expr = try self.wrapLet(renamed_field_locals[index], str_ty, renamed_field_values[index], loop_expr, ret_ty);
+            }
+        }
+        return loop_expr;
     }
 
     fn lowerParseRecordEvent(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        state_local: Ast.LocalId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
         event_local: Ast.LocalId,
         event_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const continue_tag = self.monoTagByText(event_ty, "Continue");
         const done_tag = self.monoTagByText(event_ty, "Done");
         const field_tag = self.monoTagByText(event_ty, "Field");
+        const try_field_tag = self.monoTagByText(event_ty, "TryField");
+        const try_field_caseless_tag = self.monoTagByText(event_ty, "TryFieldCaseless");
         const continue_payload_ty = self.singleTagPayloadType(continue_tag, "record parse Continue event");
         const done_payload_ty = self.singleTagPayloadType(done_tag, "record parse Done event");
         const field_payload_ty = self.singleTagPayloadType(field_tag, "record parse Field event");
+        const try_field_payload_ty = self.singleTagPayloadType(try_field_tag, "record parse TryField event");
+        const try_field_caseless_payload_ty = self.singleTagPayloadType(try_field_caseless_tag, "record parse TryFieldCaseless event");
 
         const continue_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), continue_payload_ty);
         const continue_payload_pat = try self.builder.bindPat(continue_payload_local, continue_payload_ty);
@@ -3993,8 +5668,8 @@ const BodyContext = struct {
         } } });
         const continue_body = try self.lowerParseRecordContinueEvent(
             ret_ty,
-            state_local,
-            state_ty,
+            record_state_local,
+            record_state_ty,
             continue_payload_local,
             continue_payload_ty,
         );
@@ -4007,12 +5682,73 @@ const BodyContext = struct {
         } } });
         const done_body = try self.lowerParseRecordDoneEvent(
             shape_ty,
-            slot_ty,
-            ret_ty,
-            state_local,
+            encoding_ty,
             state_ty,
+            ret_ty,
+            record_state_local,
+            record_state_ty,
+            renamed_field_locals,
             done_payload_local,
             done_payload_ty,
+        );
+
+        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("record parse event requested for a non-record shape"),
+        });
+        defer self.allocator.free(fields);
+        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
+        defer self.allocator.free(item_tys);
+        if (fields.len != item_tys.len) Common.invariant("record parser state arity did not match derived record field count");
+        if (fields.len != renamed_field_locals.len) Common.invariant("record parser renamed field arity did not match derived record field count");
+
+        const str_ty = try self.builder.primitiveType(.str);
+        const dispatch_key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+        const dispatch_rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
+        defer self.allocator.free(matched_bodies);
+        for (fields, 0..) |field, index| {
+            matched_bodies[index] = try self.lowerParseMatchedRecordField(
+                field,
+                index,
+                item_tys,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                ret_ty,
+                record_state_local,
+                record_state_ty,
+                dispatch_rest_local,
+            );
+        }
+        const unknown_body = try self.lowerUnknownRecordFieldEvent(
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            record_state_local,
+            record_state_ty,
+            try self.builder.localExpr(dispatch_rest_local, state_ty),
+        );
+        const exact_dispatch_body = try self.lowerParseRecordNamedDispatchBody(
+            dispatch_key_local,
+            str_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
+            matched_bodies,
+            unknown_body,
+            .exact,
+            ret_ty,
+        );
+        const caseless_dispatch_body = try self.lowerParseRecordNamedDispatchBody(
+            dispatch_key_local,
+            str_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
+            matched_bodies,
+            unknown_body,
+            .caseless,
+            ret_ty,
         );
 
         const field_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_payload_ty);
@@ -4023,23 +5759,162 @@ const BodyContext = struct {
         } } });
         const field_body = try self.lowerParseRecordFieldEvent(
             shape_ty,
-            slot_ty,
-            ret_ty,
-            state_local,
+            encoding_expr,
+            encoding_ty,
             state_ty,
+            ret_ty,
+            record_state_local,
+            record_state_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
             field_payload_local,
             field_payload_ty,
+            .direct,
+        );
+
+        const try_field_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), try_field_payload_ty);
+        const try_field_payload_pat = try self.builder.bindPat(try_field_payload_local, try_field_payload_ty);
+        const try_field_pat = try self.builder.program.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
+            .name = try_field_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{try_field_payload_pat}),
+        } } });
+        const try_field_body = try self.lowerParseRecordNamedFieldBranch(
+            try_field_payload_local,
+            try_field_payload_ty,
+            dispatch_key_local,
+            dispatch_rest_local,
+            exact_dispatch_body,
+            str_ty,
+            state_ty,
+            ret_ty,
+        );
+
+        const try_field_caseless_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), try_field_caseless_payload_ty);
+        const try_field_caseless_payload_pat = try self.builder.bindPat(try_field_caseless_payload_local, try_field_caseless_payload_ty);
+        const try_field_caseless_pat = try self.builder.program.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
+            .name = try_field_caseless_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{try_field_caseless_payload_pat}),
+        } } });
+        const try_field_caseless_body = try self.lowerParseRecordNamedFieldBranch(
+            try_field_caseless_payload_local,
+            try_field_caseless_payload_ty,
+            dispatch_key_local,
+            dispatch_rest_local,
+            caseless_dispatch_body,
+            str_ty,
+            state_ty,
+            ret_ty,
         );
 
         const branches = [_]Ast.Branch{
             .{ .pat = continue_pat, .body = continue_body },
             .{ .pat = done_pat, .body = done_body },
             .{ .pat = field_pat, .body = field_body },
+            .{ .pat = try_field_pat, .body = try_field_body },
+            .{ .pat = try_field_caseless_pat, .body = try_field_caseless_body },
         };
         return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
             .scrutinee = try self.builder.localExpr(event_local, event_ty),
             .branches = try self.builder.program.addBranchSpan(&branches),
         } } });
+    }
+
+    fn lowerParseRecordNamedDispatchBody(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        matched_bodies: []const Ast.ExprId,
+        unknown_body: Ast.ExprId,
+        mode: RecordFieldMatchMode,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (renamed_field_locals.len != matched_bodies.len) Common.invariant("record parser dispatch arity did not match renamed fields");
+        if (renamed_field_lengths) |lengths| {
+            if (lengths.len != renamed_field_locals.len) Common.invariant("record parser dispatch length arity did not match renamed fields");
+            return try self.lowerParseRecordLengthBucketedDispatchBody(
+                key_local,
+                key_ty,
+                renamed_field_locals,
+                lengths,
+                matched_bodies,
+                unknown_body,
+                mode,
+                ret_ty,
+            );
+        }
+        var body = unknown_body;
+        var index = matched_bodies.len;
+        while (index > 0) {
+            index -= 1;
+            const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[index], key_ty);
+            const cond = try self.recordFieldNameMatch(key_local, key_ty, renamed_field_expr, mode);
+            body = try self.builder.ifExpr(cond, matched_bodies[index], body, ret_ty);
+        }
+        return body;
+    }
+
+    fn lowerParseRecordLengthBucketedDispatchBody(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: []const u32,
+        matched_bodies: []const Ast.ExprId,
+        unknown_body: Ast.ExprId,
+        mode: RecordFieldMatchMode,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const key_len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+
+        var body = unknown_body;
+        var index = matched_bodies.len;
+        while (index > 0) {
+            index -= 1;
+            const length = renamed_field_lengths[index];
+            if (fieldLengthAlreadyHandled(renamed_field_lengths, index, length)) continue;
+
+            var group_body = unknown_body;
+            var field_index = matched_bodies.len;
+            while (field_index > 0) {
+                field_index -= 1;
+                if (renamed_field_lengths[field_index] != length) continue;
+
+                const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[field_index], key_ty);
+                const cond = try self.recordFieldNameMatch(key_local, key_ty, renamed_field_expr, mode);
+                group_body = try self.builder.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
+            }
+
+            const key_len_expr = try self.builder.localExpr(key_len_local, u64_ty);
+            const length_expr = try self.builder.intLiteralExpr(length, u64_ty);
+            const length_matches = try self.builder.lowLevelExpr(.num_is_eq, &.{ key_len_expr, length_expr }, bool_ty);
+            body = try self.builder.ifExpr(length_matches, group_body, body, ret_ty);
+        }
+
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const key_len_expr = try self.builder.lowLevelExpr(.str_count_utf8_bytes, &.{key_expr}, u64_ty);
+        return try self.wrapLet(key_len_local, u64_ty, key_len_expr, body, ret_ty);
+    }
+
+    fn lowerParseRecordNamedFieldBranch(
+        self: *BodyContext,
+        payload_local: Ast.LocalId,
+        payload_ty: Type.TypeId,
+        key_local: Ast.LocalId,
+        rest_local: Ast.LocalId,
+        dispatch_body: Ast.ExprId,
+        str_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const name_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "name");
+        const rest_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "rest");
+        var body = dispatch_body;
+        body = try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty);
+        return try self.wrapLet(key_local, str_ty, name_expr, body, ret_ty);
     }
 
     fn lowerParseRecordContinueEvent(
@@ -4057,10 +5932,12 @@ const BodyContext = struct {
     fn lowerParseRecordDoneEvent(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         state_local: Ast.LocalId,
-        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
         done_payload_local: Ast.LocalId,
         done_payload_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -4068,19 +5945,21 @@ const BodyContext = struct {
         const rest_expr = try self.recordPayloadFieldAccess(done_payload_local, done_payload_ty, "rest");
         const record_try_ty = try self.tryTypeLike(ret_ty, shape_ty, ret_info.err_ty);
         const record_expr = try self.finishGeneratedRecordState(
-            try self.builder.localExpr(state_local, state_ty),
-            state_ty,
+            try self.builder.localExpr(state_local, record_state_ty),
+            record_state_ty,
             shape_ty,
             record_try_ty,
             rest_expr,
-            slot_ty,
+            encoding_ty,
+            state_ty,
+            renamed_field_locals,
         );
         const record_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), shape_ty);
         const ok_body = try self.parseResultOk(
             ret_ty,
             try self.builder.localExpr(record_local, shape_ty),
             rest_expr,
-            slot_ty,
+            state_ty,
         );
         return try self.sequenceTry(record_expr, record_try_ty, record_local, ok_body, ret_ty);
     }
@@ -4088,101 +5967,557 @@ const BodyContext = struct {
     fn lowerParseRecordFieldEvent(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        state_local: Ast.LocalId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
         field_payload_local: Ast.LocalId,
         field_payload_ty: Type.TypeId,
+        mode: RecordFieldMatchMode,
     ) Allocator.Error!Ast.ExprId {
-        const name_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "name");
         const rest_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "rest");
-        const value_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "value");
-        const updated_state = try self.generatedRecordStatePutExact(
-            shape_ty,
-            state_local,
-            state_ty,
-            name_expr,
-            value_expr,
-            slot_ty,
-        );
-        return try self.continueWith(ret_ty, &.{ rest_expr, updated_state });
+        return switch (mode) {
+            .direct => try self.lowerParseRecordDirectFieldEvent(
+                shape_ty,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                ret_ty,
+                record_state_local,
+                record_state_ty,
+                field_payload_local,
+                field_payload_ty,
+                rest_expr,
+            ),
+            .exact, .caseless => blk: {
+                const name_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "name");
+                break :blk try self.lowerParseRecordNamedFieldEvent(
+                    shape_ty,
+                    encoding_expr,
+                    encoding_ty,
+                    state_ty,
+                    ret_ty,
+                    record_state_local,
+                    record_state_ty,
+                    renamed_field_locals,
+                    renamed_field_lengths,
+                    name_expr,
+                    rest_expr,
+                    mode,
+                );
+            },
+        };
     }
 
-    fn lowerParseValueFromSlot(
+    fn lowerParseRecordDirectFieldEvent(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        field_payload_local: Ast.LocalId,
+        field_payload_ty: Type.TypeId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const field_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "field");
+        const field_ty = self.builder.program.exprs.items[@intFromEnum(field_expr)].ty;
+        const next_ok_ty = try self.parseRecordLoopNextType(state_ty, record_state_ty);
+        const helper_try_ty = try self.tryTypeLike(ret_ty, next_ok_ty, self.tryInfo(ret_ty).err_ty);
+        const helper_fn = try self.recordDirectFieldDispatchFn(
+            shape_ty,
+            encoding_ty,
+            field_ty,
+            state_ty,
+            record_state_ty,
+            helper_try_ty,
+        );
+        const helper_call = try self.builder.program.addExpr(.{
+            .ty = helper_try_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = helper_fn },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{
+                    encoding_expr,
+                    field_expr,
+                    rest_expr,
+                    try self.builder.localExpr(record_state_local, record_state_ty),
+                }),
+            } },
+        });
+
+        const next_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), next_ok_ty);
+        const cursor_expr = try self.recordPayloadFieldAccess(next_local, next_ok_ty, "cursor");
+        const next_record_state_expr = try self.recordPayloadFieldAccess(next_local, next_ok_ty, "record_state");
+        const ok_body = try self.continueWith(ret_ty, &.{ cursor_expr, next_record_state_expr });
+        return try self.sequenceTry(helper_call, helper_try_ty, next_local, ok_body, ret_ty);
+    }
+
+    fn recordDirectFieldDispatchFn(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        field_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnId {
+        const arg_tys = [_]Type.TypeId{ encoding_ty, field_ty, state_ty, record_state_ty };
+        const fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(&arg_tys),
+            .ret = ret_ty,
+        } });
+        const owner = self.view.templates.get(self.owner_template.template);
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = owner.checked_fn_root,
+            .source_fn_key = generatedRecordDirectDispatchKey(self.current_fn_key, fn_ty),
+            .mono_fn_ty = fn_ty,
+        });
+
+        const encoding_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), encoding_ty);
+        const field_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_ty);
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const record_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), record_state_ty);
+        const args = try self.builder.program.addTypedLocalSpan(&.{
+            .{ .local = encoding_local, .ty = encoding_ty },
+            .{ .local = field_local, .ty = field_ty },
+            .{ .local = rest_local, .ty = state_ty },
+            .{ .local = record_state_local, .ty = record_state_ty },
+        });
+
+        const body = try self.lowerRecordDirectFieldDispatchBody(
+            shape_ty,
+            encoding_local,
+            encoding_ty,
+            field_local,
+            field_ty,
+            rest_local,
+            state_ty,
+            record_state_local,
+            record_state_ty,
+            ret_ty,
+        );
+        try self.builder.program.defs.append(self.allocator, .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = self.builder.program.fns.items[@intFromEnum(fn_id)].source,
+            .fn_id = fn_id,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = ret_ty,
+        });
+        return fn_id;
+    }
+
+    fn lowerRecordDirectFieldDispatchBody(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_local: Ast.LocalId,
+        encoding_ty: Type.TypeId,
+        field_local: Ast.LocalId,
+        field_ty: Type.TypeId,
+        rest_local: Ast.LocalId,
+        state_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("record direct field dispatch requested for a non-record shape"),
+        });
+        defer self.allocator.free(fields);
+        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
+        defer self.allocator.free(item_tys);
+        if (fields.len != item_tys.len) Common.invariant("record direct field dispatch state arity differed from field count");
+
+        if (fields.len == 0) {
+            return try self.lowerSkipRecordFieldNext(
+                encoding_ty,
+                state_ty,
+                record_state_ty,
+                ret_ty,
+                rest_local,
+                record_state_local,
+            );
+        }
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        var body = try self.lowerParseMatchedRecordFieldNext(
+            fields[fields.len - 1],
+            fields.len - 1,
+            item_tys,
+            encoding_local,
+            encoding_ty,
+            state_ty,
+            record_state_local,
+            record_state_ty,
+            rest_local,
+            ret_ty,
+        );
+        var index = fields.len - 1;
+        while (index > 0) {
+            index -= 1;
+            const matched = try self.lowerParseMatchedRecordFieldNext(
+                fields[index],
+                index,
+                item_tys,
+                encoding_local,
+                encoding_ty,
+                state_ty,
+                record_state_local,
+                record_state_ty,
+                rest_local,
+                ret_ty,
+            );
+            const index_expr = try self.builder.localExpr(index_local, u64_ty);
+            const literal_expr = try self.builder.intLiteralExpr(@intCast(index), u64_ty);
+            const cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, literal_expr }, try self.builder.primitiveType(.bool));
+            body = try self.builder.ifExpr(cond, matched, body, ret_ty);
+        }
+
+        const handle_index = try self.fieldHandleIndexExpr(field_local, field_ty, u64_ty);
+        return try self.wrapLet(index_local, u64_ty, handle_index, body, ret_ty);
+    }
+
+    fn lowerSkipRecordFieldNext(
+        self: *BodyContext,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        rest_local: Ast.LocalId,
+        record_state_local: Ast.LocalId,
+    ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
-        if (!self.sameType(ret_info.ok_ty, shape_ty)) Common.invariant("parse value wrapper Ok type differed from parsed shape");
+        const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
+        const lookup = self.methodLookupForTypeName(encoding_ty, "skip_record_field");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{state_ty}, skip_try_ty);
+        const skip_fn = self.builder.functionShape(callable_mono_ty, "skip_record_field target method was not a function");
+        const arg_tys = self.builder.program.types.span(skip_fn.args);
+        if (arg_tys.len != 1) Common.invariant("skip_record_field target method had an unexpected arity");
+        if (!self.sameType(arg_tys[0], state_ty)) Common.invariant("skip_record_field state type differed from record state type");
 
-        const parse_ok_ty = try self.parseResultOkType(shape_ty, slot_ty);
+        const skip_expr = try self.builder.program.addExpr(.{
+            .ty = skip_try_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{try self.builder.localExpr(rest_local, state_ty)}),
+            } },
+        });
+        const skipped_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const ok_body = try self.parseRecordLoopNextOk(
+            ret_ty,
+            try self.builder.localExpr(skipped_local, state_ty),
+            try self.builder.localExpr(record_state_local, record_state_ty),
+            state_ty,
+            record_state_ty,
+        );
+        return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
+    }
+
+    fn lowerUnknownRecordFieldEvent(
+        self: *BodyContext,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
+        const lookup = self.methodLookupForTypeName(encoding_ty, "skip_record_field");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{state_ty}, skip_try_ty);
+        const skip_fn = self.builder.functionShape(callable_mono_ty, "skip_record_field target method was not a function");
+        const arg_tys = self.builder.program.types.span(skip_fn.args);
+        if (arg_tys.len != 1) Common.invariant("skip_record_field target method had an unexpected arity");
+        if (!self.sameType(arg_tys[0], state_ty)) Common.invariant("skip_record_field state type differed from record state type");
+
+        const skip_expr = try self.builder.program.addExpr(.{
+            .ty = skip_try_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{rest_expr}),
+            } },
+        });
+        const skipped_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const ok_body = try self.continueWith(ret_ty, &.{
+            try self.builder.localExpr(skipped_local, state_ty),
+            try self.builder.localExpr(record_state_local, record_state_ty),
+        });
+        return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
+    }
+
+    fn lowerParseRecordNamedFieldEvent(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        name_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+        mode: RecordFieldMatchMode,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("record put requested for a non-record shape"),
+        });
+        defer self.allocator.free(fields);
+        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
+        defer self.allocator.free(item_tys);
+        if (fields.len != item_tys.len) Common.invariant("record parser state arity did not match derived record field count");
+        if (fields.len != renamed_field_locals.len) Common.invariant("record parser renamed field arity did not match derived record field count");
+
+        const key_ty = self.builder.program.exprs.items[@intFromEnum(name_expr)].ty;
+        if (!self.typeHasBuiltinOwner(key_ty, .str)) Common.invariant("record field event name was not Str");
+        const value_state_ty = self.builder.program.exprs.items[@intFromEnum(rest_expr)].ty;
+        if (!self.sameType(value_state_ty, state_ty)) Common.invariant("record field event rest type differed from parser state type");
+
+        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), key_ty);
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+
+        const unknown_body = try self.lowerUnknownRecordFieldEvent(
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            record_state_local,
+            record_state_ty,
+            try self.builder.localExpr(rest_local, state_ty),
+        );
+        const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
+        defer self.allocator.free(matched_bodies);
+        for (fields, 0..) |field, index| {
+            matched_bodies[index] = try self.lowerParseMatchedRecordField(
+                field,
+                index,
+                item_tys,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                ret_ty,
+                record_state_local,
+                record_state_ty,
+                rest_local,
+            );
+        }
+        var body = try self.lowerParseRecordNamedDispatchBody(
+            key_local,
+            key_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
+            matched_bodies,
+            unknown_body,
+            mode,
+            ret_ty,
+        );
+
+        body = try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty);
+        return try self.wrapLet(key_local, key_ty, name_expr, body, ret_ty);
+    }
+
+    fn lowerParseMatchedRecordField(
+        self: *BodyContext,
+        field: Type.Field,
+        field_index: usize,
+        item_tys: []const Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        rest_local: Ast.LocalId,
+    ) Allocator.Error!Ast.ExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const field_parse_ty = if (self.tryOptionalInfo(field.ty)) |info| info.ok_payload_ty else field.ty;
+        const parse_ok_ty = try self.parseResultOkType(field_parse_ty, state_ty);
         const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
-        const parse_expr = try self.lowerParseResultFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
-
+        const parse_expr = try self.lowerParseResultFromState(
+            field_parse_ty,
+            encoding_expr,
+            encoding_ty,
+            try self.builder.localExpr(rest_local, state_ty),
+            state_ty,
+            parse_ret_ty,
+        );
         const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
-        const value_expr = try self.builder.program.addExpr(.{
-            .ty = shape_ty,
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const parsed_value = try self.builder.program.addExpr(.{
+            .ty = field_parse_ty,
             .data = .{ .field_access = .{
                 .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
                 .field = value_name,
             } },
         });
-        const ok_body = try self.tryOk(ret_ty, value_expr);
-        return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, ret_ty);
+        const field_value = if (self.tryOptionalInfo(field.ty) != null)
+            try self.tryOk(field.ty, parsed_value)
+        else
+            parsed_value;
+        const field_value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field.ty);
+        const parsed_rest = try self.builder.program.addExpr(.{
+            .ty = state_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
+                .field = rest_name,
+            } },
+        });
+        const updated_state = try self.generatedRecordStateWithFieldValue(
+            record_state_local,
+            record_state_ty,
+            item_tys,
+            field_value_local,
+            field.ty,
+            field_index,
+        );
+        const continue_body = try self.continueWith(ret_ty, &.{ parsed_rest, updated_state });
+        const with_field_value = try self.wrapLet(field_value_local, field.ty, field_value, continue_body, ret_ty);
+        return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, with_field_value, ret_ty);
     }
 
-    fn lowerParseResultFromSlot(
+    fn lowerParseMatchedRecordFieldNext(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        field: Type.Field,
+        field_index: usize,
+        item_tys: []const Type.TypeId,
+        encoding_local: Ast.LocalId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        rest_local: Ast.LocalId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        return if (self.customParseFromLookup(shape_ty)) |lookup|
-            try self.lowerCustomParseFromSlot(lookup, shape_ty, slot_expr, slot_ty, ret_ty)
+        const ret_info = self.tryInfo(ret_ty);
+        const field_parse_ty = if (self.tryOptionalInfo(field.ty)) |info| info.ok_payload_ty else field.ty;
+        const parse_ok_ty = try self.parseResultOkType(field_parse_ty, state_ty);
+        const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
+        const parse_expr = try self.lowerParseResultFromState(
+            field_parse_ty,
+            try self.builder.localExpr(encoding_local, encoding_ty),
+            encoding_ty,
+            try self.builder.localExpr(rest_local, state_ty),
+            state_ty,
+            parse_ret_ty,
+        );
+        const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const parsed_value = try self.builder.program.addExpr(.{
+            .ty = field_parse_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
+                .field = value_name,
+            } },
+        });
+        const field_value = if (self.tryOptionalInfo(field.ty) != null)
+            try self.tryOk(field.ty, parsed_value)
         else
-            try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, ret_ty);
+            parsed_value;
+        const field_value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field.ty);
+        const parsed_rest = try self.builder.program.addExpr(.{
+            .ty = state_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
+                .field = rest_name,
+            } },
+        });
+        const updated_state = try self.generatedRecordStateWithFieldValue(
+            record_state_local,
+            record_state_ty,
+            item_tys,
+            field_value_local,
+            field.ty,
+            field_index,
+        );
+        const ok_body = try self.parseRecordLoopNextOk(
+            ret_ty,
+            parsed_rest,
+            updated_state,
+            state_ty,
+            record_state_ty,
+        );
+        const with_field_value = try self.wrapLet(field_value_local, field.ty, field_value, ok_body, ret_ty);
+        return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, with_field_value, ret_ty);
     }
 
-    fn lowerCustomParseFromSlot(
+    fn lowerParseResultFromState(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return if (self.customParserLookup(shape_ty)) |lookup|
+            try self.lowerCustomParserFromState(lookup, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty)
+        else
+            try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, null, null);
+    }
+
+    fn lowerCustomParserFromState(
         self: *BodyContext,
         lookup: MethodLookup,
         shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{slot_ty}, ret_ty);
-        const parse_fn = self.builder.functionShape(callable_mono_ty, "custom parse_from target was not a function");
+        const runtime_fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(&.{state_ty}),
+            .ret = ret_ty,
+        } });
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{encoding_ty}, runtime_fn_ty);
+        const parse_fn = self.builder.functionShape(callable_mono_ty, "custom parser target was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
-        if (parse_arg_tys.len != 1) Common.invariant("custom parse_from target had an unexpected arity");
-        if (!self.sameType(parse_arg_tys[0], slot_ty)) Common.invariant("custom parse_from slot type differed from input slot type");
+        if (parse_arg_tys.len != 1) Common.invariant("custom parser target had an unexpected arity");
+        if (!self.sameType(parse_arg_tys[0], encoding_ty)) Common.invariant("custom parser encoding type differed from input encoding type");
+        if (!self.sameType(parse_fn.ret, runtime_fn_ty)) Common.invariant("custom parser runtime function type differed from expected type");
 
         const ret_info = self.tryInfo(ret_ty);
         const parse_ok_fields = switch (self.builder.shapeContent(ret_info.ok_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
-            else => Common.invariant("custom parse_from result Ok type was not a parse result record"),
+            else => Common.invariant("custom parser result Ok type was not a parse result record"),
         };
         var found_value = false;
         for (parse_ok_fields) |field| {
             const field_text = self.builder.program.names.recordFieldLabelText(field.name);
             if (Ident.textEql(field_text, "value")) {
                 found_value = true;
-                if (!self.sameType(field.ty, shape_ty)) Common.invariant("custom parse_from value type differed from parsed shape");
+                if (!self.sameType(field.ty, shape_ty)) Common.invariant("custom parser value type differed from parsed shape");
             }
         }
-        if (!found_value) Common.invariant("custom parse_from result was missing value field");
+        if (!found_value) Common.invariant("custom parser result was missing value field");
 
-        return try self.builder.program.addExpr(.{
-            .ty = ret_ty,
+        const parser_expr = try self.builder.program.addExpr(.{
+            .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{slot_expr}),
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{encoding_expr}),
+            } },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .call_value = .{
+                .callee = parser_expr,
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{state_expr}),
             } },
         });
     }
@@ -4225,41 +6560,60 @@ const BodyContext = struct {
         return try self.tryOk(try_ty, record_expr);
     }
 
+    fn parseRecordLoopNextType(
+        self: *BodyContext,
+        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
+        const record_state_name = try self.builder.program.names.internRecordFieldLabel("record_state");
+        const fields = [_]Type.Field{
+            .{ .name = cursor_name, .ty = state_ty },
+            .{ .name = record_state_name, .ty = record_state_ty },
+        };
+        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
+    }
+
+    fn parseRecordLoopNextOk(
+        self: *BodyContext,
+        try_ty: Type.TypeId,
+        cursor_expr: Ast.ExprId,
+        record_state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const try_info = self.tryInfo(try_ty);
+        const next_ty = try self.parseRecordLoopNextType(state_ty, record_state_ty);
+        if (!self.sameType(try_info.ok_ty, next_ty)) Common.invariant("record loop next Try Ok type differed from generated next-state record");
+        const cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
+        const record_state_name = try self.builder.program.names.internRecordFieldLabel("record_state");
+        const fields = [_]Ast.FieldExpr{
+            .{ .name = cursor_name, .value = cursor_expr },
+            .{ .name = record_state_name, .value = record_state_expr },
+        };
+        const record_expr = try self.builder.program.addExpr(.{
+            .ty = try_info.ok_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(&fields) },
+        });
+        return try self.tryOk(try_ty, record_expr);
+    }
+
     fn generatedRecordStateType(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        fmt_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const fields_span = switch (self.builder.shapeContent(shape_ty)) {
             .record => |fields| fields,
             .zst => Type.Span.empty(),
-            else => Common.invariant("parse_from record state requested for a non-record shape"),
+            else => Common.invariant("parser record state requested for a non-record shape"),
         };
         const fields = self.builder.program.types.fieldSpan(fields_span);
         const items = try self.allocator.alloc(Type.TypeId, fields.len);
         defer self.allocator.free(items);
-        if (fields.len > 0) {
-            const slot_ty = try self.builder.generatedRecordSlotType(fmt_ty);
-            @memset(items, slot_ty);
+        for (fields, 0..) |field, index| {
+            items[index] = try self.builder.generatedRecordSlotType(field.ty);
         }
         return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(items) });
-    }
-
-    fn longestRecordFieldByteLen(
-        self: *BodyContext,
-        shape_ty: Type.TypeId,
-    ) Allocator.Error!u64 {
-        const fields_span = switch (self.builder.shapeContent(shape_ty)) {
-            .record => |fields| fields,
-            .zst => Type.Span.empty(),
-            else => Common.invariant("record longest-field length requested for a non-record shape"),
-        };
-        var longest: usize = 0;
-        for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-            const field_text = self.builder.program.names.recordFieldLabelText(field.name);
-            longest = @max(longest, field_text.len);
-        }
-        return @intCast(longest);
     }
 
     fn parseRecordInitialState(self: *BodyContext, state_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -4285,28 +6639,36 @@ const BodyContext = struct {
 
     fn parseRecordFieldEventType(
         self: *BodyContext,
-        fmt_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        field_handle_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
+        const field_name_name = try self.builder.program.names.internRecordFieldLabel("field");
         const name_name = try self.builder.program.names.internRecordFieldLabel("name");
         const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
-        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
         const str_ty = try self.builder.primitiveType(.str);
 
         const field_fields = [_]Type.Field{
-            .{ .name = name_name, .ty = str_ty },
-            .{ .name = rest_name, .ty = fmt_ty },
-            .{ .name = value_name, .ty = fmt_ty },
+            .{ .name = field_name_name, .ty = field_handle_ty },
+            .{ .name = rest_name, .ty = state_ty },
         };
         const field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&field_fields) });
 
+        const try_field_fields = [_]Type.Field{
+            .{ .name = name_name, .ty = str_ty },
+            .{ .name = rest_name, .ty = state_ty },
+        };
+        const try_field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&try_field_fields) });
+
         const rest_fields = [_]Type.Field{
-            .{ .name = rest_name, .ty = fmt_ty },
+            .{ .name = rest_name, .ty = state_ty },
         };
         const rest_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&rest_fields) });
 
         const continue_name = try self.builder.program.names.internTagLabel("Continue");
         const done_name = try self.builder.program.names.internTagLabel("Done");
         const field_name = try self.builder.program.names.internTagLabel("Field");
+        const try_field_name = try self.builder.program.names.internTagLabel("TryField");
+        const try_field_caseless_name = try self.builder.program.names.internTagLabel("TryFieldCaseless");
         const tags = [_]Type.Tag{
             .{
                 .name = continue_name,
@@ -4323,8 +6685,25 @@ const BodyContext = struct {
                 .checked_name = field_name,
                 .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{field_payload_ty}),
             },
+            .{
+                .name = try_field_name,
+                .checked_name = try_field_name,
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
+            },
+            .{
+                .name = try_field_caseless_name,
+                .checked_name = try_field_caseless_name,
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
+            },
         };
         return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
+    }
+
+    fn recordEventFieldHandleTemplate(self: *BodyContext, event_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const field_tag = self.monoTagByText(event_ty, "Field");
+        const payload_ty = self.singleTagPayloadType(field_tag, "record parse Field event");
+        const field_name = try self.builder.program.names.internRecordFieldLabel("field");
+        return self.builder.recordFieldType(payload_ty, field_name);
     }
 
     fn singleTagPayloadType(self: *BodyContext, tag: Type.Tag, comptime context: []const u8) Type.TypeId {
@@ -4352,17 +6731,19 @@ const BodyContext = struct {
 
     fn finishGeneratedRecordState(
         self: *BodyContext,
-        state_value: Ast.ExprId,
-        state_ty: Type.TypeId,
+        record_state_value: Ast.ExprId,
+        record_state_ty: Type.TypeId,
         record_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         rest_value: Ast.ExprId,
-        fmt_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        renamed_field_locals: []const Ast.LocalId,
     ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
         if (!self.sameType(ret_info.ok_ty, record_ty)) Common.invariant("record finish Try Ok type differed from record type");
 
-        const state_items = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(state_ty));
+        const state_items = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
         defer self.allocator.free(state_items);
         const record_fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(record_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
@@ -4371,9 +6752,10 @@ const BodyContext = struct {
         });
         defer self.allocator.free(record_fields);
         if (record_fields.len != state_items.len) Common.invariant("record parse state arity did not match finish record field count");
+        if (record_fields.len != renamed_field_locals.len) Common.invariant("record parse renamed field arity did not match finish record field count");
 
-        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
-        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), fmt_ty);
+        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), record_state_ty);
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
 
         const out_fields = try self.allocator.alloc(Ast.FieldExpr, record_fields.len);
         defer self.allocator.free(out_fields);
@@ -4387,14 +6769,23 @@ const BodyContext = struct {
             const slot_expr = try self.builder.program.addExpr(.{
                 .ty = state_items[index],
                 .data = .{ .tuple_access = .{
-                    .tuple = try self.builder.localExpr(state_local, state_ty),
+                    .tuple = try self.builder.localExpr(state_local, record_state_ty),
                     .elem_index = @intCast(index),
                 } },
             });
             const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
             field_try_tys[index] = field_try_ty;
             field_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), field.ty);
-            field_tries[index] = try self.parseRecordFieldFromStateSlot(slot_expr, state_items[index], field, field_try_ty, rest_local, fmt_ty);
+            field_tries[index] = try self.parseRecordFieldFromStateSlot(
+                slot_expr,
+                state_items[index],
+                field,
+                field_try_ty,
+                rest_local,
+                encoding_ty,
+                state_ty,
+                renamed_field_locals[index],
+            );
             out_fields[index] = .{
                 .name = field.name,
                 .value = try self.builder.localExpr(field_locals[index], field.ty),
@@ -4411,56 +6802,8 @@ const BodyContext = struct {
             field_index -= 1;
             body = try self.sequenceTry(field_tries[field_index], field_try_tys[field_index], field_locals[field_index], body, ret_ty);
         }
-        body = try self.wrapLet(state_local, state_ty, state_value, body, ret_ty);
-        return try self.wrapLet(rest_local, fmt_ty, rest_value, body, ret_ty);
-    }
-
-    fn generatedRecordStatePutExact(
-        self: *BodyContext,
-        shape_ty: Type.TypeId,
-        state_local: Ast.LocalId,
-        state_ty: Type.TypeId,
-        key_value: Ast.ExprId,
-        field_value: Ast.ExprId,
-        fmt_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
-            .zst => &.{},
-            else => Common.invariant("record put requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(state_ty));
-        defer self.allocator.free(item_tys);
-        if (fields.len != item_tys.len) Common.invariant("record parse state arity did not match derived record field count");
-
-        const key_ty = self.builder.program.exprs.items[@intFromEnum(key_value)].ty;
-        const value_ty = self.builder.program.exprs.items[@intFromEnum(field_value)].ty;
-        if (!self.typeHasBuiltinOwner(key_ty, .str)) Common.invariant("record field event name was not Str");
-        if (!self.sameType(value_ty, fmt_ty)) Common.invariant("record field event value type differed from format type");
-
-        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), key_ty);
-        const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const key_len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
-        const key_len_value = try self.builder.lowLevelExpr(
-            .str_count_utf8_bytes,
-            &.{try self.builder.localExpr(key_local, key_ty)},
-            u64_ty,
-        );
-
-        var body = try self.builder.localExpr(state_local, state_ty);
-        var index = fields.len;
-        while (index > 0) {
-            index -= 1;
-            const updated = try self.decoderStateWithSlot(state_local, state_ty, item_tys, value_local, value_ty, index);
-            const cond = try self.recordFieldNameLengthAndExactMatch(key_local, key_ty, key_len_local, u64_ty, fields[index]);
-            body = try self.builder.ifExpr(cond, updated, body, state_ty);
-        }
-
-        body = try self.wrapLet(key_len_local, u64_ty, key_len_value, body, state_ty);
-        body = try self.wrapLet(value_local, value_ty, field_value, body, state_ty);
-        return try self.wrapLet(key_local, key_ty, key_value, body, state_ty);
+        body = try self.wrapLet(state_local, record_state_ty, record_state_value, body, ret_ty);
+        return try self.wrapLet(rest_local, state_ty, rest_value, body, ret_ty);
     }
 
     const ParseShapeSelection = struct {
@@ -4469,67 +6812,80 @@ const BodyContext = struct {
 
     fn parseShapeSelection(self: *BodyContext, shape_ty: Type.TypeId) ParseShapeSelection {
         if (self.typeHasBuiltinOwner(shape_ty, .str)) return .{ .tag_text = "Str" };
+        if (self.typeHasBuiltinOwner(shape_ty, .u64)) return .{ .tag_text = "U64" };
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => .{ .tag_text = "Record" },
             .zst => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
-            else => Common.invariant("parse_from shape was not supported"),
+            else => Common.invariant("parser shape was not supported"),
         };
     }
 
-    fn lowerDecoderTagUnionDecode(
+    fn lowerParseTagUnionDecode(
         self: *BodyContext,
         args: []const checked.CheckedExprId,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 4 or arg_tys.len != 4) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
+        if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
         const ret_info = self.tryInfo(ret_ty);
 
         const tag_span = switch (self.builder.shapeContent(ret_info.ok_ty)) {
             .tag_union => |span| span,
             else => Common.invariant("ParseTagUnionSpec.parse Ok type was not a tag union"),
         };
-        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
-        const key_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
-        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[2], arg_tys[2]);
-        const missing_value = try self.lowerDecoderIntrinsicArgAtType(args[3], arg_tys[3]);
+        const spec_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const options_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        const options_ty = arg_tys[1];
+        const key_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("tag"));
+        const encoding_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("encoding"));
+        const state_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("state"));
+        const missing_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("missing"));
 
-        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
-        const slot_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[2]);
-        const missing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[3]);
+        const options_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), options_ty);
+        const key_value = try self.recordPayloadFieldAccess(options_local, options_ty, "tag");
+        const encoding_value = try self.recordPayloadFieldAccess(options_local, options_ty, "encoding");
+        const slot_value = try self.recordPayloadFieldAccess(options_local, options_ty, "state");
+        const missing_value = try self.recordPayloadFieldAccess(options_local, options_ty, "missing");
+
+        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), key_ty);
+        const encoding_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), encoding_ty);
+        const slot_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const missing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), missing_ty);
         const tags = try self.allocator.dupe(Type.Tag, self.builder.program.types.tagSpan(tag_span));
         defer self.allocator.free(tags);
 
-        var body = try self.unknownDecodedTagErr(ret_ty, missing_local, arg_tys[3]);
+        var body = try self.unknownDecodedTagErr(ret_ty, missing_local, missing_ty);
         var index = tags.len;
         while (index > 0) {
             index -= 1;
-            const tag_expr = try self.decodedTagUnionValue(tags[index], ret_info.ok_ty, ret_ty, slot_local, arg_tys[2]);
-            const cond = try self.decoderTagExactMatch(key_local, arg_tys[1], tags[index]);
+            const tag_expr = try self.decodedTagUnionValue(tags[index], ret_info.ok_ty, ret_ty, encoding_local, encoding_ty, slot_local, state_ty);
+            const cond = try self.parseTagExactMatch(key_local, key_ty, tags[index]);
             body = try self.builder.ifExpr(cond, tag_expr, body, ret_ty);
         }
 
-        body = try self.wrapLet(missing_local, arg_tys[3], missing_value, body, ret_ty);
-        body = try self.wrapLet(slot_local, arg_tys[2], slot_value, body, ret_ty);
-        body = try self.wrapLet(key_local, arg_tys[1], key_value, body, ret_ty);
+        body = try self.wrapLet(missing_local, missing_ty, missing_value, body, ret_ty);
+        body = try self.wrapLet(slot_local, state_ty, slot_value, body, ret_ty);
+        body = try self.wrapLet(encoding_local, encoding_ty, encoding_value, body, ret_ty);
+        body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
+        body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
         return try self.wrapWildcardLet(arg_tys[0], spec_value, body, ret_ty);
     }
 
-    fn decoderStateWithSlot(
+    fn generatedRecordStateWithFieldValue(
         self: *BodyContext,
         state_local: Ast.LocalId,
         state_ty: Type.TypeId,
         item_tys: []const Type.TypeId,
-        fmt_local: Ast.LocalId,
-        fmt_ty: Type.TypeId,
+        value_local: Ast.LocalId,
+        value_ty: Type.TypeId,
         replace_index: usize,
     ) Allocator.Error!Ast.ExprId {
         const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
         defer self.allocator.free(items);
         for (item_tys, 0..) |item_ty, index| {
             items[index] = if (index == replace_index)
-                try self.generatedRecordPresentExpr(fmt_local, fmt_ty, item_ty)
+                try self.generatedRecordPresentValueExpr(value_local, value_ty, item_ty)
             else
                 try self.builder.program.addExpr(.{
                     .ty = item_ty,
@@ -4545,11 +6901,30 @@ const BodyContext = struct {
         });
     }
 
+    fn generatedRecordPresentValueExpr(
+        self: *BodyContext,
+        value_local: Ast.LocalId,
+        value_ty: Type.TypeId,
+        state_slot_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const slot_info = self.generatedRecordSlotInfo(state_slot_ty);
+        if (!self.sameType(slot_info.present_payload_ty, value_ty)) Common.invariant("generated record parse slot present payload type differed from parsed field type");
+        return try self.builder.program.addExpr(.{
+            .ty = state_slot_ty,
+            .data = .{ .tag = .{
+                .name = slot_info.present_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{try self.builder.localExpr(value_local, value_ty)}),
+            } },
+        });
+    }
+
     fn decodedTagUnionValue(
         self: *BodyContext,
         tag: Type.Tag,
         union_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        encoding_local: Ast.LocalId,
+        encoding_ty: Type.TypeId,
         slot_local: Ast.LocalId,
         slot_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -4592,7 +6967,14 @@ const BodyContext = struct {
                         .field = rest_name,
                     } },
                 });
-            const payload_parse = try self.lowerParseResultFromSlot(payload_tys[index], slot_expr, slot_ty, payload_parse_ret_tys[index]);
+            const payload_parse = try self.lowerParseResultFromState(
+                payload_tys[index],
+                try self.builder.localExpr(encoding_local, encoding_ty),
+                encoding_ty,
+                slot_expr,
+                slot_ty,
+                payload_parse_ret_tys[index],
+            );
             body = try self.sequenceTry(payload_parse, payload_parse_ret_tys[index], payload_parse_locals[index], body, ret_ty);
         }
         return body;
@@ -4629,7 +7011,7 @@ const BodyContext = struct {
         return try self.tryErr(ret_ty, try self.builder.localExpr(missing_local, missing_ty));
     }
 
-    fn decoderTagExactMatch(
+    fn parseTagExactMatch(
         self: *BodyContext,
         key_local: Ast.LocalId,
         key_ty: Type.TypeId,
@@ -4646,34 +7028,51 @@ const BodyContext = struct {
         self: *BodyContext,
         key_local: Ast.LocalId,
         key_ty: Type.TypeId,
-        field: Type.Field,
+        field_expr: Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        const field_text = self.builder.program.names.recordFieldLabelText(field.name);
-        const field_expr = try self.builder.stringExpr(field_text, key_ty);
         const key_expr = try self.builder.localExpr(key_local, key_ty);
         return try self.builder.lowLevelExpr(.str_is_eq, &.{ key_expr, field_expr }, try self.builder.primitiveType(.bool));
     }
 
-    fn recordFieldNameLengthAndExactMatch(
+    fn renamedRecordFieldNameExpr(
+        self: *BodyContext,
+        encoding_ty: Type.TypeId,
+        field: Type.Field,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const field_text = self.builder.program.names.recordFieldLabelText(field.name);
+        const field_expr = try self.builder.stringExpr(field_text, str_ty);
+        const lookup = self.methodLookupForTypeName(encoding_ty, "rename_field");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{str_ty}, str_ty);
+        const rename_fn = self.builder.functionShape(callable_mono_ty, "rename_field target method was not a function");
+        const arg_tys = self.builder.program.types.span(rename_fn.args);
+        if (arg_tys.len != 1) Common.invariant("rename_field target method had an unexpected arity");
+        if (!self.sameType(arg_tys[0], str_ty)) Common.invariant("rename_field argument type differed from Str");
+        if (!self.sameType(rename_fn.ret, str_ty)) Common.invariant("rename_field return type differed from Str");
+        return try self.builder.program.addExpr(.{
+            .ty = str_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{field_expr}),
+            } },
+        });
+    }
+
+    fn recordFieldNameMatch(
         self: *BodyContext,
         key_local: Ast.LocalId,
         key_ty: Type.TypeId,
-        key_len_local: Ast.LocalId,
-        u64_ty: Type.TypeId,
-        field: Type.Field,
+        field_expr: Ast.ExprId,
+        mode: RecordFieldMatchMode,
     ) Allocator.Error!Ast.ExprId {
-        const bool_ty = try self.builder.primitiveType(.bool);
-        const field_text = self.builder.program.names.recordFieldLabelText(field.name);
-        const len_eq = try self.builder.lowLevelExpr(
-            .num_is_eq,
-            &.{
-                try self.builder.localExpr(key_len_local, u64_ty),
-                try self.builder.intLiteralExpr(@intCast(field_text.len), u64_ty),
+        return switch (mode) {
+            .direct => Common.invariant("direct field handles do not use string matching"),
+            .exact => try self.recordFieldNameExactMatch(key_local, key_ty, field_expr),
+            .caseless => blk: {
+                const key_expr = try self.builder.localExpr(key_local, key_ty);
+                break :blk try self.builder.lowLevelExpr(.str_caseless_ascii_equals, &.{ key_expr, field_expr }, try self.builder.primitiveType(.bool));
             },
-            bool_ty,
-        );
-        const exact_eq = try self.recordFieldNameExactMatch(key_local, key_ty, field);
-        return try self.builder.ifExpr(len_eq, exact_eq, try self.boolLiteral(false, bool_ty), bool_ty);
+        };
     }
 
     fn wrapLet(
@@ -4839,12 +7238,23 @@ const BodyContext = struct {
             Common.invariant("checked direct call arity differs from its function type");
         }
         const fn_node = try self.instNode(source_fn_ty);
-        for (function.args, checked_args) |formal_ty, checked_arg| {
+        const generated_arg_overrides = try self.allocator.alloc(?Type.TypeId, function.args.len);
+        defer self.allocator.free(generated_arg_overrides);
+        @memset(generated_arg_overrides, null);
+        var saw_generated_fields_evidence = false;
+        for (function.args, checked_args, 0..) |formal_ty, checked_arg, index| {
             const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
             const formal_node = try self.instNode(formal_ty);
             try self.graph.unify(formal_node, try caller.instNode(arg_ty));
             if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
-                try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+                const evidence_node = try self.graph.importMono(evidence_ty);
+                if (self.isGeneratedFieldsEvidenceType(evidence_ty)) {
+                    saw_generated_fields_evidence = true;
+                    generated_arg_overrides[index] = evidence_ty;
+                    try self.graph.unify(evidence_node, formal_node);
+                } else {
+                    try self.graph.unify(formal_node, evidence_node);
+                }
             }
         }
         try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
@@ -4852,6 +7262,17 @@ const BodyContext = struct {
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
         try self.graph.drainDirty();
+        if (saw_generated_fields_evidence) {
+            const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
+            defer self.allocator.free(arg_tys);
+            for (function.args, generated_arg_overrides, 0..) |formal_ty, override, index| {
+                arg_tys[index] = override orelse try self.graph.monoFor(try self.instNode(formal_ty));
+            }
+            return try self.builder.program.types.add(.{ .func = .{
+                .args = try self.builder.program.types.addSpan(arg_tys),
+                .ret = try self.graph.monoFor(try self.instNode(function.ret)),
+            } });
+        }
         return try self.graph.monoFor(fn_node);
     }
 
@@ -4891,7 +7312,12 @@ const BodyContext = struct {
                 const formal_node = try self.instNode(formal_ty);
                 try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                 if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
-                    try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+                    const evidence_node = try self.graph.importMono(evidence_ty);
+                    if (self.isGeneratedFieldsEvidenceType(evidence_ty)) {
+                        try self.graph.unify(evidence_node, formal_node);
+                    } else {
+                        try self.graph.unify(formal_node, evidence_node);
+                    }
                 }
             },
             .generated_interpolation_iter,
@@ -4965,6 +7391,27 @@ const BodyContext = struct {
         return try self.graph.monoFor(fn_node);
     }
 
+    fn instantiateTargetCallTypeFromMonoArgsPreservingArgs(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const function = self.checkedFunctionType(source_fn_ty);
+        if (function.args.len != arg_tys.len) {
+            Common.invariant("checked synthetic dispatch target arity differs from its function type");
+        }
+        for (function.args, arg_tys) |formal_ty, arg_ty| {
+            try self.graph.unify(try self.graph.importMono(arg_ty), try self.instNode(formal_ty));
+        }
+        try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
+        try self.graph.drainDirty();
+        return try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(arg_tys),
+            .ret = ret_ty,
+        } });
+    }
+
     fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -4979,6 +7426,22 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
+    }
+
+    fn instantiateTargetCallTypeFromMonoArgAtIndex(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        arg_index: usize,
+        arg_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const function = self.checkedFunctionType(source_fn_ty);
+        if (arg_index >= function.args.len) {
+            Common.invariant("checked synthetic dispatch target argument index was outside its function type");
+        }
+        const fn_node = try self.instNode(source_fn_ty);
+        try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
         try self.graph.drainDirty();
         return try self.graph.monoFor(fn_node);
     }
@@ -5217,11 +7680,14 @@ const BodyContext = struct {
             try self.constrainTypeToMono(binder_ty, ty);
             try self.constrainTypeToMono(checked_ty, ty);
             const live_ty = try self.lowerType(binder_ty);
-            if (live_ty != local_ty) self.builder.program.setLocalType(local_id, live_ty);
-            if (!self.sameType(ty, live_ty)) {
+            const use_ty = if (self.sameType(ty, local_ty))
+                local_ty
+            else if (self.sameType(ty, live_ty))
+                live_ty
+            else
                 Common.invariant("checked local lookup type differed from its expected Monotype use type");
-            }
-            return try self.builder.program.addExpr(.{ .ty = live_ty, .data = .{ .local = local_id } });
+            if (use_ty != local_ty) self.builder.program.setLocalType(local_id, use_ty);
+            return try self.builder.program.addExpr(.{ .ty = use_ty, .data = .{ .local = local_id } });
         }
 
         switch (record.ref) {
@@ -5870,10 +8336,20 @@ const BodyContext = struct {
     }
 
     fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
-        for (self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty))) |field| {
+        return self.recordFieldByTextOptional(ty, text) orelse
+            Common.invariant("expected record field was absent from monotype type");
+    }
+
+    fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
+        const fields = switch (self.builder.shapeContent(ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => return null,
+            else => return null,
+        };
+        for (fields) |field| {
             if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
         }
-        Common.invariant("expected record field was absent from monotype type");
+        return null;
     }
 
     fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
@@ -5898,7 +8374,7 @@ const BodyContext = struct {
         self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
             .call => |call| {
-                if (try self.lowerDecoderIntrinsicCallExpr(expr.ty, call, ty)) |lowered| return lowered;
+                if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| return lowered;
                 try self.constrainKnownType(expr.ty, ty);
                 const lowered = try self.lowerCall(expr.ty, call);
                 if (!self.sameType(ty, lowered.ret_ty)) {
@@ -6207,7 +8683,7 @@ const BodyContext = struct {
         if (lookup == null) {
             return switch (plan.result_mode) {
                 .equality => try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
-                .parse_from => try self.lowerStructuralParseFrom(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
+                .parser => try self.lowerStructuralParser(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
                 .value => Common.invariant("value dispatch plan had no resolved dispatch target"),
             };
         }
@@ -6237,7 +8713,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (mode) {
             .value => expr,
-            .parse_from => expr,
+            .parser => expr,
             .equality => |eq| if (eq.negated) blk: {
                 if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
                 break :blk try self.builder.lowLevelExpr(.bool_not, &.{expr}, expr_ty);
@@ -6609,13 +9085,13 @@ const BodyContext = struct {
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .parse_from and plan.result_mode.parse_from.structural_allowed) return null;
+            if (plan.result_mode == .parser and plan.result_mode.parser.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .parse_from and plan.result_mode.parse_from.structural_allowed) return null;
+            if (plan.result_mode == .parser and plan.result_mode.parser.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
@@ -6664,6 +9140,17 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
     }
 
+    fn methodTargetMonoTypeFromArgsPreservingArgs(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetCallTypeFromMonoArgsPreservingArgs(lookup.target.callable_ty, arg_tys, ret_ty);
+    }
+
     fn methodTargetMonoTypeFromArgAtIndexAndRet(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -6676,15 +9163,36 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndexAndRet(lookup.target.callable_ty, arg_index, arg_ty, ret_ty);
     }
 
+    fn methodTargetMonoTypeFromArgAtIndexIsolated(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        arg_index: usize,
+        arg_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var graph = try InstGraph.create(self.allocator, &self.builder.program.types, &self.builder.program.names, &self.builder.unsolved_monos);
+        defer graph.destroy();
+
+        const owner_template = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc => blk: {
+                self.requireLocalMethodTargetInCurrentView(lookup);
+                break :blk self.owner_template;
+            },
+        };
+        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, graph);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndex(lookup.target.callable_ty, arg_index, arg_ty);
+    }
+
     fn methodLookupForTypeName(
         self: *BodyContext,
         owner_ty: Type.TypeId,
         method_name: []const u8,
     ) MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, owner_ty) orelse
-            Common.invariant("parse_from format type did not have a method owner");
+            Common.invariant("parser format type did not have a method owner");
         return self.builder.lookupMethodTargetByName(owner, method_name) orelse
-            Common.invariant("checked method registry is missing parse_from format method");
+            Common.invariant("checked method registry is missing parser format method");
     }
 
     fn methodTargetCalleeWithMono(
@@ -6763,11 +9271,11 @@ const BodyContext = struct {
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
-            .parse_from => Common.invariant("parse_from dispatch plan reached structural equality lowering"),
+            .parser => Common.invariant("parser dispatch plan reached structural equality lowering"),
         };
     }
 
-    fn lowerStructuralParseFrom(
+    fn lowerStructuralParser(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         callable_mono_ty: Type.TypeId,
@@ -6775,53 +9283,112 @@ const BodyContext = struct {
         arg_ctx: *BodyContext,
         pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprId {
-        const parse_from = switch (plan.result_mode) {
-            .parse_from => |parse_from| parse_from,
-            else => Common.invariant("non-parse_from dispatch plan reached structural parse lowering"),
+        const parser = switch (plan.result_mode) {
+            .parser => |parser| parser,
+            else => Common.invariant("non-parser dispatch plan reached structural parse lowering"),
         };
-        if (!parse_from.structural_allowed) Common.invariant("structural parse_from dispatch plan did not permit structural parse lowering");
+        if (!parser.structural_allowed) Common.invariant("structural parser dispatch plan did not permit structural parser lowering");
 
-        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural parse_from target had a non-function type");
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural parser target had a non-function type");
         const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
         defer self.allocator.free(arg_tys);
-        if (arg_tys.len != 1 or plan.args.len != 1) Common.invariant("structural parse_from callable type must have one format argument");
+        if (arg_tys.len != 1 or plan.args.len != 1) Common.invariant("structural parser callable type must have one encoding argument");
+        if (!self.sameType(fn_data.ret, ret_ty)) Common.invariant("structural parser return type differed from dispatch expression type");
+
+        const runtime_fn = self.builder.functionShape(ret_ty, "checked structural parser return had a non-function type");
+        const runtime_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(runtime_fn.args));
+        defer self.allocator.free(runtime_arg_tys);
+        if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
         const shape_ty = try self.lowerType(plan.dispatcher_ty);
         if (!self.typeHasBuiltinOwner(shape_ty, .str)) {
             switch (self.builder.shapeContent(shape_ty)) {
                 .record => |fields_span| blk: {
                     for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                        if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural parse_from record field type was not supported");
+                        if (!self.parseFieldTypeIsSupported(field.ty)) Common.invariant("structural parser record field type was not supported");
                     }
                     break :blk;
                 },
                 .tag_union => |tags_span| blk: {
                     const tags = self.builder.program.types.tagSpan(tags_span);
-                    if (tags.len == 0) Common.invariant("structural parse_from empty tag union reached postcheck lowering");
+                    if (tags.len == 0) Common.invariant("structural parser empty tag union reached postcheck lowering");
                     for (tags) |tag| {
                         for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                            if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural parse_from tag-union payload type was not supported");
+                            if (!self.parseFieldTypeIsSupported(payload_ty)) Common.invariant("structural parser tag-union payload type was not supported");
                         }
                     }
                     break :blk;
                 },
                 .zst => {},
-                else => Common.invariant("structural parse_from dispatcher was not a supported structural type"),
+                else => Common.invariant("structural parser dispatcher was not a supported structural type"),
             }
         }
 
-        const input_value = if (pre_lowered != null and pre_lowered.?.index == 0)
+        const encoding_value = if (pre_lowered != null and pre_lowered.?.index == 0)
             pre_lowered.?.expr
         else
             try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
-        const input_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
-        const parsed = try self.lowerParseShapeFromSlot(
+        const encoding_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        self.builder.program.setLocalCaptureId(encoding_local, parserEncodingCaptureId());
+        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
+
+        var precomputed_renamed_field_locals: ?[]Ast.LocalId = null;
+        defer if (precomputed_renamed_field_locals) |locals| self.allocator.free(locals);
+        var precomputed_renamed_field_values: ?[]Ast.ExprId = null;
+        defer if (precomputed_renamed_field_values) |values| self.allocator.free(values);
+        const str_ty = try self.builder.primitiveType(.str);
+        switch (self.builder.shapeContent(shape_ty)) {
+            .record, .zst => {
+                const record_fields = self.recordFieldsForShape(shape_ty);
+                const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
+                const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
+                precomputed_renamed_field_locals = locals;
+                precomputed_renamed_field_values = values;
+
+                for (record_fields, 0..) |field, index| {
+                    locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+                    self.builder.program.setLocalCaptureId(locals[index], self.parserFieldCaptureIdForRecordField(record_fields, index));
+                    values[index] = try self.renamedRecordFieldNameExpr(arg_tys[0], field, str_ty);
+                }
+            },
+            else => {},
+        }
+
+        const parsed = try self.lowerParseShapeFromState(
             shape_ty,
-            try self.builder.localExpr(input_local, arg_tys[0]),
+            try self.builder.localExpr(encoding_local, arg_tys[0]),
             arg_tys[0],
-            ret_ty,
+            try self.builder.localExpr(state_local, runtime_arg_tys[0]),
+            runtime_arg_tys[0],
+            runtime_fn.ret,
+            precomputed_renamed_field_locals,
+            null,
         );
-        return try self.wrapLet(input_local, arg_tys[0], input_value, parsed, ret_ty);
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .parser_runtime = .{
+                .owner = self.owner_template,
+                .expr = plan.expr,
+            } },
+            .source_fn_ty = plan.callable_ty,
+            .source_fn_key = generatedParserRuntimeKey(self.current_fn_key, plan.expr),
+            .mono_fn_ty = ret_ty,
+        });
+        var parser_expr = try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
+            .fn_id = fn_id,
+            .args = try self.builder.program.addTypedLocalSpan(&.{
+                .{ .local = state_local, .ty = runtime_arg_tys[0] },
+            }),
+            .body = parsed,
+        } } });
+        if (precomputed_renamed_field_values) |values| {
+            const locals = precomputed_renamed_field_locals orelse Common.invariant("renamed field values existed without locals");
+            var index = values.len;
+            while (index > 0) {
+                index -= 1;
+                parser_expr = try self.wrapLet(locals[index], str_ty, values[index], parser_expr, ret_ty);
+            }
+        }
+        return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, parser_expr, ret_ty);
     }
 
     fn cloneNamedTypeWithArgs(
@@ -6850,11 +9417,10 @@ const BodyContext = struct {
         present_payload_ty: Type.TypeId,
     };
 
-    const TryStrOptionalInfo = struct {
+    const TryOptionalInfo = struct {
         backing_ty: Type.TypeId,
         ok_payload_ty: Type.TypeId,
         err_ty: Type.TypeId,
-        missing_tag: Type.Tag,
     };
 
     const TryInfo = struct {
@@ -6864,6 +9430,20 @@ const BodyContext = struct {
         ok_tag: Type.Tag,
         err_tag: Type.Tag,
     };
+
+    const RecordFieldMatchMode = enum {
+        direct,
+        exact,
+        caseless,
+    };
+
+    fn fieldLengthAlreadyHandled(lengths: []const u32, index: usize, length: u32) bool {
+        var i = index + 1;
+        while (i < lengths.len) : (i += 1) {
+            if (lengths[i] == length) return true;
+        }
+        return false;
+    }
 
     fn tryInfo(self: *BodyContext, try_ty: Type.TypeId) TryInfo {
         const backing_ty = self.builder.namedBackingType(try_ty) orelse Common.invariant("expected a named Try type");
@@ -6991,14 +9571,15 @@ const BodyContext = struct {
         } } });
     }
 
-    fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
+    fn parseFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
         if (self.typeHasBuiltinOwner(ty, .str)) return true;
-        if (self.tryStrOptionalInfo(ty) != null) return true;
-        if (self.customParseFromLookup(ty) != null) return true;
+        if (self.typeHasBuiltinOwner(ty, .u64)) return true;
+        if (self.tryOptionalInfo(ty) != null) return true;
+        if (self.customParserLookup(ty) != null) return true;
         return switch (self.builder.shapeContent(ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.decoderFieldTypeIsSupported(field.ty)) break :blk false;
+                    if (!self.parseFieldTypeIsSupported(field.ty)) break :blk false;
                 }
                 break :blk true;
             },
@@ -7007,7 +9588,7 @@ const BodyContext = struct {
                 if (tags.len == 0) break :blk false;
                 for (tags) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                        if (!self.decoderFieldTypeIsSupported(payload_ty)) break :blk false;
+                        if (!self.parseFieldTypeIsSupported(payload_ty)) break :blk false;
                     }
                 }
                 break :blk true;
@@ -7017,7 +9598,7 @@ const BodyContext = struct {
         };
     }
 
-    fn customParseFromLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
+    fn customParserLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
         const named = switch (self.builder.program.types.get(ty)) {
             .named => |named| named,
             else => return null,
@@ -7028,9 +9609,9 @@ const BodyContext = struct {
             .alias => return null,
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
-            Common.invariant("custom named parse_from type had no method owner");
-        return self.builder.lookupMethodTargetByName(owner, "parse_from") orelse
-            Common.invariant("checked method registry is missing custom parse_from target");
+            Common.invariant("custom named parser type had no method owner");
+        return self.builder.lookupMethodTargetByName(owner, "parser") orelse
+            Common.invariant("checked method registry is missing custom parser target");
     }
 
     fn generatedRecordSlotInfo(self: *BodyContext, slot_ty: Type.TypeId) GeneratedRecordSlotInfo {
@@ -7065,50 +9646,18 @@ const BodyContext = struct {
         };
     }
 
-    fn tryStrOptionalInfo(self: *BodyContext, ty: Type.TypeId) ?TryStrOptionalInfo {
+    fn tryOptionalInfo(self: *BodyContext, ty: Type.TypeId) ?TryOptionalInfo {
         const backing_ty = self.builder.namedBackingType(ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;
         const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
         const err_payloads = self.builder.program.types.span(err_tag.payloads);
         if (ok_payloads.len != 1 or err_payloads.len != 1) return null;
-        if (!self.typeHasBuiltinOwner(ok_payloads[0], .str)) return null;
-        const missing_tag = self.singleEmptyTagOptional(err_payloads[0]) orelse return null;
         return .{
             .backing_ty = backing_ty,
             .ok_payload_ty = ok_payloads[0],
             .err_ty = err_payloads[0],
-            .missing_tag = missing_tag,
         };
-    }
-
-    fn singleEmptyTagOptional(self: *BodyContext, ty: Type.TypeId) ?Type.Tag {
-        const tags = switch (self.builder.shapeContent(ty)) {
-            .tag_union => |span| self.builder.program.types.tagSpan(span),
-            else => return null,
-        };
-        if (tags.len != 1) return null;
-        const tag = tags[0];
-        if (self.builder.program.types.span(tag.payloads).len != 0) return null;
-        return tag;
-    }
-
-    fn generatedRecordPresentExpr(
-        self: *BodyContext,
-        fmt_local: Ast.LocalId,
-        fmt_ty: Type.TypeId,
-        state_slot_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const slot_info = self.generatedRecordSlotInfo(state_slot_ty);
-        if (!self.sameType(slot_info.present_payload_ty, fmt_ty)) Common.invariant("generated record parse slot present payload type differed from put format type");
-        const fmt_expr = try self.builder.localExpr(fmt_local, fmt_ty);
-        return try self.builder.program.addExpr(.{
-            .ty = state_slot_ty,
-            .data = .{ .tag = .{
-                .name = slot_info.present_tag.name,
-                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{fmt_expr}),
-            } },
-        });
     }
 
     fn parseRecordFieldFromStateSlot(
@@ -7118,13 +9667,17 @@ const BodyContext = struct {
         field: Type.Field,
         field_try_ty: Type.TypeId,
         rest_local: Ast.LocalId,
-        fmt_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        renamed_field_local: Ast.LocalId,
     ) Allocator.Error!Ast.ExprId {
         const field_ty = field.ty;
         const field_try_info = self.tryInfo(field_try_ty);
-        if (!self.sameType(field_try_info.ok_ty, field_ty)) Common.invariant("structural decoder field Try Ok type differed from field type");
+        if (!self.sameType(field_try_info.ok_ty, field_ty)) Common.invariant("structural parser field Try Ok type differed from field type");
         const slot_info = self.generatedRecordSlotInfo(state_slot_ty);
-        if (!self.sameType(slot_info.present_payload_ty, fmt_ty)) Common.invariant("generated record parse slot present payload type differed from record rest format type");
+        const renamed_field_ty = self.builder.program.locals.items[@intFromEnum(renamed_field_local)].ty;
+        if (!self.typeHasBuiltinOwner(renamed_field_ty, .str)) Common.invariant("record parser renamed field local was not Str");
+        const renamed_field_expr = try self.builder.localExpr(renamed_field_local, renamed_field_ty);
 
         const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_info.present_payload_ty);
         const value_pat = try self.builder.bindPat(value_local, slot_info.present_payload_ty);
@@ -7137,15 +9690,18 @@ const BodyContext = struct {
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{}),
         } } });
 
-        const fmt_expr = try self.builder.localExpr(value_local, slot_info.present_payload_ty);
-        const present_body = try self.parsePresentRecordField(field_ty, fmt_expr, slot_info.present_payload_ty, field_try_ty);
+        if (!self.sameType(slot_info.present_payload_ty, field_ty)) {
+            Common.invariant("generated record parse slot present payload type differed from parsed field type");
+        }
+        const present_body = try self.tryOk(field_try_ty, try self.builder.localExpr(value_local, slot_info.present_payload_ty));
 
         const absent_body = if (self.typeHasBuiltinOwner(field_ty, .str)) blk: {
-            break :blk try self.tryErr(field_try_ty, try self.missingRecordFieldError(field.name, rest_local, fmt_ty, field_try_info.err_ty));
-        } else if (self.tryStrOptionalInfo(field_ty)) |info| blk: {
-            const missing_field = try self.tryErrMissing(info, field_ty);
+            break :blk try self.tryErr(field_try_ty, try self.missingRecordFieldError(renamed_field_expr, rest_local, encoding_ty, state_ty, field_try_info.err_ty));
+        } else if (self.tryOptionalInfo(field_ty)) |info| blk: {
+            const missing_error = try self.missingOptionalFieldError(renamed_field_expr, rest_local, encoding_ty, state_ty, info.err_ty);
+            const missing_field = try self.tryErr(field_ty, missing_error);
             break :blk try self.tryOk(field_try_ty, missing_field);
-        } else try self.tryErr(field_try_ty, try self.missingRecordFieldError(field.name, rest_local, fmt_ty, field_try_info.err_ty));
+        } else try self.tryErr(field_try_ty, try self.missingRecordFieldError(renamed_field_expr, rest_local, encoding_ty, state_ty, field_try_info.err_ty));
 
         const branches = [_]Ast.Branch{
             .{ .pat = present_pat, .body = present_body },
@@ -7159,25 +9715,25 @@ const BodyContext = struct {
 
     fn missingRecordFieldError(
         self: *BodyContext,
-        field_name: names.RecordFieldNameId,
+        field_name_expr: Ast.ExprId,
         rest_local: Ast.LocalId,
-        fmt_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const str_ty = try self.builder.primitiveType(.str);
-        const lookup = self.methodLookupForTypeName(fmt_ty, "missing_record_field");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ str_ty, fmt_ty }, err_ty);
+        const lookup = self.methodLookupForTypeName(encoding_ty, "missing_record_field");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ str_ty, state_ty }, err_ty);
         const missing_fn = self.builder.functionShape(callable_mono_ty, "missing_record_field target method was not a function");
         const arg_tys = self.builder.program.types.span(missing_fn.args);
         if (arg_tys.len != 2) Common.invariant("missing_record_field target method had an unexpected arity");
         if (!self.sameType(arg_tys[0], str_ty)) Common.invariant("missing_record_field name type differed from Str");
-        if (!self.sameType(arg_tys[1], fmt_ty)) Common.invariant("missing_record_field format type differed from record rest format type");
+        if (!self.sameType(arg_tys[1], state_ty)) Common.invariant("missing_record_field state type differed from record rest state type");
         if (!self.sameType(missing_fn.ret, err_ty)) Common.invariant("missing_record_field return type differed from parse error type");
 
-        const field_text = self.builder.program.names.recordFieldLabelText(field_name);
         const args = [_]Ast.ExprId{
-            try self.builder.stringExpr(field_text, str_ty),
-            try self.builder.localExpr(rest_local, fmt_ty),
+            field_name_expr,
+            try self.builder.localExpr(rest_local, state_ty),
         };
         return try self.builder.program.addExpr(.{
             .ty = err_ty,
@@ -7188,58 +9744,34 @@ const BodyContext = struct {
         });
     }
 
-    fn parsePresentRecordField(
+    fn missingOptionalFieldError(
         self: *BodyContext,
-        field_ty: Type.TypeId,
-        fmt_expr: Ast.ExprId,
-        fmt_ty: Type.TypeId,
-        field_try_ty: Type.TypeId,
+        field_name_expr: Ast.ExprId,
+        rest_local: Ast.LocalId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        err_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.tryStrOptionalInfo(field_ty)) |info| {
-            const outer_info = self.tryInfo(field_try_ty);
-            const parse_ok_ty = try self.parseResultOkType(info.ok_payload_ty, fmt_ty);
-            const parse_ret_ty = try self.tryTypeLike(field_try_ty, parse_ok_ty, outer_info.err_ty);
-            const parse_expr = try self.lowerParseResultFromSlot(info.ok_payload_ty, fmt_expr, fmt_ty, parse_ret_ty);
-            const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
-            const value_name = try self.builder.program.names.internRecordFieldLabel("value");
-            const value_expr = try self.builder.program.addExpr(.{
-                .ty = info.ok_payload_ty,
-                .data = .{ .field_access = .{
-                    .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
-                    .field = value_name,
-                } },
-            });
-            const field_value = try self.tryOk(field_ty, value_expr);
-            const ok_body = try self.tryOk(field_try_ty, field_value);
-            return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, field_try_ty);
-        }
+        const str_ty = try self.builder.primitiveType(.str);
+        const lookup = self.methodLookupForTypeName(encoding_ty, "missing_optional_field");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ str_ty, state_ty }, err_ty);
+        const missing_fn = self.builder.functionShape(callable_mono_ty, "missing_optional_field target method was not a function");
+        const arg_tys = self.builder.program.types.span(missing_fn.args);
+        if (arg_tys.len != 2) Common.invariant("missing_optional_field target method had an unexpected arity");
+        if (!self.sameType(arg_tys[0], str_ty)) Common.invariant("missing_optional_field name type differed from Str");
+        if (!self.sameType(arg_tys[1], state_ty)) Common.invariant("missing_optional_field state type differed from record rest state type");
+        if (!self.sameType(missing_fn.ret, err_ty)) Common.invariant("missing_optional_field return type differed from optional field error type");
 
-        return try self.lowerParseValueFromSlot(field_ty, fmt_expr, fmt_ty, field_try_ty);
-    }
-
-    fn tryErrMissing(
-        self: *BodyContext,
-        info: TryStrOptionalInfo,
-        try_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const missing_expr = try self.builder.program.addExpr(.{
-            .ty = info.err_ty,
-            .data = .{ .tag = .{
-                .name = info.missing_tag.name,
-                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{}),
-            } },
-        });
-        const err_tag = self.monoTagByText(info.backing_ty, "Err");
-        const backing_expr = try self.builder.program.addExpr(.{
-            .ty = info.backing_ty,
-            .data = .{ .tag = .{
-                .name = err_tag.name,
-                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{missing_expr}),
-            } },
-        });
+        const args = [_]Ast.ExprId{
+            field_name_expr,
+            try self.builder.localExpr(rest_local, state_ty),
+        };
         return try self.builder.program.addExpr(.{
-            .ty = try_ty,
-            .data = .{ .nominal = backing_expr },
+            .ty = err_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&args),
+            } },
         });
     }
 
@@ -10829,6 +13361,59 @@ fn generatedInterpolationStepKey(
     return .{ .bytes = hasher.finalResult() };
 }
 
+fn generatedParserRuntimeKey(
+    current_fn_key: names.TypeDigest,
+    source_expr_id: checked.CheckedExprId,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_structural_parser_runtime");
+    hasher.update(&current_fn_key.bytes);
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    hasher.update(std.mem.asBytes(&source_expr_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn parserEncodingCaptureId() u32 {
+    return 0;
+}
+
+fn parserFieldCaptureId(index: usize) u32 {
+    return @as(u32, @intCast(index + 1));
+}
+
+fn generatedRecordDirectDispatchKey(
+    current_fn_key: names.TypeDigest,
+    fn_ty: Type.TypeId,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_record_direct_field_dispatch");
+    hasher.update(&current_fn_key.bytes);
+    var fn_ty_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_ty));
+    hasher.update(std.mem.asBytes(&fn_ty_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn generatedFieldsIterStepKey(
+    current_fn_key: names.TypeDigest,
+    source_expr_id: checked.CheckedExprId,
+    index: usize,
+    mode: FieldsIterMode,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_fields_iter_step");
+    hasher.update(&current_fn_key.bytes);
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    hasher.update(std.mem.asBytes(&source_expr_bytes));
+    var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
+    hasher.update(std.mem.asBytes(&index_bytes));
+    const mode_byte: u8 = switch (mode) {
+        .all => 0,
+        .for_size => 1,
+    };
+    hasher.update(&[_]u8{mode_byte});
+    return .{ .bytes = hasher.finalResult() };
+}
+
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
     const raw = @intFromEnum(checked_ty);
     if (raw >= view.types.payloads.len) Common.invariant("checked type id outside checked type store");
@@ -10879,6 +13464,44 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
     const pattern_raw = @intFromEnum(pattern);
     if (pattern_raw >= view.bodies.patterns.len) Common.invariant("stored function capture pattern is outside checked body store");
     return view.bodies.patterns[pattern_raw].ty;
+}
+
+fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
+    return switch (id) {
+        .binder => |binder| binder,
+        .generated => Common.invariant("generated capture reached source lambda restore"),
+    };
+}
+
+fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+    for (fn_value.captures) |capture| {
+        switch (capture.id) {
+            .generated => |actual| if (actual == capture_id) return capture.value,
+            .binder => {},
+        }
+    }
+    return null;
+}
+
+fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
+    return switch (view.const_store.get(node)) {
+        .str => |str| str.len,
+        else => Common.invariant("stored parser renamed field capture was not a Str constant"),
+    };
+}
+
+fn parserDispatchPlanForExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
+    const raw = @intFromEnum(expr_id);
+    if (raw >= view.bodies.exprs.len) Common.invariant("stored parser runtime expression is outside checked body store");
+    const expr = view.bodies.exprs[raw];
+    const plan_id = switch (expr.data) {
+        .dispatch_call => |maybe| maybe orelse Common.invariant("stored parser dispatch expression had no dispatch plan"),
+        .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored parser type dispatch expression had no dispatch plan"),
+        else => Common.invariant("stored parser runtime function did not reference a dispatch expression"),
+    };
+    const plan_raw = @intFromEnum(plan_id);
+    if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored parser dispatch plan is outside plan table");
+    return view.static_dispatch_plans.plans[plan_raw];
 }
 
 fn moduleIdFromDigest(ref: names.CheckedModuleDigest) checked.ModuleId {
@@ -10933,6 +13556,8 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .list => .list,
         .box => .box,
         .parse_tag_union_spec => .parse_tag_union_spec,
+        .fields => .fields,
+        .field => .field,
     };
 }
 

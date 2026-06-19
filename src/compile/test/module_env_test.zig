@@ -108,10 +108,11 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified builtin type names: Builtin.List, Builtin.Box
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
-    // Count reflects the current merged builtin set, including Str.find_first and
-    // parse_from identifiers. Ranges desugar to the generic Iter.exclusive_range /
-    // inclusive_range constructors, so no per-type range method identifiers are interned.
-    try testing.expectEqual(@as(u32, 94), original.common.idents.interner.entry_count);
+    // Count reflects the current merged builtin set, including Str.find_first,
+    // parser, and structural parser field metadata identifiers. Ranges desugar
+    // to the generic Iter.exclusive_range / inclusive_range constructors, so no
+    // per-type range method identifiers are interned.
+    try testing.expectEqual(@as(u32, 96), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -120,9 +121,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same identifiers as original, including the builtin parse_from identifiers.
+    // Should have same identifiers as original, including the builtin parser identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 94), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 96), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

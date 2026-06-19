@@ -488,6 +488,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_builder,
+    /// Direct nominal record construction: Type.{ field: value }
+    /// * lhs - mapper/type expression
+    /// * rhs - backing record expression
+    nominal_record,
     /// A block of statements
     /// Main token is newline preceding the block
     /// * lhs - first statement node
