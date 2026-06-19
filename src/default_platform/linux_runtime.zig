@@ -31,20 +31,20 @@ const BacktraceEntry = extern struct {
     column: u32,
 };
 
-extern const roc_default_backtrace_table: [*]const BacktraceEntry;
-extern const roc_default_backtrace_count: usize;
-
-const empty_backtrace_table: [0]BacktraceEntry = .{};
-const fallback_backtrace_table: [*]const BacktraceEntry = empty_backtrace_table[0..].ptr;
-const fallback_backtrace_count: usize = 0;
+const roc_default_backtrace_table = @extern(*const [*]const BacktraceEntry, .{
+    .name = "roc_default_backtrace_table",
+    .linkage = .weak,
+});
+const roc_default_backtrace_count = @extern(*const usize, .{
+    .name = "roc_default_backtrace_count",
+    .linkage = .weak,
+});
 
 comptime {
     if (builtin.os.tag != .linux) {
         @compileError("default platform Linux runtime must be built for Linux");
     }
 
-    @export(&fallback_backtrace_table, .{ .name = "roc_default_backtrace_table", .linkage = .weak });
-    @export(&fallback_backtrace_count, .{ .name = "roc_default_backtrace_count", .linkage = .weak });
     @export(&defaultMemcpy, .{ .name = "memcpy", .linkage = .weak });
     @export(&defaultMemmove, .{ .name = "memmove", .linkage = .weak });
     @export(&defaultMemset, .{ .name = "memset", .linkage = .weak });
@@ -223,19 +223,19 @@ const X86_64UContext = extern struct {
 };
 
 const Aarch64MContext = extern struct {
-    fault_address: u64,
-    regs: [31]u64,
+    fault_address: u64 align(16),
+    regs: [30]u64,
+    lr: u64,
     sp: u64,
     pc: u64,
-    pstate: u64,
-    reserved: [4096]u8 align(16),
 };
 
 const Aarch64UContext = extern struct {
-    flags: u64,
+    flags: usize,
     link: ?*anyopaque,
     stack: linux.stack_t,
     sigmask: linux.sigset_t,
+    unused: [120]u8,
     mcontext: Aarch64MContext,
 };
 
@@ -317,10 +317,15 @@ fn printMappedInstructionPointer(ip: usize) void {
 }
 
 fn lookupBacktraceEntry(ip: usize) ?BacktraceEntry {
+    const count_ptr = roc_default_backtrace_count orelse return null;
+    const table_ptr = roc_default_backtrace_table orelse return null;
+    const count = count_ptr.*;
+    const table = table_ptr.*;
+
     var best: ?BacktraceEntry = null;
     var i: usize = 0;
-    while (i < roc_default_backtrace_count) : (i += 1) {
-        const entry = roc_default_backtrace_table[i];
+    while (i < count) : (i += 1) {
+        const entry = table[i];
         if (ip < entry.start) continue;
         if (entry.end != 0 and ip >= entry.end) continue;
         if (best == null or entry.start > best.?.start) {
