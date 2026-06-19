@@ -36,10 +36,19 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    |n| n + 2.I64
         \\}
         \\
+        \\top_add_five = |n| n + 5.I64
+        \\
+        \\DispatchBox := [Val(I64)].{
+        \\    add = |DispatchBox.Val(n), delta| DispatchBox.Val(n + delta)
+        \\    unwrap = |DispatchBox.Val(n)| n
+        \\}
+        \\
         \\main! = |args| {
         \\    x = top_b + 1.I64
         \\    y = x + 1.I64
         \\    called = top_callable(41.I64)
+        \\    called_unique = top_add_five(72.I64)
+        \\    dispatched = DispatchBox.Val(89.I64).add(2.I64).unwrap()
         \\    { z } = { z: 44.I64 }
         \\    pair = (40.I64, 6.I64)
         \\    (left, right) = pair
@@ -62,6 +71,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    }
         \\    _ = y + List.len(args).to_i64_wrap()
         \\    _ = called + List.len(args).to_i64_wrap()
+        \\    _ = called_unique + List.len(args).to_i64_wrap()
+        \\    _ = dispatched + List.len(args).to_i64_wrap()
         \\    _ = z + tuple_total + List.len(args).to_i64_wrap()
         \\    _ = tag_value + List.len(args).to_i64_wrap()
         \\    _ = match_tuple_total
@@ -167,6 +178,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const match_tuple_left = findStoredI64(app_view, 50) orelse return error.HoistedMatchTupleLeftExtractionNotFound;
     const match_tuple_right = findStoredI64(app_view, 8) orelse return error.HoistedMatchTupleRightExtractionNotFound;
     const match_alias = findStoredI64(app_view, 46) orelse return error.HoistedMatchAliasExtractionNotFound;
+    const ordinary_call = findStoredI64(app_view, 77) orelse return error.HoistedOrdinaryCallNotFound;
+    _ = findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
     try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
     try std.testing.expect(countHoistedMatchRoots(app_artifact) >= 1);
@@ -179,6 +192,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_left.root);
     try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_right.root);
     try expectRootRequestBefore(app_artifact, top_b.id, match_alias.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
     try expectPatternExtractionSyntheticRegions(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
@@ -520,6 +534,195 @@ test "hoisted pattern extraction failure reports original destructure region" {
         try std.testing.expectEqualStrings("main", entry.module_name);
     }
     try std.testing.expect(found);
+}
+
+test "hoisted pattern extraction base match failure reports match" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    x : Try(I64, Str)
+        \\    x = Err("bad")
+        \\    Ok(foo) = match x {
+        \\        Ok(n) => Ok(n)
+        \\    }
+        \\    _ = foo + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found_match = false;
+    var found_destructure = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "NON-EXHAUSTIVE MATCH")) {
+            found_match = true;
+            try std.testing.expectEqualStrings("main", entry.module_name);
+        }
+        if (std.mem.eql(u8, entry.report.title, "NON-EXHAUSTIVE DESTRUCTURE")) {
+            found_destructure = true;
+        }
+    }
+    try std.testing.expect(found_match);
+    try std.testing.expect(!found_destructure);
+}
+
+test "hoisted pattern extraction successful base match resolves pending diagnostics" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    x : Try(I64, Str)
+        \\    x = Ok(41.I64)
+        \\    Ok(foo) = match x {
+        \\        Ok(n) => Ok(n)
+        \\    }
+        \\    _ = foo + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
 }
 
 fn findHoistedArtifact(

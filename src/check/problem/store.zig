@@ -127,7 +127,20 @@ pub const Store = struct {
     pub fn resolvePendingStaticExhaustiveness(self: *Self, kind: EmpiricalSiteKind, region: base.Region) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.mode == .empirical and pending.kind == kind and regionsEqual(pending.region, region)) continue;
+            // Compile-time finalization may execute a source site that checking
+            // originally recorded as static, for example inside a runtime
+            // function body that became a hoisted root.
+            if (pending.kind == kind and regionsEqual(pending.region, region)) continue;
+            self.pending_static_exhaustiveness.items[write] = pending;
+            write += 1;
+        }
+        self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
+    }
+
+    pub fn discardPendingStaticExhaustiveness(self: *Self, kind: EmpiricalSiteKind, region: base.Region) void {
+        var write: usize = 0;
+        for (self.pending_static_exhaustiveness.items) |pending| {
+            if (pending.kind == kind and regionsEqual(pending.region, region)) continue;
             self.pending_static_exhaustiveness.items[write] = pending;
             write += 1;
         }

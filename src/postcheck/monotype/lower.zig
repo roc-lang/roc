@@ -7271,7 +7271,11 @@ const BodyContext = struct {
         const branch_regions = try self.matchBranchRegions(match.branches);
         defer self.allocator.free(branch_regions);
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
-        return try self.addComptimeSite(.match, expr.source_region, branch_regions);
+        const site_kind: Ast.ComptimeSiteKind = switch (match.comptime_site_kind) {
+            .match => .match,
+            .destructure => .destructure,
+        };
+        return try self.addComptimeSite(site_kind, expr.source_region, branch_regions);
     }
 
     fn matchBranchRegions(self: *BodyContext, branches: []const checked.CheckedMatchBranch) Allocator.Error![]base.Region {

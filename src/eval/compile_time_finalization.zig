@@ -504,7 +504,7 @@ fn lowerEvalAndFinishRoots(
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
-            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, compile_time_root, interpreter.getComptimeBranchHits(), root.proc);
+            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
@@ -657,7 +657,7 @@ fn evalCompileTimeRoot(
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
-        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, root, lir_result, interpreter),
+        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, lir_result, interpreter, proc),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
@@ -668,14 +668,13 @@ fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
     lir_result: *const lir.Program.Result,
-    root: checked.CompileTimeRoot,
     hits: []const Interpreter.ComptimeBranchHit,
     root_proc: lir.LIR.LirProcSpecId,
 ) Allocator.Error!void {
     const problem_store = maybe_problem_store orelse return;
     for (hits) |hit| {
         const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
-        if (rootEmpiricalSiteKind(root, site)) |kind| {
+        if (comptimeSiteEmpiricalKind(site.kind)) |kind| {
             problem_store.resolvePendingStaticExhaustiveness(kind, site.region);
         }
         if (site.proc == root_proc) {
@@ -687,9 +686,9 @@ fn recordComptimeSiteHits(
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
+    root_proc: lir.LIR.LirProcSpecId,
 ) anyerror!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
@@ -698,10 +697,11 @@ fn reportCompileTimeExhaustiveness(
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
     const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
-    const kind = rootEmpiricalSiteKind(root, site) orelse switch (site.kind) {
+    const kind = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
         .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
     };
+    discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, site_id);
     const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, kind, site.region);
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
@@ -709,15 +709,25 @@ fn reportCompileTimeExhaustiveness(
     return error.CompileTimeProblem;
 }
 
-fn rootEmpiricalSiteKind(
-    root: checked.CompileTimeRoot,
-    site: lir.LIR.ComptimeSite,
+fn discardUnreachedRootComptimeSites(
+    problem_store: *check.problem.Store,
+    lir_result: *const lir.Program.Result,
+    root_proc: lir.LIR.LirProcSpecId,
+    failed_site_id: lir.LIR.ComptimeSiteId,
+) void {
+    for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
+        if (root_site.proc != root_proc) continue;
+        if (raw_site_id == @intFromEnum(failed_site_id)) continue;
+        const root_site_kind = comptimeSiteEmpiricalKind(root_site.kind) orelse continue;
+        problem_store.discardPendingStaticExhaustiveness(root_site_kind, root_site.region);
+    }
+}
+
+fn comptimeSiteEmpiricalKind(
+    site_kind: lir.LIR.ComptimeSiteKind,
 ) ?check.problem.Store.EmpiricalSiteKind {
-    return switch (site.kind) {
-        .match => if (root.hoisted_body) |body| switch (body) {
-            .pattern_extraction => .destructure,
-            .expr => .match,
-        } else .match,
+    return switch (site_kind) {
+        .match => .match,
         .destructure => .destructure,
         .if_ => null,
     };

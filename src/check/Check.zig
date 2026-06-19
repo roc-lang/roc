@@ -188,6 +188,8 @@ checking_call_arg: bool = false,
 /// treatment of a variable binding. Deliberately NOT set for mutable `var`
 /// bindings, which must never generalize.
 checking_binding_rhs: bool = false,
+/// Pattern for the immediate binding RHS being checked.
+checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
 /// Nonzero while checking source that constructs a compile-time value. Static
 /// exhaustiveness diagnostics under this depth are empirical candidates: the
 /// compile-time finalizer either observes them executing, reports their generated
@@ -375,6 +377,7 @@ const HoistFrame = struct {
     expr: CIR.Expr.Idx,
     suppressed: bool,
     binding_rhs: bool,
+    binding_pattern: ?CIR.Pattern.Idx,
     candidate_start: usize,
     deferred_dependency_start: usize,
     has_runtime_dependency: bool = false,
@@ -391,6 +394,7 @@ const HoistFrame = struct {
 const CompletedHoistResult = struct {
     expr: CIR.Expr.Idx,
     eligible: bool,
+    top_level_equivalent: bool,
 };
 
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
@@ -400,6 +404,403 @@ const HoistKnownValue = union(enum) {
     pattern_extraction: HoistPatternExtraction,
     selected_root: u32,
     unavailable_runtime,
+};
+
+const HoistKnownUpdate = struct {
+    pattern: CIR.Pattern.Idx,
+    root_index: u32,
+};
+
+const HoistSelectionTransaction = struct {
+    checker: *Self,
+    staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
+    staged_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
+    staged_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
+    committed: bool = false,
+
+    fn init(checker: *Self) HoistSelectionTransaction {
+        return .{ .checker = checker };
+    }
+
+    fn deinit(self: *HoistSelectionTransaction) void {
+        if (!self.committed) {
+            for (self.staged_roots.items) |*root| {
+                hoist_roots.deinitSelectedRoot(self.checker.gpa, root);
+            }
+        }
+        self.staged_roots.deinit(self.checker.gpa);
+        self.staged_exprs.deinit(self.checker.gpa);
+        self.staged_bindings.deinit(self.checker.gpa);
+        self.known_updates.deinit(self.checker.gpa);
+    }
+
+    fn selectedRootCount(self: *const HoistSelectionTransaction) usize {
+        return self.checker.selected_hoisted_roots.items.len;
+    }
+
+    fn stagedRootPtr(self: *HoistSelectionTransaction, root_index: u32) ?*hoist_roots.SelectedHoistedRoot {
+        const selected_count = self.selectedRootCount();
+        if (root_index < selected_count) return null;
+        return &self.staged_roots.items[@as(usize, root_index) - selected_count];
+    }
+
+    fn stageBindingAssociation(
+        self: *HoistSelectionTransaction,
+        pattern: CIR.Pattern.Idx,
+        root_index: u32,
+    ) Allocator.Error!void {
+        if (self.checker.hoist_selected_bindings.get(pattern)) |existing| {
+            std.debug.assert(existing == root_index);
+            return;
+        }
+        if (self.staged_bindings.get(pattern)) |existing| {
+            std.debug.assert(existing == root_index);
+            return;
+        }
+
+        if (self.stagedRootPtr(root_index)) |root| {
+            switch (root.body) {
+                .expr => {
+                    if (root.pattern) |existing| {
+                        std.debug.assert(existing == pattern);
+                    } else {
+                        root.pattern = pattern;
+                    }
+                },
+                .pattern_extraction => {
+                    std.debug.assert(root.pattern != null);
+                    std.debug.assert(root.pattern.? == pattern);
+                },
+            }
+        } else {
+            const root = &self.checker.selected_hoisted_roots.items[root_index];
+            if (root.pattern) |existing| {
+                std.debug.assert(existing == pattern);
+            }
+        }
+
+        try self.staged_bindings.put(self.checker.gpa, pattern, root_index);
+    }
+
+    fn stageKnownUpdate(
+        self: *HoistSelectionTransaction,
+        pattern: CIR.Pattern.Idx,
+        root_index: u32,
+    ) Allocator.Error!void {
+        try self.known_updates.append(self.checker.gpa, .{
+            .pattern = pattern,
+            .root_index = root_index,
+        });
+    }
+
+    fn stageExprRoot(
+        self: *HoistSelectionTransaction,
+        expr: CIR.Expr.Idx,
+        pattern: ?CIR.Pattern.Idx,
+    ) Allocator.Error!u32 {
+        if (self.staged_exprs.get(expr)) |root_index| {
+            if (pattern) |pattern_idx| {
+                try self.stageBindingAssociation(pattern_idx, root_index);
+            }
+            return root_index;
+        }
+        if (self.checker.hoist_selected_exprs.get(expr)) |root_index| {
+            if (pattern) |pattern_idx| {
+                try self.stageBindingAssociation(pattern_idx, root_index);
+            }
+            return root_index;
+        }
+
+        try self.stageExprDependencies(expr);
+
+        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
+        try self.staged_roots.append(self.checker.gpa, .{
+            .expr = expr,
+            .pattern = pattern,
+        });
+        try self.staged_exprs.put(self.checker.gpa, expr, root_index);
+        if (pattern) |pattern_idx| {
+            try self.stageBindingAssociation(pattern_idx, root_index);
+        }
+        return root_index;
+    }
+
+    fn stagePatternExtractionRoot(
+        self: *HoistSelectionTransaction,
+        pattern: CIR.Pattern.Idx,
+        extraction: HoistPatternExtraction,
+    ) Allocator.Error!u32 {
+        if (self.checker.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
+        if (self.staged_bindings.get(pattern)) |root_index| return root_index;
+
+        try self.stageExprDependencies(extraction.base_expr);
+
+        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
+        try self.staged_roots.append(self.checker.gpa, .{
+            .expr = extraction.base_expr,
+            .pattern = pattern,
+            .body = .{ .pattern_extraction = extraction },
+        });
+        try self.stageBindingAssociation(pattern, root_index);
+        return root_index;
+    }
+
+    fn stageBindingRoot(
+        self: *HoistSelectionTransaction,
+        pattern: CIR.Pattern.Idx,
+    ) Allocator.Error!bool {
+        if (self.checker.hoist_selected_bindings.get(pattern) != null) return true;
+        if (self.staged_bindings.get(pattern) != null) return true;
+        const known = self.checker.hoist_known_values.get(pattern) orelse return false;
+        return switch (known) {
+            .binding_rhs => |expr| {
+                const root_index = try self.stageExprRoot(expr, pattern);
+                try self.stageKnownUpdate(pattern, root_index);
+                return true;
+            },
+            .pattern_extraction => |extraction| {
+                const root_index = try self.stagePatternExtractionRoot(pattern, extraction);
+                try self.stageKnownUpdate(pattern, root_index);
+                return true;
+            },
+            .selected_root => true,
+            .unavailable_runtime => false,
+        };
+    }
+
+    fn stageExprDependencies(self: *HoistSelectionTransaction, expr: CIR.Expr.Idx) Allocator.Error!void {
+        var context = HoistedDependencyContext{};
+        defer context.deinit(self.checker.gpa);
+        try self.stageExprDependenciesInternal(expr, &context);
+    }
+
+    fn stageExprDependenciesInternal(
+        self: *HoistSelectionTransaction,
+        expr: CIR.Expr.Idx,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        switch (self.checker.cir.store.getExpr(expr)) {
+            .e_lookup_local => |lookup| {
+                if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return;
+                if (self.checker.hoist_selected_bindings.contains(lookup.pattern_idx)) return;
+                if (self.staged_bindings.contains(lookup.pattern_idx)) return;
+                if (context.contains(lookup.pattern_idx)) return;
+                _ = try self.stageBindingRoot(lookup.pattern_idx);
+            },
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_num,
+            .e_num_from_numeral,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_crash,
+            .e_closure,
+            .e_lambda,
+            .e_hosted_lambda,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_for,
+            .e_return,
+            .e_run_low_level,
+            => {},
+            .e_str => |str| try self.stageExprSpanDependencies(str.span, context),
+            .e_list => |list| try self.stageExprSpanDependencies(list.elems, context),
+            .e_tuple => |tuple| try self.stageExprSpanDependencies(tuple.elems, context),
+            .e_block => |block| try self.stageBlockDependencies(block.stmts, block.final_expr, context),
+            .e_match => |match| try self.stageMatchDependencies(match, context),
+            .e_if => |if_expr| try self.stageIfDependencies(if_expr.branches, if_expr.final_else, context),
+            .e_call => |call| {
+                try self.stageExprDependenciesInternal(call.func, context);
+                try self.stageExprSpanDependencies(call.args, context);
+            },
+            .e_method_call => |call| {
+                try self.stageExprDependenciesInternal(call.receiver, context);
+                try self.stageExprSpanDependencies(call.args, context);
+            },
+            .e_dispatch_call => |call| {
+                try self.stageExprDependenciesInternal(call.receiver, context);
+                try self.stageExprSpanDependencies(call.args, context);
+            },
+            .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context),
+            .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context),
+            .e_nominal => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
+            .e_nominal_external => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
+            .e_binop => |binop| {
+                try self.stageExprDependenciesInternal(binop.lhs, context);
+                try self.stageExprDependenciesInternal(binop.rhs, context);
+            },
+            .e_unary_minus => |unary| try self.stageExprDependenciesInternal(unary.expr, context),
+            .e_unary_not => |unary| try self.stageExprDependenciesInternal(unary.expr, context),
+            .e_field_access => |field| try self.stageExprDependenciesInternal(field.receiver, context),
+            .e_interpolation => |interpolation| {
+                try self.stageExprDependenciesInternal(interpolation.first, context);
+                try self.stageExprSpanDependencies(interpolation.parts, context);
+            },
+            .e_structural_eq => |eq| {
+                try self.stageExprDependenciesInternal(eq.lhs, context);
+                try self.stageExprDependenciesInternal(eq.rhs, context);
+            },
+            .e_method_eq => |eq| {
+                try self.stageExprDependenciesInternal(eq.lhs, context);
+                try self.stageExprDependenciesInternal(eq.rhs, context);
+            },
+            .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context),
+            .e_type_dispatch_call => |call| try self.stageExprSpanDependencies(call.args, context),
+            .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context),
+        }
+    }
+
+    fn stageExprSpanDependencies(
+        self: *HoistSelectionTransaction,
+        span: CIR.Expr.Span,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        for (self.checker.cir.store.sliceExpr(span)) |child| {
+            try self.stageExprDependenciesInternal(child, context);
+        }
+    }
+
+    fn stageBlockDependencies(
+        self: *HoistSelectionTransaction,
+        statements: CIR.Statement.Span,
+        final_expr: CIR.Expr.Idx,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        for (self.checker.cir.store.sliceStatements(statements)) |statement| {
+            switch (self.checker.cir.store.getStatement(statement)) {
+                .s_decl => |decl| try self.stageExprDependenciesInternal(decl.expr, context),
+                .s_expr => |expr_stmt| try self.stageExprDependenciesInternal(expr_stmt.expr, context),
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_runtime_error,
+                => {},
+            }
+        }
+        try self.stageExprDependenciesInternal(final_expr, context);
+    }
+
+    fn stageMatchDependencies(
+        self: *HoistSelectionTransaction,
+        match: CIR.Expr.Match,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        try self.stageExprDependenciesInternal(match.cond, context);
+        for (self.checker.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
+            const branch = self.checker.cir.store.getMatchBranch(branch_idx);
+            const mark = context.mark();
+            defer context.pop(mark);
+            for (self.checker.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                const branch_pattern = self.checker.cir.store.getMatchBranchPattern(branch_pattern_idx);
+                try self.checker.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context);
+            }
+            if (branch.guard) |guard| {
+                try self.stageExprDependenciesInternal(guard, context);
+            }
+            try self.stageExprDependenciesInternal(branch.value, context);
+        }
+    }
+
+    fn stageIfDependencies(
+        self: *HoistSelectionTransaction,
+        branches: CIR.Expr.IfBranch.Span,
+        final_else: CIR.Expr.Idx,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        for (self.checker.cir.store.sliceIfBranches(branches)) |branch_idx| {
+            const branch = self.checker.cir.store.getIfBranch(branch_idx);
+            try self.stageExprDependenciesInternal(branch.cond, context);
+            try self.stageExprDependenciesInternal(branch.body, context);
+        }
+        try self.stageExprDependenciesInternal(final_else, context);
+    }
+
+    fn stageRecordDependencies(
+        self: *HoistSelectionTransaction,
+        fields: CIR.RecordField.Span,
+        ext: ?CIR.Expr.Idx,
+        context: *HoistedDependencyContext,
+    ) Allocator.Error!void {
+        if (ext) |ext_expr| {
+            try self.stageExprDependenciesInternal(ext_expr, context);
+        }
+        for (self.checker.cir.store.sliceRecordFields(fields)) |field_idx| {
+            const field = self.checker.cir.store.getRecordField(field_idx);
+            try self.stageExprDependenciesInternal(field.value, context);
+        }
+    }
+
+    fn commit(self: *HoistSelectionTransaction) Allocator.Error!void {
+        std.debug.assert(!self.committed);
+
+        try self.checker.selected_hoisted_roots.ensureUnusedCapacity(self.checker.gpa, self.staged_roots.items.len);
+        try self.checker.hoist_selected_exprs.ensureUnusedCapacity(self.checker.gpa, self.staged_exprs.count());
+        try self.checker.hoist_selected_bindings.ensureUnusedCapacity(self.checker.gpa, self.staged_bindings.count());
+
+        const selected_start = self.checker.selected_hoisted_roots.items.len;
+        for (self.staged_roots.items, 0..) |root, offset| {
+            const root_index: u32 = @intCast(selected_start + offset);
+            self.checker.selected_hoisted_roots.appendAssumeCapacity(root);
+            switch (root.body) {
+                .expr => self.checker.hoist_selected_exprs.putAssumeCapacityNoClobber(root.expr, root_index),
+                .pattern_extraction => {},
+            }
+        }
+
+        var binding_iter = self.staged_bindings.iterator();
+        while (binding_iter.next()) |entry| {
+            const pattern = entry.key_ptr.*;
+            const root_index = entry.value_ptr.*;
+            const root = &self.checker.selected_hoisted_roots.items[root_index];
+            if (root.pattern) |existing| {
+                std.debug.assert(existing == pattern);
+            } else {
+                root.pattern = pattern;
+            }
+            self.checker.hoist_selected_bindings.putAssumeCapacityNoClobber(pattern, root_index);
+        }
+
+        for (self.known_updates.items) |update| {
+            const value = self.checker.hoist_known_values.getPtr(update.pattern) orelse {
+                std.debug.panic("check invariant violated: hoist-known value disappeared before selected-root commit", .{});
+            };
+            self.checker.deinitHoistKnownValue(value.*);
+            value.* = .{ .selected_root = update.root_index };
+        }
+
+        self.staged_roots.clearRetainingCapacity();
+        self.committed = true;
+        self.checker.debugAssertHoistSelectionConsistent();
+    }
 };
 
 const HoistFrameGuard = struct {
@@ -782,6 +1183,7 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator
         .expr = expr,
         .suppressed = self.hoist_suppressed_depth != 0,
         .binding_rhs = binding_rhs,
+        .binding_pattern = if (binding_rhs) self.checking_binding_rhs_pattern else null,
         .candidate_start = self.hoist_expr_candidates.items.len,
         .deferred_dependency_start = self.hoist_deferred_binding_dependencies.items.len,
     });
@@ -818,28 +1220,46 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     if (does_fx) frame.has_observable_effect = true;
 
     const semantically_eligible = frame.eligible();
-    const can_be_root = semantically_eligible and !frame.has_contextual_dependency and self.exprCanBeHoistedRoot(expr);
+    const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
+    const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
     const should_flush_child_candidates = (!semantically_eligible or (can_be_root and !frame.binding_rhs)) and
         !frame.suppressed and !can_be_root;
     const should_bubble_to_parent = frame_index != 0 and
         can_be_root and !frame.binding_rhs and !frame.suppressed;
 
+    var transaction = HoistSelectionTransaction.init(self);
+    defer transaction.deinit();
+
     if (should_flush_child_candidates) {
-        const candidate_count = self.hoist_expr_candidates.items.len - frame.candidate_start;
-        try self.selected_hoisted_roots.ensureUnusedCapacity(self.gpa, candidate_count);
-        try self.hoist_selected_exprs.ensureUnusedCapacity(self.gpa, @intCast(candidate_count));
+        for (self.hoist_expr_candidates.items[frame.candidate_start..]) |candidate| {
+            _ = try transaction.stageExprRoot(candidate, null);
+        }
+    }
+    if (frame.binding_rhs) {
+        const binding_pattern_can_be_selected = if (frame.binding_pattern) |pattern|
+            self.patternCanOwnHoistedBindingRoot(pattern)
+        else
+            true;
+        const binding_rhs_can_be_selected = top_level_equivalent and
+            binding_pattern_can_be_selected and
+            self.exprCanBeHoistedBindingRoot(expr) and
+            !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
+            !self.varIsFunctionType(ModuleEnv.varFrom(expr));
+        if ((!semantically_eligible or !binding_rhs_can_be_selected) and !frame.suppressed) {
+            for (self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]) |dependency| {
+                _ = try transaction.stageBindingRoot(dependency);
+            }
+        }
     }
     if (should_bubble_to_parent) {
         try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
+    try transaction.commit();
 
     if ((!semantically_eligible or (can_be_root and !frame.binding_rhs)) and !frame.suppressed) {
         if (can_be_root) {
             self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
         } else {
-            for (self.hoist_expr_candidates.items[frame.candidate_start..]) |candidate| {
-                _ = try self.ensureHoistedExprRoot(candidate, null);
-            }
             self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
         }
     } else {
@@ -847,21 +1267,13 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
 
     if (frame.binding_rhs) {
-        const binding_rhs_can_be_selected = semantically_eligible and
-            self.exprCanBeHoistedBindingRoot(expr) and
-            !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
-            !self.varIsFunctionType(ModuleEnv.varFrom(expr));
-        if ((!semantically_eligible or !binding_rhs_can_be_selected) and !frame.suppressed) {
-            for (self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]) |dependency| {
-                _ = try self.ensureHoistedBindingRoot(dependency);
-            }
-        }
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
     }
 
     const completed = CompletedHoistResult{
         .expr = expr,
         .eligible = semantically_eligible,
+        .top_level_equivalent = top_level_equivalent,
     };
     self.last_hoist_result = completed;
 
@@ -890,7 +1302,8 @@ fn markCurrentHoistObservableEffect(self: *Self) void {
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
-    if (completed.expr != expr or !completed.eligible) return;
+    if (completed.expr != expr or !completed.top_level_equivalent) return;
+    if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
@@ -920,7 +1333,7 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
 
 fn recordHoistPatternProvenance(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
-    if (completed.expr != expr or !completed.eligible) return;
+    if (completed.expr != expr or !completed.top_level_equivalent) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
@@ -945,6 +1358,30 @@ fn recordHoistPatternProvenance(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR
         .str_literal,
         => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern),
     }
+}
+
+fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign,
+        .as,
+        => true,
+        .tuple,
+        .record_destructure,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .list,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => false,
+    };
 }
 
 fn recordHoistSingleBranchMatchPatternProvenance(
@@ -1246,29 +1683,12 @@ fn popHoistKnownValueScope(self: *Self, start: usize) void {
 
 fn ensureHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
     if (self.hoist_selected_bindings.contains(pattern)) return true;
-    const known = self.hoist_known_values.get(pattern) orelse return false;
-    return switch (known) {
-        .binding_rhs => |expr| {
-            const root_index = try self.ensureHoistedExprRoot(expr, pattern);
-            const value = self.hoist_known_values.getPtr(pattern) orelse {
-                std.debug.panic("check invariant violated: hoist-known binding disappeared during root selection", .{});
-            };
-            self.deinitHoistKnownValue(value.*);
-            value.* = .{ .selected_root = root_index };
-            return true;
-        },
-        .pattern_extraction => |extraction| {
-            const root_index = try self.ensureHoistedPatternExtractionRoot(pattern, extraction);
-            const value = self.hoist_known_values.getPtr(pattern) orelse {
-                std.debug.panic("check invariant violated: hoist-known pattern extraction disappeared during root selection", .{});
-            };
-            self.deinitHoistKnownValue(value.*);
-            value.* = .{ .selected_root = root_index };
-            return true;
-        },
-        .selected_root => true,
-        .unavailable_runtime => false,
-    };
+    var transaction = HoistSelectionTransaction.init(self);
+    defer transaction.deinit();
+    const selected = try transaction.stageBindingRoot(pattern);
+    if (!selected) return false;
+    try transaction.commit();
+    return true;
 }
 
 fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
@@ -1297,259 +1717,18 @@ fn ensureHoistedPatternExtractionRoot(
     extraction: HoistPatternExtraction,
 ) Allocator.Error!u32 {
     if (self.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
-
-    try self.ensureHoistedExprDependencies(extraction.base_expr);
-    try self.selected_hoisted_roots.ensureUnusedCapacity(self.gpa, 1);
-    try self.hoist_selected_bindings.ensureUnusedCapacity(self.gpa, 1);
-
-    const root_index: u32 = @intCast(self.selected_hoisted_roots.items.len);
-    self.selected_hoisted_roots.appendAssumeCapacity(.{
-        .expr = extraction.base_expr,
-        .pattern = pattern,
-        .body = .{ .pattern_extraction = extraction },
-    });
-    self.hoist_selected_bindings.putAssumeCapacityNoClobber(pattern, root_index);
+    var transaction = HoistSelectionTransaction.init(self);
+    defer transaction.deinit();
+    const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction);
+    try transaction.commit();
     return root_index;
 }
 
 fn ensureHoistedExprRoot(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx) Allocator.Error!u32 {
-    try self.ensureHoistedExprDependencies(expr);
-    try self.ensureHoistedExprRootCapacity(expr, pattern);
-    return self.ensureHoistedExprRootAssumeCapacity(expr, pattern);
-}
-
-fn ensureHoistedExprDependencies(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!void {
-    var context = HoistedDependencyContext{};
-    defer context.deinit(self.gpa);
-    try self.ensureHoistedExprDependenciesInternal(expr, &context);
-}
-
-fn ensureHoistedExprDependenciesInternal(
-    self: *Self,
-    expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| {
-            if (self.patternIsTopLevel(lookup.pattern_idx)) return;
-            if (self.hoist_selected_bindings.contains(lookup.pattern_idx)) return;
-            if (context.contains(lookup.pattern_idx)) return;
-            _ = try self.ensureHoistedBindingRoot(lookup.pattern_idx);
-        },
-        .e_lookup_external,
-        .e_lookup_required,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_return,
-        .e_run_low_level,
-        => {},
-        .e_str => |str| try self.ensureHoistedExprSpanDependencies(str.span, context),
-        .e_list => |list| try self.ensureHoistedExprSpanDependencies(list.elems, context),
-        .e_tuple => |tuple| try self.ensureHoistedExprSpanDependencies(tuple.elems, context),
-        .e_block => |block| try self.ensureHoistedBlockDependencies(block.stmts, block.final_expr, context),
-        .e_match => |match| try self.ensureHoistedMatchDependencies(match, context),
-        .e_if => |if_expr| try self.ensureHoistedIfDependencies(if_expr.branches, if_expr.final_else, context),
-        .e_call => |call| {
-            try self.ensureHoistedExprDependenciesInternal(call.func, context);
-            try self.ensureHoistedExprSpanDependencies(call.args, context);
-        },
-        .e_method_call => |call| {
-            try self.ensureHoistedExprDependenciesInternal(call.receiver, context);
-            try self.ensureHoistedExprSpanDependencies(call.args, context);
-        },
-        .e_dispatch_call => |call| {
-            try self.ensureHoistedExprDependenciesInternal(call.receiver, context);
-            try self.ensureHoistedExprSpanDependencies(call.args, context);
-        },
-        .e_record => |record| try self.ensureHoistedRecordDependencies(record.fields, record.ext, context),
-        .e_tag => |tag| try self.ensureHoistedExprSpanDependencies(tag.args, context),
-        .e_nominal => |nominal| try self.ensureHoistedExprDependenciesInternal(nominal.backing_expr, context),
-        .e_nominal_external => |nominal| try self.ensureHoistedExprDependenciesInternal(nominal.backing_expr, context),
-        .e_binop => |binop| {
-            try self.ensureHoistedExprDependenciesInternal(binop.lhs, context);
-            try self.ensureHoistedExprDependenciesInternal(binop.rhs, context);
-        },
-        .e_unary_minus => |unary| try self.ensureHoistedExprDependenciesInternal(unary.expr, context),
-        .e_unary_not => |unary| try self.ensureHoistedExprDependenciesInternal(unary.expr, context),
-        .e_field_access => |field| try self.ensureHoistedExprDependenciesInternal(field.receiver, context),
-        .e_interpolation => |interpolation| {
-            try self.ensureHoistedExprDependenciesInternal(interpolation.first, context);
-            try self.ensureHoistedExprSpanDependencies(interpolation.parts, context);
-        },
-        .e_structural_eq => |eq| {
-            try self.ensureHoistedExprDependenciesInternal(eq.lhs, context);
-            try self.ensureHoistedExprDependenciesInternal(eq.rhs, context);
-        },
-        .e_method_eq => |eq| {
-            try self.ensureHoistedExprDependenciesInternal(eq.lhs, context);
-            try self.ensureHoistedExprDependenciesInternal(eq.rhs, context);
-        },
-        .e_type_method_call => |call| try self.ensureHoistedExprSpanDependencies(call.args, context),
-        .e_type_dispatch_call => |call| try self.ensureHoistedExprSpanDependencies(call.args, context),
-        .e_tuple_access => |access| try self.ensureHoistedExprDependenciesInternal(access.tuple, context),
-    }
-}
-
-fn ensureHoistedExprSpanDependencies(
-    self: *Self,
-    span: CIR.Expr.Span,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    for (self.cir.store.sliceExpr(span)) |child| {
-        try self.ensureHoistedExprDependenciesInternal(child, context);
-    }
-}
-
-fn ensureHoistedBlockDependencies(
-    self: *Self,
-    statements: CIR.Statement.Span,
-    final_expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    for (self.cir.store.sliceStatements(statements)) |statement| {
-        switch (self.cir.store.getStatement(statement)) {
-            .s_decl => |decl| try self.ensureHoistedExprDependenciesInternal(decl.expr, context),
-            .s_expr => |expr_stmt| try self.ensureHoistedExprDependenciesInternal(expr_stmt.expr, context),
-            .s_import,
-            .s_alias_decl,
-            .s_nominal_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_runtime_error,
-            => {},
-        }
-    }
-    try self.ensureHoistedExprDependenciesInternal(final_expr, context);
-}
-
-fn ensureHoistedMatchDependencies(
-    self: *Self,
-    match: CIR.Expr.Match,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    try self.ensureHoistedExprDependenciesInternal(match.cond, context);
-    for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-        const branch = self.cir.store.getMatchBranch(branch_idx);
-        const mark = context.mark();
-        defer context.pop(mark);
-        for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-            const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-            try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context);
-        }
-        if (branch.guard) |guard| {
-            try self.ensureHoistedExprDependenciesInternal(guard, context);
-        }
-        try self.ensureHoistedExprDependenciesInternal(branch.value, context);
-    }
-}
-
-fn ensureHoistedIfDependencies(
-    self: *Self,
-    branches: CIR.Expr.IfBranch.Span,
-    final_else: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    for (self.cir.store.sliceIfBranches(branches)) |branch_idx| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-        try self.ensureHoistedExprDependenciesInternal(branch.cond, context);
-        try self.ensureHoistedExprDependenciesInternal(branch.body, context);
-    }
-    try self.ensureHoistedExprDependenciesInternal(final_else, context);
-}
-
-fn ensureHoistedRecordDependencies(
-    self: *Self,
-    fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!void {
-    if (ext) |ext_expr| {
-        try self.ensureHoistedExprDependenciesInternal(ext_expr, context);
-    }
-    for (self.cir.store.sliceRecordFields(fields)) |field_idx| {
-        const field = self.cir.store.getRecordField(field_idx);
-        try self.ensureHoistedExprDependenciesInternal(field.value, context);
-    }
-}
-
-fn ensureHoistedExprRootCapacity(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx) Allocator.Error!void {
-    if (self.hoist_selected_exprs.get(expr)) |root_index| {
-        if (pattern) |pattern_idx| {
-            if (!self.hoist_selected_bindings.contains(pattern_idx)) {
-                try self.hoist_selected_bindings.ensureUnusedCapacity(self.gpa, 1);
-            }
-        }
-        _ = root_index;
-        return;
-    }
-
-    try self.selected_hoisted_roots.ensureUnusedCapacity(self.gpa, 1);
-    try self.hoist_selected_exprs.ensureUnusedCapacity(self.gpa, 1);
-    if (pattern) |pattern_idx| {
-        if (!self.hoist_selected_bindings.contains(pattern_idx)) {
-            try self.hoist_selected_bindings.ensureUnusedCapacity(self.gpa, 1);
-        }
-    }
-}
-
-fn ensureHoistedExprRootAssumeCapacity(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx) u32 {
-    if (self.hoist_selected_exprs.get(expr)) |root_index| {
-        if (pattern) |pattern_idx| {
-            const selected = &self.selected_hoisted_roots.items[root_index];
-            if (selected.pattern) |existing| {
-                std.debug.assert(existing == pattern_idx);
-            } else {
-                selected.pattern = pattern_idx;
-            }
-            self.hoist_selected_bindings.putAssumeCapacity(pattern_idx, root_index);
-        }
-        return root_index;
-    }
-
-    const root_index: u32 = @intCast(self.selected_hoisted_roots.items.len);
-    self.selected_hoisted_roots.appendAssumeCapacity(.{
-        .expr = expr,
-        .pattern = pattern,
-    });
-    self.hoist_selected_exprs.putAssumeCapacityNoClobber(expr, root_index);
-    if (pattern) |pattern_idx| {
-        self.hoist_selected_bindings.putAssumeCapacity(pattern_idx, root_index);
-    }
+    var transaction = HoistSelectionTransaction.init(self);
+    defer transaction.deinit();
+    const root_index = try transaction.stageExprRoot(expr, pattern);
+    try transaction.commit();
     return root_index;
 }
 
@@ -1748,6 +1927,66 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
     try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
     try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), state.checker.selected_hoisted_roots.items[0].pattern);
+}
+
+test "hoist frame finish is atomic when child flush precedes deferred dependency failure" {
+    const parent_expr: CIR.Expr.Idx = @enumFromInt(1);
+    const dependency_pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var saw_late_oom = false;
+    for (0..8) |fail_index| {
+        var state = HoistSelectionTestState.init(std.testing.allocator);
+        defer state.deinit();
+        const child_expr = try state.borrowCheckedContext(&test_env.checker);
+
+        state.checker.checking_binding_rhs_pattern = null;
+        var guard = try state.checker.beginHoistFrame(parent_expr, true);
+        defer guard.deinit();
+        try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+        try state.checker.hoist_deferred_binding_dependencies.append(std.testing.allocator, dependency_pattern);
+        try state.checker.recordHoistKnownValue(dependency_pattern, .{ .binding_rhs = child_expr });
+        state.checker.markCurrentHoistRuntimeDependency();
+
+        var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        state.checker.gpa = failing_allocator.allocator();
+
+        guard.finish(false) catch |err| switch (err) {
+            error.OutOfMemory => {
+                if (fail_index > 0) saw_late_oom = true;
+                try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
+                try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_expr_candidates.items.len);
+                try std.testing.expectEqual(child_expr, state.checker.hoist_expr_candidates.items[0]);
+                try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_deferred_binding_dependencies.items.len);
+                try std.testing.expectEqual(dependency_pattern, state.checker.hoist_deferred_binding_dependencies.items[0]);
+                try std.testing.expectEqual(@as(usize, 0), state.checker.selected_hoisted_roots.items.len);
+                try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_exprs.count());
+                try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_bindings.count());
+                const known = state.checker.hoist_known_values.get(dependency_pattern) orelse return error.ExpectedKnownHoistDependency;
+                switch (known) {
+                    .binding_rhs => |expr| try std.testing.expectEqual(child_expr, expr),
+                    .pattern_extraction,
+                    .selected_root,
+                    .unavailable_runtime,
+                    => return error.KnownHoistDependencyMutatedAfterFailedFinish,
+                }
+                continue;
+            },
+        };
+
+        try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_frames.items.len);
+        try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_expr_candidates.items.len);
+        try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_deferred_binding_dependencies.items.len);
+        try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+        try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
+        try std.testing.expectEqual(dependency_pattern, state.checker.selected_hoisted_roots.items[0].pattern.?);
+    }
+    try std.testing.expect(saw_late_oom);
 }
 
 test "hoisted binding root selection is atomic when binding map allocation fails" {
@@ -1957,11 +2196,12 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => true,
-        .e_dispatch_call => |call| dispatchSurfaceCanBeHoistedBindingRoot(call.surface_origin),
         .e_call,
         .e_method_call,
         .e_type_method_call,
         .e_type_dispatch_call,
+        .e_dispatch_call,
+        => true,
         .e_for,
         .e_run_low_level,
         .e_lookup_required,
@@ -2015,24 +2255,12 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     };
 }
 
-fn dispatchSurfaceCanBeHoistedBindingRoot(surface_origin: CIR.Expr.SurfaceOrigin) bool {
-    return switch (surface_origin) {
-        .method_call => false,
-        .binop,
-        .unary_minus,
-        .unary_not,
-        => true,
-    };
-}
-
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
     for (self.cir.store.sliceExpr(span)) |segment| {
         if (self.cir.store.getExpr(segment) != .e_str_segment) return true;
     }
     return false;
 }
-
-/// Assert that type vars and regions in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
         const region_nodes = self.regions.len();
@@ -3804,31 +4032,18 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
     defer self.gpa.free(keep_roots);
+    @memset(keep_roots, false);
+
+    var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
+    defer keep_oracle.deinit(self.gpa);
 
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
-        const type_var = if (root.pattern) |pattern|
-            ModuleEnv.varFrom(pattern)
-        else
-            ModuleEnv.varFrom(root.expr);
-        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) {
-            keep_roots[i] = false;
-            continue;
-        }
-        if (self.varIsFunctionType(type_var)) {
-            keep_roots[i] = false;
-            continue;
-        }
-        if (!try self.varIsConcreteHoistedConstType(type_var)) {
-            keep_roots[i] = false;
-            continue;
-        }
-        if (!try self.hoistedRootDependenciesAreKept(root.expr)) {
-            keep_roots[i] = false;
-            continue;
-        }
+        keep_oracle.current_root_index = i;
+        if (!try self.hoistedRootIsIntrinsicallyKept(root)) continue;
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) continue;
 
         keep_roots[i] = true;
         kept_count += 1;
@@ -3838,7 +4053,6 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         }
         if (root.pattern != null) kept_pattern_count += 1;
     }
-
     try self.hoist_selected_exprs.ensureTotalCapacity(self.gpa, kept_expr_count);
     try self.hoist_selected_bindings.ensureTotalCapacity(self.gpa, kept_pattern_count);
 
@@ -3870,6 +4084,39 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
+    try self.debugVerifyKeptHoistedRootDependencies();
+}
+
+fn hoistedRootIsIntrinsicallyKept(
+    self: *Self,
+    root: hoist_roots.SelectedHoistedRoot,
+) Allocator.Error!bool {
+    const type_var = if (root.pattern) |pattern|
+        ModuleEnv.varFrom(pattern)
+    else
+        ModuleEnv.varFrom(root.expr);
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
+    if (self.varIsFunctionType(type_var)) return false;
+    return try self.varIsConcreteHoistedConstType(type_var);
+}
+
+fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
+    if (builtin.mode != .Debug) return;
+
+    const root_count = self.selected_hoisted_roots.items.len;
+    const keep_roots = try self.gpa.alloc(bool, root_count);
+    defer self.gpa.free(keep_roots);
+    @memset(keep_roots, true);
+
+    var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
+    defer keep_oracle.deinit(self.gpa);
+
+    for (self.selected_hoisted_roots.items, 0..) |root, i| {
+        keep_oracle.current_root_index = i;
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
+            hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
+        }
+    }
 }
 
 fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
@@ -3980,23 +4227,85 @@ const HoistedDependencyContext = struct {
     }
 };
 
-fn hoistedRootDependenciesAreKept(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!bool {
+fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("check invariant violated: " ++ message, .{});
+    }
+    unreachable;
+}
+
+const HoistedRootKeepOracle = struct {
+    pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
+    keep_roots: []const bool,
+    current_root_index: usize = 0,
+
+    fn init(
+        allocator: Allocator,
+        roots: []const hoist_roots.SelectedHoistedRoot,
+        keep_roots: []const bool,
+    ) Allocator.Error!HoistedRootKeepOracle {
+        var oracle = HoistedRootKeepOracle{ .keep_roots = keep_roots };
+        errdefer oracle.deinit(allocator);
+        try oracle.pattern_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
+        try oracle.expr_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
+
+        for (roots, 0..) |root, i| {
+            const root_index: u32 = @intCast(i);
+            switch (root.body) {
+                .expr => {
+                    const entry = oracle.expr_roots.getOrPutAssumeCapacity(root.expr);
+                    if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted expression root");
+                    entry.value_ptr.* = root_index;
+                },
+                .pattern_extraction => {},
+            }
+            if (root.pattern) |pattern| {
+                const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
+                if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted binding root");
+                entry.value_ptr.* = root_index;
+            }
+        }
+
+        return oracle;
+    }
+
+    fn deinit(self: *HoistedRootKeepOracle, allocator: Allocator) void {
+        self.pattern_roots.deinit(allocator);
+        self.expr_roots.deinit(allocator);
+    }
+
+    fn selectedPatternIsKept(self: *const HoistedRootKeepOracle, pattern: CIR.Pattern.Idx) ?bool {
+        const root_index = self.pattern_roots.get(pattern) orelse return null;
+        if (root_index >= self.current_root_index) {
+            hoistSelectionInvariant("selected hoisted root depended on a later selected root");
+        }
+        return self.keep_roots[root_index];
+    }
+};
+
+fn hoistedRootDependenciesAreKept(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    keep_oracle: *const HoistedRootKeepOracle,
+) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
-    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context);
+    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
 }
 
 fn hoistedRootDependenciesAreKeptInternal(
     self: *Self,
     expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
 
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
-            self.hoist_selected_bindings.contains(lookup.pattern_idx) or
-            context.contains(lookup.pattern_idx),
+            context.contains(lookup.pattern_idx) or
+            (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
         .e_lookup_external,
         .e_str_segment,
         .e_bytes_literal,
@@ -4028,44 +4337,44 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_return,
         .e_run_low_level,
         => false,
-        .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context),
-        .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context),
-        .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context),
-        .e_block => |block| self.hoistedRootBlockDependenciesAreKept(block.stmts, block.final_expr, context),
-        .e_match => |match| self.hoistedRootMatchDependenciesAreKept(match, context),
-        .e_if => |if_expr| self.hoistedRootIfDependenciesAreKept(if_expr.branches, if_expr.final_else, context),
-        .e_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.func, context)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context),
-        .e_method_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context),
+        .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
+        .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context, keep_oracle),
+        .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context, keep_oracle),
+        .e_block => |block| self.hoistedRootBlockDependenciesAreKept(block.stmts, block.final_expr, context, keep_oracle),
+        .e_match => |match| self.hoistedRootMatchDependenciesAreKept(match, context, keep_oracle),
+        .e_if => |if_expr| self.hoistedRootIfDependenciesAreKept(if_expr.branches, if_expr.final_else, context, keep_oracle),
+        .e_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.func, context, keep_oracle)) and
+            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
+        .e_method_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
+            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
         .e_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
-            (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context),
-        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext, context),
-        .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args, context),
-        .e_nominal => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context),
-        .e_nominal_external => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context),
-        .e_binop => |binop| (try self.hoistedRootDependenciesAreKeptInternal(binop.lhs, context)) and
-            try self.hoistedRootDependenciesAreKeptInternal(binop.rhs, context),
-        .e_unary_minus => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context),
-        .e_unary_not => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context),
-        .e_field_access => |field| self.hoistedRootDependenciesAreKeptInternal(field.receiver, context),
+            (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
+            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
+        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext, context, keep_oracle),
+        .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args, context, keep_oracle),
+        .e_nominal => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
+        .e_nominal_external => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
+        .e_binop => |binop| (try self.hoistedRootDependenciesAreKeptInternal(binop.lhs, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(binop.rhs, context, keep_oracle),
+        .e_unary_minus => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context, keep_oracle),
+        .e_unary_not => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context, keep_oracle),
+        .e_field_access => |field| self.hoistedRootDependenciesAreKeptInternal(field.receiver, context, keep_oracle),
         .e_interpolation => |interpolation| blk: {
             if (interpolation.constraint_fn_var) |fn_var| {
                 if (self.varIsEffectfulFunction(fn_var)) break :blk false;
             }
-            break :blk (try self.hoistedRootDependenciesAreKeptInternal(interpolation.first, context)) and
-                try self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts, context);
+            break :blk (try self.hoistedRootDependenciesAreKeptInternal(interpolation.first, context, keep_oracle)) and
+                try self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts, context, keep_oracle);
         },
-        .e_structural_eq => |eq| (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context),
+        .e_structural_eq => |eq| (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
         .e_method_eq => |eq| !self.varIsEffectfulFunction(eq.constraint_fn_var) and
-            (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context),
-        .e_type_method_call => |call| self.hoistedRootExprSpanDependenciesAreKept(call.args, context),
+            (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
+        .e_type_method_call => |call| self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
         .e_type_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context),
-        .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context),
+            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
+        .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context, keep_oracle),
     };
 }
 
@@ -4124,9 +4433,10 @@ fn hoistedRootExprSpanDependenciesAreKept(
     self: *Self,
     span: CIR.Expr.Span,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     for (self.cir.store.sliceExpr(span)) |child| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(child, context)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(child, context, keep_oracle)) return false;
     }
     return true;
 }
@@ -4136,21 +4446,23 @@ fn hoistedRootBlockDependenciesAreKept(
     statements: CIR.Statement.Span,
     final_expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     for (self.cir.store.sliceStatements(statements)) |statement| {
-        if (!try self.hoistedRootStatementDependenciesAreKept(statement, context)) return false;
+        if (!try self.hoistedRootStatementDependenciesAreKept(statement, context, keep_oracle)) return false;
     }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_expr, context);
+    return try self.hoistedRootDependenciesAreKeptInternal(final_expr, context, keep_oracle);
 }
 
 fn hoistedRootStatementDependenciesAreKept(
     self: *Self,
     statement: CIR.Statement.Idx,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     return switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| self.hoistedRootDependenciesAreKeptInternal(decl.expr, context),
-        .s_expr => |expr| self.hoistedRootDependenciesAreKeptInternal(expr.expr, context),
+        .s_decl => |decl| self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle),
+        .s_expr => |expr| self.hoistedRootDependenciesAreKeptInternal(expr.expr, context, keep_oracle),
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
@@ -4178,8 +4490,9 @@ fn hoistedRootMatchDependenciesAreKept(
     self: *Self,
     match: CIR.Expr.Match,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
-    if (!try self.hoistedRootDependenciesAreKeptInternal(match.cond, context)) return false;
+    if (!try self.hoistedRootDependenciesAreKeptInternal(match.cond, context, keep_oracle)) return false;
     for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
         const branch = self.cir.store.getMatchBranch(branch_idx);
         const mark = context.mark();
@@ -4189,9 +4502,9 @@ fn hoistedRootMatchDependenciesAreKept(
             try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context);
         }
         if (branch.guard) |guard| {
-            if (!try self.hoistedRootDependenciesAreKeptInternal(guard, context)) return false;
+            if (!try self.hoistedRootDependenciesAreKeptInternal(guard, context, keep_oracle)) return false;
         }
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.value, context)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.value, context, keep_oracle)) return false;
     }
     return true;
 }
@@ -4267,13 +4580,14 @@ fn hoistedRootIfDependenciesAreKept(
     branches: CIR.Expr.IfBranch.Span,
     final_else: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     for (self.cir.store.sliceIfBranches(branches)) |branch_idx| {
         const branch = self.cir.store.getIfBranch(branch_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.cond, context)) return false;
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.body, context)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.cond, context, keep_oracle)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.body, context, keep_oracle)) return false;
     }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_else, context);
+    return try self.hoistedRootDependenciesAreKeptInternal(final_else, context, keep_oracle);
 }
 
 fn hoistedRootRecordDependenciesAreKept(
@@ -4281,13 +4595,14 @@ fn hoistedRootRecordDependenciesAreKept(
     fields: CIR.RecordField.Span,
     ext: ?CIR.Expr.Idx,
     context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     if (ext) |ext_expr| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(ext_expr, context)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(ext_expr, context, keep_oracle)) return false;
     }
     for (self.cir.store.sliceRecordFields(fields)) |field_idx| {
         const field = self.cir.store.getRecordField(field_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(field.value, context)) return false;
+        if (!try self.hoistedRootDependenciesAreKeptInternal(field.value, context, keep_oracle)) return false;
     }
     return true;
 }
@@ -5660,6 +5975,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         if (suppress_nested_hoists) self.hoist_suppressed_depth -= 1;
     }
     self.checking_binding_rhs = true;
+    self.checking_binding_rhs_pattern = def.pattern;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
@@ -7694,7 +8010,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Consume the binding-RHS flag: it applies only to this immediate checkExpr
     // call and must not propagate into subexpressions.
     const is_binding_rhs = self.checking_binding_rhs;
+    const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
+    self.checking_binding_rhs_pattern = null;
 
     // Decide whether this binding generalizes — see `shouldGeneralize` for the
     // three qualifying paths and why each is sound.
@@ -7760,7 +8078,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     };
 
     var does_fx = false; // Does this expression potentially perform any side effects?
+    self.checking_binding_rhs_pattern = binding_rhs_pattern;
+    errdefer self.checking_binding_rhs_pattern = null;
     var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs);
+    self.checking_binding_rhs_pattern = null;
     defer hoist_frame.deinit();
 
     switch (expr) {
@@ -10275,6 +10596,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
 
                 self.checking_binding_rhs = true;
+                self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {

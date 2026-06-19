@@ -4925,6 +4925,11 @@ pub const CheckedMatchBranch = struct {
     guard: ?CheckedExprId,
 };
 
+pub const CheckedComptimeSiteKind = enum {
+    match,
+    destructure,
+};
+
 /// Public `CheckedCapture` declaration.
 pub const CheckedCapture = struct {
     pattern: CheckedPatternId,
@@ -5105,6 +5110,7 @@ pub const CheckedExprData = union(enum) {
         branches: []const CheckedMatchBranch,
         is_try_suffix: bool,
         skip_exhaustiveness: bool,
+        comptime_site_kind: CheckedComptimeSiteKind,
     },
     if_: struct {
         branches: []const CheckedIfBranch,
@@ -6755,6 +6761,7 @@ const CheckedBodyPayloadCopier = struct {
                 .branches = try self.copyMatchBranches(match.branches),
                 .is_try_suffix = match.is_try_suffix,
                 .skip_exhaustiveness = match.skip_exhaustiveness,
+                .comptime_site_kind = .match,
             } },
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
@@ -13579,6 +13586,7 @@ fn appendCheckedPatternExtractionRootExpr(
         .branches = branches,
         .is_try_suffix = false,
         .skip_exhaustiveness = false,
+        .comptime_site_kind = .destructure,
     } };
     errdefer deinitCheckedExprData(allocator, &data);
     branches_owned = false;

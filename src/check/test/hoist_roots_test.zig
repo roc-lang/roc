@@ -22,6 +22,110 @@ test "hoist roots selected for referenced closed local binding chain" {
     try std.testing.expect(roots[1].pattern != null);
 }
 
+test "hoist roots selected for closed ordinary call binding RHS" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    x = add_one(41.I64)
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].pattern != null);
+    try expectExprTag(&test_env, roots[0].expr, .e_call);
+}
+
+test "hoist roots select closed ordinary call dependencies first" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    base = 41.I64
+        \\    x = add_one(base)
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[1].pattern != null);
+    try expectExprTag(&test_env, roots[1].expr, .e_call);
+}
+
+test "hoist roots select closed ordinary call child expressions" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    _ = [add_one(41.I64), arg]
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_call);
+}
+
+test "hoist roots selected for closed pure static dispatch call binding RHS" {
+    var test_env = try TestEnv.init("Test",
+        \\DispatchBox := [Val(I64)].{
+        \\    inc = |DispatchBox.Val(n)| n + 1.I64
+        \\}
+        \\
+        \\main = |arg| {
+        \\    x = DispatchBox.Val(41.I64).inc()
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].pattern != null);
+    try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
+}
+
+test "hoist roots are not selected for ordinary call with runtime argument" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    x = add_one(arg)
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for ordinary call with runtime callee" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg, f| {
+        \\    x = f(41.I64)
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots selected for record destructure extraction binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
@@ -270,6 +374,10 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) !void {
     try std.testing.expect(extraction.scrutinee_pattern != extraction.result_pattern);
 }
 
+fn expectExprTag(test_env: *const TestEnv, expr: CIR.Expr.Idx, expected: std.meta.Tag(CIR.Expr)) !void {
+    try std.testing.expectEqual(expected, std.meta.activeTag(test_env.checker.cir.store.getExpr(expr)));
+}
+
 fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) usize {
     var count: usize = 0;
     for (roots) |root| {
@@ -358,6 +466,33 @@ test "hoist roots are not selected for local values indirectly depending on func
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for branch-local binding dependencies" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    input : [A(I64), B]
+        \\    input = if arg == 0.I64 {
+        \\        A(41.I64)
+        \\    } else {
+        \\        B
+        \\    }
+        \\    value = match input {
+        \\        A(n) => {
+        \\            x = n + 1.I64
+        \\            x
+        \\        }
+        \\        B => 0.I64
+        \\    }
+        \\    value
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), root.pattern);
+    }
+}
+
 test "hoist roots are not selected for mutable local dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
@@ -391,6 +526,42 @@ test "hoist roots with non-concrete compile-time types are pruned" {
         \\    x = []
         \\    _y = x
         \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots depending on pruned non-concrete roots are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    x = []
+        \\    y = List.len(x).to_i64_wrap()
+        \\    y
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots depending on pruned custom literal roots are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Ok(Picky)
+        \\}
+        \\
+        \\main = |_| {
+        \\    x : Picky
+        \\    x = 42
+        \\    y = match x {
+        \\        Picky => 7.I64
+        \\    }
+        \\    y
         \\}
     );
     defer test_env.deinit();
