@@ -1328,6 +1328,23 @@ const TypeCloner = struct {
         return reserved;
     }
 
+    /// Re-materializes a nominal record's declared field order from the monotype
+    /// declared-field store into the Lambda Solved store. Named entries copy the
+    /// shared field-name id; padding entries re-lower their reserved type.
+    fn lowerDeclaredOrder(self: *TypeCloner, span: MonoType.Span) Allocator.Error!Type.Span {
+        const source = self.solver.program.lifted.types.declaredFieldSpan(span);
+        if (source.len == 0) return Type.Span.empty();
+        const lowered = try self.solver.allocator.alloc(Type.DeclaredField, source.len);
+        defer self.solver.allocator.free(lowered);
+        for (source, 0..) |entry, i| {
+            lowered[i] = switch (entry) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = try self.lower(ty) },
+            };
+        }
+        return try self.solver.program.types.addDeclaredFields(lowered);
+    }
+
     fn lowerContent(self: *TypeCloner, content: MonoType.Content) Allocator.Error!Type.Content {
         return switch (content) {
             .primitive => |primitive| .{ .primitive = primitive },
@@ -1378,6 +1395,7 @@ const TypeCloner = struct {
                         .ty = try self.lower(backing.ty),
                         .use = backing.use,
                     } else null,
+                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
             .func => |fn_ty| blk: {

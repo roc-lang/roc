@@ -1656,6 +1656,11 @@ pub const CheckedNominalType = struct {
     backing: CheckedTypeId,
     representation: CheckedNominalRepresentationRef,
     args: []const CheckedTypeId = &.{},
+    /// Resolved types of the declaration's unnamed (`_` / `_name`) fields, in
+    /// declared order. These are layout padding, excluded from the backing row;
+    /// layout selection reserves `sizeof` of each. Empty for the common case of
+    /// a nominal with no unnamed fields.
+    padding_field_types: []const CheckedTypeId = &.{},
 };
 
 /// Public `CheckedTypePayload` declaration.
@@ -1953,6 +1958,10 @@ pub const CheckedNominalDeclaration = struct {
     declaration_root: CheckedTypeId,
     backing: CheckedTypeId,
     formal_args: []const CheckedTypeId = &.{},
+    /// Resolved types of the declaration's unnamed (`_` / `_name`) padding
+    /// fields, in declared order. Consumed by Monotype to reserve layout
+    /// padding; excluded from the backing row.
+    padding_field_types: []const CheckedTypeId = &.{},
 };
 
 const CheckedSourceTypeRoot = struct {
@@ -2458,6 +2467,7 @@ pub const CheckedTypeStore = struct {
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, nominal.backing, formals, actuals, active),
                 .representation = nominal.representation,
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.args, formals, actuals, active),
+                .padding_field_types = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.padding_field_types, formals, actuals, active),
             } },
             .function => |function| try self.cloneCheckedFunctionTypeSubstituting(allocator, names, function, formals, actuals, active),
             .tag_union => |tag_union| .{ .tag_union = .{
@@ -2829,6 +2839,21 @@ fn appendCheckedNominalDeclarationFromStatement(
         anno_idx,
     );
 
+    const padding_field_types = try paddingFieldTypesFromDeclarationAnno(
+        allocator,
+        module,
+        names,
+        imports,
+        roots,
+        payloads,
+        active,
+        local_type_declarations,
+        declaration_formals,
+        anno_idx,
+    );
+    var padding_field_types_owned = padding_field_types.len != 0;
+    errdefer if (padding_field_types_owned) allocator.free(padding_field_types);
+
     const nominal_payload = CheckedTypePayload{ .nominal = .{
         .name = statement_nominal.name,
         .origin_module = statement_nominal.origin_module,
@@ -2841,8 +2866,10 @@ fn appendCheckedNominalDeclarationFromStatement(
         else
             .{ .local_declaration = localNominalDeclarationIdForStatement(module, statement_idx) },
         .args = formal_args,
+        .padding_field_types = padding_field_types,
     } };
     formal_args_owned = false;
+    padding_field_types_owned = false;
 
     const declaration_root = try appendNominalDeclarationRootPayload(
         allocator,
@@ -3114,14 +3141,63 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
 ) Allocator.Error![]const CheckedRecordField {
     const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(span);
     if (fields.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedRecordField, fields.len);
+    // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
+    // stay in the canonical record annotation (declared order) but are excluded
+    // from the backing row here so they are never name-resolved or unified.
+    var named_count: usize = 0;
+    for (fields) |field_idx| {
+        if (!module.moduleEnvConst().store.getAnnoRecordField(field_idx).is_unnamed) named_count += 1;
+    }
+    if (named_count == 0) return &.{};
+    const out = try allocator.alloc(CheckedRecordField, named_count);
     errdefer allocator.free(out);
-    for (fields, 0..) |field_idx, i| {
+    var out_index: usize = 0;
+    for (fields) |field_idx| {
         const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
-        out[i] = .{
+        if (field.is_unnamed) continue;
+        out[out_index] = .{
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
             .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, field.ty),
         };
+        out_index += 1;
+    }
+    return out;
+}
+
+/// Resolves the types of a nominal declaration's unnamed (`_` / `_name`) fields,
+/// in declared order, when its top-level backing annotation is a record. These
+/// are layout padding (excluded from the backing row); returns the empty slice
+/// when the backing is not a record or has no unnamed fields.
+fn paddingFieldTypesFromDeclarationAnno(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    roots: *std.ArrayList(CheckedTypeRoot),
+    payloads: *std.ArrayList(CheckedTypePayload),
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    declaration_formals: []const DeclarationFormal,
+    anno_idx: CIR.TypeAnno.Idx,
+) Allocator.Error![]const CheckedTypeId {
+    const record = switch (module.moduleEnvConst().store.getTypeAnno(anno_idx)) {
+        .record => |record| record,
+        else => return &.{},
+    };
+    const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(record.fields);
+    var padding_count: usize = 0;
+    for (fields) |field_idx| {
+        if (module.moduleEnvConst().store.getAnnoRecordField(field_idx).is_unnamed) padding_count += 1;
+    }
+    if (padding_count == 0) return &.{};
+    const out = try allocator.alloc(CheckedTypeId, padding_count);
+    errdefer allocator.free(out);
+    var out_index: usize = 0;
+    for (fields) |field_idx| {
+        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
+        if (!field.is_unnamed) continue;
+        out[out_index] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, field.ty);
+        out_index += 1;
     }
     return out;
 }
@@ -3374,7 +3450,10 @@ fn appendCheckedNominalDeclarationFromPayload(
     };
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
-            if (existing.backing == nominal.backing and checkedTypeIdSliceEql(existing.formal_args, nominal.args)) {
+            if (existing.backing == nominal.backing and
+                checkedTypeIdSliceEql(existing.formal_args, nominal.args) and
+                checkedTypeIdSliceEql(existing.padding_field_types, nominal.padding_field_types))
+            {
                 return;
             }
             checkedArtifactInvariant("checked artifact attempted to publish conflicting nominal declarations", .{});
@@ -3387,6 +3466,7 @@ fn appendCheckedNominalDeclarationFromPayload(
         .declaration_root = root,
         .backing = nominal.backing,
         .formal_args = nominal.args,
+        .padding_field_types = nominal.padding_field_types,
     });
 }
 
@@ -3544,6 +3624,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeBool(nominal.is_opaque);
                 self.writeU32(@intCast(nominal.args.len));
                 for (nominal.args) |arg| try self.writeType(arg);
+                self.writeU32(@intCast(nominal.padding_field_types.len));
+                for (nominal.padding_field_types) |padding_type| try self.writeType(padding_type);
             },
             .function => |func| {
                 switch (finalizedFunctionKind(func.kind)) {
@@ -4263,6 +4345,10 @@ fn copyCheckedFlatType(
                 .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
                 .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
                 .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
+                // Padding lives on the nominal declaration (built from its source
+                // annotation), not on usage payloads copied from the internal
+                // type store, which carry no unnamed-field information.
+                .padding_field_types = &.{},
             } };
         },
         .fn_pure => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, roots, payloads, active, .pure, func) },
@@ -4767,7 +4853,10 @@ fn deinitCheckedTypePayload(allocator: Allocator, payload: *CheckedTypePayload) 
         .record => |record| allocator.free(record.fields),
         .record_unbound => |fields| allocator.free(fields),
         .tuple => |elems| allocator.free(elems),
-        .nominal => |nominal| allocator.free(nominal.args),
+        .nominal => |nominal| {
+            allocator.free(nominal.args);
+            allocator.free(nominal.padding_field_types);
+        },
         .function => |function| allocator.free(function.args),
         .tag_union => |tag_union| {
             for (tag_union.tags) |tag| allocator.free(tag.args);
@@ -11836,6 +11925,8 @@ const PlatformAppRelationTypeResolver = struct {
             .nominal => |nominal| blk: {
                 const args = try self.finalizeRootSlice(nominal.args);
                 errdefer self.allocator.free(args);
+                const padding_field_types = try self.finalizeRootSlice(nominal.padding_field_types);
+                errdefer self.allocator.free(padding_field_types);
                 const backing = try self.finalize(nominal.backing, .value);
                 break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
                     .name = nominal.name,
@@ -11846,6 +11937,7 @@ const PlatformAppRelationTypeResolver = struct {
                     .backing = backing,
                     .representation = nominal.representation,
                     .args = args,
+                    .padding_field_types = padding_field_types,
                 } });
             },
         };
@@ -11901,6 +11993,8 @@ const PlatformAppRelationTypeResolver = struct {
         }
         const args = try self.mergeRootSlices(platform_nominal.args, app_nominal.args);
         errdefer self.allocator.free(args);
+        const padding_field_types = try self.mergeRootSlices(platform_nominal.padding_field_types, app_nominal.padding_field_types);
+        errdefer self.allocator.free(padding_field_types);
         const backing = try self.merge(platform_nominal.backing, app_nominal.backing, .value);
         return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
             .name = platform_nominal.name,
@@ -11911,6 +12005,7 @@ const PlatformAppRelationTypeResolver = struct {
             .backing = backing,
             .representation = platform_nominal.representation,
             .args = args,
+            .padding_field_types = padding_field_types,
         } });
     }
 
@@ -16631,6 +16726,7 @@ pub const CheckedTypeProjector = struct {
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, nominal.backing, active),
                 .representation = remapViewNominalRepresentation(nominal.representation),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, nominal.args, active),
+                .padding_field_types = try self.projectCheckedTypeViewIds(source, source_names, nominal.padding_field_types, active),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),
@@ -16967,6 +17063,8 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error!CheckedTypePayload {
         const args = try self.projectImportedTypeIds(imported, nominal.args);
         errdefer self.allocator.free(args);
+        const padding_field_types = try self.projectImportedTypeIds(imported, nominal.padding_field_types);
+        errdefer self.allocator.free(padding_field_types);
         return .{ .nominal = .{
             .name = try self.remapTypeName(imported, nominal.name),
             .origin_module = try self.remapModuleName(imported, nominal.origin_module),
@@ -16976,6 +17074,7 @@ pub const CheckedTypeProjector = struct {
             .backing = try self.projectImportedCheckedType(imported, nominal.backing),
             .representation = try self.remapImportedNominalRepresentation(imported, nominal),
             .args = args,
+            .padding_field_types = padding_field_types,
         } };
     }
 
@@ -17195,6 +17294,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .backing = try self.project(nominal.backing),
                 .representation = try self.remapNominalRepresentation(nominal),
                 .args = try self.projectIds(nominal.args),
+                .padding_field_types = try self.projectIds(nominal.padding_field_types),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),

@@ -71,6 +71,11 @@ pub const InstNamed = struct {
     builtin_owner: ?static_dispatch.BuiltinOwner,
     args: []NodeId,
     backing: ?InstBacking,
+    /// Declared field order for a nominal/opaque record backing (empty
+    /// otherwise). Carried verbatim into the materialized monotype `.named`
+    /// content; the entries already reference the shared monotype declared-field
+    /// store, so materialization copies the span as-is.
+    declared_order: Type.Span = Type.Span.empty(),
 };
 
 /// Content of an instantiation-graph node. Rows carry explicit extension
@@ -1153,6 +1158,7 @@ pub const InstGraph = struct {
                     .node = try self.importMono(backing.ty),
                     .use = backing.use,
                 } else null,
+                .declared_order = named.declared_order,
             } },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
@@ -1285,6 +1291,7 @@ pub const InstGraph = struct {
                     .ty = try self.monoFor(backing.node),
                     .use = backing.use,
                 } else null,
+                .declared_order = named.declared_order,
             } },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,

@@ -156,6 +156,8 @@ pub const Resolver = struct {
 
     /// Return the child step for one refcounted struct field, if any.
     pub fn structFieldPlan(self: *const Resolver, struct_plan: StructPlan, field_index: u32) ?FieldPlan {
+        // Padding spacers hold uninitialized bytes, never a refcounted value.
+        if (self.store.getStructFieldIsPadding(struct_plan.struct_idx, @intCast(field_index))) return null;
         const field_layout_idx = self.store.getStructFieldLayout(struct_plan.struct_idx, @intCast(field_index));
         const field_layout = self.store.getLayout(field_layout_idx);
         if (!self.store.layoutContainsRefcounted(field_layout)) return null;

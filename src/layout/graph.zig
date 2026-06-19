@@ -33,6 +33,11 @@ pub fn refKey(ref: Ref) u64 {
 pub const Field = struct {
     index: u16,
     child: Ref,
+    /// True for unnamed nominal-record padding spacers: the field's layout
+    /// supplies only its size; it occupies bytes (forced to alignment 1) but is
+    /// excluded from every semantic field operation (access, equality, refcount,
+    /// inspect, glue) and does not contribute its alignment to the struct.
+    is_padding: bool = false,
 };
 
 /// Span into a graph's contiguous field storage.
@@ -72,12 +77,32 @@ pub const Graph = struct {
     nodes: std.ArrayListUnmanaged(Node) = .empty,
     fields: std.ArrayListUnmanaged(Field) = .empty,
     refs: std.ArrayListUnmanaged(Ref) = .empty,
+    /// Struct nodes whose fields are in nominal-record declared order. They are
+    /// ordinary `.struct_` nodes for every graph pass (cycle detection,
+    /// refcounting, boxing); only the final commit differs, keeping declared
+    /// order (repaired for padding) instead of sorting by alignment. See
+    /// `nominal_order` and design.md "Nominal Record Field Order".
+    nominal_structs: std.ArrayListUnmanaged(NodeId) = .empty,
 
     /// Release all graph storage.
     pub fn deinit(self: *Graph, allocator: std.mem.Allocator) void {
         self.nodes.deinit(allocator);
         self.fields.deinit(allocator);
         self.refs.deinit(allocator);
+        self.nominal_structs.deinit(allocator);
+    }
+
+    /// Mark a `.struct_` node as a nominal record laid out in declared order.
+    pub fn markNominalStruct(self: *Graph, allocator: std.mem.Allocator, id: NodeId) Allocator.Error!void {
+        try self.nominal_structs.append(allocator, id);
+    }
+
+    /// Whether `id` was marked as a nominal-record struct node.
+    pub fn isNominalStruct(self: *const Graph, id: NodeId) bool {
+        for (self.nominal_structs.items) |marked| {
+            if (marked == id) return true;
+        }
+        return false;
     }
 
     /// Reserve a local node id before its final shape is known.

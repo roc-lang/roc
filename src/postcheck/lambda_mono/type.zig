@@ -59,6 +59,13 @@ pub const FnVariant = struct {
     capture_ty: ?TypeId,
 };
 
+/// One entry of a nominal record's declared layout order. Mirrors
+/// `MonoType.DeclaredField`; consumed only by layout selection.
+pub const DeclaredField = union(enum) {
+    named: names.RecordFieldNameId,
+    padding: TypeId,
+};
+
 /// Lambda Mono type content.
 pub const Content = union(enum) {
     primitive: MonoType.Primitive,
@@ -72,6 +79,9 @@ pub const Content = union(enum) {
             ty: TypeId,
             use: MonoType.BackingUse,
         } = null,
+        /// Declared field order for a nominal/opaque record backing; empty
+        /// otherwise.
+        declared_order: Span = Span.empty(),
     },
     record: Span,
     capture_record: Span,
@@ -97,6 +107,7 @@ pub const Store = struct {
     capture_fields: std.ArrayList(CaptureField),
     tags: std.ArrayList(Tag),
     fn_variants: std.ArrayList(FnVariant),
+    declared_fields: std.ArrayList(DeclaredField),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -107,10 +118,12 @@ pub const Store = struct {
             .capture_fields = .empty,
             .tags = .empty,
             .fn_variants = .empty,
+            .declared_fields = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.declared_fields.deinit(self.allocator);
         self.fn_variants.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.capture_fields.deinit(self.allocator);
@@ -186,6 +199,17 @@ pub const Store = struct {
 
     pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
         return self.tags.items[span_.start..][0..span_.len];
+    }
+
+    pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
+        const start: u32 = @intCast(self.declared_fields.items.len);
+        try self.declared_fields.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
+        return self.declared_fields.items[span_.start..][0..span_.len];
     }
 
     pub fn fnVariantSpan(self: *const Store, span_: Span) []const FnVariant {
