@@ -4503,6 +4503,27 @@ pub fn build(b: *std.Build) void {
             } else &copy_http_host.step;
             b.getInstallStep().dependOn(final_http_host_step);
 
+            const http_app_exe_name = if (http_host_target.result.os.tag == .windows)
+                "http_header_decoder_server_prebuilt.exe"
+            else
+                "http_header_decoder_server_prebuilt";
+            const prebuilt_roc_cache_root = b.pathJoin(&.{ b.cache_root.path orelse ".zig-cache", "roc-prebuilt-cache" });
+            const http_prebuilt_roc_cache_dir = b.pathJoin(&.{ prebuilt_roc_cache_root, "http" });
+            const build_http_app = b.addRunArtifact(roc_exe);
+            build_http_app.addArgs(&.{
+                "build",
+                "--opt=speed",
+                b.fmt("--target={s}", .{target_dir}),
+            });
+            build_http_app.setEnvironmentVariable("ROC_CACHE_DIR", http_prebuilt_roc_cache_dir);
+            build_http_app.setEnvironmentVariable("XDG_CACHE_HOME", http_prebuilt_roc_cache_dir);
+            const http_app_output = build_http_app.addPrefixedOutputFileArg("--output=", http_app_exe_name);
+            build_http_app.addFileArg(b.path("test/http-headers/app.roc"));
+            build_http_app.step.dependOn(final_http_host_step);
+            build_http_app.step.dependOn(build_roc_step);
+            const install_http_app = b.addInstallBinFile(http_app_output, http_app_exe_name);
+            const http_app_installed_path = b.pathJoin(&.{ b.exe_dir, http_app_exe_name });
+
             const http_header_decoder_platform_test = b.addTest(.{
                 .name = "http_header_decoder_platform_test",
                 .root_module = b.createModule(.{
@@ -4515,18 +4536,22 @@ pub fn build(b: *std.Build) void {
             });
 
             const run_http_header_decoder_platform_test = b.addRunArtifact(http_header_decoder_platform_test);
+            run_http_header_decoder_platform_test.setEnvironmentVariable("ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", http_app_installed_path);
             if (run_args.len != 0) {
                 run_http_header_decoder_platform_test.addArgs(run_args);
             }
             build_test_zig_step.dependOn(&http_header_decoder_platform_test.step);
             run_http_header_decoder_platform_test.step.dependOn(final_http_host_step);
+            run_http_header_decoder_platform_test.step.dependOn(&install_http_app.step);
             run_http_header_decoder_platform_test.step.dependOn(build_roc_step);
 
             const run_http_header_decoder_platform_test_for_summary = b.addRunArtifact(http_header_decoder_platform_test);
+            run_http_header_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", http_app_installed_path);
             if (run_args.len != 0) {
                 run_http_header_decoder_platform_test_for_summary.addArgs(run_args);
             }
             run_http_header_decoder_platform_test_for_summary.step.dependOn(final_http_host_step);
+            run_http_header_decoder_platform_test_for_summary.step.dependOn(&install_http_app.step);
             run_http_header_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
             tests_summary.addRun(&run_http_header_decoder_platform_test_for_summary.step);
 
@@ -4560,6 +4585,59 @@ pub fn build(b: *std.Build) void {
             } else &copy_json_host.step;
             b.getInstallStep().dependOn(final_json_host_step);
 
+            const json_exe_ext = if (http_host_target.result.os.tag == .windows) ".exe" else "";
+            const json_app_exe_name = b.fmt("json_decoder_prebuilt{s}", .{json_exe_ext});
+            const json_camel_app_exe_name = b.fmt("json_decoder_camel_prebuilt{s}", .{json_exe_ext});
+            const json_camel_direct_app_exe_name = b.fmt("json_decoder_camel_direct_prebuilt{s}", .{json_exe_ext});
+
+            const json_prebuilt_roc_cache_dir = b.pathJoin(&.{ prebuilt_roc_cache_root, "json" });
+            const build_json_app = b.addRunArtifact(roc_exe);
+            build_json_app.addArgs(&.{
+                "build",
+                "--opt=speed",
+                b.fmt("--target={s}", .{target_dir}),
+            });
+            build_json_app.setEnvironmentVariable("ROC_CACHE_DIR", json_prebuilt_roc_cache_dir);
+            build_json_app.setEnvironmentVariable("XDG_CACHE_HOME", json_prebuilt_roc_cache_dir);
+            const json_app_output = build_json_app.addPrefixedOutputFileArg("--output=", json_app_exe_name);
+            build_json_app.addFileArg(b.path("test/json-decoder/app.roc"));
+            build_json_app.step.dependOn(final_json_host_step);
+            build_json_app.step.dependOn(build_roc_step);
+            const install_json_app = b.addInstallBinFile(json_app_output, json_app_exe_name);
+            const json_app_installed_path = b.pathJoin(&.{ b.exe_dir, json_app_exe_name });
+
+            const json_camel_prebuilt_roc_cache_dir = b.pathJoin(&.{ prebuilt_roc_cache_root, "json-camel" });
+            const build_json_camel_app = b.addRunArtifact(roc_exe);
+            build_json_camel_app.addArgs(&.{
+                "build",
+                "--opt=speed",
+                b.fmt("--target={s}", .{target_dir}),
+            });
+            build_json_camel_app.setEnvironmentVariable("ROC_CACHE_DIR", json_camel_prebuilt_roc_cache_dir);
+            build_json_camel_app.setEnvironmentVariable("XDG_CACHE_HOME", json_camel_prebuilt_roc_cache_dir);
+            const json_camel_app_output = build_json_camel_app.addPrefixedOutputFileArg("--output=", json_camel_app_exe_name);
+            build_json_camel_app.addFileArg(b.path("test/json-decoder/camel_app.roc"));
+            build_json_camel_app.step.dependOn(final_json_host_step);
+            build_json_camel_app.step.dependOn(build_roc_step);
+            const install_json_camel_app = b.addInstallBinFile(json_camel_app_output, json_camel_app_exe_name);
+            const json_camel_app_installed_path = b.pathJoin(&.{ b.exe_dir, json_camel_app_exe_name });
+
+            const json_camel_direct_prebuilt_roc_cache_dir = b.pathJoin(&.{ prebuilt_roc_cache_root, "json-camel-direct" });
+            const build_json_camel_direct_app = b.addRunArtifact(roc_exe);
+            build_json_camel_direct_app.addArgs(&.{
+                "build",
+                "--opt=speed",
+                b.fmt("--target={s}", .{target_dir}),
+            });
+            build_json_camel_direct_app.setEnvironmentVariable("ROC_CACHE_DIR", json_camel_direct_prebuilt_roc_cache_dir);
+            build_json_camel_direct_app.setEnvironmentVariable("XDG_CACHE_HOME", json_camel_direct_prebuilt_roc_cache_dir);
+            const json_camel_direct_app_output = build_json_camel_direct_app.addPrefixedOutputFileArg("--output=", json_camel_direct_app_exe_name);
+            build_json_camel_direct_app.addFileArg(b.path("test/json-decoder/camel_direct_app.roc"));
+            build_json_camel_direct_app.step.dependOn(final_json_host_step);
+            build_json_camel_direct_app.step.dependOn(build_roc_step);
+            const install_json_camel_direct_app = b.addInstallBinFile(json_camel_direct_app_output, json_camel_direct_app_exe_name);
+            const json_camel_direct_app_installed_path = b.pathJoin(&.{ b.exe_dir, json_camel_direct_app_exe_name });
+
             const json_decoder_platform_test = b.addTest(.{
                 .name = "json_decoder_platform_test",
                 .root_module = b.createModule(.{
@@ -4572,18 +4650,30 @@ pub fn build(b: *std.Build) void {
             });
 
             const run_json_decoder_platform_test = b.addRunArtifact(json_decoder_platform_test);
+            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_PREBUILT_EXE", json_app_installed_path);
+            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_PREBUILT_EXE", json_camel_app_installed_path);
+            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE", json_camel_direct_app_installed_path);
             if (run_args.len != 0) {
                 run_json_decoder_platform_test.addArgs(run_args);
             }
             build_test_zig_step.dependOn(&json_decoder_platform_test.step);
             run_json_decoder_platform_test.step.dependOn(final_json_host_step);
+            run_json_decoder_platform_test.step.dependOn(&install_json_app.step);
+            run_json_decoder_platform_test.step.dependOn(&install_json_camel_app.step);
+            run_json_decoder_platform_test.step.dependOn(&install_json_camel_direct_app.step);
             run_json_decoder_platform_test.step.dependOn(build_roc_step);
 
             const run_json_decoder_platform_test_for_summary = b.addRunArtifact(json_decoder_platform_test);
+            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_PREBUILT_EXE", json_app_installed_path);
+            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_PREBUILT_EXE", json_camel_app_installed_path);
+            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE", json_camel_direct_app_installed_path);
             if (run_args.len != 0) {
                 run_json_decoder_platform_test_for_summary.addArgs(run_args);
             }
             run_json_decoder_platform_test_for_summary.step.dependOn(final_json_host_step);
+            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_app.step);
+            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_app.step);
+            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_direct_app.step);
             run_json_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
             tests_summary.addRun(&run_json_decoder_platform_test_for_summary.step);
 

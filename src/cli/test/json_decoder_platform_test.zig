@@ -46,22 +46,36 @@ test "JSON parsing platform derives structural parser without runtime allocation
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
+    const prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_PREBUILT_EXE");
     const exe_name = if (builtin.os.tag == .windows) "json_decoder.exe" else "json_decoder";
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
+    const output_path = if (prebuilt_path) |path|
+        path
+    else
+        try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
     defer allocator.free(output_path);
 
+    const camel_prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_CAMEL_PREBUILT_EXE");
     const camel_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel.exe" else "json_decoder_camel";
-    const camel_output_path = try std.fs.path.join(allocator, &.{ tmp_path, camel_exe_name });
+    const camel_output_path = if (camel_prebuilt_path) |path|
+        path
+    else
+        try std.fs.path.join(allocator, &.{ tmp_path, camel_exe_name });
     defer allocator.free(camel_output_path);
 
+    const camel_direct_prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE");
     const camel_direct_exe_name = if (builtin.os.tag == .windows) "json_decoder_camel_direct.exe" else "json_decoder_camel_direct";
-    const camel_direct_output_path = try std.fs.path.join(allocator, &.{ tmp_path, camel_direct_exe_name });
+    const camel_direct_output_path = if (camel_direct_prebuilt_path) |path|
+        path
+    else
+        try std.fs.path.join(allocator, &.{ tmp_path, camel_direct_exe_name });
     defer allocator.free(camel_direct_output_path);
 
     var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
     defer env_map.deinit();
 
-    try buildRocApp(allocator, &env_map, target_name, output_path, "test/json-decoder/app.roc");
+    if (prebuilt_path == null) {
+        try buildRocApp(allocator, &env_map, target_name, output_path, "test/json-decoder/app.roc");
+    }
 
     for (0..8) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -107,7 +121,9 @@ test "JSON parsing platform derives structural parser without runtime allocation
 
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
 
-    try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
+    if (camel_prebuilt_path == null) {
+        try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
+    }
     try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "inner_value", "nested_record", "user_id" });
     try runJsonDecoderAndCheckOutput(
         allocator,
@@ -116,7 +132,16 @@ test "JSON parsing platform derives structural parser without runtime allocation
         "14\n",
     );
 
-    try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
+    if (camel_direct_prebuilt_path == null) {
+        try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
+    }
+}
+
+fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) anyerror!?[]u8 {
+    const key_z = try allocator.dupeZ(u8, key);
+    defer allocator.free(key_z);
+    const value = std.c.getenv(key_z) orelse return null;
+    return try allocator.dupe(u8, value[0..std.mem.len(value)]);
 }
 
 fn buildRocApp(

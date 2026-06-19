@@ -673,11 +673,12 @@ maintain both systems side by side.
 - [ ] Build an optimized app binary and scan strings:
   - [ ] original HTTP Roc names absent: `cache_control`, `content_length`,
     `x_auth_token`
-  - [ ] transformed HTTP names present if referenced: `cache-control`,
-    `content-length`, `x-auth-token`
+  - [ ] transformed HTTP names are allowed but not required as searchable
+    strings; runtime tests prove transformed input names still match.
   - [ ] original JSON snake_case names absent in camel-case test:
     `user_id`, `cache_control`
-  - [ ] transformed JSON names present if referenced: `userId`, `cacheControl`
+  - [ ] transformed JSON names are allowed but not required as searchable
+    strings; runtime tests prove transformed input names still match.
 - [ ] Ensure debug/unstripped compiler symbols are not used for this assertion.
 
 ## Host And Platform Verification
@@ -770,7 +771,8 @@ where supported.
   - [ ] `U64` parser consumes the value and returns the continuation state
 - [ ] Scan optimized final app binary strings:
   - [ ] original field names absent where the test expects compile-time renaming
-  - [ ] transformed field names present only as needed
+  - [ ] transformed field names may be present or optimized away, but behavior
+    must prove transformed input names still match
 - [ ] Record the disassembly files and the key observations in the final
   implementation summary.
 

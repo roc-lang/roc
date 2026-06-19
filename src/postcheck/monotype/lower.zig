@@ -6214,46 +6214,6 @@ const BodyContext = struct {
         return try self.sequenceTry(record_expr, record_try_ty, record_local, ok_body, ret_ty);
     }
 
-    fn lowerParseRecordFieldEvent(
-        self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: Ast.ExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        record_state_local: Ast.LocalId,
-        record_state_ty: Type.TypeId,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-        renamed_field_locals: []const Ast.LocalId,
-        renamed_field_lengths: ?[]const u32,
-        field_payload_local: Ast.LocalId,
-        field_payload_ty: Type.TypeId,
-        mode: RecordFieldMatchMode,
-    ) Allocator.Error!Ast.ExprId {
-        const rest_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "rest");
-        return switch (mode) {
-            .direct => Common.invariant("direct record field events lower through prebuilt matched bodies"),
-            .exact, .caseless => blk: {
-                const name_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "name");
-                break :blk try self.lowerParseRecordNamedFieldEvent(
-                    shape_ty,
-                    encoding_expr,
-                    encoding_ty,
-                    state_ty,
-                    ret_ty,
-                    record_state_local,
-                    record_state_ty,
-                    precomputed_plan,
-                    renamed_field_locals,
-                    renamed_field_lengths,
-                    name_expr,
-                    rest_expr,
-                    mode,
-                );
-            },
-        };
-    }
-
     fn lowerParseRecordDirectFieldEvent(
         self: *BodyContext,
         shape_ty: Type.TypeId,
@@ -6536,81 +6496,6 @@ const BodyContext = struct {
             try self.builder.localExpr(record_state_local, record_state_ty),
         });
         return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
-    }
-
-    fn lowerParseRecordNamedFieldEvent(
-        self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: Ast.ExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        record_state_local: Ast.LocalId,
-        record_state_ty: Type.TypeId,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-        renamed_field_locals: []const Ast.LocalId,
-        renamed_field_lengths: ?[]const u32,
-        name_expr: Ast.ExprId,
-        rest_expr: Ast.ExprId,
-        mode: RecordFieldMatchMode,
-    ) Allocator.Error!Ast.ExprId {
-        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
-            .zst => &.{},
-            else => Common.invariant("record put requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
-        defer self.allocator.free(item_tys);
-        if (fields.len != item_tys.len) Common.invariant("record parser state arity did not match derived record field count");
-        if (fields.len != renamed_field_locals.len) Common.invariant("record parser renamed field arity did not match derived record field count");
-
-        const key_ty = self.builder.program.exprs.items[@intFromEnum(name_expr)].ty;
-        if (!self.typeHasBuiltinOwner(key_ty, .str)) Common.invariant("record field event name was not Str");
-        const value_state_ty = self.builder.program.exprs.items[@intFromEnum(rest_expr)].ty;
-        if (!self.sameType(value_state_ty, state_ty)) Common.invariant("record field event rest type differed from parser state type");
-
-        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), key_ty);
-        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
-
-        const unknown_body = try self.lowerUnknownRecordFieldEvent(
-            encoding_ty,
-            state_ty,
-            ret_ty,
-            record_state_local,
-            record_state_ty,
-            try self.builder.localExpr(rest_local, state_ty),
-        );
-        const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
-        defer self.allocator.free(matched_bodies);
-        for (fields, 0..) |field, index| {
-            matched_bodies[index] = try self.lowerParseMatchedRecordField(
-                field,
-                index,
-                item_tys,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                record_state_local,
-                record_state_ty,
-                precomputed_plan,
-                rest_local,
-            );
-        }
-        var body = try self.lowerParseRecordNamedDispatchBody(
-            key_local,
-            key_ty,
-            renamed_field_locals,
-            renamed_field_lengths,
-            matched_bodies,
-            unknown_body,
-            mode,
-            ret_ty,
-        );
-
-        body = try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty);
-        return try self.wrapLet(key_local, key_ty, name_expr, body, ret_ty);
     }
 
     fn lowerParseMatchedRecordField(
@@ -13645,10 +13530,6 @@ fn generatedParserRuntimeKey(
 
 fn parserEncodingCaptureId() u32 {
     return 0;
-}
-
-fn parserFieldCaptureId(index: usize) u32 {
-    return @as(u32, @intCast(index + 1));
 }
 
 fn generatedRecordDirectDispatchKey(

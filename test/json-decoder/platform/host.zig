@@ -346,11 +346,14 @@ const darwin = struct {
 };
 
 const windows = struct {
+    const ERROR_HANDLE_EOF: u32 = 38;
+    const ERROR_BROKEN_PIPE: u32 = 109;
     const STD_INPUT_HANDLE: u32 = @bitCast(@as(i32, -10));
     const STD_OUTPUT_HANDLE: u32 = @bitCast(@as(i32, -11));
     const STD_ERROR_HANDLE: u32 = @bitCast(@as(i32, -12));
 
     extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetLastError() callconv(.winapi) u32;
     extern "kernel32" fn ReadFile(hFile: ?*anyopaque, lpBuffer: [*]u8, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: ?*u32, lpOverlapped: ?*anyopaque) callconv(.winapi) c_int;
     extern "kernel32" fn WriteFile(hFile: ?*anyopaque, lpBuffer: [*]const u8, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: ?*u32, lpOverlapped: ?*anyopaque) callconv(.winapi) c_int;
     extern "kernel32" fn ExitProcess(exit_code: u32) callconv(.winapi) noreturn;
@@ -359,7 +362,12 @@ const windows = struct {
         const handle = GetStdHandle(if (fd == stdin_fd) STD_INPUT_HANDLE else return error.ReadFailed);
         const chunk_len = @min(buffer.len, @as(usize, std.math.maxInt(u32)));
         var read: u32 = 0;
-        if (ReadFile(handle, buffer.ptr, @intCast(chunk_len), &read, null) == 0) return error.ReadFailed;
+        if (ReadFile(handle, buffer.ptr, @intCast(chunk_len), &read, null) == 0) {
+            return switch (GetLastError()) {
+                ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF => 0,
+                else => error.ReadFailed,
+            };
+        }
         return read;
     }
 

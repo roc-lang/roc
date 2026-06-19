@@ -49,52 +49,59 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
+    const prebuilt_path = try getEnvVarOwnedOrNull(allocator, "ROC_HTTP_HEADER_DECODER_PREBUILT_EXE");
+
     const exe_name = if (builtin.os.tag == .windows) "http_header_decoder_server.exe" else "http_header_decoder_server";
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
+    const output_path = if (prebuilt_path) |path|
+        path
+    else
+        try std.fs.path.join(allocator, &.{ tmp_path, exe_name });
     defer allocator.free(output_path);
 
-    var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-    defer env_map.deinit();
+    if (prebuilt_path == null) {
+        var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
+        defer env_map.deinit();
 
-    const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
-    defer allocator.free(target_arg);
+        const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
+        defer allocator.free(target_arg);
 
-    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
-    defer allocator.free(output_arg);
+        const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+        defer allocator.free(output_arg);
 
-    const build_result = try util.runChildWithTimeout(io, allocator, &.{
-        util.roc_binary_path,
-        "build",
-        "--opt=speed",
-        target_arg,
-        output_arg,
-        "test/http-headers/app.roc",
-    }, .{
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024,
-    });
-    defer allocator.free(build_result.stdout);
-    defer allocator.free(build_result.stderr);
+        const build_result = try util.runChildWithTimeout(io, allocator, &.{
+            util.roc_binary_path,
+            "build",
+            "--opt=speed",
+            target_arg,
+            output_arg,
+            "test/http-headers/app.roc",
+        }, .{
+            .env_map = &env_map,
+            .max_output_bytes = 10 * 1024 * 1024,
+        });
+        defer allocator.free(build_result.stdout);
+        defer allocator.free(build_result.stderr);
 
-    switch (build_result.term) {
-        .exited => |code| {
-            if (code != 0) {
-                std.debug.print("roc build failed with exit code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
-                    code,
+        switch (build_result.term) {
+            .exited => |code| {
+                if (code != 0) {
+                    std.debug.print("roc build failed with exit code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                        code,
+                        build_result.stdout,
+                        build_result.stderr,
+                    });
+                    return error.RocBuildFailed;
+                }
+            },
+            else => {
+                std.debug.print("roc build terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                    build_result.term,
                     build_result.stdout,
                     build_result.stderr,
                 });
                 return error.RocBuildFailed;
-            }
-        },
-        else => {
-            std.debug.print("roc build terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
-                build_result.term,
-                build_result.stdout,
-                build_result.stderr,
-            });
-            return error.RocBuildFailed;
-        },
+            },
+        }
     }
 
     try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "x_auth_token" });
@@ -238,6 +245,13 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
     try request.appendSlice(allocator, request_body);
 
     return request.toOwnedSlice(allocator);
+}
+
+fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) anyerror!?[]u8 {
+    const key_z = try allocator.dupeZ(u8, key);
+    defer allocator.free(key_z);
+    const value = std.c.getenv(key_z) orelse return null;
+    return try allocator.dupe(u8, value[0..std.mem.len(value)]);
 }
 
 fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
