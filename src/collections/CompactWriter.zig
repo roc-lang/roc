@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const native_endian = @import("builtin").cpu.arch.endian();
 
 const CompactWriter = @This();
 
@@ -151,60 +152,73 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         const uinfo = vinfo.@"union";
         if (uinfo.tag_type) |TagType| {
             const tag_size = @sizeOf(TagType);
-            const max_payload = comptime blk: {
-                var max: usize = 0;
-                for (uinfo.fields) |f| max = @max(max, @sizeOf(f.type));
-                break :blk max;
-            };
-            const max_payload_align = comptime blk: {
-                var a: usize = 1;
-                for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
-                break :blk a;
-            };
-            // Layout-agnostic: compute where Zig actually places the tag and payload.
-            // Zig puts the tag FIRST when its alignment is >= every payload's alignment,
-            // otherwise the payload comes first (highest-alignment field at offset 0).
-            // This handles both layouts — a wrong tag-after-payload assumption would
-            // otherwise clobber live tag/payload bytes (and miss undefined inactive bytes)
-            // for a tag-first union.
-            const tag_first = @alignOf(TagType) >= max_payload_align;
-            const payload_offset = comptime if (tag_first)
-                std.mem.alignForward(usize, tag_size, max_payload_align)
-            else
-                0;
-            const tag_offset = comptime if (tag_first)
-                0
-            else
-                std.mem.alignForward(usize, max_payload, @alignOf(TagType));
-
-            // Save the tag + active payload, zero the WHOLE value (so every inactive /
-            // unused / alignment byte becomes deterministic 0 regardless of layout), then
-            // restore the tag + active payload and recurse to zero the active payload's
-            // own internal padding.
-            const item = @as(*V, @ptrCast(@alignCast(ptr)));
-            switch (item.*) {
-                inline else => |_, tag| {
-                    const VariantType = uinfo.fields[@intFromEnum(tag)].type;
-                    const active_size = @sizeOf(VariantType);
-                    // Self-check the computed payload offset against Zig's actual layout, so
-                    // a future change to union layout fails loudly here instead of silently
-                    // corrupting serialized bytes.
-                    if (active_size > 0) {
-                        std.debug.assert(payload_offset ==
-                            @intFromPtr(&@field(item.*, @tagName(tag))) - @intFromPtr(item));
-                    }
-                    const saved_tag: [tag_size]u8 = ptr[tag_offset..][0..tag_size].*;
-                    const saved_payload: [active_size]u8 = if (active_size > 0)
-                        ptr[payload_offset..][0..active_size].*
-                    else
-                        undefined;
+            if (tag_size == 0) {
+                // A zero-size tag (e.g. a single-variant union) carries no discriminant; the
+                // sole payload sits at offset 0.
+                if (uinfo.fields.len >= 1 and @sizeOf(uinfo.fields[0].type) > 0) {
+                    zeroValuePadding(uinfo.fields[0].type, ptr);
+                    @memset(ptr[@sizeOf(uinfo.fields[0].type)..vsize], 0);
+                } else {
                     @memset(ptr[0..vsize], 0);
-                    ptr[tag_offset..][0..tag_size].* = saved_tag;
-                    if (active_size > 0) {
-                        ptr[payload_offset..][0..active_size].* = saved_payload;
-                        zeroValuePadding(VariantType, ptr + payload_offset);
+                }
+            } else {
+                const max_payload = comptime blk: {
+                    var m: usize = 0;
+                    for (uinfo.fields) |f| m = @max(m, @sizeOf(f.type));
+                    break :blk m;
+                };
+                const max_payload_align = comptime blk: {
+                    var a: usize = 1;
+                    for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
+                    break :blk a;
+                };
+                // Zig lays out a tagged union like a 2-field struct {tag, payload}: the tag
+                // comes first iff its alignment is >= every payload's, otherwise the payload
+                // is first (at offset 0) and the tag follows the largest variant.
+                const tag_first = @alignOf(TagType) >= max_payload_align;
+                const payload_offset = comptime if (tag_first)
+                    std.mem.alignForward(usize, tag_size, max_payload_align)
+                else
+                    0;
+                const tag_offset = comptime if (tag_first)
+                    0
+                else
+                    std.mem.alignForward(usize, max_payload, @alignOf(TagType));
+
+                // Read the discriminant as a raw, bit-width-masked integer — NEVER through
+                // the enum/`switch`, which panics in safe builds on a poisoned tag (the
+                // round-trip tests fill every byte, tags included). Masking to the tag's bit
+                // width mirrors what the compiler's own tag read sees, so an in-range value
+                // still selects the right variant.
+                const TagInt = @typeInfo(TagType).@"enum".tag_type;
+                const StorageInt = std.meta.Int(.unsigned, tag_size * 8);
+                const stored = std.mem.readInt(StorageInt, ptr[tag_offset..][0..tag_size], native_endian);
+                const tag_val: TagInt = @truncate(stored);
+
+                // Save the tag + active payload, zero the WHOLE value (every inactive / unused
+                // / alignment byte becomes deterministic 0), then restore them.
+                const saved_tag: [tag_size]u8 = ptr[tag_offset..][0..tag_size].*;
+                var handled = false;
+                inline for (uinfo.fields) |f| {
+                    if (!handled and @intFromEnum(@field(TagType, f.name)) == tag_val) {
+                        handled = true;
+                        const active_size = @sizeOf(f.type);
+                        const saved_payload: [active_size]u8 = if (active_size > 0)
+                            ptr[payload_offset..][0..active_size].*
+                        else
+                            undefined;
+                        @memset(ptr[0..vsize], 0);
+                        ptr[tag_offset..][0..tag_size].* = saved_tag;
+                        if (active_size > 0) {
+                            ptr[payload_offset..][0..active_size].* = saved_payload;
+                            zeroValuePadding(f.type, ptr + payload_offset);
+                        }
                     }
-                },
+                }
+                // An out-of-range discriminant has no active payload to preserve (only
+                // reachable from poisoned test bytes, never a real serialized value): zero
+                // everything for a deterministic result.
+                if (!handled) @memset(ptr[0..vsize], 0);
             }
         }
     } else if (vinfo == .optional) {
@@ -388,3 +402,32 @@ const AllocatedMemory = struct {
     size: usize,
     alignment: usize,
 };
+
+test "zeroValuePadding: tagged-union determinism regardless of prior garbage / layout" {
+    // Tagged unions whose variants differ in size/alignment place the discriminant at a
+    // target-dependent offset that no comptime formula can reliably predict. The padding
+    // zeroer must locate the real tag (so it survives) AND deterministically zero every
+    // inactive/padding byte. The property: the same logical value canonicalizes to the
+    // SAME bytes no matter what garbage preceded it. (A mislocated tag breaks this and
+    // corrupted the discriminant on x86_64.)
+    const Case = struct {
+        fn check(comptime U: type, value: U) anyerror!void {
+            var a: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
+            var b: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
+            @memset(&a, 0xAA); // two different poisons in the inactive/padding bytes
+            @memset(&b, 0x55);
+            @as(*U, @ptrCast(&a)).* = value;
+            @as(*U, @ptrCast(&b)).* = value;
+            zeroValuePadding(U, @ptrCast(&a));
+            zeroValuePadding(U, @ptrCast(&b));
+            try std.testing.expectEqualSlices(u8, &a, &b); // deterministic, garbage-independent
+            try std.testing.expectEqual(std.meta.activeTag(value), std.meta.activeTag(@as(*U, @ptrCast(&a)).*));
+        }
+    };
+    // Payload-first union, largest variant (12) not a multiple of the max payload align (8).
+    try Case.check(union(enum) { a: u64, b: [12]u8 }, .{ .b = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } });
+    try Case.check(union(enum) { a: u64, b: [12]u8 }, .{ .a = 0x0102030405060708 });
+    // A few more shapes (different sizes/alignments → different tag placements).
+    try Case.check(union(enum) { a: u32, b: [3]u8 }, .{ .b = [_]u8{ 9, 9, 9 } });
+    try Case.check(union(enum) { a: u128, b: [4]u8 }, .{ .b = [_]u8{ 1, 2, 3, 4 } });
+}
