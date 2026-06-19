@@ -31,10 +31,11 @@ matches the design:
 
 This is the hard part of the engine, and it is largely in place. The remaining
 work is concentrated in three areas: **confined erasure still uses internal
-`NodeValue`**, **structural render patching is not yet at the target**, and
-**effects/subscriptions are not implemented**. Dirty leaf sinks now patch
+`NodeValue`**, **structural render patching is not yet at final granularity**,
+and **effects/subscriptions are not implemented**. Dirty leaf sinks now patch
 directly from the retained descriptor stream; structural `when`/`each` changes
-still rebuild the active descriptor stream. The old `Reactive`/`Graph`/
+still rebuild the active descriptor stream, but apply it as a DOM patch instead
+of resetting/recreating the simulated DOM. The old `Reactive`/`Graph`/
 `UiRuntime` Roc surface has been removed from the active platform.
 
 ## Gap Analysis (current vs. `DESIGN.md`)
@@ -52,10 +53,11 @@ Ordered roughly by how much of the design they block.
    active `Ui.when` condition or `Ui.each` item list, dispatch now reuses the
    retained descriptor stream and applies only dirty signal-backed text/value/
    checked/disabled sinks. If the dirty source feeds a structural site, the host
-   still rebuilds the active descriptor stream and reapplies the simulated DOM.
-   The remaining target is structural subtree patching: detach removed branches/
-   rows, move/reuse surviving keyed row DOM, and avoid a full DOM reset for those
-   structural updates.
+   rebuilds the active descriptor stream, then patches DOM shape from explicit
+   host-owned DOM identities: removed branch/row DOM is detached, surviving keyed
+   row DOM is moved/reused, and the simulated DOM is not reset. Remaining work is
+   finer-grained event bind/unbind and eventually eliminating the descriptor
+   rebuild once retained typed closures replace the internal `NodeValue` path.
 
 3. **Metrics are partway through the design migration.** `RuntimeMetrics` now
    carries the design counter names (`nodes_recomputed`,
@@ -63,10 +65,11 @@ Ordered roughly by how much of the design they block.
    and closure counters). Scope and keyed-row counters are real for active
    branch/row churn; closure counters remain zero until closure lifecycle data is
    retained explicitly. Leaf sink patch counts now track changed fields on
-   non-structural updates, while structural updates still include full reset/
-   create/bind command counts. Source-level equal-output pruning suppresses
-   downstream work; full per-edge `is_eq` thunk pruning is still pending until
-   confined erasure moves typed edge thunks into the runtime.
+   non-structural updates, while structural updates count actual creates, child
+   moves, changed fields, and event bindings rather than a full reset/recreate.
+   Source-level equal-output pruning suppresses downstream work; full per-edge
+   `is_eq` thunk pruning is still pending until confined erasure moves typed edge
+   thunks into the runtime.
 
 4. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
    `Ui.on_change`, `Ui.on_cleanup` are unimplemented. (Lowest priority; the
@@ -278,8 +281,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    carries an explicit binder stack, resolves event `BinderRef`s to state node
    ids, records source node ids for signal-backed descriptors, and stores the
    active binder context on scope sites so branch/row bodies can resolve outer
-   state refs. The remaining work is tightening disposal/DOM detachment semantics
-   and adding broader assertions around branch/filter churn.
+   state refs. The host now keeps DOM identity separate from state/scope
+   identity, so structural patches can detach removed DOM and move/reuse
+   surviving keyed row DOM. The remaining work is adding broader assertions
+   around branch/filter churn and tightening event rebinding granularity.
 2. **Host-invoked `is_eq` thunks.** Keep the erased-callable call convention +
    per-type marshaling as the only way the host compares typed keys/values.
    Duplicate keys within one keyed scope = hard host error (not a silent alias).
@@ -301,27 +306,30 @@ In dependency order. Each sub-step ends green per `minici` discipline.
 
    Progress: `platform/host.zig` now has recursive scope disposal that retires
    subtree node identities, drops keyed-row keys exactly once, and prevents a
-   later matching key from reusing disposed local state. It is not yet wired into
-   the app init/render lifecycle or DOM detachment. The host also has a
-   typed-key row diff helper that reuses, creates, and disposes row scopes by the
-   boxed key equality thunk and records `rows_reused`/`rows_created`/
-   `rows_removed`. The `NodeElem` descriptor collector can now consume explicit
+   later matching key from reusing disposed local state. It is wired into the app
+   init/render lifecycle and structural DOM patching. The host also has a typed-key
+   row diff helper that reuses, creates, and disposes row scopes by the boxed key
+   equality thunk and records `rows_reused`/`rows_created`/`rows_removed`. The
+   `NodeElem` descriptor collector can now consume explicit
    evaluated item values for an `Each` site, invoke `key_of`, run the typed row
    diff, call the row thunk, and walk each returned row body in its keyed row
    scope so row-local state ids survive reorder and removed rows are disposed.
    It can also collect the active `When` branch while disposing the inactive
    branch scope, so branch-local state is retired on flips and never silently
    reused. The app init/render lifecycle uses this active collector for
-   structural updates.
+   structural updates, and structural DOM application now detaches removed
+   branch/row DOM while moving/reusing surviving keyed row DOM through explicit
+   host-owned DOM identities.
 4. **Done — delete legacy surface.** `Reactive.roc`, the old string-keyed
    `Graph.roc`, and the old `UiRuntime.roc` evaluator have been removed. The
    active platform surface is the retained descriptor API in `Elem`/`Node` plus
    `Signal`/`Html`/`Ui`, and apps import only `Elem`/`Signal`/`Html`/`Ui`.
-5. **Partial — dirty leaf patches.** Dispatch now classifies changed source
-   nodes against the active descriptor stream. Non-structural changes apply only
-   the matching signal text/value/checked/disabled sinks and leave the descriptor
-   stream and DOM shape intact. Dirty sources that feed active `When`/`Each`
-   descriptors still use the structural active-root render path.
+5. **Partial — incremental render patches.** Dispatch now classifies changed
+   source nodes against the active descriptor stream. Non-structural changes
+   apply only the matching signal text/value/checked/disabled sinks and leave the
+   descriptor stream and DOM shape intact. Dirty sources that feed active
+   `When`/`Each` descriptors rebuild the active descriptor stream, then apply a
+   structural DOM patch rather than resetting the DOM.
 6. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
    `TodoId := [Tid(U64)]` (nominal-over-tag-union), `state` is a closure binder,
    and the host owns equality/hash through captured per-type thunks rather than
@@ -465,7 +473,8 @@ Status as of 2026-06-20: the host scope forest, keyed-row diff/reuse/removal,
 and active `Ui.when` branch disposal are wired into the active app lifecycle.
 Dirty non-structural source changes now patch only matching leaf sinks from the
 retained descriptor stream. Structural source changes still rebuild the active
-descriptor stream and reset/reapply the simulated DOM.
+descriptor stream, but the host now applies the result as a structural DOM patch
+using explicit DOM identities scoped by branch/row.
 
 - Keep the host scope forest explicit: each conditional branch and list row is a
   scope owning its minted ids and retained closures.
@@ -477,9 +486,12 @@ descriptor stream and reset/reapply the simulated DOM.
 - Done for leaf sinks: non-structural dirty source nodes emit only matching
   `SetText`/`SetValue`/`SetChecked`/`SetDisabled` patches, with no descriptor
   rebuild and no DOM reset.
-- Remaining structural patch work: detach removed branch/row DOM, move/reuse
-  surviving keyed row DOM, bind/unbind events for changed subtrees, and avoid the
-  full DOM reset when a dirty source feeds `when`/`each`.
+- Done for structural DOM shape: dirty structural source nodes detach removed
+  branch/row DOM, move/reuse surviving keyed row DOM, create only new DOM nodes,
+  and avoid the full DOM reset when a dirty source feeds `when`/`each`.
+- Remaining structural patch work: bind/unbind events only for changed subtrees
+  and remove the active descriptor-stream rebuild when retained typed closures
+  make per-node structural plans explicit.
 
 Exit: `rows_reused`/`rows_removed` reflect actual reuse; reorder/filter
 preserves per-row state; non-structural `patches_emitted` tracks changed sinks,
