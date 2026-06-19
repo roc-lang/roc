@@ -162,9 +162,9 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v1";
-const checked_module_cache_format_version: u64 = 5;
+const checked_module_cache_format_version: u64 = 6;
 const checked_module_cache_no_pattern: u32 = std.math.maxInt(u32);
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 8 + 8 + 32;
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 8 + 8 + 8 + 32;
 const checked_module_cache_root_base_len: usize = 12;
 const checked_module_cache_pattern_extraction_len: usize = 12;
 
@@ -214,11 +214,12 @@ fn readU64Little(buf: []const u8) u64 {
         (@as(u64, buf[7]) << 56);
 }
 
-fn hashCachePayload(module_env_len: u64, hoisted_root_count: u64, payload: []const u8) [32]u8 {
+fn hashCachePayload(module_env_len: u64, hoisted_root_count: u64, hoist_selection_version: u64, payload: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var len_bytes: [16]u8 = undefined;
+    var len_bytes: [24]u8 = undefined;
     writeU64Little(len_bytes[0..8], module_env_len);
     writeU64Little(len_bytes[8..16], hoisted_root_count);
+    writeU64Little(len_bytes[16..24], hoist_selection_version);
     hasher.update(&len_bytes);
     hasher.update(payload);
     return hasher.finalResult();
@@ -261,6 +262,8 @@ fn encodeCheckedModuleCacheEntry(
     offset += 8;
     writeU64Little(bytes[offset..][0..8], @intCast(hoisted_roots.len));
     offset += 8;
+    writeU64Little(bytes[offset..][0..8], check.HoistRoots.selection_algorithm_version);
+    offset += 8;
     const payload_start = checked_module_cache_header_len;
     @memcpy(bytes[payload_start..][0..module_env_body.len], module_env_body);
     var root_offset = payload_start + module_env_body.len;
@@ -289,6 +292,7 @@ fn encodeCheckedModuleCacheEntry(
     const body_hash = hashCachePayload(
         @intCast(module_env_body.len),
         @intCast(hoisted_roots.len),
+        check.HoistRoots.selection_algorithm_version,
         bytes[payload_start..],
     );
     @memcpy(bytes[offset..][0..32], &body_hash);
@@ -315,10 +319,13 @@ fn decodeCheckedModuleCacheEntry(
     offset += 8;
     const hoisted_root_count_u64 = readU64Little(bytes[offset..][0..8]);
     offset += 8;
+    const hoist_selection_version = readU64Little(bytes[offset..][0..8]);
+    offset += 8;
+    if (hoist_selection_version != check.HoistRoots.selection_algorithm_version) return null;
     const stored_hash = bytes[offset..][0..32];
     offset += 32;
     const payload = bytes[offset..];
-    const actual_hash = hashCachePayload(module_env_len_u64, hoisted_root_count_u64, payload);
+    const actual_hash = hashCachePayload(module_env_len_u64, hoisted_root_count_u64, hoist_selection_version, payload);
     if (!std.mem.eql(u8, stored_hash, &actual_hash)) return null;
 
     const module_env_len = std.math.cast(usize, module_env_len_u64) orelse return null;
@@ -393,485 +400,6 @@ fn decodeCheckedModuleCacheHoistedRoots(
     if (offset != bytes.len) return error.InvalidCheckedModuleCache;
 
     return roots;
-}
-
-fn validateCheckedModuleCacheHoistedRoots(
-    allocator: Allocator,
-    module_env: *const ModuleEnv,
-    roots: []const check.HoistRoots.SelectedHoistedRoot,
-) (Allocator.Error || error{InvalidCheckedModuleCache})!void {
-    var expr_roots = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator);
-    defer expr_roots.deinit();
-    var pattern_roots = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
-    defer pattern_roots.deinit();
-
-    for (roots) |root| {
-        try validateCheckedModuleCacheExprSource(module_env, root.expr);
-        if (root.pattern) |pattern| {
-            try validateCheckedModuleCachePatternSource(module_env, pattern);
-            const entry = try pattern_roots.getOrPut(pattern);
-            if (entry.found_existing) return error.InvalidCheckedModuleCache;
-        }
-
-        switch (root.body) {
-            .expr => {
-                const entry = try expr_roots.getOrPut(root.expr);
-                if (entry.found_existing) return error.InvalidCheckedModuleCache;
-            },
-            .pattern_extraction => |extraction| {
-                if (root.pattern == null) return error.InvalidCheckedModuleCache;
-                if (root.pattern.? != extraction.result_pattern) return error.InvalidCheckedModuleCache;
-                if (root.expr != extraction.base_expr) return error.InvalidCheckedModuleCache;
-                try validateCheckedModuleCacheExprSource(module_env, extraction.base_expr);
-                try validateCheckedModuleCachePatternSource(module_env, extraction.scrutinee_pattern);
-                try validateCheckedModuleCachePatternSource(module_env, extraction.result_pattern);
-            },
-        }
-    }
-}
-
-fn validateCheckedModuleCacheExprSource(
-    module_env: *const ModuleEnv,
-    expr: CIR.Expr.Idx,
-) error{InvalidCheckedModuleCache}!void {
-    const raw = @intFromEnum(expr);
-    if (raw >= module_env.store.nodes.len()) return error.InvalidCheckedModuleCache;
-    const tag = module_env.store.nodes.get(@enumFromInt(raw)).tag;
-    if (!checkedModuleCacheNodeTagIsExpr(tag)) return error.InvalidCheckedModuleCache;
-}
-
-fn validateCheckedModuleCachePatternSource(
-    module_env: *const ModuleEnv,
-    pattern: CIR.Pattern.Idx,
-) error{InvalidCheckedModuleCache}!void {
-    const raw = @intFromEnum(pattern);
-    if (raw >= module_env.store.nodes.len()) return error.InvalidCheckedModuleCache;
-    const tag = module_env.store.nodes.get(@enumFromInt(raw)).tag;
-    if (!checkedModuleCacheNodeTagIsPattern(tag)) return error.InvalidCheckedModuleCache;
-}
-
-fn checkedModuleCacheNodeTagIsExpr(tag: CIR.Node.Tag) bool {
-    return switch (tag) {
-        .expr_var,
-        .expr_tuple,
-        .expr_tuple_access,
-        .expr_list,
-        .expr_empty_list,
-        .expr_call,
-        .expr_record,
-        .expr_empty_record,
-        .expr_field_access,
-        .expr_method_call,
-        .expr_dispatch_call,
-        .expr_interpolation,
-        .expr_structural_eq,
-        .expr_method_eq,
-        .expr_type_method_call,
-        .expr_type_dispatch_call,
-        .expr_static_dispatch,
-        .expr_external_lookup,
-        .expr_required_lookup,
-        .expr_apply,
-        .expr_string,
-        .expr_string_segment,
-        .expr_bytes_literal,
-        .expr_num,
-        .expr_frac_f32,
-        .expr_frac_f64,
-        .expr_dec,
-        .expr_dec_small,
-        .expr_num_from_numeral,
-        .expr_typed_int,
-        .expr_typed_frac,
-        .expr_typed_num_from_numeral,
-        .expr_tag,
-        .expr_nominal,
-        .expr_nominal_external,
-        .expr_zero_argument_tag,
-        .expr_closure,
-        .expr_lambda,
-        .expr_record_update,
-        .expr_bin_op,
-        .expr_unary_minus,
-        .expr_unary_not,
-        .expr_suffix_single_question,
-        .expr_if_then_else,
-        .expr_match,
-        .expr_dbg,
-        .expr_crash,
-        .expr_expect_err,
-        .expr_block,
-        .expr_ellipsis,
-        .expr_anno_only,
-        .expr_hosted_lambda,
-        .expr_low_level,
-        .expr_run_low_level,
-        .expr_expect,
-        .expr_for,
-        .expr_record_builder,
-        .expr_return,
-        => true,
-        .statement_decl,
-        .statement_var,
-        .statement_var_uninitialized,
-        .statement_reassign,
-        .statement_crash,
-        .statement_dbg,
-        .statement_expr,
-        .statement_expect,
-        .statement_for,
-        .statement_while,
-        .statement_infinite_loop,
-        .statement_breakable_loop,
-        .statement_break,
-        .statement_return,
-        .statement_import,
-        .statement_alias_decl,
-        .statement_nominal_decl,
-        .statement_type_anno,
-        .statement_type_var_alias,
-        .record_field,
-        .record_destruct,
-        .match_branch,
-        .match_branch_pattern,
-        .type_header,
-        .annotation,
-        .ty_apply,
-        .ty_apply_external,
-        .ty_rigid_var,
-        .ty_rigid_var_lookup,
-        .ty_lookup,
-        .ty_underscore,
-        .ty_tag_union,
-        .ty_tag,
-        .ty_tuple,
-        .ty_record,
-        .ty_record_field,
-        .ty_fn,
-        .ty_parens,
-        .ty_lookup_external,
-        .ty_malformed,
-        .where_method,
-        .where_alias,
-        .where_malformed,
-        .pattern_identifier,
-        .pattern_as,
-        .pattern_applied_tag,
-        .pattern_nominal,
-        .pattern_nominal_external,
-        .pattern_record_destructure,
-        .pattern_list,
-        .pattern_tuple,
-        .pattern_num_literal,
-        .pattern_dec_literal,
-        .pattern_f32_literal,
-        .pattern_f64_literal,
-        .pattern_small_dec_literal,
-        .pattern_str_literal,
-        .pattern_str_interpolation,
-        .pattern_underscore,
-        .lambda_capture,
-        .def,
-        .exposed_item,
-        .if_branch,
-        .type_var_slot,
-        .malformed,
-        .diag_not_implemented,
-        .diag_invalid_num_literal,
-        .diag_empty_single_quote,
-        .diag_empty_tuple,
-        .diag_ident_already_in_scope,
-        .diag_ident_not_in_scope,
-        .diag_read_uninitialized_var,
-        .diag_self_referential_definition,
-        .diag_circular_value_definition,
-        .diag_local_reference_before_definition,
-        .diag_mutually_recursive_local_definitions,
-        .diag_erroneous_value_use,
-        .diag_erroneous_value_expr,
-        .diag_qualified_ident_does_not_exist,
-        .diag_invalid_top_level_statement,
-        .diag_expr_not_canonicalized,
-        .diag_invalid_string_interpolation,
-        .diag_unreachable_string_pattern_capture,
-        .diag_pattern_arg_invalid,
-        .diag_pattern_not_canonicalized,
-        .diag_can_lambda_not_implemented,
-        .diag_lambda_body_not_canonicalized,
-        .diag_if_condition_not_canonicalized,
-        .diag_if_then_not_canonicalized,
-        .diag_if_else_not_canonicalized,
-        .diag_malformed_type_annotation,
-        .diag_malformed_where_clause,
-        .diag_where_clause_not_allowed_in_type_decl,
-        .diag_open_ext_not_allowed_in_type_decl,
-        .diag_type_module_missing_matching_type,
-        .diag_type_module_has_alias_not_nominal,
-        .diag_default_app_missing_main,
-        .diag_default_app_wrong_arity,
-        .diag_cannot_import_default_app,
-        .diag_execution_requires_app_or_default_app,
-        .diag_type_name_case_mismatch,
-        .diag_module_header_deprecated,
-        .diag_redundant_expose_main_type,
-        .diag_invalid_main_type_rename_in_exposing,
-        .diag_var_across_function_boundary,
-        .diag_shadowing_warning,
-        .diag_type_redeclared,
-        .diag_undeclared_type,
-        .diag_undeclared_type_var,
-        .diag_type_alias_but_needed_nominal,
-        .diag_type_alias_redeclared,
-        .diag_tuple_elem_not_canonicalized,
-        .diag_file_import_not_found,
-        .diag_file_import_io_error,
-        .diag_file_import_not_utf8,
-        .diag_module_not_found,
-        .diag_value_not_exposed,
-        .diag_type_not_exposed,
-        .diag_private_type_in_exposed_type,
-        .diag_private_type_in_exposed_field,
-        .diag_type_from_missing_module,
-        .diag_module_not_imported,
-        .diag_nested_type_not_found,
-        .diag_nested_value_not_found,
-        .diag_record_builder_map2_not_found,
-        .diag_too_many_exports,
-        .diag_nominal_type_redeclared,
-        .diag_type_shadowed_warning,
-        .diag_type_parameter_conflict,
-        .diag_unused_variable,
-        .diag_used_underscore_variable,
-        .diag_duplicate_record_field,
-        .diag_crash_expects_string,
-        .diag_f64_pattern_literal,
-        .diag_unused_type_var_name,
-        .diag_type_var_marked_unused,
-        .diag_type_var_starting_with_dollar,
-        .diag_underscore_in_type_declaration,
-        .diagnostic_exposed_but_not_implemented,
-        .diag_redundant_exposed,
-        .diag_if_expr_without_else,
-        .diag_break_outside_loop,
-        .diag_infinite_loop_never_exits,
-        .diag_return_outside_fn,
-        .diag_mutually_recursive_type_aliases,
-        .diag_deprecated_number_suffix,
-        .diag_range_op_chained,
-        => false,
-    };
-}
-
-fn checkedModuleCacheNodeTagIsPattern(tag: CIR.Node.Tag) bool {
-    return switch (tag) {
-        .pattern_identifier,
-        .pattern_as,
-        .pattern_applied_tag,
-        .pattern_nominal,
-        .pattern_nominal_external,
-        .pattern_record_destructure,
-        .pattern_list,
-        .pattern_tuple,
-        .pattern_num_literal,
-        .pattern_dec_literal,
-        .pattern_f32_literal,
-        .pattern_f64_literal,
-        .pattern_small_dec_literal,
-        .pattern_str_literal,
-        .pattern_str_interpolation,
-        .pattern_underscore,
-        => true,
-        .statement_decl,
-        .statement_var,
-        .statement_var_uninitialized,
-        .statement_reassign,
-        .statement_crash,
-        .statement_dbg,
-        .statement_expr,
-        .statement_expect,
-        .statement_for,
-        .statement_while,
-        .statement_infinite_loop,
-        .statement_breakable_loop,
-        .statement_break,
-        .statement_return,
-        .statement_import,
-        .statement_alias_decl,
-        .statement_nominal_decl,
-        .statement_type_anno,
-        .statement_type_var_alias,
-        .expr_var,
-        .expr_tuple,
-        .expr_tuple_access,
-        .expr_list,
-        .expr_empty_list,
-        .expr_call,
-        .expr_record,
-        .expr_empty_record,
-        .record_field,
-        .record_destruct,
-        .expr_field_access,
-        .expr_method_call,
-        .expr_dispatch_call,
-        .expr_interpolation,
-        .expr_structural_eq,
-        .expr_method_eq,
-        .expr_type_method_call,
-        .expr_type_dispatch_call,
-        .expr_static_dispatch,
-        .expr_external_lookup,
-        .expr_required_lookup,
-        .expr_apply,
-        .expr_string,
-        .expr_string_segment,
-        .expr_bytes_literal,
-        .expr_num,
-        .expr_frac_f32,
-        .expr_frac_f64,
-        .expr_dec,
-        .expr_dec_small,
-        .expr_num_from_numeral,
-        .expr_typed_int,
-        .expr_typed_frac,
-        .expr_typed_num_from_numeral,
-        .expr_tag,
-        .expr_nominal,
-        .expr_nominal_external,
-        .expr_zero_argument_tag,
-        .expr_closure,
-        .expr_lambda,
-        .expr_record_update,
-        .expr_bin_op,
-        .expr_unary_minus,
-        .expr_unary_not,
-        .expr_suffix_single_question,
-        .expr_if_then_else,
-        .expr_match,
-        .expr_dbg,
-        .expr_crash,
-        .expr_expect_err,
-        .expr_block,
-        .expr_ellipsis,
-        .expr_anno_only,
-        .expr_hosted_lambda,
-        .expr_low_level,
-        .expr_run_low_level,
-        .expr_expect,
-        .expr_for,
-        .expr_record_builder,
-        .expr_return,
-        .match_branch,
-        .match_branch_pattern,
-        .type_header,
-        .annotation,
-        .ty_apply,
-        .ty_apply_external,
-        .ty_rigid_var,
-        .ty_rigid_var_lookup,
-        .ty_lookup,
-        .ty_underscore,
-        .ty_tag_union,
-        .ty_tag,
-        .ty_tuple,
-        .ty_record,
-        .ty_record_field,
-        .ty_fn,
-        .ty_parens,
-        .ty_lookup_external,
-        .ty_malformed,
-        .where_method,
-        .where_alias,
-        .where_malformed,
-        .lambda_capture,
-        .def,
-        .exposed_item,
-        .if_branch,
-        .type_var_slot,
-        .malformed,
-        .diag_not_implemented,
-        .diag_invalid_num_literal,
-        .diag_empty_single_quote,
-        .diag_empty_tuple,
-        .diag_ident_already_in_scope,
-        .diag_ident_not_in_scope,
-        .diag_read_uninitialized_var,
-        .diag_self_referential_definition,
-        .diag_circular_value_definition,
-        .diag_local_reference_before_definition,
-        .diag_mutually_recursive_local_definitions,
-        .diag_erroneous_value_use,
-        .diag_erroneous_value_expr,
-        .diag_qualified_ident_does_not_exist,
-        .diag_invalid_top_level_statement,
-        .diag_expr_not_canonicalized,
-        .diag_invalid_string_interpolation,
-        .diag_unreachable_string_pattern_capture,
-        .diag_pattern_arg_invalid,
-        .diag_pattern_not_canonicalized,
-        .diag_can_lambda_not_implemented,
-        .diag_lambda_body_not_canonicalized,
-        .diag_if_condition_not_canonicalized,
-        .diag_if_then_not_canonicalized,
-        .diag_if_else_not_canonicalized,
-        .diag_malformed_type_annotation,
-        .diag_malformed_where_clause,
-        .diag_where_clause_not_allowed_in_type_decl,
-        .diag_open_ext_not_allowed_in_type_decl,
-        .diag_type_module_missing_matching_type,
-        .diag_type_module_has_alias_not_nominal,
-        .diag_default_app_missing_main,
-        .diag_default_app_wrong_arity,
-        .diag_cannot_import_default_app,
-        .diag_execution_requires_app_or_default_app,
-        .diag_type_name_case_mismatch,
-        .diag_module_header_deprecated,
-        .diag_redundant_expose_main_type,
-        .diag_invalid_main_type_rename_in_exposing,
-        .diag_var_across_function_boundary,
-        .diag_shadowing_warning,
-        .diag_type_redeclared,
-        .diag_undeclared_type,
-        .diag_undeclared_type_var,
-        .diag_type_alias_but_needed_nominal,
-        .diag_type_alias_redeclared,
-        .diag_tuple_elem_not_canonicalized,
-        .diag_file_import_not_found,
-        .diag_file_import_io_error,
-        .diag_file_import_not_utf8,
-        .diag_module_not_found,
-        .diag_value_not_exposed,
-        .diag_type_not_exposed,
-        .diag_private_type_in_exposed_type,
-        .diag_private_type_in_exposed_field,
-        .diag_type_from_missing_module,
-        .diag_module_not_imported,
-        .diag_nested_type_not_found,
-        .diag_nested_value_not_found,
-        .diag_record_builder_map2_not_found,
-        .diag_too_many_exports,
-        .diag_nominal_type_redeclared,
-        .diag_type_shadowed_warning,
-        .diag_type_parameter_conflict,
-        .diag_unused_variable,
-        .diag_used_underscore_variable,
-        .diag_duplicate_record_field,
-        .diag_crash_expects_string,
-        .diag_f64_pattern_literal,
-        .diag_unused_type_var_name,
-        .diag_type_var_marked_unused,
-        .diag_type_var_starting_with_dollar,
-        .diag_underscore_in_type_declaration,
-        .diagnostic_exposed_but_not_implemented,
-        .diag_redundant_exposed,
-        .diag_if_expr_without_else,
-        .diag_break_outside_loop,
-        .diag_infinite_loop_never_exits,
-        .diag_return_outside_fn,
-        .diag_mutually_recursive_type_aliases,
-        .diag_deprecated_number_suffix,
-        .diag_range_op_chained,
-        => false,
-    };
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -3461,7 +2989,7 @@ pub const Coordinator = struct {
             return false;
         };
         defer check.HoistRoots.freeSelectedRootSlice(module_alloc, hoisted_roots);
-        validateCheckedModuleCacheHoistedRoots(module_alloc, cached_env, hoisted_roots) catch {
+        check.HoistRoots.validateSelectedRootSetForPublication(module_alloc, cached_env, hoisted_roots) catch {
             manager.stats.recordInvalidation();
             return false;
         };
@@ -5030,6 +4558,47 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
     return overwritten;
 }
 
+fn checkedModuleCacheKeyFromEntryBytes(bytes: []const u8) ?check.CheckedArtifact.CheckedModuleArtifactKey {
+    if (bytes.len < checked_module_cache_magic.len + 8 + 32) return null;
+    if (!std.mem.eql(u8, bytes[0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
+
+    var key = check.CheckedArtifact.CheckedModuleArtifactKey{};
+    const key_offset = checked_module_cache_magic.len + 8;
+    @memcpy(&key.bytes, bytes[key_offset..][0..32]);
+    return key;
+}
+
+fn reorderFirstCheckedModuleCacheEntryWithMultipleHoistedRoots(allocator: Allocator, absolute_dir: []const u8) anyerror!bool {
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+
+        const bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(128 * 1024 * 1024));
+        defer allocator.free(bytes);
+
+        const key = checkedModuleCacheKeyFromEntryBytes(bytes) orelse continue;
+        const decoded_entry = decodeCheckedModuleCacheEntry(key, bytes) orelse continue;
+        if (decoded_entry.hoisted_root_count < 2) continue;
+
+        const roots = decodeCheckedModuleCacheHoistedRoots(allocator, decoded_entry.hoisted_roots, decoded_entry.hoisted_root_count) catch continue;
+        defer check.HoistRoots.freeSelectedRootSlice(allocator, roots);
+        std.mem.swap(check.HoistRoots.SelectedHoistedRoot, @constCast(&roots[0]), @constCast(&roots[1]));
+
+        const rewritten = try encodeCheckedModuleCacheEntry(allocator, key, decoded_entry.module_env, roots);
+        defer allocator.free(rewritten);
+        try dir.writeFile(io, .{ .sub_path = entry.path, .data = rewritten });
+        return true;
+    }
+
+    return false;
+}
+
 test "Coordinator checked cache key requires checked direct imports" {
     const allocator = std.testing.allocator;
 
@@ -5175,6 +4744,80 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     try std.testing.expect(second.cache.invalidations > 0);
 }
 
+test "Coordinator semantically invalid checked module cache hoisted roots compile from source" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    x = 41.I64
+        \\    y = x + 1.I64
+        \\    _ = y + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(first.hoisted_constants >= 2);
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(checked_module_cache_dir);
+    try std.testing.expect(try reorderFirstCheckedModuleCacheEntryWithMultipleHoistedRoots(allocator, checked_module_cache_dir));
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(second.cache.invalidations > 0);
+    try std.testing.expect(second.build.modules_compiled > 0);
+}
+
 test "checked module cache roundtrips pattern extraction hoisted root payloads" {
     const allocator = std.testing.allocator;
     const key = check.CheckedArtifact.CheckedModuleArtifactKey{};
@@ -5301,15 +4944,15 @@ test "checked module cache validates decoded hoisted roots against module nodes"
             } },
         },
     };
-    try validateCheckedModuleCacheHoistedRoots(allocator, &env, &valid_roots);
+    try check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &valid_roots);
 
     const invalid_expr_index = [_]check.HoistRoots.SelectedHoistedRoot{.{
         .expr = @enumFromInt(999),
         .body = .expr,
     }};
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &invalid_expr_index),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &invalid_expr_index),
     );
 
     const pattern_used_as_expr = [_]check.HoistRoots.SelectedHoistedRoot{.{
@@ -5317,8 +4960,8 @@ test "checked module cache validates decoded hoisted roots against module nodes"
         .body = .expr,
     }};
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &pattern_used_as_expr),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &pattern_used_as_expr),
     );
 
     const expr_used_as_pattern = [_]check.HoistRoots.SelectedHoistedRoot{.{
@@ -5327,8 +4970,8 @@ test "checked module cache validates decoded hoisted roots against module nodes"
         .body = .expr,
     }};
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &expr_used_as_pattern),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &expr_used_as_pattern),
     );
 
     const duplicate_expr_roots = [_]check.HoistRoots.SelectedHoistedRoot{
@@ -5342,8 +4985,8 @@ test "checked module cache validates decoded hoisted roots against module nodes"
         },
     };
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &duplicate_expr_roots),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &duplicate_expr_roots),
     );
 
     const duplicate_pattern_roots = [_]check.HoistRoots.SelectedHoistedRoot{
@@ -5367,8 +5010,8 @@ test "checked module cache validates decoded hoisted roots against module nodes"
         },
     };
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &duplicate_pattern_roots),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &duplicate_pattern_roots),
     );
 
     const mismatched_extraction_base = [_]check.HoistRoots.SelectedHoistedRoot{.{
@@ -5381,8 +5024,8 @@ test "checked module cache validates decoded hoisted roots against module nodes"
         } },
     }};
     try std.testing.expectError(
-        error.InvalidCheckedModuleCache,
-        validateCheckedModuleCacheHoistedRoots(allocator, &env, &mismatched_extraction_base),
+        error.InvalidSelectedHoistedRootSet,
+        check.HoistRoots.validateSelectedRootSetShape(allocator, &env, &mismatched_extraction_base),
     );
 }
 

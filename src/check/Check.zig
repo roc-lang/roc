@@ -411,6 +411,13 @@ const HoistKnownUpdate = struct {
     root_index: u32,
 };
 
+const HoistSelectionAction = enum {
+    suppress_children,
+    cover_with_current_root,
+    flush_child_candidates,
+    drop_empty,
+};
+
 const HoistSelectionTransaction = struct {
     checker: *Self,
     staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
@@ -1222,8 +1229,23 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
     const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
-    const should_flush_child_candidates = (!semantically_eligible or (can_be_root and !frame.binding_rhs)) and
-        !frame.suppressed and !can_be_root;
+    const can_cover_children = top_level_equivalent and self.exprCanCoverHoistedChildren(expr);
+    const binding_rhs_can_cover_children = frame.binding_rhs and
+        top_level_equivalent and
+        self.exprCanBeHoistedBindingRoot(expr) and
+        !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
+        !self.varIsFunctionType(ModuleEnv.varFrom(expr));
+    const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
+    const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
+    const action: HoistSelectionAction = if (frame.suppressed)
+        .suppress_children
+    else if (current_covers_children)
+        .cover_with_current_root
+    else if (has_child_candidates)
+        .flush_child_candidates
+    else
+        .drop_empty;
+    const should_flush_child_candidates = action == .flush_child_candidates;
     const should_bubble_to_parent = frame_index != 0 and
         can_be_root and !frame.binding_rhs and !frame.suppressed;
 
@@ -1236,16 +1258,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         }
     }
     if (frame.binding_rhs) {
-        const binding_pattern_can_be_selected = if (frame.binding_pattern) |pattern|
-            self.patternCanOwnHoistedBindingRoot(pattern)
-        else
-            true;
-        const binding_rhs_can_be_selected = top_level_equivalent and
-            binding_pattern_can_be_selected and
-            self.exprCanBeHoistedBindingRoot(expr) and
-            !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
-            !self.varIsFunctionType(ModuleEnv.varFrom(expr));
-        if ((!semantically_eligible or !binding_rhs_can_be_selected) and !frame.suppressed) {
+        if (!binding_rhs_can_cover_children and !frame.suppressed) {
             for (self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]) |dependency| {
                 _ = try transaction.stageBindingRoot(dependency);
             }
@@ -1256,15 +1269,16 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
     try transaction.commit();
 
-    if ((!semantically_eligible or (can_be_root and !frame.binding_rhs)) and !frame.suppressed) {
-        if (can_be_root) {
-            self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
-        } else {
-            self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
+    if (builtin.mode == .Debug and has_child_candidates) {
+        switch (action) {
+            .suppress_children,
+            .cover_with_current_root,
+            .flush_child_candidates,
+            => {},
+            .drop_empty => hoistSelectionInvariant("hoist frame dropped child candidates without an explicit action"),
         }
-    } else {
-        self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
     }
+    self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
 
     if (frame.binding_rhs) {
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
@@ -2188,6 +2202,71 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_for,
         .e_return,
         .e_run_low_level,
+        => true,
+    };
+}
+
+/// True when this expression can replace already-bubbled child candidates with
+/// one larger stored data root. This is intentionally stricter than semantic
+/// eligibility: function/lambda/closure and observable expression frames may
+/// contain closed child work, but they cannot cover that work as data roots.
+fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
+    return switch (self.cir.store.getExpr(expr)) {
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_num,
+        .e_num_from_numeral,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_crash,
+        .e_closure,
+        .e_lambda,
+        .e_hosted_lambda,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_for,
+        .e_return,
+        .e_run_low_level,
+        => false,
+        .e_str => |str| self.stringHasInterpolation(str.span),
+        .e_list,
+        .e_tuple,
+        .e_block,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_record,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
         => true,
     };
 }

@@ -40,6 +40,34 @@ test "hoist roots selected for closed ordinary call binding RHS" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
+test "hoist roots selected for direct closed ordinary call function body" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |_| add_one(41.I64)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_call);
+}
+
+test "hoist roots selected for direct closed arithmetic function body" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| 1.I64 + 2.I64
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
+}
+
 test "hoist roots select closed ordinary call dependencies first" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -98,6 +126,23 @@ test "hoist roots selected for closed pure static dispatch call binding RHS" {
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
+test "hoist roots selected for direct closed static dispatch function body" {
+    var test_env = try TestEnv.init("Test",
+        \\DispatchBox := [Val(I64)].{
+        \\    inc = |DispatchBox.Val(n)| n + 1.I64
+        \\}
+        \\
+        \\main = |_| DispatchBox.Val(41.I64).inc()
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
+}
+
 test "hoist roots are not selected for ordinary call with runtime argument" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -118,6 +163,47 @@ test "hoist roots are not selected for ordinary call with runtime callee" {
         \\main = |arg, f| {
         \\    x = f(41.I64)
         \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for direct runtime-dependent function body" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| add_one(arg)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots selected for closed nested lambda body child" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    f = |_| 1.I64 + 2.I64
+        \\    f(arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
+}
+
+test "hoist roots are not selected for nested lambda body depending on its argument" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    f = |n| n + 2.I64
+        \\    f(arg)
         \\}
     );
     defer test_env.deinit();
@@ -550,16 +636,16 @@ test "hoist roots depending on pruned non-concrete roots are pruned" {
 
 test "hoist roots depending on pruned custom literal roots are pruned" {
     var test_env = try TestEnv.init("Test",
-        \\Picky := [Picky].{
+        \\Picky := [Picky(Numeral)].{
         \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
-        \\    from_numeral = |_numeral| Ok(Picky)
+        \\    from_numeral = |numeral| Ok(Picky(numeral))
         \\}
         \\
         \\main = |_| {
         \\    x : Picky
         \\    x = 42
         \\    y = match x {
-        \\        Picky => 7.I64
+        \\        Picky(_) => 7.I64
         \\    }
         \\    y
         \\}
@@ -604,9 +690,9 @@ test "hoist roots selected for arbitrary closed child expressions" {
 
 test "hoist roots are not selected for custom from_numeral conversion roots" {
     var test_env = try TestEnv.init("Test",
-        \\Picky := [Picky].{
+        \\Picky := [Picky(Numeral)].{
         \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
-        \\    from_numeral = |_numeral| Ok(Picky)
+        \\    from_numeral = |numeral| Ok(Picky(numeral))
         \\}
         \\
         \\main = |_| {
@@ -660,5 +746,411 @@ test "hoist roots are not selected for effectful static dispatch calls" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist root validator accepts checker-selected roots" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    x = 41.I64
+        \\    y = x + 1.I64
+        \\    y + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try hoist_roots.validateSelectedRootSetForPublication(
+        std.testing.allocator,
+        test_env.module_env,
+        test_env.checker.selectedHoistedRoots(),
+    );
+}
+
+test "hoist root validator rejects runtime argument dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| arg + 1.I64
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const invalid_roots = [_]hoist_roots.SelectedHoistedRoot{.{
+        .expr = try firstExprWithTag(&test_env, .e_dispatch_call),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &invalid_roots),
+    );
+}
+
+test "hoist root validator rejects effectful root" {
+    var test_env = try TestEnv.init("Test",
+        \\Foo := { x: I64 }.{
+        \\    show! : Foo => I64
+        \\    show! = |self| self.x
+        \\}
+        \\
+        \\main! = |_| {
+        \\    foo : Foo
+        \\    foo = { x: 42.I64 }
+        \\    foo.show!()
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const invalid_roots = [_]hoist_roots.SelectedHoistedRoot{.{
+        .expr = try firstExprWithTag(&test_env, .e_dispatch_call),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &invalid_roots),
+    );
+}
+
+test "hoist root validator rejects function-typed root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    f = |n| n
+        \\    f
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const invalid_roots = [_]hoist_roots.SelectedHoistedRoot{.{
+        .expr = try firstExprWithTag(&test_env, .e_lambda),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &invalid_roots),
+    );
+}
+
+test "hoist root validator rejects dedicated literal conversion root" {
+    var test_env = try TestEnv.init("Test",
+        \\Picky := [Picky(Numeral)].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Picky(numeral))
+        \\}
+        \\
+        \\main = |_| {
+        \\    x : Picky
+        \\    x = 42
+        \\    _ = x
+        \\    0.I64
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const invalid_roots = [_]hoist_roots.SelectedHoistedRoot{.{
+        .expr = try firstExprWithLiteralConversion(&test_env),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &invalid_roots),
+    );
+}
+
+test "hoist root validator rejects later selected dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    x = 41.I64
+        \\    y = x + 1.I64
+        \\    y + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    const reversed_roots = [_]hoist_roots.SelectedHoistedRoot{ roots[1], roots[0] };
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &reversed_roots),
+    );
+}
+
+test "hoist root validator rejects unselected local dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    x = 41.I64
+        \\    y = x + 1.I64
+        \\    y + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    const missing_dependency_roots = [_]hoist_roots.SelectedHoistedRoot{roots[1]};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &missing_dependency_roots),
+    );
+}
+
+test "hoist root validator rejects mutable local dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    var x = 41.I64
+        \\    y = x + 1.I64
+        \\    y
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const invalid_roots = [_]hoist_roots.SelectedHoistedRoot{.{
+        .expr = try firstExprWithTag(&test_env, .e_dispatch_call),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidSelectedHoistedRootSet,
+        hoist_roots.validateSelectedRootSetForPublication(std.testing.allocator, test_env.module_env, &invalid_roots),
+    );
+}
+
+fn firstExprWithTag(test_env: *const TestEnv, tag: std.meta.Tag(CIR.Expr)) !CIR.Expr.Idx {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!exprNodeTag(test_env.checker.cir.store.nodes.get(node_idx).tag)) continue;
+        const expr: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (std.meta.activeTag(test_env.checker.cir.store.getExpr(expr)) == tag) return expr;
+    }
+    return error.ExpectedExprTag;
+}
+
+fn firstExprWithLiteralConversion(test_env: *const TestEnv) !CIR.Expr.Idx {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!exprNodeTag(test_env.checker.cir.store.nodes.get(node_idx).tag)) continue;
+        if (test_env.module_env.numeralDispatchPlanForNode(node_idx) != null or
+            test_env.module_env.quoteDispatchPlanForNode(node_idx) != null)
+        {
+            return @enumFromInt(raw_node_idx);
+        }
+    }
+    return error.ExpectedLiteralConversionExpr;
+}
+
+fn exprNodeTag(tag: CIR.Node.Tag) bool {
+    return switch (tag) {
+        .expr_var,
+        .expr_tuple,
+        .expr_tuple_access,
+        .expr_list,
+        .expr_empty_list,
+        .expr_call,
+        .expr_record,
+        .expr_empty_record,
+        .expr_field_access,
+        .expr_method_call,
+        .expr_dispatch_call,
+        .expr_interpolation,
+        .expr_structural_eq,
+        .expr_method_eq,
+        .expr_type_method_call,
+        .expr_type_dispatch_call,
+        .expr_static_dispatch,
+        .expr_external_lookup,
+        .expr_required_lookup,
+        .expr_apply,
+        .expr_string,
+        .expr_string_segment,
+        .expr_bytes_literal,
+        .expr_num,
+        .expr_frac_f32,
+        .expr_frac_f64,
+        .expr_dec,
+        .expr_dec_small,
+        .expr_num_from_numeral,
+        .expr_typed_int,
+        .expr_typed_frac,
+        .expr_typed_num_from_numeral,
+        .expr_tag,
+        .expr_nominal,
+        .expr_nominal_external,
+        .expr_zero_argument_tag,
+        .expr_closure,
+        .expr_lambda,
+        .expr_record_update,
+        .expr_bin_op,
+        .expr_unary_minus,
+        .expr_unary_not,
+        .expr_suffix_single_question,
+        .expr_if_then_else,
+        .expr_match,
+        .expr_dbg,
+        .expr_crash,
+        .expr_expect_err,
+        .expr_block,
+        .expr_ellipsis,
+        .expr_anno_only,
+        .expr_hosted_lambda,
+        .expr_low_level,
+        .expr_run_low_level,
+        .expr_expect,
+        .expr_for,
+        .expr_record_builder,
+        .expr_return,
+        => true,
+        .statement_decl,
+        .statement_var,
+        .statement_var_uninitialized,
+        .statement_reassign,
+        .statement_crash,
+        .statement_dbg,
+        .statement_expr,
+        .statement_expect,
+        .statement_for,
+        .statement_while,
+        .statement_infinite_loop,
+        .statement_breakable_loop,
+        .statement_break,
+        .statement_return,
+        .statement_import,
+        .statement_alias_decl,
+        .statement_nominal_decl,
+        .statement_type_anno,
+        .statement_type_var_alias,
+        .record_field,
+        .record_destruct,
+        .match_branch,
+        .match_branch_pattern,
+        .type_header,
+        .annotation,
+        .ty_apply,
+        .ty_apply_external,
+        .ty_rigid_var,
+        .ty_rigid_var_lookup,
+        .ty_lookup,
+        .ty_underscore,
+        .ty_tag_union,
+        .ty_tag,
+        .ty_tuple,
+        .ty_record,
+        .ty_record_field,
+        .ty_fn,
+        .ty_parens,
+        .ty_lookup_external,
+        .ty_malformed,
+        .where_method,
+        .where_alias,
+        .where_malformed,
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        .pattern_num_literal,
+        .pattern_dec_literal,
+        .pattern_f32_literal,
+        .pattern_f64_literal,
+        .pattern_small_dec_literal,
+        .pattern_str_literal,
+        .pattern_str_interpolation,
+        .pattern_underscore,
+        .lambda_capture,
+        .def,
+        .exposed_item,
+        .if_branch,
+        .type_var_slot,
+        .malformed,
+        .diag_not_implemented,
+        .diag_invalid_num_literal,
+        .diag_empty_single_quote,
+        .diag_empty_tuple,
+        .diag_ident_already_in_scope,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_mutually_recursive_local_definitions,
+        .diag_erroneous_value_use,
+        .diag_erroneous_value_expr,
+        .diag_qualified_ident_does_not_exist,
+        .diag_invalid_top_level_statement,
+        .diag_expr_not_canonicalized,
+        .diag_invalid_string_interpolation,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_can_lambda_not_implemented,
+        .diag_lambda_body_not_canonicalized,
+        .diag_if_condition_not_canonicalized,
+        .diag_if_then_not_canonicalized,
+        .diag_if_else_not_canonicalized,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_type_module_missing_matching_type,
+        .diag_type_module_has_alias_not_nominal,
+        .diag_default_app_missing_main,
+        .diag_default_app_wrong_arity,
+        .diag_cannot_import_default_app,
+        .diag_execution_requires_app_or_default_app,
+        .diag_type_name_case_mismatch,
+        .diag_module_header_deprecated,
+        .diag_redundant_expose_main_type,
+        .diag_invalid_main_type_rename_in_exposing,
+        .diag_var_across_function_boundary,
+        .diag_shadowing_warning,
+        .diag_type_redeclared,
+        .diag_undeclared_type,
+        .diag_undeclared_type_var,
+        .diag_type_alias_but_needed_nominal,
+        .diag_type_alias_redeclared,
+        .diag_tuple_elem_not_canonicalized,
+        .diag_file_import_not_found,
+        .diag_file_import_io_error,
+        .diag_file_import_not_utf8,
+        .diag_module_not_found,
+        .diag_value_not_exposed,
+        .diag_type_not_exposed,
+        .diag_private_type_in_exposed_type,
+        .diag_private_type_in_exposed_field,
+        .diag_type_from_missing_module,
+        .diag_module_not_imported,
+        .diag_nested_type_not_found,
+        .diag_nested_value_not_found,
+        .diag_record_builder_map2_not_found,
+        .diag_too_many_exports,
+        .diag_nominal_type_redeclared,
+        .diag_type_shadowed_warning,
+        .diag_type_parameter_conflict,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        .diag_duplicate_record_field,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_unused_type_var_name,
+        .diag_type_var_marked_unused,
+        .diag_type_var_starting_with_dollar,
+        .diag_underscore_in_type_declaration,
+        .diagnostic_exposed_but_not_implemented,
+        .diag_redundant_exposed,
+        .diag_if_expr_without_else,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_return_outside_fn,
+        .diag_mutually_recursive_type_aliases,
+        .diag_deprecated_number_suffix,
+        .diag_range_op_chained,
+        => false,
+    };
 }

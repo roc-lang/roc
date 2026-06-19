@@ -1791,6 +1791,10 @@ pub const PackageEnv = struct {
         var typed_modules = try CheckedModules.init(gpa, source_modules);
         defer typed_modules.deinit();
 
+        if (builtin.mode == .Debug) {
+            try check.HoistRoots.validateSelectedRootSetForPublication(gpa, env, publication.hoisted_roots);
+        }
+
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             &typed_modules,
