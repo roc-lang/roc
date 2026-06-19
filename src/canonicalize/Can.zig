@@ -18627,6 +18627,18 @@ fn setExternalTypeBinding(
 ) Allocator.Error!void {
     // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
     if (scope.type_bindings.get(local_ident)) |existing_binding| {
+        // Binding the same external type to the same name twice is idempotent,
+        // not a conflict. This happens when a type module's main type is both
+        // auto-exposed and named explicitly, as in `import M exposing [M]`.
+        switch (existing_binding) {
+            .external_nominal => |ext| {
+                if (ext.module_ident.eql(module_ident) and ext.original_ident.eql(original_ident)) {
+                    return;
+                }
+            },
+            else => {},
+        }
+
         // Extract the original region from the existing binding for the diagnostic
         const original_region = switch (existing_binding) {
             .local_nominal, .local_alias, .associated_nominal => Region.zero(),

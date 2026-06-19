@@ -430,6 +430,94 @@ test "import validation - exposed nested type associated function resolves via s
     }
 }
 
+test "import validation - exposing a type module's main type by name is not a redeclaration" {
+    // A type module's main type is auto-exposed, so naming it explicitly in
+    // `exposing` (as platform code does with `import NodeB exposing [NodeB]`)
+    // binds the same external type to the same name twice. That is idempotent,
+    // not a DUPLICATE DEFINITION.
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+    const Ident = base.Ident;
+
+    const shape_source =
+        \\Shape :: {}.{
+        \\    area : U64 -> U64
+        \\    area = |x| x
+        \\}
+    ;
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+
+    const shape_env = try allocator.create(ModuleEnv);
+    shape_env.* = try ModuleEnv.init(allocator, shape_source);
+    defer {
+        shape_env.deinit();
+        allocator.destroy(shape_env);
+    }
+    const shape_ast = try parse.file(allocator, &shape_env.common);
+    defer shape_ast.deinit();
+    try shape_env.initCIRFields("Shape");
+
+    var shape_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer shape_builtin_ctx.deinit();
+
+    var shape_can = try Can.initModule(roc_ctx, shape_env, shape_ast, shape_builtin_ctx.canInitContext());
+    defer shape_can.deinit();
+    try shape_can.canonicalizeFile();
+
+    const importer_source =
+        \\module [main]
+        \\
+        \\import Shape exposing [Shape]
+        \\
+        \\main = Shape.area(5)
+    ;
+    const importer_env = try allocator.create(ModuleEnv);
+    importer_env.* = try ModuleEnv.init(allocator, importer_source);
+    defer {
+        importer_env.deinit();
+        allocator.destroy(importer_env);
+    }
+    const importer_ast = try parse.file(allocator, &importer_env.common);
+    defer importer_ast.deinit();
+    try importer_env.initCIRFields("Importer");
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    const shape_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Shape"));
+    const shape_qualified_ident = try shape_env.common.insertIdent(shape_env.gpa, Ident.for_text("Shape"));
+    try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident });
+
+    var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer importer_builtin_ctx.deinit();
+
+    var importer_can = try Can.initModule(roc_ctx, importer_env, importer_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = importer_builtin_ctx.builtin_module.env,
+            .builtin_indices = importer_builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer importer_can.deinit();
+    try importer_can.canonicalizeFile();
+
+    const diagnostics = try importer_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .shadowing_warning => |d| {
+                std.debug.print("unexpected redeclaration of {s}\n", .{importer_env.getIdent(d.ident)});
+                return error.UnexpectedRedeclaration;
+            },
+            .qualified_ident_does_not_exist => |d| {
+                std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
+                return error.UnexpectedUnresolvedIdent;
+            },
+            else => {},
+        }
+    }
+}
+
 test "unresolved exposed value is not imported as external lookup target zero" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
