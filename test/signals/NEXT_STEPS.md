@@ -265,6 +265,13 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    call convention + per-type marshaling so the host can call the boxed key-`is_eq`
    for the keyed-row diff and the value `is_eq` for change pruning. Duplicate keys
    within one keyed scope = hard host error (not a silent alias).
+
+   Progress: `platform/host.zig` now has typed helper calls for
+   `NodeValue -> NodeValue`, `(NodeValue, NodeValue) -> NodeValue`, and
+   `(NodeValue, NodeValue) -> Bool`, with Zig unit coverage that allocates boxed
+   erased callables through the real ABI payload/capture path. The remaining work
+   is wiring those helpers into keyed-row diffing, reducer dispatch, and
+   value-pruning once the host owns the new `Node.Elem` graph.
 5. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
    `is_eq` thunk; reuse surviving row scopes (and their local state) → `rows_reused`;
    mint new keys → `rows_created`; dispose removed keys → drop one refcount per

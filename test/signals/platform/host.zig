@@ -2252,6 +2252,66 @@ fn nodeValueBool(value: bool) abi.NodeValue {
     };
 }
 
+fn nodeValueI64(value: i64) abi.NodeValue {
+    return .{
+        .payload = .{ .nv_i64 = value },
+        .tag = .NvI64,
+    };
+}
+
+const ErasedNodeValueUnaryArgs = extern struct {
+    arg0: abi.NodeValue,
+};
+
+const ErasedNodeValueBinaryArgs = extern struct {
+    arg0: abi.NodeValue,
+    arg1: abi.NodeValue,
+};
+
+fn erasedCallablePayload(callable: abi.RocErasedCallable) *abi.RocErasedCallablePayload {
+    if (callable == null) failHost("host attempted to call a null Roc erased callable");
+    return abi.rocErasedCallablePayloadPtr(callable);
+}
+
+fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue) abi.NodeValue {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedNodeValueUnaryArgs{ .arg0 = arg0 };
+    var result: abi.NodeValue = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.NodeValue {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
+    var result: abi.NodeValue = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedNodeValueNodeValueToBool(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) bool {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
+    var result: bool = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
 fn activeOccurrence(event_id: u64, value: abi.NodeValue) ActiveEvent {
     return .{
         .payload = .{ .occurrence = .{ .id = event_id, .value = value } },
@@ -2919,4 +2979,138 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
+}
+
+const TestErasedI64Capture = extern struct {
+    amount: i64,
+};
+
+var test_erased_callable_drop_count: u64 = 0;
+
+fn testCapturePtrAs(comptime T: type, capture_ptr: ?[*]u8) *T {
+    return @ptrCast(@alignCast(capture_ptr orelse unreachable));
+}
+
+fn testErasedArgsAs(comptime T: type, args: ?[*]const u8) *align(1) const T {
+    return @as(*align(1) const T, @ptrCast(args orelse unreachable));
+}
+
+fn writeTestErasedResult(comptime T: type, ret: ?[*]u8, value: T) void {
+    @as(*align(1) T, @ptrCast(ret orelse unreachable)).* = value;
+}
+
+fn writeTestErasedCallable(
+    comptime Capture: type,
+    roc_host: *abi.RocHost,
+    callable_fn_ptr: abi.RocErasedCallableFn,
+    on_drop: ?abi.RocErasedCallableOnDrop,
+    capture: Capture,
+) abi.RocErasedCallable {
+    comptime {
+        if (@alignOf(Capture) > abi.roc_erased_callable_capture_alignment) {
+            @compileError("signals test erased-callable capture alignment exceeds Roc ABI alignment");
+        }
+    }
+    const callable = abi.rocErasedCallableAllocate(roc_host, callable_fn_ptr, on_drop, @sizeOf(Capture));
+    testCapturePtrAs(Capture, abi.rocErasedCallableCapturePtr(callable)).* = capture;
+    return callable;
+}
+
+fn testUnaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedNodeValueUnaryArgs, args);
+    const input = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test unary NodeValue callable expected NvI64"),
+    };
+    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(input + capture.amount));
+}
+
+fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const left = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test binary NodeValue callable expected left NvI64"),
+    };
+    const right = switch (call_args.arg1.tag) {
+        .NvI64 => call_args.arg1.payload.nv_i64,
+        else => @panic("test binary NodeValue callable expected right NvI64"),
+    };
+    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(left + right + capture.amount));
+}
+
+fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const is_equal =
+        call_args.arg0.tag == .NvI64 and
+        call_args.arg1.tag == .NvI64 and
+        call_args.arg0.payload.nv_i64 == call_args.arg1.payload.nv_i64;
+    writeTestErasedResult(bool, ret, is_equal);
+}
+
+fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
+    test_erased_callable_drop_count += 1;
+}
+
+fn expectNodeValueI64(value: abi.NodeValue, expected: i64) !void {
+    try std.testing.expectEqual(abi.NodeValueTag.NvI64, value.tag);
+    try std.testing.expectEqual(expected, value.payload.nv_i64);
+}
+
+test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.roc_allocations.deinit(host.gpa.allocator());
+        _ = host.gpa.deinit();
+    }
+
+    {
+        const unary = writeTestErasedCallable(
+            TestErasedI64Capture,
+            &roc_host,
+            &testUnaryNodeValueCallable,
+            &testErasedCallableOnDrop,
+            .{ .amount = 5 },
+        );
+        defer abi.decrefErasedCallable(unary, &roc_host);
+
+        const result = callErasedNodeValueToNodeValue(&roc_host, unary, nodeValueI64(37));
+        try expectNodeValueI64(result, 42);
+    }
+
+    {
+        const binary = writeTestErasedCallable(
+            TestErasedI64Capture,
+            &roc_host,
+            &testBinaryNodeValueCallable,
+            &testErasedCallableOnDrop,
+            .{ .amount = 3 },
+        );
+        defer abi.decrefErasedCallable(binary, &roc_host);
+
+        const result = callErasedNodeValueNodeValueToNodeValue(&roc_host, binary, nodeValueI64(10), nodeValueI64(29));
+        try expectNodeValueI64(result, 42);
+    }
+
+    {
+        const eq = writeTestErasedCallable(
+            TestErasedI64Capture,
+            &roc_host,
+            &testNodeValueEqCallable,
+            &testErasedCallableOnDrop,
+            .{ .amount = 0 },
+        );
+        defer abi.decrefErasedCallable(eq, &roc_host);
+
+        try std.testing.expect(callErasedNodeValueNodeValueToBool(&roc_host, eq, nodeValueI64(42), nodeValueI64(42)));
+        try std.testing.expect(!callErasedNodeValueNodeValueToBool(&roc_host, eq, nodeValueI64(41), nodeValueI64(42)));
+    }
+
+    try std.testing.expectEqual(@as(u64, 3), test_erased_callable_drop_count);
 }
