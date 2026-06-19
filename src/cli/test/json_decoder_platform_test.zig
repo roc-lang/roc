@@ -108,12 +108,12 @@ test "JSON parsing platform derives structural parser without runtime allocation
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
 
     try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
-    try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "user_id" });
+    try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "inner_value", "nested_record", "user_id" });
     try runJsonDecoderAndCheckOutput(
         allocator,
         camel_output_path,
-        "{ \"cacheControl\" : \"no-cache\", \"userId\" : \"abc\" }\n",
-        "11\n",
+        "{ \"cacheControl\" : \"no-cache\", \"nestedRecord\" : { \"innerValue\" : \"xyz\" }, \"userId\" : \"abc\" }\n",
+        "14\n",
     );
 
     try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");

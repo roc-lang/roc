@@ -103,7 +103,6 @@ pub fn certifyStore(
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
         .repr_scratch = std.AutoHashMap(ValueId, u32).init(allocator),
         .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
-        .scan_visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
         .diag = diag,
     };
     defer certifier.deinit();
@@ -576,9 +575,6 @@ const Certifier = struct {
     join_bodies: std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId),
     /// Scratch bitset over store locals, reused by join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
-    /// Scratch storage reused by reachability scans.
-    scan_visited: std.AutoHashMap(LIR.CFStmtId, void),
-    scan_stack: std.ArrayList(LIR.CFStmtId) = .empty,
     diag: *Diagnostic,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
@@ -600,8 +596,6 @@ const Certifier = struct {
         self.proc_locals.deinit(self.allocator);
         self.join_bodies.deinit();
         self.relevant_scratch.deinit(self.allocator);
-        self.scan_visited.deinit();
-        self.scan_stack.deinit(self.allocator);
     }
 
     fn clearRecords(self: *Certifier) void {
@@ -1026,125 +1020,261 @@ const Certifier = struct {
         }
     }
 
-    /// Mirrors ARC insertion's liveness scan: reports whether `needle` is
-    /// read starting from `start` before being rebound on that path. Jumps
-    /// are followed into join bodies.
-    fn usedBeforeRebind(self: *Certifier, start: LIR.CFStmtId, needle: LIR.LocalId) Allocator.Error!bool {
-        self.scan_visited.clearRetainingCapacity();
-        self.scan_stack.clearRetainingCapacity();
-        try self.scan_stack.append(self.allocator, start);
+    fn noteExposedReadLocal(
+        self: *const Certifier,
+        relevant: *std.bit_set.DynamicBitSetUnmanaged,
+        local: LIR.LocalId,
+    ) void {
+        if (!self.isRc(local)) return;
+        relevant.set(@intFromEnum(local));
+    }
 
-        while (self.scan_stack.pop()) |current| {
-            if (self.scan_visited.contains(current)) continue;
-            try self.scan_visited.put(current, {});
+    fn noteExposedReadSpan(
+        self: *const Certifier,
+        relevant: *std.bit_set.DynamicBitSetUnmanaged,
+        span: LIR.LocalSpan,
+    ) void {
+        for (self.store.getLocalSpan(span)) |local| {
+            self.noteExposedReadLocal(relevant, local);
+        }
+    }
 
-            switch (self.store.getCFStmt(current)) {
+    fn noteExposedRefOpRead(
+        self: *const Certifier,
+        relevant: *std.bit_set.DynamicBitSetUnmanaged,
+        op: LIR.RefOp,
+    ) void {
+        const local = switch (op) {
+            .local => |source| source,
+            .discriminant => |ref| ref.source,
+            .field => |ref| ref.source,
+            .tag_payload => |ref| ref.source,
+            .tag_payload_struct => |ref| ref.source,
+            .list_reinterpret => |ref| ref.backing_ref,
+            .nominal => |ref| ref.backing_ref,
+        };
+        self.noteExposedReadLocal(relevant, local);
+    }
+
+    const ReadBeforeRebindNode = struct {
+        stmt: LIR.CFStmtId,
+        reads: std.bit_set.DynamicBitSetUnmanaged,
+        exposed: std.bit_set.DynamicBitSetUnmanaged,
+        successor_start: usize,
+        successor_len: usize,
+        def: ?LIR.LocalId,
+    };
+
+    const ReadBeforeRebindGraph = struct {
+        allocator: Allocator,
+        nodes: std.ArrayList(ReadBeforeRebindNode),
+        successors: std.ArrayList(LIR.CFStmtId),
+        indices: std.AutoHashMap(LIR.CFStmtId, usize),
+
+        fn init(allocator: Allocator) ReadBeforeRebindGraph {
+            return .{
+                .allocator = allocator,
+                .nodes = .empty,
+                .successors = .empty,
+                .indices = std.AutoHashMap(LIR.CFStmtId, usize).init(allocator),
+            };
+        }
+    };
+
+    fn ensureReadBeforeRebindNode(
+        self: *Certifier,
+        graph: *ReadBeforeRebindGraph,
+        work: *std.ArrayList(LIR.CFStmtId),
+        stmt: LIR.CFStmtId,
+    ) Allocator.Error!void {
+        if (graph.indices.contains(stmt)) return;
+
+        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.store.locals.items.len);
+        errdefer reads.deinit(graph.allocator);
+        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.store.locals.items.len);
+        errdefer exposed.deinit(graph.allocator);
+
+        const index = graph.nodes.items.len;
+        try graph.indices.put(stmt, index);
+        errdefer _ = graph.indices.remove(stmt);
+
+        try graph.nodes.append(graph.allocator, .{
+            .stmt = stmt,
+            .reads = reads,
+            .exposed = exposed,
+            .successor_start = 0,
+            .successor_len = 0,
+            .def = null,
+        });
+
+        try work.append(graph.allocator, stmt);
+    }
+
+    fn appendReadBeforeRebindSuccessor(
+        self: *Certifier,
+        graph: *ReadBeforeRebindGraph,
+        work: *std.ArrayList(LIR.CFStmtId),
+        node_index: usize,
+        successor: LIR.CFStmtId,
+    ) Allocator.Error!void {
+        const successor_index = graph.successors.items.len;
+        if (graph.nodes.items[node_index].successor_len == 0) {
+            graph.nodes.items[node_index].successor_start = successor_index;
+        }
+        try graph.successors.append(graph.allocator, successor);
+        graph.nodes.items[node_index].successor_len += 1;
+        try self.ensureReadBeforeRebindNode(graph, work, successor);
+    }
+
+    fn setReadBeforeRebindDef(
+        self: *const Certifier,
+        graph: *ReadBeforeRebindGraph,
+        node_index: usize,
+        local: LIR.LocalId,
+    ) void {
+        if (self.isRc(local)) graph.nodes.items[node_index].def = local;
+    }
+
+    fn computeReadsBeforeRebind(self: *Certifier, start: LIR.CFStmtId) Allocator.Error!std.bit_set.DynamicBitSetUnmanaged {
+        var graph_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer graph_arena.deinit();
+        const graph_allocator = graph_arena.allocator();
+
+        var graph = ReadBeforeRebindGraph.init(graph_allocator);
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+
+        try self.ensureReadBeforeRebindNode(&graph, &work, start);
+
+        while (work.pop()) |stmt| {
+            const node_index = graph.indices.get(stmt) orelse unreachable;
+
+            switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
-                    if (refOpReadsLocal(assign.op, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedRefOpRead(&graph.nodes.items[node_index].reads, assign.op);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_literal => |assign| {
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_call => |assign| {
-                    if (self.spanReadsLocal(assign.args, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_call_erased => |assign| {
-                    if (assign.closure == needle or self.spanReadsLocal(assign.args, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
-                    if (assign.capture != null and assign.capture.? == needle) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    if (assign.capture) |capture| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, capture);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    if (self.spanReadsLocal(assign.args, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_list => |assign| {
-                    if (self.spanReadsLocal(assign.elems, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.elems);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_struct => |assign| {
-                    if (self.spanReadsLocal(assign.fields, needle)) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
-                    if (assign.payload != null and assign.payload.? == needle) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    if (assign.payload) |payload| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, payload);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
-                    if (assign.value == needle) return true;
-                    if (assign.target == needle) continue;
-                    try self.scan_stack.append(self.allocator, assign.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.value);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .debug => |debug_stmt| {
-                    if (debug_stmt.message == needle) return true;
-                    try self.scan_stack.append(self.allocator, debug_stmt.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, debug_stmt.message);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, debug_stmt.next);
                 },
-                .expect_err => |expect_err_stmt| {
-                    if (expect_err_stmt.message == needle) return true;
-                },
+                .expect_err => |expect_err_stmt| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, expect_err_stmt.message),
                 .expect => |expect_stmt| {
-                    if (expect_stmt.condition == needle) return true;
-                    try self.scan_stack.append(self.allocator, expect_stmt.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, expect_stmt.condition);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
                 },
                 .incref => |rc| {
-                    if (rc.value == needle) return true;
-                    try self.scan_stack.append(self.allocator, rc.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref => |rc| {
-                    if (rc.value == needle) return true;
-                    try self.scan_stack.append(self.allocator, rc.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .free => |rc| {
-                    if (rc.value == needle) return true;
-                    try self.scan_stack.append(self.allocator, rc.next);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .switch_stmt => |switch_stmt| {
-                    if (switch_stmt.cond == needle) return true;
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
                     if (switch_stmt.continuation) |continuation| {
-                        try self.scan_stack.append(self.allocator, continuation);
+                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, continuation);
                     }
-                    try self.scan_stack.append(self.allocator, switch_stmt.default_branch);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.default_branch);
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                        try self.scan_stack.append(self.allocator, branch.body);
+                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
                     }
                 },
                 .join => |join_stmt| {
-                    try self.scan_stack.append(self.allocator, join_stmt.remainder);
-                    try self.scan_stack.append(self.allocator, join_stmt.body);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.body);
                 },
                 .jump => |jump_stmt| {
                     if (self.join_bodies.get(jump_stmt.target)) |target_body| {
-                        try self.scan_stack.append(self.allocator, target_body);
+                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                     }
                 },
-                .ret => |ret_stmt| {
-                    if (ret_stmt.value == needle) return true;
-                },
+                .ret => |ret_stmt| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, ret_stmt.value),
                 .runtime_error, .comptime_exhaustiveness_failed, .crash, .loop_continue, .loop_break => {},
-                .comptime_branch_taken => |marker| try self.scan_stack.append(self.allocator, marker.next),
+                .comptime_branch_taken => |marker| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
         }
-        return false;
-    }
 
-    fn spanReadsLocal(self: *const Certifier, span: LIR.LocalSpan, needle: LIR.LocalId) bool {
-        for (self.store.getLocalSpan(span)) |local| {
-            if (local == needle) return true;
+        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.store.locals.items.len);
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var node_index = graph.nodes.items.len;
+            while (node_index > 0) {
+                node_index -= 1;
+                const node = &graph.nodes.items[node_index];
+
+                scratch.unsetAll();
+                const successor_start = node.successor_start;
+                const successor_end = successor_start + @as(usize, node.successor_len);
+                for (graph.successors.items[successor_start..successor_end]) |successor| {
+                    const successor_index = graph.indices.get(successor) orelse unreachable;
+                    scratch.setUnion(graph.nodes.items[successor_index].exposed);
+                }
+                if (node.def) |local| scratch.unset(@intFromEnum(local));
+                scratch.setUnion(node.reads);
+
+                if (!node.exposed.eql(scratch)) {
+                    node.exposed.unsetAll();
+                    node.exposed.setUnion(scratch);
+                    changed = true;
+                }
+            }
         }
-        return false;
+
+        const start_index = graph.indices.get(start) orelse unreachable;
+        return try graph.nodes.items[start_index].exposed.clone(self.allocator);
     }
 
     /// Computes the join's relevant-local set: its parameters plus every
@@ -1159,10 +1289,12 @@ const Certifier = struct {
         for (self.store.getLocalSpan(params)) |param| {
             if (self.isRc(param)) relevant.set(@intFromEnum(param));
         }
+        var reads = try self.computeReadsBeforeRebind(body);
+        defer reads.deinit(self.allocator);
         for (self.proc_locals.items) |local| {
             if (!self.isRc(local)) continue;
             if (relevant.isSet(@intFromEnum(local))) continue;
-            if (try self.usedBeforeRebind(body, local)) {
+            if (reads.isSet(@intFromEnum(local))) {
                 relevant.set(@intFromEnum(local));
             }
         }

@@ -2315,35 +2315,10 @@ const Builder = struct {
             break :blk try self.localExpr(local, arg_tys[0]);
         } else try fn_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
 
-        var renamed_field_locals: ?[]Ast.LocalId = null;
-        defer if (renamed_field_locals) |locals| self.allocator.free(locals);
-        var renamed_field_values: ?[]Ast.ExprId = null;
-        defer if (renamed_field_values) |values| self.allocator.free(values);
-        var renamed_field_lengths: ?[]u32 = null;
-        defer if (renamed_field_lengths) |lengths| self.allocator.free(lengths);
-
         const str_ty = try self.primitiveType(.str);
-        switch (self.shapeContent(shape_ty)) {
-            .record, .zst => {
-                const record_fields = fn_ctx.recordFieldsForShape(shape_ty);
-                const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
-                const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
-                const lengths = try self.allocator.alloc(u32, record_fields.len);
-                renamed_field_locals = locals;
-                renamed_field_values = values;
-                renamed_field_lengths = lengths;
-                for (record_fields, 0..) |_, index| {
-                    const capture_id = fn_ctx.parserFieldCaptureIdForRecordField(record_fields, index);
-                    const node = constGeneratedCaptureNode(fn_value, capture_id) orelse
-                        Common.invariant("stored parser runtime function was missing a renamed field capture");
-                    locals[index] = try self.program.addLocal(self.symbols.fresh(), str_ty);
-                    self.program.setLocalCaptureId(locals[index], capture_id);
-                    values[index] = try self.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
-                    lengths[index] = constStrNodeByteLen(store_view, node);
-                }
-            },
-            else => {},
-        }
+        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        try fn_ctx.buildParserRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, str_ty);
 
         const parsed = try fn_ctx.lowerParseShapeFromState(
             shape_ty,
@@ -2352,8 +2327,7 @@ const Builder = struct {
             state_expr,
             runtime_arg_tys[0],
             runtime_fn.ret,
-            renamed_field_locals,
-            renamed_field_lengths,
+            &precomputed_plan,
         );
         const runtime_fn_id = try self.program.addFn(.{
             .fn_def = .{ .parser_runtime = .{
@@ -2371,13 +2345,11 @@ const Builder = struct {
             }),
             .body = parsed,
         } } });
-        if (renamed_field_values) |values| {
-            const locals = renamed_field_locals orelse Common.invariant("renamed field values existed without locals");
-            var index = values.len;
-            while (index > 0) {
-                index -= 1;
-                parser_expr = try fn_ctx.wrapLet(locals[index], str_ty, values[index], parser_expr, ty);
-            }
+        var capture_index = precomputed_plan.captures.items.len;
+        while (capture_index > 0) {
+            capture_index -= 1;
+            const capture = precomputed_plan.captures.items[capture_index];
+            parser_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, parser_expr, ty);
         }
         if (encoding_let) |let_| {
             parser_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, parser_expr, ty);
@@ -3003,6 +2975,44 @@ const BodyContext = struct {
         local: Ast.LocalId,
         conversion: checked.CheckedExprId,
         ty: Type.TypeId,
+    };
+
+    const ParserPrecomputedRecord = struct {
+        renamed_field_locals: []Ast.LocalId,
+        renamed_field_values: []Ast.ExprId,
+        renamed_field_lengths: ?[]u32,
+    };
+
+    const ParserPrecomputedCapture = struct {
+        local: Ast.LocalId,
+        value: Ast.ExprId,
+    };
+
+    const ParserPrecomputedPlan = struct {
+        allocator: Allocator,
+        records: std.AutoHashMap(Type.TypeId, ParserPrecomputedRecord),
+        captures: std.ArrayList(ParserPrecomputedCapture),
+        next_capture_id: usize,
+
+        fn init(allocator: Allocator) ParserPrecomputedPlan {
+            return .{
+                .allocator = allocator,
+                .records = std.AutoHashMap(Type.TypeId, ParserPrecomputedRecord).init(allocator),
+                .captures = .empty,
+                .next_capture_id = 1,
+            };
+        }
+
+        fn deinit(self: *ParserPrecomputedPlan) void {
+            var records = self.records.valueIterator();
+            while (records.next()) |record| {
+                self.allocator.free(record.renamed_field_locals);
+                self.allocator.free(record.renamed_field_values);
+                if (record.renamed_field_lengths) |lengths| self.allocator.free(lengths);
+            }
+            self.records.deinit();
+            self.captures.deinit(self.allocator);
+        }
     };
 
     const MaterializedArg = struct {
@@ -5424,11 +5434,11 @@ const BodyContext = struct {
         };
     }
 
-    fn parserFieldCaptureIdForRecordField(
+    fn parserRecordFieldRank(
         self: *BodyContext,
         fields: []const Type.Field,
         field_index: usize,
-    ) u32 {
+    ) usize {
         if (field_index >= fields.len) Common.invariant("parser field capture requested for a missing record field");
         const target = self.builder.program.names.recordFieldLabelText(fields[field_index].name);
         var rank: usize = 0;
@@ -5437,7 +5447,244 @@ const BodyContext = struct {
             const name = self.builder.program.names.recordFieldLabelText(field.name);
             if (std.mem.order(u8, name, target) == .lt) rank += 1;
         }
-        return parserFieldCaptureId(rank);
+        return rank;
+    }
+
+    fn parserFieldCaptureIdForRecordField(
+        self: *BodyContext,
+        fields: []const Type.Field,
+        field_index: usize,
+        base_capture_id: usize,
+    ) u32 {
+        const capture_id = base_capture_id + self.parserRecordFieldRank(fields, field_index);
+        if (capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many field captures");
+        return @intCast(capture_id);
+    }
+
+    fn appendParserPrecomputedCaptures(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        fields: []const Type.Field,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_values: []const Ast.ExprId,
+    ) Allocator.Error!void {
+        if (fields.len != renamed_field_locals.len or fields.len != renamed_field_values.len) {
+            Common.invariant("parser precomputed capture arity differed from record field count");
+        }
+
+        var rank: usize = 0;
+        while (rank < fields.len) : (rank += 1) {
+            for (fields, 0..) |_, index| {
+                if (self.parserRecordFieldRank(fields, index) != rank) continue;
+                try plan.captures.append(self.allocator, .{
+                    .local = renamed_field_locals[index],
+                    .value = renamed_field_values[index],
+                });
+                break;
+            } else {
+                Common.invariant("parser record field rank was missing from field set");
+            }
+        }
+    }
+
+    fn parserPrecomputedCaptureIndex(
+        plan: *const ParserPrecomputedPlan,
+        local: Ast.LocalId,
+    ) usize {
+        for (plan.captures.items, 0..) |capture, index| {
+            if (capture.local == local) return index;
+        }
+        Common.invariant("parser precomputed record referenced a local outside its capture list");
+    }
+
+    fn cloneParserPrecomputedPlanForCaptureArgs(
+        self: *BodyContext,
+        source_plan: *const ParserPrecomputedPlan,
+        capture_arg_locals: []const Ast.LocalId,
+    ) Allocator.Error!ParserPrecomputedPlan {
+        if (source_plan.captures.items.len != capture_arg_locals.len) {
+            Common.invariant("parser helper capture arg count differed from source capture count");
+        }
+
+        var cloned = ParserPrecomputedPlan.init(self.allocator);
+        errdefer cloned.deinit();
+        cloned.next_capture_id = source_plan.next_capture_id;
+        const str_ty = try self.builder.primitiveType(.str);
+        for (capture_arg_locals) |local| {
+            try cloned.captures.append(self.allocator, .{
+                .local = local,
+                .value = try self.builder.stringExpr("", str_ty),
+            });
+        }
+
+        var records = source_plan.records.iterator();
+        while (records.next()) |entry| {
+            const source = entry.value_ptr.*;
+            const locals = try self.allocator.alloc(Ast.LocalId, source.renamed_field_locals.len);
+            const values = try self.allocator.alloc(Ast.ExprId, source.renamed_field_values.len);
+            var lengths: ?[]u32 = null;
+            var inserted = false;
+            errdefer if (!inserted) {
+                self.allocator.free(locals);
+                self.allocator.free(values);
+                if (lengths) |owned_lengths| self.allocator.free(owned_lengths);
+            };
+
+            for (source.renamed_field_locals, 0..) |source_local, index| {
+                locals[index] = capture_arg_locals[parserPrecomputedCaptureIndex(source_plan, source_local)];
+            }
+
+            if (source.renamed_field_lengths) |source_lengths| {
+                const copied_lengths = try self.allocator.dupe(u32, source_lengths);
+                lengths = copied_lengths;
+            }
+
+            try cloned.records.put(entry.key_ptr.*, .{
+                .renamed_field_locals = locals,
+                .renamed_field_values = values,
+                .renamed_field_lengths = lengths,
+            });
+            inserted = true;
+        }
+
+        return cloned;
+    }
+
+    fn buildParserConstructionPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        shape_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (self.tryOptionalInfo(shape_ty)) |info| {
+            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_ty, str_ty);
+        }
+        if (self.customParserLookup(shape_ty) != null) return;
+        if (self.typeHasBuiltinOwner(shape_ty, .str) or self.typeHasBuiltinOwner(shape_ty, .u64)) return;
+
+        switch (self.builder.shapeContent(shape_ty)) {
+            .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_ty, str_ty),
+            .tag_union => {},
+            else => {},
+        }
+    }
+
+    fn buildParserConstructionRecordPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        shape_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (plan.records.contains(shape_ty)) return;
+
+        const fields = self.recordFieldsForShape(shape_ty);
+        const locals = try self.allocator.alloc(Ast.LocalId, fields.len);
+        const values = try self.allocator.alloc(Ast.ExprId, fields.len);
+        var inserted = false;
+        errdefer if (!inserted) {
+            self.allocator.free(locals);
+            self.allocator.free(values);
+        };
+
+        const base_capture_id = plan.next_capture_id;
+        plan.next_capture_id += fields.len;
+        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many captures");
+
+        for (fields, 0..) |field, index| {
+            locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+            self.builder.program.setLocalCaptureId(
+                locals[index],
+                self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
+            );
+            values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+        }
+
+        try plan.records.put(shape_ty, .{
+            .renamed_field_locals = locals,
+            .renamed_field_values = values,
+            .renamed_field_lengths = null,
+        });
+        inserted = true;
+
+        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+
+        for (fields) |field| {
+            try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_ty, str_ty);
+        }
+    }
+
+    fn buildParserRestoredPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (self.tryOptionalInfo(shape_ty)) |info| {
+            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
+        }
+        if (self.customParserLookup(shape_ty) != null) return;
+        if (self.typeHasBuiltinOwner(shape_ty, .str) or self.typeHasBuiltinOwner(shape_ty, .u64)) return;
+
+        switch (self.builder.shapeContent(shape_ty)) {
+            .record, .zst => try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty),
+            .tag_union => {},
+            else => {},
+        }
+    }
+
+    fn buildParserRestoredRecordPrecomputedPlan(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (plan.records.contains(shape_ty)) return;
+
+        const fields = self.recordFieldsForShape(shape_ty);
+        const locals = try self.allocator.alloc(Ast.LocalId, fields.len);
+        const values = try self.allocator.alloc(Ast.ExprId, fields.len);
+        const lengths = try self.allocator.alloc(u32, fields.len);
+        var inserted = false;
+        errdefer if (!inserted) {
+            self.allocator.free(locals);
+            self.allocator.free(values);
+            self.allocator.free(lengths);
+        };
+
+        const base_capture_id = plan.next_capture_id;
+        plan.next_capture_id += fields.len;
+        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many captures");
+
+        for (fields, 0..) |_, index| {
+            const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
+            const node = constGeneratedCaptureNode(fn_value, capture_id) orelse
+                Common.invariant("stored parser runtime function was missing a renamed field capture");
+            locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+            self.builder.program.setLocalCaptureId(locals[index], capture_id);
+            values[index] = try self.builder.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
+            lengths[index] = constStrNodeByteLen(store_view, node);
+        }
+
+        try plan.records.put(shape_ty, .{
+            .renamed_field_locals = locals,
+            .renamed_field_values = values,
+            .renamed_field_lengths = lengths,
+        });
+        inserted = true;
+
+        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+
+        for (fields) |field| {
+            try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
+        }
     }
 
     fn lowerParseShapeFromState(
@@ -5448,11 +5695,11 @@ const BodyContext = struct {
         state_expr: Ast.ExprId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        precomputed_renamed_field_locals: ?[]const Ast.LocalId,
-        precomputed_renamed_field_lengths: ?[]const u32,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!Ast.ExprId {
         const selected = self.parseShapeSelection(shape_ty);
         if (Ident.textEql(selected.tag_text, "Record")) {
+            const precomputed = if (precomputed_plan) |plan| plan.records.get(shape_ty) else null;
             return try self.lowerParseRecordFromState(
                 shape_ty,
                 encoding_expr,
@@ -5460,8 +5707,9 @@ const BodyContext = struct {
                 state_expr,
                 state_ty,
                 ret_ty,
-                precomputed_renamed_field_locals,
-                precomputed_renamed_field_lengths,
+                precomputed_plan,
+                if (precomputed) |record| record.renamed_field_locals else null,
+                if (precomputed) |record| record.renamed_field_lengths else null,
             );
         }
 
@@ -5518,6 +5766,7 @@ const BodyContext = struct {
         state_expr: Ast.ExprId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         precomputed_renamed_field_locals: ?[]const Ast.LocalId,
         precomputed_renamed_field_lengths: ?[]const u32,
     ) Allocator.Error!Ast.ExprId {
@@ -5608,6 +5857,7 @@ const BodyContext = struct {
             ret_ty,
             record_state_local,
             record_state_ty,
+            precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
             event_local,
@@ -5644,6 +5894,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
         event_local: Ast.LocalId,
@@ -5719,6 +5970,7 @@ const BodyContext = struct {
                 ret_ty,
                 record_state_local,
                 record_state_ty,
+                precomputed_plan,
                 dispatch_rest_local,
             );
         }
@@ -5757,7 +6009,7 @@ const BodyContext = struct {
             .name = field_tag.name,
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{field_payload_pat}),
         } } });
-        const field_body = try self.lowerParseRecordFieldEvent(
+        const field_body = try self.lowerParseRecordDirectFieldEvent(
             shape_ty,
             encoding_expr,
             encoding_ty,
@@ -5765,11 +6017,9 @@ const BodyContext = struct {
             ret_ty,
             record_state_local,
             record_state_ty,
-            renamed_field_locals,
-            renamed_field_lengths,
+            precomputed_plan,
             field_payload_local,
             field_payload_ty,
-            .direct,
         );
 
         const try_field_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), try_field_payload_ty);
@@ -5973,6 +6223,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
         field_payload_local: Ast.LocalId,
@@ -5981,18 +6232,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         const rest_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "rest");
         return switch (mode) {
-            .direct => try self.lowerParseRecordDirectFieldEvent(
-                shape_ty,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                record_state_local,
-                record_state_ty,
-                field_payload_local,
-                field_payload_ty,
-                rest_expr,
-            ),
+            .direct => Common.invariant("direct record field events lower through prebuilt matched bodies"),
             .exact, .caseless => blk: {
                 const name_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "name");
                 break :blk try self.lowerParseRecordNamedFieldEvent(
@@ -6003,6 +6243,7 @@ const BodyContext = struct {
                     ret_ty,
                     record_state_local,
                     record_state_ty,
+                    precomputed_plan,
                     renamed_field_locals,
                     renamed_field_lengths,
                     name_expr,
@@ -6022,10 +6263,11 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         field_payload_local: Ast.LocalId,
         field_payload_ty: Type.TypeId,
-        rest_expr: Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
+        const rest_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "rest");
         const field_expr = try self.recordPayloadFieldAccess(field_payload_local, field_payload_ty, "field");
         const field_ty = self.builder.program.exprs.items[@intFromEnum(field_expr)].ty;
         const next_ok_ty = try self.parseRecordLoopNextType(state_ty, record_state_ty);
@@ -6037,17 +6279,25 @@ const BodyContext = struct {
             state_ty,
             record_state_ty,
             helper_try_ty,
+            precomputed_plan,
         );
+        var arg_exprs = std.ArrayList(Ast.ExprId).empty;
+        defer arg_exprs.deinit(self.allocator);
+        try arg_exprs.append(self.allocator, encoding_expr);
+        try arg_exprs.append(self.allocator, field_expr);
+        try arg_exprs.append(self.allocator, rest_expr);
+        try arg_exprs.append(self.allocator, try self.builder.localExpr(record_state_local, record_state_ty));
+        if (precomputed_plan) |plan| {
+            const str_ty = try self.builder.primitiveType(.str);
+            for (plan.captures.items) |capture| {
+                try arg_exprs.append(self.allocator, try self.builder.localExpr(capture.local, str_ty));
+            }
+        }
         const helper_call = try self.builder.program.addExpr(.{
             .ty = helper_try_ty,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = helper_fn },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{
-                    encoding_expr,
-                    field_expr,
-                    rest_expr,
-                    try self.builder.localExpr(record_state_local, record_state_ty),
-                }),
+                .args = try self.builder.program.addExprSpan(arg_exprs.items),
             } },
         });
 
@@ -6066,10 +6316,22 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         record_state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!Ast.FnId {
-        const arg_tys = [_]Type.TypeId{ encoding_ty, field_ty, state_ty, record_state_ty };
+        const capture_count = if (precomputed_plan) |plan| plan.captures.items.len else 0;
+        const arg_tys = try self.allocator.alloc(Type.TypeId, 4 + capture_count);
+        defer self.allocator.free(arg_tys);
+        arg_tys[0] = encoding_ty;
+        arg_tys[1] = field_ty;
+        arg_tys[2] = state_ty;
+        arg_tys[3] = record_state_ty;
+        const str_ty = try self.builder.primitiveType(.str);
+        for (arg_tys[4..]) |*arg_ty| {
+            arg_ty.* = str_ty;
+        }
+
         const fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(&arg_tys),
+            .args = try self.builder.program.types.addSpan(arg_tys),
             .ret = ret_ty,
         } });
         const owner = self.view.templates.get(self.owner_template.template);
@@ -6084,12 +6346,28 @@ const BodyContext = struct {
         const field_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_ty);
         const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
         const record_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), record_state_ty);
-        const args = try self.builder.program.addTypedLocalSpan(&.{
-            .{ .local = encoding_local, .ty = encoding_ty },
-            .{ .local = field_local, .ty = field_ty },
-            .{ .local = rest_local, .ty = state_ty },
-            .{ .local = record_state_local, .ty = record_state_ty },
-        });
+        const capture_arg_locals = try self.allocator.alloc(Ast.LocalId, capture_count);
+        defer self.allocator.free(capture_arg_locals);
+        for (capture_arg_locals) |*local| {
+            local.* = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+        }
+
+        const args_items = try self.allocator.alloc(Ast.TypedLocal, 4 + capture_count);
+        defer self.allocator.free(args_items);
+        args_items[0] = .{ .local = encoding_local, .ty = encoding_ty };
+        args_items[1] = .{ .local = field_local, .ty = field_ty };
+        args_items[2] = .{ .local = rest_local, .ty = state_ty };
+        args_items[3] = .{ .local = record_state_local, .ty = record_state_ty };
+        for (capture_arg_locals, 0..) |local, index| {
+            args_items[4 + index] = .{ .local = local, .ty = str_ty };
+        }
+        const args = try self.builder.program.addTypedLocalSpan(args_items);
+
+        var helper_plan: ?ParserPrecomputedPlan = if (precomputed_plan) |plan|
+            try self.cloneParserPrecomputedPlanForCaptureArgs(plan, capture_arg_locals)
+        else
+            null;
+        defer if (helper_plan) |*plan| plan.deinit();
 
         const body = try self.lowerRecordDirectFieldDispatchBody(
             shape_ty,
@@ -6102,6 +6380,7 @@ const BodyContext = struct {
             record_state_local,
             record_state_ty,
             ret_ty,
+            if (helper_plan) |*plan| plan else null,
         );
         try self.builder.program.defs.append(self.allocator, .{
             .symbol = self.builder.symbols.fresh(),
@@ -6126,6 +6405,7 @@ const BodyContext = struct {
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!Ast.ExprId {
         const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
@@ -6159,6 +6439,7 @@ const BodyContext = struct {
             state_ty,
             record_state_local,
             record_state_ty,
+            precomputed_plan,
             rest_local,
             ret_ty,
         );
@@ -6174,6 +6455,7 @@ const BodyContext = struct {
                 state_ty,
                 record_state_local,
                 record_state_ty,
+                precomputed_plan,
                 rest_local,
                 ret_ty,
             );
@@ -6265,6 +6547,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
         name_expr: Ast.ExprId,
@@ -6311,6 +6594,7 @@ const BodyContext = struct {
                 ret_ty,
                 record_state_local,
                 record_state_ty,
+                precomputed_plan,
                 rest_local,
             );
         }
@@ -6340,6 +6624,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         rest_local: Ast.LocalId,
     ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
@@ -6353,6 +6638,7 @@ const BodyContext = struct {
             try self.builder.localExpr(rest_local, state_ty),
             state_ty,
             parse_ret_ty,
+            precomputed_plan,
         );
         const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
@@ -6399,6 +6685,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         record_state_local: Ast.LocalId,
         record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
         rest_local: Ast.LocalId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -6413,6 +6700,7 @@ const BodyContext = struct {
             try self.builder.localExpr(rest_local, state_ty),
             state_ty,
             parse_ret_ty,
+            precomputed_plan,
         );
         const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
@@ -6463,11 +6751,12 @@ const BodyContext = struct {
         state_expr: Ast.ExprId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!Ast.ExprId {
         return if (self.customParserLookup(shape_ty)) |lookup|
             try self.lowerCustomParserFromState(lookup, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty)
         else
-            try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, null, null);
+            try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
 
     fn lowerCustomParserFromState(
@@ -6974,6 +7263,7 @@ const BodyContext = struct {
                 slot_expr,
                 slot_ty,
                 payload_parse_ret_tys[index],
+                null,
             );
             body = try self.sequenceTry(payload_parse, payload_parse_ret_tys[index], payload_parse_locals[index], body, ret_ty);
         }
@@ -9332,27 +9622,10 @@ const BodyContext = struct {
         self.builder.program.setLocalCaptureId(encoding_local, parserEncodingCaptureId());
         const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
 
-        var precomputed_renamed_field_locals: ?[]Ast.LocalId = null;
-        defer if (precomputed_renamed_field_locals) |locals| self.allocator.free(locals);
-        var precomputed_renamed_field_values: ?[]Ast.ExprId = null;
-        defer if (precomputed_renamed_field_values) |values| self.allocator.free(values);
         const str_ty = try self.builder.primitiveType(.str);
-        switch (self.builder.shapeContent(shape_ty)) {
-            .record, .zst => {
-                const record_fields = self.recordFieldsForShape(shape_ty);
-                const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
-                const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
-                precomputed_renamed_field_locals = locals;
-                precomputed_renamed_field_values = values;
-
-                for (record_fields, 0..) |field, index| {
-                    locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
-                    self.builder.program.setLocalCaptureId(locals[index], self.parserFieldCaptureIdForRecordField(record_fields, index));
-                    values[index] = try self.renamedRecordFieldNameExpr(arg_tys[0], field, str_ty);
-                }
-            },
-            else => {},
-        }
+        var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        try self.buildParserConstructionPrecomputedPlan(&precomputed_plan, shape_ty, arg_tys[0], str_ty);
 
         const parsed = try self.lowerParseShapeFromState(
             shape_ty,
@@ -9361,8 +9634,7 @@ const BodyContext = struct {
             try self.builder.localExpr(state_local, runtime_arg_tys[0]),
             runtime_arg_tys[0],
             runtime_fn.ret,
-            precomputed_renamed_field_locals,
-            null,
+            &precomputed_plan,
         );
         const fn_id = try self.builder.program.addFn(.{
             .fn_def = .{ .parser_runtime = .{
@@ -9380,13 +9652,11 @@ const BodyContext = struct {
             }),
             .body = parsed,
         } } });
-        if (precomputed_renamed_field_values) |values| {
-            const locals = precomputed_renamed_field_locals orelse Common.invariant("renamed field values existed without locals");
-            var index = values.len;
-            while (index > 0) {
-                index -= 1;
-                parser_expr = try self.wrapLet(locals[index], str_ty, values[index], parser_expr, ret_ty);
-            }
+        var capture_index = precomputed_plan.captures.items.len;
+        while (capture_index > 0) {
+            capture_index -= 1;
+            const capture = precomputed_plan.captures.items[capture_index];
+            parser_expr = try self.wrapLet(capture.local, str_ty, capture.value, parser_expr, ret_ty);
         }
         return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, parser_expr, ret_ty);
     }
