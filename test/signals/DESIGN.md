@@ -83,12 +83,13 @@ is the number of nodes whose value actually changed.
 
 ## Core Concepts
 
-- **Signal(a)** — a continuous, always-present value of type `a`. Opaque type
-  wrapping a host node id (`U64`), phantom-typed in `a`. The `a` exists only in
-  Roc's type system; the wire payload is the id.
+- **Signal(a)** — a continuous, always-present value of type `a`. Opaque typed
+  descriptor that references a source binder or derived expression. The `a`
+  exists only in Roc's type system; the host assigns the runtime node id when it
+  ingests the descriptor tree.
 - **Source** — a node whose value is set by host input (a DOM event, a timer, an
-  effect result). Created by `Signal.state` / `Signal.input` and by effect
-  combinators.
+  effect result). Local state sources are introduced by the `Ui.state` closure
+  binder; effect combinators introduce effect sources.
 - **Derived node** — `map`, `map2`, `combine`. Holds a retained Roc transform
   closure plus its input node ids. The host recomputes it when an input changes.
 - **Reducer** — a pure `a -> a` (or `a -> (a, Cmd)`) closure attached to a source
@@ -177,8 +178,6 @@ Sub(a)
 Scope            # only appears in Ui.component / cleanup signatures
 
 # Signal construction and combination
-Signal.state : a -> { signal : Signal(a), send : (a -> a) -> Msg }
-    where [a.is_eq : a, a -> Bool]
 Signal.const : a -> Signal(a)
     where [a.is_eq : a, a -> Bool]
 Signal.map : Signal(a), (a -> b) -> Signal(b)
@@ -210,6 +209,11 @@ Html.on_input : (Str -> Msg) -> Attr
 Html.on_check : (Bool -> Msg) -> Attr
 
 # Dynamic structure (explicit scopes)
+Ui.state : a, (State(a) -> Elem) -> Elem
+    where [a.is_eq : a, a -> Bool]
+State.signal : State(a) -> Signal(a)
+State.on_unit : State(a), (a -> a) -> Msg
+State.on_value : State(a), (a, payload -> a) -> Msg
 Ui.when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 Ui.each : Signal(List(item)), (item -> key), (key, Signal(item) -> Elem) -> Elem
     where [key.hash : key, Hasher -> Hasher, key.is_eq : key, key -> Bool]
@@ -227,17 +231,21 @@ app never names an event id; the host mints and routes them.
 
 ```roc
 counter : Elem
-counter = {
-    { signal: count, send } = Signal.state(0i64)
-    Html.div(
-        [],
-        [
-            Html.button([Html.on_click(send(|n| n - 1))], [Html.text("-")]),
-            Html.text_s(Signal.map(count, |n| n.to_str())),
-            Html.button([Html.on_click(send(|n| n + 1))], [Html.text("+")]),
-        ],
-    )
-}
+counter =
+    Ui.state(0i64, |count_state| {
+        count = count_state.signal
+        dec = count_state.on_unit(|n| n - 1)
+        inc = count_state.on_unit(|n| n + 1)
+
+        Html.div(
+            [],
+            [
+                Html.button([Html.on_click(dec)], [Html.text("-")]),
+                Html.text_s(Signal.map(count, |n| n.to_str())),
+                Html.button([Html.on_click(inc)], [Html.text("+")]),
+            ],
+        )
+    })
 ```
 
 ### Example: derived value
@@ -251,29 +259,37 @@ full_name = |first, last| Signal.map2(first, last, |f, l| "${f} ${l}")
 
 ```roc
 name_field : Elem
-name_field = {
-    { signal: text, send } = Signal.state("")
-    Html.input(
-        [Html.value(text), Html.on_input(|new| send(|_| new))],
-        [],
-    )
-}
+name_field =
+    Ui.state("", |text_state| {
+        text = text_state.signal
+        Html.input(
+            [Html.value(text), Html.on_input(|new| text_state.on_value(|_, _payload| new))],
+            [],
+        )
+    })
 ```
 
-`text` survives across events because the host holds this node by its minted id,
-not by a string and not by re-derived tree position.
+`text` survives across events because the `Ui.state` binder is an
+identity-bearing construction site. The host holds it by its minted id, not by a
+string and not by re-derived tree position.
 
 ### Example: keyed list with per-row local state
 
 ```roc
 # A nominal key type provides hash and is_eq through its method block, so it
 # satisfies the `where [key.hash, key.is_eq]` constraint on Ui.each.
-TodoId := U64.{
+TodoId := [Tid(U64)].{
     hash : TodoId, Hasher -> Hasher
-    hash = |TodoId(n), hasher| hasher.add_u64(n)
+    hash = |id, hasher| match id {
+        Tid(n) => Hasher.write_u64(hasher, n)
+    }
 
     is_eq : TodoId, TodoId -> Bool
-    is_eq = |TodoId(a), TodoId(b)| a == b
+    is_eq = |left, right| match left {
+        Tid(a) => match right {
+            Tid(b) => a == b
+        }
+    }
 }
 
 todo_list : Signal(List(Todo)) -> Elem
@@ -285,25 +301,27 @@ todo_list = |todos|
                 todos,
                 |todo| todo.id,
                 |_key, row| {
-                    { signal: editing, send: set_editing } = Signal.state(Bool.false)
-                    Html.li(
-                        [],
-                        [
-                            Html.text_s(Signal.map(row, |t| t.title)),
-                            Html.button(
-                                [Html.on_click(set_editing(|e| !e))],
-                                [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
-                            ),
-                        ],
-                    )
+                    Ui.state(Bool.false, |editing_state| {
+                        editing = editing_state.signal
+                        Html.li(
+                            [],
+                            [
+                                Html.text_s(Signal.map(row, |t| t.title)),
+                                Html.button(
+                                    [Html.on_click(editing_state.on_unit(|e| !e))],
+                                    [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
+                                ),
+                            ],
+                        )
+                    })
                 },
             ),
         ],
     )
 ```
 
-`editing` is a per-row source keyed by the row's typed `key`. It survives
-reorder/filter because identity is the key, not the index.
+`editing` is a per-row source inside the row scope. It survives reorder/filter
+because the row scope is keyed by the typed `key`, not by the index.
 
 ## The Roc Platform Layer
 
@@ -313,9 +331,11 @@ has three responsibilities and no reactive runtime of its own.
 
 ### 1. Graph description as an explicit value
 
-`Signal(a)` is an opaque wrapper over a `U64` node id. The platform builds a graph
-description as it threads a node-id counter through pure construction. Each node
-records its kind and input ids:
+`Signal(a)` is an opaque descriptor that references a state/source binder or a
+derived expression. Roc does not thread an ordinal counter while building the
+tree; `build` returns a pure descriptor tree, and the host assigns dense ids by
+walking identity-bearing construction sites in deterministic pre-order. Each
+ingested node records its kind and input ids:
 
 ```roc
 NodeDesc := [
@@ -334,8 +354,8 @@ GraphDesc := {
 ```
 
 `MapThunk`/`Map2Thunk`/`EqThunk` are boxed monomorphized closures (the confined
-erasure). They are produced from `Signal.map`/`map2`/`state` at the call site, so
-their input and output types are pinned to the surrounding `Signal(a)`.
+erasure). They are produced from `Signal.map`/`map2`/`Ui.state` at the call site,
+so their input and output types are pinned to the surrounding `Signal(a)`.
 
 The platform does **not** evaluate the graph. It only describes it. There is no
 `eval_signal`, no dirty propagation, no cache in Roc.

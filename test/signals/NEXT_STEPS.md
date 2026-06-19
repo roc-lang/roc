@@ -48,8 +48,9 @@ Ordered roughly by how much of the design they block.
    import `Reactive`, `NodeValue`, call `Reactive.Signal.fold_i64`,
    `map_i64_str_keyed`, `unit_channel`, `Elem.each`, and hand-write
    `Str.concat("line_quantity:", id)` keys. The target `Signal` / `Html` / `Ui`
-   modules (with `Signal.state`/`send`, `Html.on_click(msg)`,
-   `Ui.each(items, key_fn, |key, row| ...)`) do not exist yet.
+   modules now exist, but the apps have not been ported to `Ui.state`
+   state-handle reducers, `Html.on_click(msg)`, or
+   `Ui.each(items, key_fn, |key, row| ...)`.
 
 3. **`NodeValue` is still the value representation, with `encode`/`decode` in
    app code.** Every app type defines `encode`/`decode` against `NodeValue`, and
@@ -143,13 +144,14 @@ compiler that reshape the new-API surface and the host equality mechanism:
    constraints compile and are satisfiable across the platform boundary.** The new
    keyed-identity API shape is viable.
 2. **Key/value nominal types must wrap a single-tag union, not a bare primitive.**
-   The `TodoId := U64.{ hash = |TodoId(n), ...| ... }` form shown in `DESIGN.md`
-   and `GUIDE.md` does **not** typecheck — `TodoId(n)` is rejected as a tag-union
-   pattern against the nominal `TodoId` (error: `[TodoId(_c), ..]` vs `TodoId`).
+   The `TodoId := U64.{ hash = |TodoId(n), ...| ... }` form previously shown in
+   `DESIGN.md` and `GUIDE.md` does **not** typecheck — `TodoId(n)` is rejected
+   as a tag-union pattern against the nominal `TodoId` (error:
+   `[TodoId(_c), ..]` vs `TodoId`).
    The form that compiles is `TodoId := [Tid(U64)]`, constructed `TodoId.Tid(n)`
    and destructured `match id { Tid(n) => ... }` (matches the passing
    `test/snapshots/eval/custom_wrapper_equality.md`). DESIGN.md/GUIDE.md examples
-   must be corrected to this form.
+   have been corrected to this form.
 3. **Roc cannot construct or inspect a `Hasher`** (opaque builtin), so Roc never
    runs `hash`/`is_eq` itself. The **host owns hashing and equality**; the `where`
    constraint exists to require the methods exist and let the platform-glue capture
@@ -163,6 +165,11 @@ compiler that reshape the new-API surface and the host equality mechanism:
    checked type`). Builder combinators must not be generic in the body's return
    payload; scope bodies return a concrete descriptor carrier.
 
+DESIGN.md and GUIDE.md now reflect these findings: local state is introduced
+through `Ui.state(init, |state| ...)`, key examples use nominal-over-single-tag
+unions such as `TodoId := [Tid(U64)]`, and the host/equality text describes
+captured per-type thunks rather than runtime string keys.
+
 ### Identity threading: the host walks, Roc does not thread ordinals (2026-06-19)
 
 A first attempt threaded a pure `BuildCtx { path, ordinal }` through construction
@@ -170,8 +177,8 @@ in Roc (a state monad). This is the **wrong** design and was discarded:
 
 - It destroys the nested-expression ergonomics the API needs, and finding (4)
   above shows the generic scope-body it requires also crashes the compiler.
-- More fundamentally, the inline `{ signal, send } = Signal.state(0)` shown in
-  `DESIGN.md`/`GUIDE.md` is **mathematically impossible to give a stable unique
+- More fundamentally, the inline `{ signal, send } = Signal.state(0)` previously
+  shown in `DESIGN.md`/`GUIDE.md` is **mathematically impossible to give a stable unique
   identity in a pure language**: a pure call with identical arguments must return
   an identical result, so a plain let-bound `state` cannot mint a per-site
   ordinal. State that needs identity must be introduced through an explicit
@@ -216,13 +223,14 @@ platform modules:
   output) per edge.
 - `platform/Ui.roc` — `state(init, |State(a)| body)` closure binder with
   `signal`/`on_unit`/`on_value`; `when(cond, true_body, false_body)` (branch
-  scopes); `each(items, key_fn, row_fn)` with `where [k.hash, k.is_eq]` and boxed
-  key equality. Key types are nominal-over-tag-union.
+  scopes); `each(items, key_fn, |key, row_signal| ...)` with
+  `where [k.hash, k.is_eq]` and boxed key equality. Key types are
+  nominal-over-tag-union.
 - `platform/Html.roc` — `div`/`section`/`heading`/`paragraph`/`text`/`text_s`/
   `button`/`button_s`/`text_input`/`checkbox`.
 - `platform/main.roc` — imports + exposes `Signal`, `Html`, `Ui` (exposed modules
-  MUST be imported by `main.roc`). `UiRuntime.roc` imports `Node`/`Signal` and has
-  placeholder type aliases `NewElem`/`NewSignal` anchoring them.
+  MUST be imported by `main.roc`). The temporary `UiRuntime.roc` placeholder
+  aliases that anchored `Node.Elem`/`Signal.Signal` have been removed.
 
 Function types are standardized to 2-param (`NodeValue, NodeValue -> X`), not
 tuple-arg, to match the descriptor thunk signatures.
@@ -242,7 +250,7 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    thread a counter). Flip `main.roc` `requires` to `main : {} -> Node.Elem`.
    Delete the string-keyed paths: `StateSlot.key`, `SignalRegistryEntry.key`,
    `signal_registry_lookup` string compare, `register_state_key`/
-   `register_event_key`. Remove the `NewElem`/`NewSignal` placeholder anchors.
+   `register_event_key`.
 2. **Regenerate `roc_platform_abi.zig`** after the boundary types change:
    `./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc`.
    Re-fix the `comptime` struct-size asserts.
@@ -270,10 +278,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
 8. **Delete legacy:** `Reactive.roc`, `Elem.roc`, `Graph.roc`'s string-keyed paths,
    old `UiRuntime` string tables; drop them from `main.roc` `exposes`/imports.
    Apps then import only `Signal`/`Html`/`Ui`.
-9. **Correct the docs** (`DESIGN.md`, `GUIDE.md`): key types are
+9. **Done — docs corrected** (`DESIGN.md`, `GUIDE.md`): key types are
    `TodoId := [Tid(U64)]` (nominal-over-tag-union), `state` is a closure binder,
-   and the host owns hashing/equality via boxed `is_eq` thunks (Roc never runs
-   `hash`/`is_eq`).
+   and the host owns equality/hash through captured per-type thunks rather than
+   string identity.
 10. **Extend `identity_stress.txt`** with the mid-list-insert assertion (new row
     gets fresh state while every existing row's count survives unmoved) — only
     once honestly supported. Do not weaken existing assertions.

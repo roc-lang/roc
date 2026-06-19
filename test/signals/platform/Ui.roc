@@ -82,6 +82,20 @@ Ui := [].{
 			}
 			{ binder: st.ref, payload_kind, transform: Box.box(wrapped) }
 		}
+
+		on_str : State(a), (a, Str -> a) -> Node.Msg
+			where [
+				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+			]
+		on_str = |st, f| st.on_value(Node.str_payload_kind, f)
+
+		on_bool : State(a), (a, Bool -> a) -> Node.Msg
+			where [
+				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+			]
+		on_bool = |st, f| st.on_value(Node.bool_payload_kind, f)
 	}
 
 	## Introduce a state binder. `init` is the initial value; `body` receives a
@@ -139,10 +153,11 @@ Ui := [].{
 	}
 
 	## Keyed list. `key_of` extracts a typed, stable key per item; `row` renders a
-	## row given that item. Row identity is the key (compared by the key type's
-	## `is_eq`), so per-row local state survives reorder/insert/delete.
+	## row given that key and a typed signal for the item. Row identity is the key
+	## (compared by the key type's `is_eq`), so per-row local state survives
+	## reorder/insert/delete.
 	each :
-		Signal(List(item)), (item -> k), (item -> Node.Elem) -> Node.Elem
+		Signal(List(item)), (item -> k), (k, Signal(item) -> Node.Elem) -> Node.Elem
 			where [
 				item.decode : NodeValue, NodeValue -> (Try(item, [TypeMismatch]), NodeValue),
 				k.encode : k, NodeValue -> Try(NodeValue, []),
@@ -189,8 +204,19 @@ Ui := [].{
 				}
 			left_k.is_eq(right_k)
 		}
-		row_nv : NodeValue -> Node.Elem
-		row_nv = |nv| row(decode_item(nv))
+		row_nv : NodeValue, NodeValue -> Node.Elem
+		row_nv = |key_nv, item_nv| {
+			K : k
+			key : k
+			key =
+				match K.decode(key_nv, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Ui.each received a key value that does not match the key type"
+					}
+				}
+			row(key, Signal.from_expr(Node.SignalExpr.Const(item_nv)))
+		}
 		Node.Elem.Each(
 			{
 				items: Box.box(Signal.to_expr(items)),

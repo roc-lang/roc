@@ -30,8 +30,9 @@ you read while describing the UI.
 Signals come in two flavors, but you build both with the same small toolkit:
 
 - **Source signals** are set from the outside: a text input, a checkbox, a
-  button-driven counter, a timer, or an effect result. You create them with
-  `Signal.state`, and you get back a `send` handle for updating them.
+  button-driven counter, a timer, or an effect result. Local source state is
+  introduced with the `Ui.state` closure binder, which gives the body a typed
+  state handle for reading and updating it.
 - **Derived signals** are computed from other signals with `Signal.map`,
   `Signal.map2`, or `Signal.combine`. You never update a derived signal
   directly; it recomputes when an input changes.
@@ -85,7 +86,7 @@ app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Signal exposing [Signal]
 import pf.Html
-import pf.Ui
+import pf.Ui exposing [Elem]
 ```
 
 Here is a small form with retained input state, derived text, a click counter,
@@ -93,58 +94,62 @@ and a disabled action:
 
 ```roc
 main : {} -> Elem
-main = |_| {
-    { signal: name, send: set_name } = Signal.state("")
+main = |_|
+    Ui.state("", |name_state| {
+        name = name_state.signal
 
-    greeting : Signal(Str)
-    greeting =
-        Signal.map(
-            name,
-            |value| if value == "" { "Enter your name" } else { "Hello, ${value}" },
-        )
+        greeting : Signal(Str)
+        greeting =
+            Signal.map(
+                name,
+                |value| if value == "" { "Enter your name" } else { "Hello, ${value}" },
+            )
 
-    submit_disabled : Signal(Bool)
-    submit_disabled = Signal.map(name, |value| value == "")
+        submit_disabled : Signal(Bool)
+        submit_disabled = Signal.map(name, |value| value == "")
 
-    { signal: submit_count, send: bump } = Signal.state(0i64)
+        Ui.state(0i64, |submit_state| {
+            submit_count = submit_state.signal
 
-    submit_label : Signal(Str)
-    submit_label =
-        Signal.map(submit_count, |count| "Submissions: ${count.to_str()}")
+            submit_label : Signal(Str)
+            submit_label =
+                Signal.map(submit_count, |count| "Submissions: ${count.to_str()}")
 
-    Html.div(
-        [],
-        [
-            Html.heading("Profile"),
-            Html.input(
-                [Html.label("Name"), Html.value(name), Html.on_input(|new| set_name(|_| new))],
+            Html.div(
                 [],
-            ),
-            Html.text_s(greeting),
-            Html.button(
-                [Html.label_s(Signal.const("Save profile")), Html.disabled(submit_disabled), Html.on_click(bump(|n| n + 1))],
-                [],
-            ),
-            Html.text_s(submit_label),
-        ],
-    )
-}
+                [
+                    Html.heading("Profile"),
+                    Html.input(
+                        [Html.label("Name"), Html.value(name), Html.on_input(|new| name_state.on_value(|_, _payload| new))],
+                        [],
+                    ),
+                    Html.text_s(greeting),
+                    Html.button(
+                        [Html.label_s(Signal.const("Save profile")), Html.disabled(submit_disabled), Html.on_click(submit_state.on_unit(|n| n + 1))],
+                        [],
+                    ),
+                    Html.text_s(submit_label),
+                ],
+            )
+        })
+    })
 ```
 
 The important pieces:
 
-`Signal.state("")` creates a source signal with an initial value and a `send`
-handle. `set_name(|_| new)` builds the message that replaces the current value
-with the latest input. You pass `name` itself to `Html.value` so the input
-stays bound to the source.
+`Ui.state("", |name_state| ...)` creates a source signal with an initial value
+and a scoped state handle. `name_state.on_value(|_, _payload| new)` builds the
+message that replaces the current value with the latest input. You pass
+`name_state.signal` itself to `Html.value` so the input stays bound to the
+source.
 
 `Signal.map(name, ...)` derives display text. There is no key; the host knows
 this derived node's identity from where you built it. When `name` changes, the
 host recomputes `greeting` and `submit_disabled` — and nothing else.
 
-`Signal.state(0i64)` plus `bump(|n| n + 1)` is a counter. Clicks do not mutate a
-variable; the click's message describes how to produce the next value from the
-current one.
+`Ui.state(0i64, ...)` plus `submit_state.on_unit(|n| n + 1)` is a counter.
+Clicks do not mutate a variable; the click's message describes how to produce
+the next value from the current one.
 
 ## How Browser Events Flow
 
@@ -217,16 +222,23 @@ Ui.when(
 Each branch is its own scope. When the condition flips, the host disposes the
 losing branch (releasing its state and detaching its DOM) and mounts the other.
 
-Use `Ui.each` for lists. You supply a typed key function and a row renderer. The
-key type provides `hash` and `is_eq` methods through its method block:
+Use `Ui.each` for lists. You supply a typed key function and a row renderer. Key
+types wrap a single-tag union and provide `hash` and `is_eq` methods through
+their method block:
 
 ```roc
-TodoId := U64.{
+TodoId := [Tid(U64)].{
     hash : TodoId, Hasher -> Hasher
-    hash = |TodoId(n), hasher| hasher.add_u64(n)
+    hash = |id, hasher| match id {
+        Tid(n) => Hasher.write_u64(hasher, n)
+    }
 
     is_eq : TodoId, TodoId -> Bool
-    is_eq = |TodoId(a), TodoId(b)| a == b
+    is_eq = |left, right| match left {
+        Tid(a) => match right {
+            Tid(b) => a == b
+        }
+    }
 }
 
 todo_list : Signal(List(Todo)) -> Elem
@@ -238,17 +250,19 @@ todo_list = |todos|
                 todos,
                 |todo| todo.id,
                 |_key, row| {
-                    { signal: editing, send: set_editing } = Signal.state(Bool.false)
-                    Html.li(
-                        [],
-                        [
-                            Html.text_s(Signal.map(row, |t| t.title)),
-                            Html.button(
-                                [Html.on_click(set_editing(|e| !e))],
-                                [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
-                            ),
-                        ],
-                    )
+                    Ui.state(Bool.false, |editing_state| {
+                        editing = editing_state.signal
+                        Html.li(
+                            [],
+                            [
+                                Html.text_s(Signal.map(row, |t| t.title)),
+                                Html.button(
+                                    [Html.on_click(editing_state.on_unit(|e| !e))],
+                                    [Html.text_s(Signal.map(editing, |e| if e { "done" } else { "edit" }))],
+                                ),
+                            ],
+                        )
+                    })
                 },
             ),
         ],
@@ -256,8 +270,8 @@ todo_list = |todos|
 ```
 
 The row renderer receives the row's key and a `Signal(item)` for that row's data.
-Any `Signal.state` you create inside the renderer is local to that row and keyed
-by the row's typed key, so it survives reorder and filter. The key function must
+Any `Ui.state` binder you create inside the renderer is local to that row scope,
+so it survives reorder and filter. The key function must
 return a stable identity from the data (a database id, slug, or durable client
 id) — never the item's current position. Two rows that produce the same key are
 reported as a host error rather than silently aliased.
@@ -289,26 +303,33 @@ Todo := { id : TodoId, title : Str, done : Bool }.{
     is_eq = |a, b| a.id.is_eq(b.id) and a.title == b.title and a.done == b.done
 }
 
-TodoId := U64.{
+TodoId := [Tid(U64)].{
     hash : TodoId, Hasher -> Hasher
-    hash = |TodoId(n), hasher| hasher.add_u64(n)
+    hash = |id, hasher| match id {
+        Tid(n) => Hasher.write_u64(hasher, n)
+    }
 
     is_eq : TodoId, TodoId -> Bool
-    is_eq = |TodoId(a), TodoId(b)| a == b
+    is_eq = |left, right| match left {
+        Tid(a) => match right {
+            Tid(b) => a == b
+        }
+    }
 }
 ```
 
 You define the comparison (and, where a value must serialize, `encode`/`decode`)
-methods on the type; the platform calls them by static dispatch at each signal
-edge. Built-in types such as `Str`, `Bool`, and `I64` already provide what the
-common cases need.
+methods on the type. The platform captures the type-specific equality/hash
+thunks at each edge or key site; the host invokes those thunks rather than
+choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
+`Bool`, and `I64` already provide what the common cases need.
 
 ## Choosing The Right Primitive
 
 - Use `Signal.const` for a value that never changes.
-- Use `Signal.state` for anything the user (or an effect) updates: input text,
-  checkbox state, counters, toggles, wizard steps, replaced lists. The `send`
-  handle's reducer (`|current| next`) describes the transition.
+- Use `Ui.state` for local state the user updates: input text, checkbox state,
+  counters, toggles, wizard steps, replaced lists. The state handle's reducer
+  (`|current| next`) describes the transition.
 - Use `Signal.map` for display-only derived data from one signal, `Signal.map2`
   for two, and `Signal.combine` for a list of signals.
 - Use `Html.text` for static text and `Html.text_s` for signal-backed text.
@@ -360,8 +381,9 @@ then inject a fake result without running a network stack.
 ## Common Mistakes
 
 - **Do not treat a signal like a mutable variable.** You do not assign to a
-  signal. You create source signals with `Signal.state` and describe transitions
-  through the `send` reducer; derived signals follow from `map`/`map2`/`combine`.
+  signal. You create local source signals with `Ui.state` and describe
+  transitions through its reducer messages; derived signals follow from
+  `map`/`map2`/`combine`.
 - **Do not let the host own app state.** The host owns the reactive runtime, but
   the state belongs to the platform's runtime, not to a second model in
   JavaScript.

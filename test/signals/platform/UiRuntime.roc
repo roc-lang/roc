@@ -1,14 +1,8 @@
 import Elem exposing [Elem]
 import Graph
 import NodeValue exposing [NodeValue]
-import Node
-import Signal
 
 UiRuntime := [].{
-	NewElem : Node.Elem
-
-	NewSignal(a) : Signal.Signal(a)
-
 	RuntimeMetrics : {
 		events_processed : U64,
 		nodes_recomputed : U64,

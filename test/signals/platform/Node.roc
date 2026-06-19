@@ -95,7 +95,8 @@ Node := [].{
 	## - `When`: a conditional with two arm subtrees; the live arm is its own scope
 	##   (`Branch` step). Advances the scope ordinal (its site ordinal).
 	## - `Each`: a keyed list; each row is its own scope keyed by the typed key
-	##   payload, with a boxed key `is_eq` thunk. Advances the scope ordinal.
+	##   payload, with a boxed key `is_eq` thunk. The row thunk receives the erased
+	##   key and item value. Advances the scope ordinal.
 	Elem := [
 		Element({ tag : Str, attrs : List(Attr), children : List(Elem) }),
 		Text(Str),
@@ -107,9 +108,8 @@ Node := [].{
 				items : Box(SignalExpr),
 				key_of : Box((NodeValue -> NodeValue)),
 				key_eq : Box((NodeValue, NodeValue -> Bool)),
-				row : Box((NodeValue -> Elem)),
+				row : Box((NodeValue, NodeValue -> Elem)),
 			},
 		),
 	]
 }
-
