@@ -284,6 +284,11 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    retained closure (`decrefErasedCallable`), detach DOM subtree, `rows_removed`.
    `Ui.when` flip disposes the losing branch scope. `keep_alive` only via explicit
    flag.
+
+   Progress: `platform/host.zig` now has recursive scope disposal that retires
+   subtree node identities, drops keyed-row keys exactly once, and prevents a
+   later matching key from reusing disposed local state. It is not yet wired into
+   the `Ui.when`/`Ui.each` descriptor walk or DOM detachment.
 6. **Port `identity_stress.roc`** to the new API; get its current `.txt` spec green
    first (the smallest honest slice).
 7. **Port `ops_dashboard`, `checkout_wizard`, `kanban_board`** to the new API;

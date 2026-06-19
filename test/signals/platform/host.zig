@@ -152,12 +152,14 @@ const HostScope = struct {
     scope_id: u64,
     parent_scope_id: ?u64,
     step: HostScopeStep,
+    active: bool,
 };
 
 const HostNodeIdentity = struct {
     node_id: u64,
     scope_id: u64,
     ordinal: u64,
+    active: bool,
 };
 
 const HostRenderTextSink = struct {
@@ -1378,6 +1380,9 @@ const HostEnv = struct {
         if (scope.scope_id != scope_id) {
             failHost("host scope table is not indexed by scope id");
         }
+        if (!scope.active) {
+            failHost("scope id references a disposed host scope");
+        }
     }
 
     fn internRootScope(self: *HostEnv) u64 {
@@ -1387,12 +1392,13 @@ const HostEnv = struct {
                 .scope_id = 0,
                 .parent_scope_id = null,
                 .step = .root,
+                .active = true,
             }) catch std.process.exit(1);
             return 0;
         }
 
         const root = self.scopes.items[0];
-        if (root.scope_id != 0 or root.parent_scope_id != null or root.step != .root) {
+        if (root.scope_id != 0 or root.parent_scope_id != null or root.step != .root or !root.active) {
             failHost("host root scope descriptor is not indexed by scope id");
         }
         return 0;
@@ -1402,6 +1408,7 @@ const HostEnv = struct {
         self.validateScopeId(parent_scope_id);
 
         for (self.scopes.items) |scope| {
+            if (!scope.active) continue;
             if (scope.parent_scope_id != parent_scope_id) continue;
             switch (scope.step) {
                 .when_branch => |step| {
@@ -1418,6 +1425,7 @@ const HostEnv = struct {
             .scope_id = scope_id,
             .parent_scope_id = parent_scope_id,
             .step = .{ .when_branch = .{ .site_ordinal = site_ordinal, .branch = branch } },
+            .active = true,
         }) catch std.process.exit(1);
         return scope_id;
     }
@@ -1426,6 +1434,7 @@ const HostEnv = struct {
         self.validateScopeId(parent_scope_id);
 
         for (self.scopes.items) |scope| {
+            if (!scope.active) continue;
             if (scope.parent_scope_id != parent_scope_id) continue;
             switch (scope.step) {
                 .each_row => |step| {
@@ -1445,6 +1454,7 @@ const HostEnv = struct {
             .scope_id = scope_id,
             .parent_scope_id = parent_scope_id,
             .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key } },
+            .active = true,
         }) catch std.process.exit(1);
         return scope_id;
     }
@@ -1453,6 +1463,7 @@ const HostEnv = struct {
         self.validateScopeId(scope_id);
 
         for (self.node_identities.items) |identity| {
+            if (!identity.active) continue;
             if (identity.scope_id == scope_id and identity.ordinal == ordinal) {
                 return identity.node_id;
             }
@@ -1463,13 +1474,41 @@ const HostEnv = struct {
             .node_id = node_id,
             .scope_id = scope_id,
             .ordinal = ordinal,
+            .active = true,
         }) catch std.process.exit(1);
         return node_id;
+    }
+
+    fn disposeScopeSubtree(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64) void {
+        self.validateScopeId(scope_id);
+
+        var child_index: usize = 0;
+        while (child_index < self.scopes.items.len) : (child_index += 1) {
+            const child = self.scopes.items[child_index];
+            if (!child.active) continue;
+            if (child.parent_scope_id == scope_id) {
+                self.disposeScopeSubtree(roc_host, child.scope_id);
+            }
+        }
+
+        for (self.node_identities.items) |*identity| {
+            if (identity.active and identity.scope_id == scope_id) {
+                identity.active = false;
+            }
+        }
+
+        const scope = &self.scopes.items[@intCast(scope_id)];
+        scope.step.deinit(roc_host);
+        scope.active = false;
+        var metrics = self.pending_roc_metrics;
+        metrics.scopes_disposed += 1;
+        self.pending_roc_metrics = metrics;
     }
 
     fn clearScopes(self: *HostEnv) void {
         if (self.roc_host) |roc_host| {
             for (self.scopes.items) |*scope| {
+                if (!scope.active) continue;
                 scope.step.deinit(roc_host);
             }
         } else if (self.scopes.items.len != 0) {
@@ -3328,4 +3367,44 @@ test "signals host interns scopes and node identities from explicit paths" {
 
     const row_next_state = host.internNodeIdentity(row_a, 1);
     try std.testing.expect(row_next_state != row_state);
+}
+
+test "signals host disposal retires scope subtree identities" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    defer abi.decrefErasedCallable(key_eq, &roc_host);
+
+    const root = host.internRootScope();
+    const row = host.internEachRowScope(&roc_host, root, 3, nodeValueI64(10), key_eq);
+    const branch = host.internWhenBranchScope(row, 4, .true_branch);
+    const row_state = host.internNodeIdentity(row, 0);
+    const branch_state = host.internNodeIdentity(branch, 0);
+
+    host.disposeScopeSubtree(&roc_host, row);
+    try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.scopes_disposed);
+    try std.testing.expect(!host.scopes.items[@intCast(row)].active);
+    try std.testing.expect(!host.scopes.items[@intCast(branch)].active);
+    try std.testing.expect(!host.node_identities.items[@intCast(row_state)].active);
+    try std.testing.expect(!host.node_identities.items[@intCast(branch_state)].active);
+
+    const recreated_row = host.internEachRowScope(&roc_host, root, 3, nodeValueI64(10), key_eq);
+    try std.testing.expect(recreated_row != row);
+
+    const recreated_state = host.internNodeIdentity(recreated_row, 0);
+    try std.testing.expect(recreated_state != row_state);
 }
