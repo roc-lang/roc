@@ -1154,44 +1154,14 @@ Builtin :: [].{
 		## ```
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
 		sort_with = |list, order| {
-			list_len = List.len(list)
-
-			if list_len < 2 {
-				list
-			} else {
-				match List.first(list) {
-					Ok(pivot) => {
-						rest = List.drop_first(list, 1)
-						less_or_equal = 
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => True
-										EQ => True
-										GT => False
-									},
-							)
-						greater = 
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => False
-										EQ => False
-										GT => True
-									},
-							)
-
-						List.concat(
-							List.sort_with(less_or_equal, order),
-							List.concat(List.single(pivot), List.sort_with(greater, order)),
-						)
-					}
-
-					Err(_) => list
-				}
-			}
+            is_leq = |a, b| {
+                match order(a, b) {
+                    LT => True
+                    EQ => True
+                    GT => False
+                }
+            }
+            sort_impl(list, is_leq)
 		}
 
 		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
@@ -13606,6 +13576,31 @@ bytes_to_str = |bytes|
 		Ok(str) => Ok(str)
 		Err(_) => Err(OutOfRange)
 	}
+
+sort_impl : List(a), (a, a -> Bool) -> List(a)
+sort_impl = |list, is_leq| {
+    list_len = List.len(list)
+
+    if list_len < 2 {
+        list
+    } else {
+        match List.first(list) {
+            Ok(pivot) => {
+                rest = List.drop_first(list, 1)
+
+                less_or_equal = List.keep_if(rest, |item| is_leq(item, pivot))
+                greater = List.keep_if(rest, |item| !is_leq(item, pivot))
+
+                List.concat(
+                    sort_impl(less_or_equal, is_leq),
+                    List.concat(List.single(pivot), sort_impl(greater, is_leq)),
+                )
+            }
+
+            Err(_) => list
+        }
+	}
+}
 
 unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
