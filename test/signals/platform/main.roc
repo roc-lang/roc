@@ -1,6 +1,6 @@
 platform ""
 	requires {} { main : {} -> Elem }
-	exposes [Reactive, Elem, NodeValue]
+	exposes [Reactive, Elem, NodeValue, Signal, Html, Ui]
 	packages {}
 	provides {
 		"roc_ui_init": ui_init,
@@ -17,6 +17,9 @@ platform ""
 import Elem exposing [Elem]
 import Reactive
 import NodeValue exposing [NodeValue]
+import Signal
+import Html
+import Ui
 import UiRuntime
 
 ui_init : {} -> Box(UiRuntime.DispatchResult)

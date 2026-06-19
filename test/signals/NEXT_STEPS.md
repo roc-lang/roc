@@ -134,6 +134,153 @@ boundary (there is no ability auto-derivation, so each value type must define
 those methods), and monomorphization/compile-time behavior of deeply nested
 generic `Signal`/`Elem` combinators.
 
+### Confirmed maturity findings (2026-06-19 probe)
+
+A throwaway compile probe (since removed) pinned down three facts on the current
+compiler that reshape the new-API surface and the host equality mechanism:
+
+1. **`where [k.hash : k, Hasher -> Hasher, k.is_eq : k, k -> Bool]` static-dispatch
+   constraints compile and are satisfiable across the platform boundary.** The new
+   keyed-identity API shape is viable.
+2. **Key/value nominal types must wrap a single-tag union, not a bare primitive.**
+   The `TodoId := U64.{ hash = |TodoId(n), ...| ... }` form shown in `DESIGN.md`
+   and `GUIDE.md` does **not** typecheck — `TodoId(n)` is rejected as a tag-union
+   pattern against the nominal `TodoId` (error: `[TodoId(_c), ..]` vs `TodoId`).
+   The form that compiles is `TodoId := [Tid(U64)]`, constructed `TodoId.Tid(n)`
+   and destructured `match id { Tid(n) => ... }` (matches the passing
+   `test/snapshots/eval/custom_wrapper_equality.md`). DESIGN.md/GUIDE.md examples
+   must be corrected to this form.
+3. **Roc cannot construct or inspect a `Hasher`** (opaque builtin), so Roc never
+   runs `hash`/`is_eq` itself. The **host owns hashing and equality**; the `where`
+   constraint exists to require the methods exist and let the platform-glue capture
+   each key/value type's `is_eq` as a boxed `RocErasedCallable` the host invokes
+   (confined erasure). Note: the current host *never invokes* erased callables —
+   all transform evaluation happens inside the Roc `recompute`/`render` walk — so
+   host-invoked `is_eq` thunks for the keyed-scope diff and value pruning are a new
+   host capability (call-convention wiring + per-type trampolines).
+4. **A polymorphic `value : v` flowing out of a higher-order scope-body closure
+   panics the current compiler** (`canonical type key requested for erroneous
+   checked type`). Builder combinators must not be generic in the body's return
+   payload; scope bodies return a concrete descriptor carrier.
+
+### Identity threading: the host walks, Roc does not thread ordinals (2026-06-19)
+
+A first attempt threaded a pure `BuildCtx { path, ordinal }` through construction
+in Roc (a state monad). This is the **wrong** design and was discarded:
+
+- It destroys the nested-expression ergonomics the API needs, and finding (4)
+  above shows the generic scope-body it requires also crashes the compiler.
+- More fundamentally, the inline `{ signal, send } = Signal.state(0)` shown in
+  `DESIGN.md`/`GUIDE.md` is **mathematically impossible to give a stable unique
+  identity in a pure language**: a pure call with identical arguments must return
+  an identical result, so a plain let-bound `state` cannot mint a per-site
+  ordinal. State that needs identity must be introduced through an explicit
+  **closure binder** (`Ui.state(init, |{ signal, send }| body)` /
+  `Ui.component`); the closure boundary is the construction site.
+
+The sound model:
+
+- `build` returns a **pure, immutable descriptor tree**. There is no ordinal
+  counter in Roc. The deterministic single-threaded walk that assigns
+  construction-order identity lives in the **host** (legitimate: the host owns
+  mutation), as a pre-order traversal of that tree.
+- **Only identity-bearing descriptors advance the ordinal** within a scope: state
+  binders, `when` sites, and `each` sites. Ordinary markup (`div`, `text`,
+  static attrs) does **not** consume identity, so cosmetic markup edits never
+  shift state identity.
+- A scope-path step carries a **per-site ordinal** plus its selector, not just the
+  selector: `When(site_ordinal)/Branch(tag)` and `Each(site_ordinal)/Keyed(key)`.
+  Without the site ordinal, two sibling `each` blocks with colliding keys would
+  alias.
+- `Signal.map`/`map2`/`combine` and event sinks carry a **reference** to a state/
+  source binder (by its descriptor position); a declaration mints identity, a use
+  does not.
+- DESIGN.md/GUIDE.md must be corrected: `state` is a closure binder, not a plain
+  let value.
+
+## Implementation Status (2026-06-19)
+
+### Done — new Roc app-facing API (compiles, additive, legacy untouched)
+
+The string-free, closure-binder API exists and typechecks end to end. New
+platform modules:
+
+- `platform/Node.roc` — pure immutable descriptor tree the host walks. `SignalExpr`
+  (`Ref(BinderRef)`/`Const`/`Map`/`Map2`/`Combine`), `Attr`, and the
+  identity-bearing `Elem` scope binders `State`/`When`/`Each`. `State` and `Each`
+  carry boxed `is_eq` / key-`is_eq` thunks (confined erasure). `Msg` is a type
+  alias `{ binder : BinderRef, payload_kind : U64, transform : Box(...) }`.
+  Binder refs are de-Bruijn-style (`BinderRef(0)` = nearest enclosing `Ui.state`).
+- `platform/Signal.roc` — opaque `Signal(a)`: `const`/`const_i64`/`const_str`/
+  `const_bool`, `map`, `map2`, `combine`. Confined erasure (decode input / encode
+  output) per edge.
+- `platform/Ui.roc` — `state(init, |State(a)| body)` closure binder with
+  `signal`/`on_unit`/`on_value`; `when(cond, true_body, false_body)` (branch
+  scopes); `each(items, key_fn, row_fn)` with `where [k.hash, k.is_eq]` and boxed
+  key equality. Key types are nominal-over-tag-union.
+- `platform/Html.roc` — `div`/`section`/`heading`/`paragraph`/`text`/`text_s`/
+  `button`/`button_s`/`text_input`/`checkbox`.
+- `platform/main.roc` — imports + exposes `Signal`, `Html`, `Ui` (exposed modules
+  MUST be imported by `main.roc`). `UiRuntime.roc` imports `Node`/`Signal` and has
+  placeholder type aliases `NewElem`/`NewSignal` anchoring them.
+
+Function types are standardized to 2-param (`NodeValue, NodeValue -> X`), not
+tuple-arg, to match the descriptor thunk signatures.
+
+The full G2 pattern (keyed `each` over rows, each row owning a `Ui.state` bump
+counter with a `Signal.map` label and `on_unit` reducer) was validated to compile
+in a throwaway `apps/api_check.roc` (removed before commit). `roc check` is green
+on all four existing apps plus that scratch app.
+
+### Remaining work (the host-side / ABI half)
+
+In dependency order. Each sub-step ends green per `minici` discipline.
+
+1. **UiRuntime ingestion of the `Node.Elem` tree.** Replace the descriptor builder
+   so `build` returns `Node.Elem` and the runtime emits a *scope/node descriptor
+   stream* from a pure pre-order shape (the host assigns ordinals; Roc does not
+   thread a counter). Flip `main.roc` `requires` to `main : {} -> Node.Elem`.
+   Delete the string-keyed paths: `StateSlot.key`, `SignalRegistryEntry.key`,
+   `signal_registry_lookup` string compare, `register_state_key`/
+   `register_event_key`. Remove the `NewElem`/`NewSignal` placeholder anchors.
+2. **Regenerate `roc_platform_abi.zig`** after the boundary types change:
+   `./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc`.
+   Re-fix the `comptime` struct-size asserts.
+3. **Host scope forest + identity walk.** Pre-order walk of the descriptor tree
+   that assigns construction-order ordinals to identity-bearing nodes only (state
+   binders, `when` sites, `each` sites); ordinary markup does not advance the
+   ordinal. Scope path step = `When(site_ordinal)/Branch(tag)` and
+   `Each(site_ordinal)/Keyed(key)`. Intern `(scope_path, ordinal)` to dense node
+   ids (reuse existing rank/adjacency/dirty machinery). No strings; no `Dict(Str,_)`.
+4. **Host-invoked `is_eq` thunks (new host capability).** The host currently never
+   invokes erased callables. Wire the `RocErasedCallableFn(host, ret, args, capture)`
+   call convention + per-type marshaling so the host can call the boxed key-`is_eq`
+   for the keyed-row diff and the value `is_eq` for change pruning. Duplicate keys
+   within one keyed scope = hard host error (not a silent alias).
+5. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
+   `is_eq` thunk; reuse surviving row scopes (and their local state) → `rows_reused`;
+   mint new keys → `rows_created`; dispose removed keys → drop one refcount per
+   retained closure (`decrefErasedCallable`), detach DOM subtree, `rows_removed`.
+   `Ui.when` flip disposes the losing branch scope. `keep_alive` only via explicit
+   flag.
+6. **Port `identity_stress.roc`** to the new API; get its current `.txt` spec green
+   first (the smallest honest slice).
+7. **Port `ops_dashboard`, `checkout_wizard`, `kanban_board`** to the new API;
+   keep their `.txt` specs green unchanged (they are the regression oracle).
+8. **Delete legacy:** `Reactive.roc`, `Elem.roc`, `Graph.roc`'s string-keyed paths,
+   old `UiRuntime` string tables; drop them from `main.roc` `exposes`/imports.
+   Apps then import only `Signal`/`Html`/`Ui`.
+9. **Correct the docs** (`DESIGN.md`, `GUIDE.md`): key types are
+   `TodoId := [Tid(U64)]` (nominal-over-tag-union), `state` is a closure binder,
+   and the host owns hashing/equality via boxed `is_eq` thunks (Roc never runs
+   `hash`/`is_eq`).
+10. **Extend `identity_stress.txt`** with the mid-list-insert assertion (new row
+    gets fresh state while every existing row's count survives unmoved) — only
+    once honestly supported. Do not weaken existing assertions.
+11. **Validate:** `roc check` on all four apps, `zig build run-test-signals`, and
+    `zig build run-signals-bench` (compare against the Phase 1 baseline; row reuse
+    should be the biggest win).
+
 ## Recommended Sequence
 
 Each phase ends green: `roc check` on the apps plus `zig build run-test-signals`
