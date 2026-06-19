@@ -120,6 +120,46 @@ const SignalEventPayload = struct {
     cached_states: StateChangeList,
 };
 
+const HostScopeBranch = enum(u8) {
+    false_branch,
+    true_branch,
+};
+
+const HostWhenBranchScopeStep = struct {
+    site_ordinal: u64,
+    branch: HostScopeBranch,
+};
+
+const HostEachRowScopeStep = struct {
+    site_ordinal: u64,
+    key: abi.NodeValue,
+};
+
+const HostScopeStep = union(enum) {
+    root,
+    when_branch: HostWhenBranchScopeStep,
+    each_row: HostEachRowScopeStep,
+
+    fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost) void {
+        switch (self.*) {
+            .each_row => |row| abi.decrefNodeValue(row.key, roc_host),
+            .root, .when_branch => {},
+        }
+    }
+};
+
+const HostScope = struct {
+    scope_id: u64,
+    parent_scope_id: ?u64,
+    step: HostScopeStep,
+};
+
+const HostNodeIdentity = struct {
+    node_id: u64,
+    scope_id: u64,
+    ordinal: u64,
+};
+
 const HostRenderTextSink = struct {
     elem_id: u64,
     field: RenderTextField,
@@ -605,6 +645,8 @@ const HostEnv = struct {
     signal_dependents: std.ArrayListUnmanaged(HostSignalDependentsRoute) = .empty,
     signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
+    scopes: std.ArrayListUnmanaged(HostScope) = .empty,
+    node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
     render_text_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderTextSink)) = .empty,
     render_bool_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderBoolSink)) = .empty,
     render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
@@ -1328,6 +1370,114 @@ const HostEnv = struct {
         }
     }
 
+    fn validateScopeId(self: *HostEnv, scope_id: u64) void {
+        if (scope_id >= self.scopes.items.len) {
+            failHost("scope id has no host scope descriptor");
+        }
+        const scope = self.scopes.items[@intCast(scope_id)];
+        if (scope.scope_id != scope_id) {
+            failHost("host scope table is not indexed by scope id");
+        }
+    }
+
+    fn internRootScope(self: *HostEnv) u64 {
+        const allocator = self.gpa.allocator();
+        if (self.scopes.items.len == 0) {
+            self.scopes.append(allocator, .{
+                .scope_id = 0,
+                .parent_scope_id = null,
+                .step = .root,
+            }) catch std.process.exit(1);
+            return 0;
+        }
+
+        const root = self.scopes.items[0];
+        if (root.scope_id != 0 or root.parent_scope_id != null or root.step != .root) {
+            failHost("host root scope descriptor is not indexed by scope id");
+        }
+        return 0;
+    }
+
+    fn internWhenBranchScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) u64 {
+        self.validateScopeId(parent_scope_id);
+
+        for (self.scopes.items) |scope| {
+            if (scope.parent_scope_id != parent_scope_id) continue;
+            switch (scope.step) {
+                .when_branch => |step| {
+                    if (step.site_ordinal == site_ordinal and step.branch == branch) {
+                        return scope.scope_id;
+                    }
+                },
+                .root, .each_row => {},
+            }
+        }
+
+        const scope_id: u64 = @intCast(self.scopes.items.len);
+        self.scopes.append(self.gpa.allocator(), .{
+            .scope_id = scope_id,
+            .parent_scope_id = parent_scope_id,
+            .step = .{ .when_branch = .{ .site_ordinal = site_ordinal, .branch = branch } },
+        }) catch std.process.exit(1);
+        return scope_id;
+    }
+
+    fn internEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, key_eq: abi.RocErasedCallable) u64 {
+        self.validateScopeId(parent_scope_id);
+
+        for (self.scopes.items) |scope| {
+            if (scope.parent_scope_id != parent_scope_id) continue;
+            switch (scope.step) {
+                .each_row => |step| {
+                    if (step.site_ordinal == site_ordinal and callErasedNodeValueNodeValueToBool(roc_host, key_eq, step.key, key)) {
+                        return scope.scope_id;
+                    }
+                },
+                .root, .when_branch => {},
+            }
+        }
+
+        abi.increfNodeValue(key, 1);
+        errdefer abi.decrefNodeValue(key, roc_host);
+
+        const scope_id: u64 = @intCast(self.scopes.items.len);
+        self.scopes.append(self.gpa.allocator(), .{
+            .scope_id = scope_id,
+            .parent_scope_id = parent_scope_id,
+            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key } },
+        }) catch std.process.exit(1);
+        return scope_id;
+    }
+
+    fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
+        self.validateScopeId(scope_id);
+
+        for (self.node_identities.items) |identity| {
+            if (identity.scope_id == scope_id and identity.ordinal == ordinal) {
+                return identity.node_id;
+            }
+        }
+
+        const node_id: u64 = @intCast(self.node_identities.items.len);
+        self.node_identities.append(self.gpa.allocator(), .{
+            .node_id = node_id,
+            .scope_id = scope_id,
+            .ordinal = ordinal,
+        }) catch std.process.exit(1);
+        return node_id;
+    }
+
+    fn clearScopes(self: *HostEnv) void {
+        if (self.roc_host) |roc_host| {
+            for (self.scopes.items) |*scope| {
+                scope.step.deinit(roc_host);
+            }
+        } else if (self.scopes.items.len != 0) {
+            failHost("host scope table cannot release keys without a Roc host");
+        }
+        self.scopes.items.len = 0;
+    }
+
     fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
         var metrics = roc_metrics;
         metrics.patches_emitted += self.render_metrics.patches_emitted;
@@ -1362,6 +1512,9 @@ const HostEnv = struct {
         self.signal_cache.deinit(allocator);
         self.clearStates();
         self.states.deinit(allocator);
+        self.clearScopes();
+        self.scopes.deinit(allocator);
+        self.node_identities.deinit(allocator);
         self.clearRenderSinkRoutes();
         self.render_text_sink_routes.deinit(allocator);
         self.render_bool_sink_routes.deinit(allocator);
@@ -2923,6 +3076,16 @@ fn deinitTestHostGraph(host: *HostEnv) void {
     host.signal_cache.deinit(allocator);
 }
 
+fn deinitTestHostIdentity(host: *HostEnv) void {
+    if (!builtin.is_test) @compileError("deinitTestHostIdentity is test-only");
+
+    const allocator = host.gpa.allocator();
+    host.clearScopes();
+    host.scopes.deinit(allocator);
+    host.node_identities.deinit(allocator);
+    host.roc_allocations.deinit(allocator);
+}
+
 test "signals host dirty plan deduplicates diamond join by rank" {
     var host = HostEnv.init();
     defer {
@@ -3113,4 +3276,56 @@ test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
     }
 
     try std.testing.expectEqual(@as(u64, 3), test_erased_callable_drop_count);
+}
+
+test "signals host interns scopes and node identities from explicit paths" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const root = host.internRootScope();
+    try std.testing.expectEqual(@as(u64, 0), root);
+    try std.testing.expectEqual(root, host.internRootScope());
+
+    const true_branch = host.internWhenBranchScope(root, 2, .true_branch);
+    try std.testing.expectEqual(true_branch, host.internWhenBranchScope(root, 2, .true_branch));
+
+    const false_branch = host.internWhenBranchScope(root, 2, .false_branch);
+    try std.testing.expect(false_branch != true_branch);
+
+    const nested_true_branch = host.internWhenBranchScope(true_branch, 2, .true_branch);
+    try std.testing.expect(nested_true_branch != true_branch);
+
+    const key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    defer abi.decrefErasedCallable(key_eq, &roc_host);
+
+    const row_a = host.internEachRowScope(&roc_host, root, 7, nodeValueI64(10), key_eq);
+    try std.testing.expectEqual(row_a, host.internEachRowScope(&roc_host, root, 7, nodeValueI64(10), key_eq));
+
+    const row_b = host.internEachRowScope(&roc_host, root, 7, nodeValueI64(11), key_eq);
+    try std.testing.expect(row_b != row_a);
+
+    const same_key_other_site = host.internEachRowScope(&roc_host, root, 8, nodeValueI64(10), key_eq);
+    try std.testing.expect(same_key_other_site != row_a);
+
+    const root_state = host.internNodeIdentity(root, 0);
+    try std.testing.expectEqual(root_state, host.internNodeIdentity(root, 0));
+
+    const row_state = host.internNodeIdentity(row_a, 0);
+    try std.testing.expect(row_state != root_state);
+
+    const row_next_state = host.internNodeIdentity(row_a, 1);
+    try std.testing.expect(row_next_state != row_state);
 }
