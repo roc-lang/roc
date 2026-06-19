@@ -217,6 +217,13 @@ table tr td {
     margin-bottom: 24px;
 }
 
+/* Targets of anchor-link navigation (permalink clicks, # references). */
+.entry[id],
+.entry-group[id] {
+  /* Offset so the target lands below the sticky search bar. */
+  scroll-margin-top: var(--module-search-form-height);
+}
+
 .entry-children-container {
     margin-top: 16px;
     margin-left: var(--entry-anchor-offset);
@@ -320,7 +327,6 @@ main {
   grid-template-rows: auto 1fr auto;
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
-  scroll-padding-top: var(--module-search-form-height);
 }
 
 main > * {
@@ -613,7 +619,7 @@ a.sidebar-module-link {
     font-size: 0.8rem;
     cursor: pointer;
     padding: 8px 16px;
-    
+
     &:hover {
         color: var(--violet);
     }
