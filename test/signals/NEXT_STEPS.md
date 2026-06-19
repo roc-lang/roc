@@ -55,8 +55,10 @@ Ordered roughly by how much of the design they block.
    checked/disabled sinks. If the dirty source feeds a structural site, the host
    rebuilds the active descriptor stream, then patches DOM shape from explicit
    host-owned DOM identities: removed branch/row DOM is detached, surviving keyed
-   row DOM is moved/reused, and the simulated DOM is not reset. Remaining work is
-   finer-grained event bind/unbind and eventually eliminating the descriptor
+   row DOM is moved/reused, and the simulated DOM is not reset. Event bindings are
+   compared against the next explicit event descriptor stream, so unchanged
+   element/kind/event-id slots are left alone and only added, removed, or shifted
+   bindings are patched. Remaining work is eventually eliminating the descriptor
    rebuild once retained typed closures replace the internal `NodeValue` path.
 
 3. **Metrics are partway through the design migration.** `RuntimeMetrics` now
@@ -284,7 +286,7 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    state refs. The host now keeps DOM identity separate from state/scope
    identity, so structural patches can detach removed DOM and move/reuse
    surviving keyed row DOM. The remaining work is adding broader assertions
-   around branch/filter churn and tightening event rebinding granularity.
+   around branch/filter churn and removing the descriptor-stream rebuild.
 2. **Host-invoked `is_eq` thunks.** Keep the erased-callable call convention +
    per-type marshaling as the only way the host compares typed keys/values.
    Duplicate keys within one keyed scope = hard host error (not a silent alias).
@@ -319,7 +321,9 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    reused. The app init/render lifecycle uses this active collector for
    structural updates, and structural DOM application now detaches removed
    branch/row DOM while moving/reusing surviving keyed row DOM through explicit
-   host-owned DOM identities.
+   host-owned DOM identities. Structural event application now compares the
+   current DOM event slots with the next explicit event stream and patches only
+   added, removed, or shifted event-id bindings.
 4. **Done — delete legacy surface.** `Reactive.roc`, the old string-keyed
    `Graph.roc`, and the old `UiRuntime.roc` evaluator have been removed. The
    active platform surface is the retained descriptor API in `Elem`/`Node` plus
@@ -474,7 +478,8 @@ and active `Ui.when` branch disposal are wired into the active app lifecycle.
 Dirty non-structural source changes now patch only matching leaf sinks from the
 retained descriptor stream. Structural source changes still rebuild the active
 descriptor stream, but the host now applies the result as a structural DOM patch
-using explicit DOM identities scoped by branch/row.
+using explicit DOM identities scoped by branch/row and compares event binding
+slots rather than rebinding every active event.
 
 - Keep the host scope forest explicit: each conditional branch and list row is a
   scope owning its minted ids and retained closures.
@@ -489,9 +494,10 @@ using explicit DOM identities scoped by branch/row.
 - Done for structural DOM shape: dirty structural source nodes detach removed
   branch/row DOM, move/reuse surviving keyed row DOM, create only new DOM nodes,
   and avoid the full DOM reset when a dirty source feeds `when`/`each`.
-- Remaining structural patch work: bind/unbind events only for changed subtrees
-  and remove the active descriptor-stream rebuild when retained typed closures
-  make per-node structural plans explicit.
+- Done for structural event bindings: unchanged event-id slots stay bound; only
+  added, removed, or shifted event-id bindings are patched.
+- Remaining structural patch work: remove the active descriptor-stream rebuild
+  when retained typed closures make per-node structural plans explicit.
 
 Exit: `rows_reused`/`rows_removed` reflect actual reuse; reorder/filter
 preserves per-row state; non-structural `patches_emitted` tracks changed sinks,

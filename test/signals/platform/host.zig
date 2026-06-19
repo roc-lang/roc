@@ -3117,6 +3117,59 @@ fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
     }
 }
 
+const HostRequiredEventBindings = struct {
+    click: ?u64 = null,
+    input: ?u64 = null,
+    check: ?u64 = null,
+};
+
+fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEventKind) *?u64 {
+    return switch (kind) {
+        .click => &bindings.click,
+        .input => &bindings.input,
+        .check => &bindings.check,
+    };
+}
+
+fn domEventBindingSlot(elem: *DomElement, kind: RenderEventKind) *?u64 {
+    return switch (kind) {
+        .click => &elem.bound_click_event,
+        .input => &elem.bound_input_event,
+        .check => &elem.bound_check_event,
+    };
+}
+
+fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *CommandCounts) void {
+    const allocator = host.gpa.allocator();
+    var required = allocator.alloc(HostRequiredEventBindings, seen.len) catch std.process.exit(1);
+    defer allocator.free(required);
+    @memset(required, .{});
+
+    for (stream.events.items, 0..) |desc, index| {
+        if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) {
+            failHost("event descriptor referenced an element outside the structural render stream");
+        }
+        const event_id: u64 = @intCast(index + 1);
+        const slot = requiredEventBindingSlot(&required[@intCast(desc.elem_id)], desc.kind);
+        if (slot.* != null) failHost("element has duplicate event descriptors for one event kind");
+        slot.* = event_id;
+    }
+
+    const kinds = [_]RenderEventKind{ .click, .input, .check };
+    for (host.dom_elements.items, 0..) |*elem, index| {
+        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+
+        for (kinds) |kind| {
+            const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
+            const current_event_id = domEventBindingSlot(elem, kind);
+            if (current_event_id.* == next_event_id) continue;
+
+            current_event_id.* = next_event_id;
+            counts.addEventBinding();
+        }
+    }
+}
+
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
@@ -3310,16 +3363,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
 
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
-        elem.bound_click_event = null;
-        elem.bound_input_event = null;
-        elem.bound_check_event = null;
-    }
-    for (stream.events.items, 0..) |desc, index| {
-        bindNodeEvent(host, desc, @intCast(index + 1));
-        counts.addEventBinding();
-    }
+    applyStructuralEventBindings(host, stream, seen, &counts);
 
     host.render_metrics.patches_emitted += counts.total;
     return counts;
@@ -4257,6 +4301,28 @@ fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]co
     writeTestErasedResult(abi.Elem, ret, testNodeState(roc_host, testNodeText(roc_host, text)));
 }
 
+fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const key = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test stateful row button Elem callable expected key NvI64"),
+    };
+    const item = switch (call_args.arg1.tag) {
+        .NvI64 => call_args.arg1.payload.nv_i64,
+        else => @panic("test stateful row button Elem callable expected item NvI64"),
+    };
+    var text_buffer: [64]u8 = undefined;
+    const text = std.fmt.bufPrint(&text_buffer, "row-action-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row button Elem callable could not format text");
+    const token = newTestBinderToken(roc_host);
+    const attrs = [_]abi.NodeAttr{
+        testNodeStaticTextAttr(roc_host, .text, text),
+        testNodeEventAttr(roc_host, .click, token, .unit),
+    };
+    const button = testElementWith(roc_host, "button", &attrs, &.{});
+    writeTestErasedResult(abi.Elem, ret, testNodeStateWithToken(roc_host, token, button));
+}
+
 fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = capture_ptr;
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
@@ -4669,6 +4735,145 @@ test "signals host structural patch clears fields absent from reused DOM node" {
     try std.testing.expect(!host.dom_elements.items[@intCast(section_id)].disabled);
 }
 
+test "signals host structural patch binds only changed event slots" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const initial_button_attrs = [_]abi.NodeAttr{
+        testNodeStaticTextAttr(&roc_host, .text, "Submit"),
+        testNodeEventAttr(&roc_host, .click, state_token, .unit),
+    };
+    const initial_children = [_]abi.Elem{
+        testElementWith(&roc_host, "button", &initial_button_attrs, &.{}),
+    };
+    const initial_section = testElementWith(&roc_host, "section", &.{}, &initial_children);
+    const initial_root = testNodeStateWithToken(&roc_host, state_token, initial_section);
+    defer abi.decrefElem(initial_root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
+    host.active_stream = initial_stream;
+
+    try std.testing.expectEqual(@as(u64, 1), initial_counts.bind_event);
+    const button_id = host.active_stream.elements.items[1].elem_id;
+    try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(button_id)].bound_click_event);
+
+    const same_button_attrs = [_]abi.NodeAttr{
+        testNodeStaticTextAttr(&roc_host, .text, "Submit"),
+        testNodeEventAttr(&roc_host, .click, state_token, .unit),
+    };
+    const same_children = [_]abi.Elem{
+        testElementWith(&roc_host, "button", &same_button_attrs, &.{}),
+    };
+    const same_section = testElementWith(&roc_host, "section", &.{}, &same_children);
+    const same_root = testNodeStateWithToken(&roc_host, cloneTestBinderToken(state_token), same_section);
+    defer abi.decrefElem(same_root, &roc_host);
+
+    var same_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &same_stream, same_root);
+    const same_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_stream);
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.active_stream = same_stream;
+
+    try std.testing.expectEqual(@as(u64, 0), same_counts.bind_event);
+    try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(button_id)].bound_click_event);
+
+    const removed_button_attrs = [_]abi.NodeAttr{
+        testNodeStaticTextAttr(&roc_host, .text, "Submit"),
+    };
+    const removed_children = [_]abi.Elem{
+        testElementWith(&roc_host, "button", &removed_button_attrs, &.{}),
+    };
+    const removed_section = testElementWith(&roc_host, "section", &.{}, &removed_children);
+    const removed_root = testNodeStateWithToken(&roc_host, cloneTestBinderToken(state_token), removed_section);
+    defer abi.decrefElem(removed_root, &roc_host);
+
+    var removed_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &removed_stream, removed_root);
+    const removed_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &removed_stream);
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.active_stream = removed_stream;
+
+    try std.testing.expectEqual(@as(u64, 1), removed_counts.bind_event);
+    try std.testing.expect(host.dom_elements.items[@intCast(button_id)].bound_click_event == null);
+}
+
+test "signals host structural patch shifts moved row event ids only" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2) };
+    const initial_children = [_]abi.Elem{
+        testNodeEachWithItemsAndRow(&roc_host, &initial_items, &testStatefulRowButtonElemCallable),
+    };
+    const initial_root = testElementWith(&roc_host, "section", &.{}, &initial_children);
+    defer abi.decrefElem(initial_root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
+    host.active_stream = initial_stream;
+
+    try std.testing.expectEqual(@as(u64, 2), initial_counts.bind_event);
+    const row_1_button_id = activeTextElementId(&host, "row-action-1-1") orelse unreachable;
+    const row_2_button_id = activeTextElementId(&host, "row-action-2-2") orelse unreachable;
+    try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(row_1_button_id)].bound_click_event);
+    try std.testing.expectEqual(@as(?u64, 2), host.dom_elements.items[@intCast(row_2_button_id)].bound_click_event);
+
+    const reordered_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(1) };
+    const reordered_children = [_]abi.Elem{
+        testNodeEachWithItemsAndRow(&roc_host, &reordered_items, &testStatefulRowButtonElemCallable),
+    };
+    const reordered_root = testElementWith(&roc_host, "section", &.{}, &reordered_children);
+    defer abi.decrefElem(reordered_root, &roc_host);
+
+    var reordered_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root);
+    const reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &reordered_stream);
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.active_stream = reordered_stream;
+
+    try std.testing.expectEqual(@as(u64, 0), reordered_counts.create_element);
+    try std.testing.expectEqual(@as(u64, 2), reordered_counts.bind_event);
+    try std.testing.expectEqual(row_1_button_id, activeTextElementId(&host, "row-action-1-1") orelse unreachable);
+    try std.testing.expectEqual(row_2_button_id, activeTextElementId(&host, "row-action-2-2") orelse unreachable);
+    try std.testing.expectEqual(@as(?u64, 2), host.dom_elements.items[@intCast(row_1_button_id)].bound_click_event);
+    try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(row_2_button_id)].bound_click_event);
+
+    const same_reordered_children = [_]abi.Elem{
+        testNodeEachWithItemsAndRow(&roc_host, &reordered_items, &testStatefulRowButtonElemCallable),
+    };
+    const same_reordered_root = testElementWith(&roc_host, "section", &.{}, &same_reordered_children);
+    defer abi.decrefElem(same_reordered_root, &roc_host);
+
+    var same_reordered_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &same_reordered_stream, same_reordered_root);
+    const same_reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_reordered_stream);
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.active_stream = same_reordered_stream;
+
+    try std.testing.expectEqual(@as(u64, 0), same_reordered_counts.create_element);
+    try std.testing.expectEqual(@as(u64, 0), same_reordered_counts.bind_event);
+    try std.testing.expectEqual(@as(?u64, 2), host.dom_elements.items[@intCast(row_1_button_id)].bound_click_event);
+    try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(row_2_button_id)].bound_click_event);
+}
+
 fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
 }
@@ -4863,7 +5068,7 @@ fn nodeValueList(roc_host: *abi.RocHost, items: []const abi.NodeValue) abi.NodeV
     };
 }
 
-fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const abi.NodeValue) abi.Elem {
+fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeValue, row_fn: abi.RocErasedCallableFn) abi.Elem {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -4881,7 +5086,7 @@ fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const abi.NodeValue) a
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testStatefulRowElemCallable,
+        row_fn,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -4896,6 +5101,10 @@ fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const abi.NodeValue) a
         },
         .tag = .Each,
     };
+}
+
+fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const abi.NodeValue) abi.Elem {
+    return testNodeEachWithItemsAndRow(roc_host, items, &testStatefulRowElemCallable);
 }
 
 fn testNodeEach(roc_host: *abi.RocHost) abi.Elem {
