@@ -122,10 +122,16 @@ parse_record_field_from_headers = |fields, headers|
 						} else if longer_than_any_field {
 							Ok(Continue({ rest: { raw: line_parts.after } }))
 						} else {
-							Ok(TryFieldCaseless({
-								name,
-								rest: { raw: value_start },
-							}))
+							match find_field_caseless(fields, name) {
+								Ok(field) =>
+									Ok(Field({
+										field,
+										rest: { raw: value_start },
+									}))
+
+								Err(NotFound) =>
+									Ok(Continue({ rest: { raw: line_parts.after } }))
+							}
 						}
 					} else {
 						Err(Headers.DecodeErr.BadHeader)
@@ -143,6 +149,29 @@ take_header_value = |raw|
 		Ok({ before, after }) => Ok({ value: before.trim(), after })
 		Err(NotFound) => Ok({ value: raw.trim(), after: "" })
 	}
+
+find_field_caseless : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_field_caseless = |fields, name| {
+	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
+
+	while True {
+		match Iter.next($remaining) {
+			One({ item, rest }) =>
+				if Str.caseless_ascii_equals(name, Field.name(item)) {
+					return Ok(item)
+				} else {
+					$remaining = rest
+				}
+
+			Skip({ rest }) => {
+				$remaining = rest
+			}
+
+			Done =>
+				return Err(NotFound)
+		}
+	}
+}
 
 underscores_to_dashes : Str -> Str
 underscores_to_dashes = |text|

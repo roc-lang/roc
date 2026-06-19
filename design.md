@@ -1218,12 +1218,18 @@ content_length -> content-length
 x_auth_token -> x-auth-token
 ```
 
-At runtime the header parser can parse the input line name as a seamless slice
-and return `TryFieldCaseless({ name, rest: value_start })`. Matching
+At runtime the header parser parses the input line name as a seamless slice and
+uses `Fields.for_size` plus ASCII-caseless comparison against `Field.name` to
+match the transformed field set directly. If the name matches a requested field,
+it returns `Field({ field, rest: value_start })`; if the name cannot match, it
+consumes the line and returns `Continue({ rest: next_line })`. Matching
 `Cache-Control`, `cache-control`, and `CACHE-CONTROL` against the transformed
 `cache-control` field set does not require allocating a lowercased copy. Header
 values are trimmed and passed to field parsing as seamless `Str` slices. The
-format does not allocate a header map.
+format does not allocate a header map. A format that prefers to delegate name
+matching to generated record dispatch may still return `TryFieldCaseless`, but
+the hot header path uses direct `Field` events so unknown headers can be skipped
+by the format without parsing their values.
 
 The JSON `Str` format receives valid UTF-8 text. The JSON `Utf8` format receives
 bytes and validates UTF-8 before producing any `Str`. JSON record parsing scans
@@ -1237,10 +1243,14 @@ user_id -> userId
 cache_control -> cacheControl
 ```
 
-The runtime JSON scanner then returns `TryField({ name, rest: value_start })`
-for each object field name. Generated matching compares the input object name
-against the already-renamed field set, and the matched field's parser consumes
-the JSON value from `value_start`.
+The runtime JSON scanner uses `Fields.for_size` and exact `Field.name`
+comparison to match each object key against the already-renamed field set. It
+returns `Field({ field, rest: value_start })` for known keys. For unknown keys,
+it skips the JSON value according to JSON syntax and returns
+`Continue({ rest: after_value })`. The matched field's parser consumes the JSON
+value from `value_start`. A format may return `TryField` to delegate exact name
+matching to generated record dispatch, but JSON can avoid that extra generated
+miss path when it has already looked up the field through `Fields`.
 
 JSON tag unions use the externally tagged object representation:
 

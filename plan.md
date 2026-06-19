@@ -447,8 +447,9 @@ maintain both systems side by side.
   - [ ] parse one CRLF-delimited line
   - [ ] return `Done` at end of header section
   - [ ] return bad-header error when a non-empty line lacks `:`
-  - [x] return `TryFieldCaseless({ name, rest: value_start })` for ordinary
+  - [x] return `Field({ field, rest: value_start })` for matching requested
     header lines
+  - [x] return `Continue({ rest: next_line })` for unknown header lines
   - [x] use `Fields.shortest_name` and `Fields.longest_name` where they can
     cheaply avoid impossible work
 - [ ] Implement `HeaderEncoding.skip_record_field`:
@@ -492,7 +493,8 @@ maintain both systems side by side.
 - [ ] Define a camel-case JSON encoding if used by tests:
   - [ ] `user_id -> userId`
   - [ ] `cache_control -> cacheControl`
-- [x] Implement `parse_record_field` to return `TryField`, not converted names.
+- [x] Implement `parse_record_field` to match transformed `Fields` directly
+  for known object keys and return `Continue` after skipping unknown keys.
 - [ ] Implement `skip_record_field` for unknown JSON values:
   - [ ] string values
   - [ ] object values currently supported by the test platform
