@@ -1,261 +1,174 @@
 # Signals Guide for Web Developers
 
-This guide introduces the signals platform as a future browser UI platform.
-The current host in this directory is a simulated DOM and test runner, but the
-programming model is the same shape a browser implementation would use:
+This guide introduces the signals platform as a future browser UI platform. The
+host in this directory is a simulated DOM and test runner, but the programming
+model is the same shape a browser implementation would use:
 
-1. A Roc app returns a pure `Elem`.
-2. The Roc runtime evaluates signals and emits DOM commands.
-3. The host applies those commands to the DOM.
-4. Browser events are sent back to Roc through event ids.
-5. Roc returns the next boxed runtime plus another command batch.
+1. A Roc app builds a pure description of its UI: signals, structure, and event
+   handlers.
+2. The platform hands that description to the host **once**.
+3. The host mints node ids, builds the dependency graph, applies the initial
+   render patches, and binds event listeners.
+4. A browser event fires; the host routes it to the right source node and asks
+   Roc to apply that source's reducer.
+5. The host propagates the change through the dependency graph, re-invoking
+   **only** the derived computations whose inputs actually changed, and emits
+   the minimal render patches.
 
-If you know Roc and browser fundamentals, the main shift is this: the DOM is
-not where application state lives. Roc owns the reactive graph and retained
-state. The browser host owns DOM nodes, event listeners, and command
-application.
+If you know Roc and browser fundamentals, the main shift is this: the DOM is not
+where application state lives, and the UI is **not** rebuilt on every event. Roc
+describes a reactive graph once; the host owns that graph, owns the retained
+state, and updates only what changed. Work scales with the number of values that
+change, not with the size of your UI.
 
 ## The Mental Model
 
-Signals are continuous values. A `Reactive.Signal(Str)` always has a current
-string value, and a `Reactive.Signal(Bool)` always has a current boolean value.
-Signals are what you read while rendering.
+A **signal** is a continuous, always-present value. A `Signal Str` always has a
+current string; a `Signal Bool` always has a current boolean. Signals are what
+you read while describing the UI.
 
-Events are discrete occurrences. A `Reactive.Event(Str)` may occur when a user
-types into an input. A `Reactive.Event(Reactive.Unit)` may occur when a user
-clicks a button. Events are what change retained state.
+Signals come in two flavors, but you build both with the same small toolkit:
 
-Event senders are write-only handles used by controls. You pass an
-`EventSender(a)` to `Elem.text_input`, `Elem.checkbox`, or `Elem.action_button`.
-The host binds that sender to a DOM event id. When the browser event fires, the
-host sends the event id and value back to Roc.
+- **Source signals** are set from the outside: a text input, a checkbox, a
+  button-driven counter, a timer, or an effect result. You create them with
+  `Signal.state`, and you get back a `send` handle for updating them.
+- **Derived signals** are computed from other signals with `Signal.map`,
+  `Signal.map2`, or `Signal.combine`. You never update a derived signal
+  directly; it recomputes when an input changes.
 
-State is created by turning events into signals:
+When you write `Signal.map2(price, qty, |p, q| p * q)`, you are not just
+computing a value — you are *declaring a dependency*. The edges
+`price -> total` and `qty -> total` are data in the description. The host reads
+those edges directly, so it never has to run your code to discover what depends
+on what. This is what lets the platform update incrementally without any
+compiler magic and without scanning the graph at runtime.
 
-- `Signal.hold(key, initial, event)` stores the latest event value.
-- `Signal.fold(key, initial, event, step)` stores accumulated state.
-- Specialized forms such as `fold_i64` and `fold_bool_toggle` avoid erased
-  value work for common cases.
-
-Derived values are ordinary signal graph nodes:
-
-- `Signal.const_*` creates values that never change.
-- `Signal.map` derives one signal from another.
-- `Signal.map2` derives one signal from two inputs.
-- Keyed variants such as `map_keyed` and `map2_keyed` let the runtime retain
-  cached results across rebuilt graph descriptions.
-
-An `Elem` is a pure description of UI. Some elements contain signals for their
-text, values, checked states, or disabled states. Dynamic elements render a
-child tree from the current value of a signal.
+An `Elem` is a pure description of UI structure. Static parts are plain values;
+dynamic parts (text, input values, checked/disabled states) reference signals;
+event handlers reference reducers. Conditional regions and lists are explicit
+constructs so the host can manage their identity and lifecycle.
 
 ## Why Use This Model?
 
-Signals can look intimidating if you are used to component state, effect hooks,
-reducers, or manually mutating DOM state. The reason to consider this model is
-not that it is familiar. The reason is that it tries to make UI behavior more
-explicit, easier to test, and easier for the runtime to update predictably.
+The reason to consider signals is not familiarity. It is that UI behavior
+becomes explicit, testable, and cheap to update.
 
-The proposed benefits are:
+- **One owner for app state.** Retained state lives in the host's reactive
+  runtime. The host applies render patches and routes events. State is not split
+  between Roc, JavaScript, DOM properties, and framework internals.
+- **Derived data stays derived.** Labels, disabled states, filtered lists, and
+  review text are signals computed from other signals. You represent them once
+  and never resynchronize duplicates by hand.
+- **Updates are incremental by construction.** Because dependencies are declared
+  in your `map`/`map2`/`combine` calls, the host updates exactly the affected
+  nodes. A change that produces an equal value stops propagating immediately.
+- **Roc types cover the whole UI model.** Form state, list items, and derived
+  values are ordinary typed Roc values. There is no untyped escape hatch.
+- **Tests speak in user-facing terms.** The host replays browser-style specs
+  against roles, labels, text, values, and checked states. A browser
+  implementation keeps the same testing model.
+- **Rendering is a data boundary.** Roc describes; the host applies patches such
+  as `SetText`, `SetValue`, and `BindClick`. The same description targets the
+  test host and a future browser host.
 
-- One owner for app state. Roc owns retained state inside the runtime, and the
-  host applies commands. That avoids splitting the same state between Roc,
-  JavaScript, DOM properties, and framework internals.
-- Explicit event flow. User actions enter through named event channels, and
-  state changes happen through `hold` and `fold`. There is no hidden callback
-  graph to reconstruct when debugging an update.
-- Derived data stays derived. Values such as labels, disabled states, filtered
-  lists, and review text are signals computed from other signals. You do not
-  store them separately and remember to keep them in sync.
-- Tests can speak in user-facing terms. The current host already replays
-  browser-style specs against roles, labels, text, values, and checked states.
-  A browser implementation can keep that testing model instead of depending on
-  component internals.
-- Rendering is a data boundary. Roc emits commands such as `SetText`,
-  `SetValue`, and `BindClick`; the host applies them. That gives a clear line
-  between application logic and DOM integration.
-- Incremental work is driven by explicit dependencies. Signals carry dependency
-  data, keyed nodes identify retained work, and the runtime can skip clean
-  cached signals or emit only changed non-structural DOM commands.
-- Roc types cover more of the UI model. Form state, events, list items, and
-  derived values are ordinary typed Roc values rather than untyped JavaScript
-  objects passed through framework conventions.
-- The same app model can target more than one host. The current host is a test
-  runner, while a future host could be a browser DOM implementation. The app
-  code still describes events, signals, and elements.
-
-This model is most likely to pay off for apps with rich state: forms, wizards,
-dashboards, editors, lists with local row state, filtered/reordered views, and
-flows where correctness matters more than quick DOM scripting. It is less
-compelling for mostly static pages, small marketing sites, or projects whose
-main value comes from an existing JavaScript component ecosystem.
-
-You can tell whether it is worth learning by building a small but real slice of
-your product and checking the result against a few concrete questions:
-
-- Can a new developer follow the event channels and signal definitions without
-  chasing hidden update paths?
-- Are derived values represented once, or are you still manually synchronizing
-  duplicate state?
-- Do keyed dynamic sections and lists preserve the state users expect when
-  branches switch, items reorder, or filters change?
-- Can important flows be tested through roles, labels, text, and form values
-  instead of framework internals?
-- Does the host boundary stay boring: apply commands, bind events, dispatch
-  events back to Roc?
-- Do runtime counters and command counts show that common interactions avoid
-  unnecessary recomputation and DOM updates?
-- Is the extra upfront vocabulary smaller than the bugs and complexity it
-  removes from the UI you are actually building?
-
-Switching is not automatically worth it. The model asks developers to learn a
-different vocabulary and to make state identity explicit with keys. The payoff
-should be visible in simpler state reasoning, stronger tests, fewer duplicated
-state updates, and predictable host integration. If a prototype does not show
-those wins for your app shape, it is reasonable to keep using a more familiar
-web framework.
+This model pays off most for apps with rich state: forms, wizards, dashboards,
+editors, lists with local row state, and filtered/reordered views. It is less
+compelling for mostly static pages or projects whose value comes from an
+existing JavaScript component ecosystem.
 
 ## A Small Browser-Style Form
 
-A signals app imports the platform modules and exposes `main : {} -> Elem.Elem`.
-The current research platform uses this header:
+A signals app imports the platform modules and builds an `Elem`:
 
 ```roc
 app [main] { pf: platform "../platform/main.roc" }
 
-import pf.Elem
-import pf.NodeValue exposing [NodeValue]
-import pf.Reactive
+import pf.Signal exposing [Signal]
+import pf.Html
+import pf.Ui
 ```
 
 Here is a small form with retained input state, derived text, a click counter,
 and a disabled action:
 
 ```roc
-main : {} -> Elem.Elem
-main = |_| {
-    { sender: name_send, receiver: name_changes } =
-        Reactive.Event.channel("name_change")
+main : {} -> Elem
+main = |_|
+    { signal: name, send: set_name } = Signal.state("")
 
-    name : Reactive.Signal(Str)
-    name =
-        Reactive.Signal.hold("name", "", name_changes)
-
-    greeting : Reactive.Signal(Str)
+    greeting : Signal Str
     greeting =
-        Reactive.Signal.map_keyed(
-            "greeting",
-            name,
-            |value| if value == "" {
-                "Enter your name"
-            } else {
-                Str.concat("Hello, ", value)
-            },
-        )
+        Signal.map(name, |value|
+            if value == "" then "Enter your name" else "Hello, ${value}")
 
-    submit_disabled : Reactive.Signal(Bool)
-    submit_disabled =
-        Reactive.Signal.map_keyed(
-            "submit_disabled",
-            name,
-            |value| value == "",
-        )
+    submit_disabled : Signal Bool
+    submit_disabled = Signal.map(name, |value| value == "")
 
-    { sender: submit_send, receiver: submit_clicks } =
-        Reactive.Event.unit_channel("submit_click")
+    { signal: submit_count, send: bump } = Signal.state(0i64)
 
-    submit_deltas : Reactive.Event(I64)
-    submit_deltas =
-        Reactive.Event.map_unit_i64_const(submit_clicks, 1)
-
-    submit_count : Reactive.Signal(I64)
-    submit_count =
-        Reactive.Signal.fold_i64(
-            "submit_count",
-            0,
-            submit_deltas,
-            |current, delta| current + delta,
-        )
-
-    submit_label : Reactive.Signal(Str)
+    submit_label : Signal Str
     submit_label =
-        Reactive.Signal.map_i64_str_keyed(
-            "submit_label",
-            submit_count,
-            |count| Str.concat("Submissions: ", count.to_str()),
-        )
+        Signal.map(submit_count, |count| "Submissions: ${Num.to_str(count)}")
 
-    Elem.div(
-        [
-            Elem.heading("Profile"),
-            Elem.text_input(
-                {
-                    label: "Name",
-                    value: name,
-                    on_input: name_send,
-                    disabled: Reactive.Signal.const_bool(False),
-                },
-            ),
-            Elem.label(greeting),
-            Elem.action_button(
-                {
-                    on_click: submit_send,
-                    label: Reactive.Signal.const_str("Save profile"),
-                    disabled: submit_disabled,
-                },
-            ),
-            Elem.label(submit_label),
-        ],
-    )
-}
+    Html.div([], [
+        Html.heading("Profile"),
+        Html.input(
+            [Html.label("Name"), Html.value(name), Html.on_input(|new| set_name(|_| new))],
+            [],
+        ),
+        Html.text_s(greeting),
+        Html.button(
+            [Html.label_s(Signal.const("Save profile")), Html.disabled(submit_disabled), Html.on_click(bump(|n| n + 1))],
+            [],
+        ),
+        Html.text_s(submit_label),
+    ])
 ```
 
-The important pieces are the channels and keys.
+The important pieces:
 
-`Reactive.Event.channel("name_change")` creates an input channel. The
-`name_send` value is passed to the text input. The `name_changes` value is the
-stream of submitted strings.
+`Signal.state("")` creates a source signal with an initial value and a `send`
+handle. `set_name(|_| new)` builds the message that replaces the current value
+with the latest input. You pass `name` itself to `Html.value` so the input
+stays bound to the source.
 
-`Reactive.Signal.hold("name", "", name_changes)` creates retained state. Before
-any input, the signal value is `""`. After the user types, the latest input
-value becomes the current signal value.
+`Signal.map(name, ...)` derives display text. There is no key; the host knows
+this derived node's identity from where you built it. When `name` changes, the
+host recomputes `greeting` and `submit_disabled` — and nothing else.
 
-`Reactive.Signal.map_keyed("greeting", name, ...)` derives display text from
-the current input. The key tells the runtime this derived node is the same
-logical node when `main` returns a fresh `Elem` tree after an event.
-
-`Reactive.Signal.fold_i64("submit_count", 0, submit_deltas, ...)` accumulates a
-counter. Click events do not directly mutate a variable. Instead, the event
-stream carries deltas, and the fold describes how to produce the next value.
+`Signal.state(0i64)` plus `bump(|n| n + 1)` is a counter. Clicks do not mutate a
+variable; the click's message describes how to produce the next value from the
+current one.
 
 ## How Browser Events Flow
 
-For a real browser host, the initial load would look like this:
+For a real browser host, the initial load looks like this:
 
-1. Call `roc_ui_init`.
-2. Store the returned boxed runtime.
-3. Apply the returned command batch to the DOM.
-4. Install listeners from commands such as `BindClick`, `BindInput`, and
-   `BindCheck`.
+1. Call `roc_ui_init`. Roc runs `main({})` once and returns the graph
+   description plus the initial render patches.
+2. The host ingests the description: it mints a dense integer id per node, builds
+   the dependency adjacency and a topological ordering, and stores each node's
+   retained transform closure.
+3. The host applies the initial patches to the DOM and binds listeners from
+   `BindClick`, `BindInput`, and `BindCheck`.
 
-When a user types in the `Name` input, the browser host uses the bound event id
-to create a Roc host event:
+When a user types in the `Name` input:
 
-```text
-Input({ event: name_event_id, value: "Ada" })
-```
+1. The bound DOM listener fires. The host looks up the input's source node id in
+   O(1) and calls `roc_ui_event` with that id and the typed value `"Ada"`.
+2. Roc applies the source's reducer and returns the new source value (and any
+   effect requests).
+3. The host marks that source dirty and walks its dependents **in dependency
+   order**, asking Roc (in a batch) to recompute only the derived nodes whose
+   inputs changed. Where a recomputed value equals its previous value,
+   propagation stops there.
+4. The host emits the minimal render patches for the sinks whose value changed.
 
-Then it:
+The host never stores Roc callbacks inside DOM nodes, never evaluates signals
+itself, and never scans the graph to guess what changed. It routes explicit
+events into Roc and applies explicit patches from the runtime.
 
-1. Passes the previous boxed runtime and boxed host event to `roc_ui_dispatch`.
-2. Stores the returned boxed runtime.
-3. Applies the returned command batch to the DOM.
-
-The host does not call Roc callbacks stored in DOM nodes. It does not evaluate
-signals. It does not inspect the graph to decide what changed. It only sends
-explicit events to Roc and applies explicit commands from Roc.
-
-The current command set includes:
+The patch command set:
 
 - `ResetDom`
 - `CreateElement` and `AppendChild`
@@ -263,314 +176,171 @@ The current command set includes:
 - `SetRole`, `SetLabel`, and `SetTestId`
 - `BindClick`, `BindInput`, and `BindCheck`
 
-The simulated host uses the same command shape a browser implementation would
-map onto DOM operations.
+The simulated host applies these against an in-memory element tree; a browser
+host maps the same commands onto real DOM operations.
 
-## Real-World Effects
+## Identity Without Keys
 
-The current research platform only models UI events and render commands. It
-does not yet expose browser effects such as HTTP requests, file picking,
-clipboard access, local storage, IndexedDB, timers, or navigation.
+Signals apps build their description once. State must survive across updates, but
+you do not manage identity with strings.
 
-A browser platform should keep the same ownership rule as rendering: Roc
-describes what should happen, and the host performs the browser operation.
-Effect results come back to Roc as explicit events.
+- **Plain signals** get their identity from where you construct them. Because the
+  build is pure and deterministic, that position is stable.
+- **Conditional regions and list rows are explicit scopes.** Adding or removing
+  UI inside one scope never disturbs the identity of sibling scopes. This is why
+  branches and lists are first-class: they are the seams that contain change.
+- **List rows are identified by a typed key**, not by position. A row keeps its
+  local state when the list is reordered or filtered, because identity is the
+  key.
 
-The shape is:
-
-1. A user event enters Roc, such as clicking `Save`.
-2. Roc updates state and emits an effect request command, such as `HttpSend`.
-3. The browser host performs `fetch`, file IO, storage access, or another
-   browser API call.
-4. When the operation finishes, the host dispatches a result event back to Roc.
-5. Roc folds that result into retained state and renders the next UI.
-
-This keeps signal evaluation pure. A signal should not call `fetch` while it is
-being evaluated, read browser storage as a hidden dependency, or mutate the DOM
-outside the command stream. If an app needs an outside operation, that operation
-should be represented as explicit data crossing the Roc/host boundary.
-
-For example, a future HTTP capability could look like this at the platform
-boundary:
-
-```text
-Roc command:
-HttpSend({
-    id: request_id,
-    method: "POST",
-    url: "/api/profile",
-    body: json_bytes,
-    on_result: event_id,
-})
-
-Host result event:
-HttpResult({
-    event: event_id,
-    status: 200,
-    body: response_bytes,
-})
-```
-
-The app would still model its state with signals:
-
-```roc
-save_state =
-    Reactive.Signal.fold(
-        "save_state",
-        NotAsked,
-        save_results,
-        |_current, result| match result {
-            Ok(_) => Saved
-            Err(message) => Failed(message)
-        },
-    )
-```
-
-The exact API is future work, but the design goal is not to hide effects inside
-signal callbacks. It is to make effects visible as requested work and completed
-work.
-
-Effect requests also need identity. Re-rendering the same state should not send
-the same HTTP request again just because a signal was evaluated again. A future
-effect API should tie requests to event occurrences or explicit state
-transitions, carry request ids across the boundary, and let responses identify
-which request completed.
-
-Different browser effects fit the same pattern:
-
-- HTTP: Roc emits a request command; the host dispatches a response event.
-- File picker: Roc emits an open-file command; the host dispatches selected
-  file metadata or bytes.
-- Browser storage: Roc emits get/set/remove commands; reads dispatch value
-  events, while writes can dispatch success or failure events when needed.
-- Timers: Roc emits start/stop timer commands; the host dispatches tick or
-  timeout events.
-- Navigation: Roc emits navigation commands, and route changes enter Roc as
-  explicit location events.
-
-This is different from many web frameworks, where effectful code often lives
-inside component lifecycle hooks. In this model, lifecycle timing belongs to
-the platform runtime, and effect requests are part of the app's explicit output.
-That makes tests and hosts simpler: a test host can assert that the app emitted
-an HTTP request, then inject a fake response event without running a browser
-network stack.
-
-## Keys Preserve Meaning
-
-Signals apps rebuild graph descriptions often. That does not mean state should
-reset. State is retained by explicit string keys.
-
-Use stable keys for anything that should survive a rebuild:
-
-```roc
-email =
-    Reactive.Signal.hold("email", "", email_changes)
-
-submit_count =
-    Reactive.Signal.fold_i64("submit_count", 0, submit_deltas, |current, delta| current + delta)
-```
-
-The key is not a label for humans. It is identity for the runtime. If the same
-state appears after the next event, use the same key. If it is a different
-piece of state, use a different key.
-
-For repeated UI, include the item identity in each local key:
-
-```roc
-render_line = |line| {
-    { sender: add_send, receiver: add_clicks } =
-        Reactive.Event.unit_channel(Str.concat("line_add_click:", line.id))
-
-    quantity =
-        Reactive.Signal.fold_i64(
-            Str.concat("line_quantity:", line.id),
-            1,
-            Reactive.Event.map_unit_i64_const(add_clicks, 1),
-            |current, delta| current + delta,
-        )
-
-    Elem.section(
-        line.label,
-        [
-            Elem.action_button(
-                {
-                    on_click: add_send,
-                    label: Reactive.Signal.const_str(Str.concat("Increase ", line.label)),
-                    disabled: Reactive.Signal.const_bool(False),
-                },
-            ),
-            Elem.label(
-                Reactive.Signal.map_i64_str_keyed(
-                    Str.concat("line_quantity_label:", line.id),
-                    quantity,
-                    |n| Str.concat("Quantity: ", n.to_str()),
-                ),
-            ),
-        ],
-    )
-}
-```
-
-This lets a row keep its local state when a list is reordered or filtered.
-Unstable keys, such as indexes that change when items move, make the runtime
-associate old state with the wrong item.
+So instead of writing keys, you write structure. Use `Ui.when` for conditionals
+and `Ui.each` for lists, and let the host manage identity and lifecycle.
 
 ## Dynamic UI
 
-Static elements are enough for simple forms. Real apps also need conditional
-sections and lists.
-
-Use `Elem.when` for a boolean choice:
+Use `Ui.when` for a boolean choice between two subtrees:
 
 ```roc
-Elem.when(
+Ui.when(
     incident_active,
-    Elem.paragraph("Incident room open"),
-    Elem.paragraph("No active incident"),
+    |_| Html.paragraph("Incident room open"),
+    |_| Html.paragraph("No active incident"),
 )
 ```
 
-Use `Elem.dynamic` when a signal value chooses a child tree:
+Each branch is its own scope. When the condition flips, the host disposes the
+losing branch (releasing its state and detaching its DOM) and mounts the other.
+
+Use `Ui.each` for lists. You supply a typed key function and a row renderer:
 
 ```roc
-Elem.dynamic(
-    step,
-    |current_step| if current_step == 0 {
-        Elem.section("Cart", cart_children)
-    } else {
-        Elem.section("Review", review_children)
-    },
-)
+TodoId := U64 implements [Hash, Eq]
+
+todo_list : Signal (List Todo) -> Elem
+todo_list = |todos|
+    Html.ul([], [
+        Ui.each(todos, |todo| todo.id, |_key, row|
+            { signal: editing, send: set_editing } = Signal.state(Bool.false)
+            Html.li([], [
+                Html.text_s(Signal.map(row, |t| t.title)),
+                Html.button(
+                    [Html.on_click(set_editing(|e| !e))],
+                    [Html.text_s(Signal.map(editing, |e| if e then "done" else "edit"))],
+                ),
+            ]),
+        ),
+    ])
 ```
 
-Use `Elem.dynamic_keyed` when switching between branches that have independent
-local state:
+The row renderer receives the row's key and a `Signal item` for that row's data.
+Any `Signal.state` you create inside the renderer is local to that row and keyed
+by the row's typed key, so it survives reorder and filter. The key function must
+return a stable identity from the data (a database id, slug, or durable client
+id) — never the item's current position. Two rows that produce the same key are
+reported as a host error rather than silently aliased.
+
+When the list changes, the host diffs the new key set against the old: surviving
+rows are reused (including their local state), new keys mint a fresh row scope,
+and removed keys are disposed. Only changed rows touch the DOM.
+
+## Typed Values
+
+App code works with ordinary typed Roc values throughout. Signals are typed
+(`Signal Str`, `Signal (List Todo)`), and the transforms you pass to `map`,
+`map2`, and `combine` are ordinary typed functions. There is no untyped value
+representation and no `encode`/`decode` boilerplate to write.
+
+For a custom type to be used as a signal value or a list key, it must implement
+the abilities those positions require:
+
+- Any signal value type implements `Eq` (the runtime uses it to stop
+  propagation when a recomputed value is unchanged).
+- Any `Ui.each` key type implements `Hash & Eq`.
 
 ```roc
-Elem.dynamic_keyed(
-    step,
-    |current_step| current_step.to_str(),
-    |current_step| if current_step == 0 {
-        Elem.section("Cart", cart_children)
-    } else {
-        Elem.section("Review", review_children)
-    },
-)
+Todo := { id : TodoId, title : Str, done : Bool } implements [Eq]
+TodoId := U64 implements [Hash, Eq]
 ```
 
-Use `Elem.each` for lists:
-
-```roc
-Elem.each(tasks, |task| task.id, render_task)
-```
-
-The key function should return a stable identity from the data, such as a
-database id, slug, or durable client id. It should not return the item's
-current position in the list.
-
-## Typed Values And NodeValue
-
-Most app code works with typed Roc values. The runtime stores dynamic signal
-and event payloads in `NodeValue` so graph nodes can carry lists and custom
-values through one representation.
-
-Built-in values such as `Str`, `Bool`, `I64`, and `Reactive.Unit` already have
-the methods needed by the current APIs. When a custom type flows through
-generic APIs such as `Event.map`, `Signal.fold`, `Elem.dynamic`, or `Elem.each`,
-define `encode` and `decode` methods for that type:
-
-```roc
-Task := { id : Str, label : Str }.{
-    make : Str, Str -> Task
-    make = |id, label| { id, label }
-
-    encode : Task, NodeValue -> Try(NodeValue, [])
-    encode = |task, fmt| [task.id, task.label].encode(fmt)
-
-    decode : NodeValue, NodeValue -> (Try(Task, [TypeMismatch]), NodeValue)
-    decode = |nv, fmt| {
-        (result, rest) =
-            NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-
-        task_result =
-            match result {
-                Ok(fields) =>
-                    match (List.get(fields, 0), List.get(fields, 1)) {
-                        (Ok(id), Ok(label)) => Ok(Task.make(id, label))
-                        _ => Err(TypeMismatch)
-                    }
-
-                Err(err) => Err(err)
-            }
-
-        (task_result, rest)
-    }
-}
-```
-
-This keeps the public app code typed while giving the runtime an explicit value
-format for retained state, dynamic rendering, and list rendering.
+The platform generates the concrete equality and (where needed) serialization
+code for each signal edge from the surrounding types. You only declare the
+abilities; you never hand-write conversions.
 
 ## Choosing The Right Primitive
 
-Use `Signal.const_str`, `Signal.const_bool`, or `Signal.const_i64` when a value
-does not depend on user interaction.
+- Use `Signal.const` for a value that never changes.
+- Use `Signal.state` for anything the user (or an effect) updates: input text,
+  checkbox state, counters, toggles, wizard steps, replaced lists. The `send`
+  handle's reducer (`|current| next`) describes the transition.
+- Use `Signal.map` for display-only derived data from one signal, `Signal.map2`
+  for two, and `Signal.combine` for a list of signals.
+- Use `Html.text` for static text and `Html.text_s` for signal-backed text.
+- Use `Html.value`, `Html.checked`, and `Html.disabled` for signal-backed
+  attributes; `Html.on_click`, `Html.on_input`, and `Html.on_check` for handlers.
+- Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
+  `Ui.component` to introduce a named scope when a reusable piece of UI needs its
+  own local state.
 
-Use `Event.channel` for controls that carry values, such as text inputs and
-checkboxes. Use `Event.unit_channel` for controls where the occurrence itself
-is the data, such as button clicks.
+## Real-World Effects
 
-Use `Signal.hold` when the next state is simply the latest event value. Text
-input values and checkbox checked states usually use `hold`.
+Effects (HTTP, timers, storage, navigation) follow the same ownership rule as
+rendering: Roc describes what should happen; the host performs it; results
+re-enter the graph as source updates, using the exact same propagation path as a
+click. A signal is never evaluated by running an effect, and an effect never
+mutates the DOM outside the patch stream.
 
-Use `Signal.fold` or `Signal.fold_i64` when the next state depends on the
-previous state. Counters, toggles, undo stacks, wizard steps, and list
-replacement flows usually use folds.
+Effects are modeled as **sources**:
 
-Use `Signal.map` for display-only derived data. Use `Signal.map2` when derived
-data depends on two signals. Prefer keyed variants for derived values that are
-part of a long-lived UI path.
+```roc
+save_state : Signal [NotAsked, Saving, Saved, Failed Str]
+save_state =
+    Signal.from_task(save_request, |result|
+        when result is
+            Ok(_) => Saved
+            Err(message) => Failed(message))
+```
 
-Use `Elem.label` for signal-backed text. Use `Elem.text` and `Elem.paragraph`
-for text that never changes.
+`Signal.from_task` produces a signal whose value reflects the lifecycle of the
+work (`Loading`, then `Done` or `Failed`). When the task resolves, the host sets
+that source node and runs the same dirty-propagation a user event would. Error
+states are ordinary signal values you fold and render.
 
-Use `Elem.action_button` when the disabled state is signal-backed. Use
-`Elem.button` for a basic click target without disabled state.
+Two related helpers:
 
-Use `Elem.dynamic_keyed` and `Elem.each` when branch or row identity matters,
-especially when local state under that branch or row should survive rebuilds.
+- `Signal.interval(duration)` is a timer source.
+- `Ui.on_change(signal, |value| cmd)` fires an effect request when a signal
+  changes, and `Ui.on_cleanup(task)` runs when the surrounding scope is disposed
+  (for unsubscribing or cancelling).
+
+Request identity comes from the owning scope and node, not from app-written
+strings, so re-evaluation never refires a request, and disposing a scope cancels
+its in-flight work. A test host can assert that an app requested an HTTP call and
+then inject a fake result without running a network stack.
 
 ## Common Mistakes
 
-Do not treat a signal like a mutable variable. You do not assign to a signal.
-You describe how events produce retained state, and how other signals derive
-from it.
-
-Do not let the browser host own Roc app state. The host stores the boxed
-runtime, but the state inside it belongs to the Roc runtime. The host should
-not mirror a second application model in JavaScript.
-
-Do not reuse one event key for different controls. Event keys identify event
-sources. Two different controls should have two different event keys unless
-they are intentionally the same source.
-
-Do not use unstable list keys. If a row has local state, the row key must come
-from item identity, not from list position.
-
-Do not recover missing information in the host. If the host needs to know what
-to update, Roc should emit a command. If Roc needs to know what happened, the
-host should send an explicit event.
+- **Do not treat a signal like a mutable variable.** You do not assign to a
+  signal. You create source signals with `Signal.state` and describe transitions
+  through the `send` reducer; derived signals follow from `map`/`map2`/`combine`.
+- **Do not let the host own app state.** The host owns the reactive runtime, but
+  the state belongs to the platform's runtime, not to a second model in
+  JavaScript.
+- **Do not use unstable list keys.** A row's key must come from item identity,
+  not from list position, or its local state will follow the wrong item.
+- **Do not push work into the host's lap.** If the host needs to update
+  something, the runtime emits a patch. If Roc needs to know something happened,
+  the host sends an explicit event. Nothing is recovered by guessing.
 
 ## Where To Look Next
 
-The maintained examples in `apps/` show larger versions of the same patterns:
+The maintained examples in `apps/` show larger versions of these patterns:
 
-- `ops_dashboard.roc` shows scalar signal chains, conditional UI, keyed alert
-  rows, and input state.
-- `checkout_wizard.roc` shows wizard steps, form state, disabled actions, list
-  replacement, and keyed line-item state.
-- `kanban_board.roc` shows list reorder, archive/reset flows, filtering, and
-  per-card local state.
+- `ops_dashboard.roc` shows scalar signal chains, fanout, conditional regions,
+  keyed alert rows, and input state.
+- `checkout_wizard.roc` shows conditional wizard steps, form state, disabled
+  actions, list replacement, and per-row local state.
+- `kanban_board.roc` shows list reorder, archive/reset flows, filtering through
+  `Signal.map2`, and per-card local state.
 
 Run the representative suite from the repository root:
 
@@ -578,5 +348,6 @@ Run the representative suite from the repository root:
 zig build run-test-signals
 ```
 
-That builds each app and replays its browser-style interaction spec against
-the simulated DOM host.
+That builds each app and replays its browser-style interaction spec against the
+simulated DOM host. For the architecture and the host boundary in detail, see
+`DESIGN.md` in this directory.

@@ -1,9 +1,7 @@
 # Signals UI Platform — Target Design
 
-This document is the forward-looking design for the Signals UI platform. It
-describes the *ideal* architecture we are building toward, not the current
-prototype. The current prototype (`Reactive.roc`, `Graph.roc`, `Elem.roc`,
-`UiRuntime.roc`, `NodeValue.roc`) is treated as legacy; this design replaces it.
+This document is the authoritative design for the Signals UI platform. It
+describes the architecture we are building toward.
 
 The host for this design is a **test-runner host** that simulates a real DOM and
 applies render patches against an in-memory element tree. The simulated host
@@ -146,9 +144,10 @@ reserved for persistence and the wire, never forced on every event. We do not
 `memcmp` encoded bytes for equality (fragile for floats/maps); we call the `Eq`
 ability thunk.
 
-`NodeValue` is deleted. The combinator zoo (`map_i64_str`, `fold_bool_toggle`,
-`*_keyed`, …) is deleted; monomorphization generates concrete code for the few
-polymorphic functions below.
+There is no untyped value representation crossing the boundary. The public API
+is a few polymorphic functions (below); monomorphization generates concrete code
+for each instantiation, so there is no hand-written family of type-specialized
+combinators.
 
 ## App-Facing API
 
@@ -394,8 +393,8 @@ Per node id the host stores:
 - the owning scope id.
 
 Adjacency, ranks, and the dirty set are dense integer-indexed structures. No
-string keys, no scans to rediscover identity, no `Dict(Str, _)`. (This sidesteps
-the legacy `Dict`/`List.set` issues entirely; identity is dense integers.)
+string keys, no scans to rediscover identity, no `Dict(Str, _)`; identity is
+dense integers throughout.
 
 ### Propagation algorithm (push-based, glitch-free, value-pruned)
 
@@ -463,14 +462,14 @@ The patch command set is the typed, host-independent set already present:
 
 ### Metrics
 
-The host retains a metrics record for benchmarking, but the meaningful counters
-change to reflect the new model: `events_processed`, `nodes_recomputed`
-(should track changed nodes, not graph size), `propagation_prunes` (Eq
-short-circuits), `derived_calls_into_roc`, `recompute_batches`, `patches_emitted`,
-`scopes_created`, `scopes_disposed`, `rows_reused`, `rows_created`,
-`rows_removed`, `closure_retains`, `closure_releases`, and `retained_alloc_delta`.
-`rows_reused` must be *real* (not incremented while discarding the key, as the
-legacy `keyed_reuses` was).
+The host retains a metrics record for benchmarking. The meaningful counters
+are: `events_processed`, `nodes_recomputed` (should track changed nodes, not
+graph size), `propagation_prunes` (Eq short-circuits), `derived_calls_into_roc`,
+`recompute_batches`, `patches_emitted`, `scopes_created`, `scopes_disposed`,
+`rows_reused`, `rows_created`, `rows_removed`, `closure_retains`,
+`closure_releases`, and `retained_alloc_delta`. `rows_reused` must count actual
+subtree reuse — a row is only counted as reused when its scope (and local state)
+is preserved across the update.
 
 ## Glitch Freedom, Ordering, and Async
 
@@ -486,16 +485,16 @@ legacy `keyed_reuses` was).
   states are ordinary signal values the app folds and renders. There is no
   effect-inside-signal-evaluation; effects are sources.
 
-## Migration From the Legacy Prototype
+## Implementation Plan
 
-1. Keep the simulated DOM, spec parser, and ABI helpers in the host.
-2. Replace the `roc_ui_init` / `roc_ui_dispatch` payloads with the
-   `GraphDesc` / `ui_event` / `ui_recompute` protocol; keep `ui_drop`.
-3. Delete `NodeValue`, `Graph.roc`'s expr unions, the combinator zoo, and the
-   Roc-side `UiRuntime` evaluator. Replace with the graph-description builder and
-   retained-thunk trampolines.
-4. Port the three representative apps (`ops_dashboard`, `checkout_wizard`,
-   `kanban_board`) to the new API and re-run their specs.
+1. Build the simulated DOM, spec parser, and ABI box/refcount helpers in the
+   host.
+2. Implement the `roc_ui_init` ingestion of `GraphDesc`, the `ui_event` and
+   batched `ui_recompute` protocol, and `ui_drop`.
+3. Implement the Roc graph-description builder (`Signal`, `Html`, `Ui`) and the
+   retained-thunk trampolines over `RocErasedCallable`.
+4. Build the three representative apps (`ops_dashboard`, `checkout_wizard`,
+   `kanban_board`) on the API and run their specs against the simulated host.
 
 ## Risks to De-Risk Before Building the Full API
 
@@ -533,7 +532,7 @@ monomorphization or compile time.
 
 - **Update amplification:** nodes recomputed and patches emitted per event should
   track the number of *changed* nodes, not graph or tree size. This is the
-  headline metric distinguishing this design from the legacy full re-render.
+  headline metric for the platform.
 - **Per-event Roc calls:** bounded (one `ui_event` + batched `ui_recompute`),
   independent of tree size.
 - **Allocations per event and under list churn:** flat; surviving rows reused.
