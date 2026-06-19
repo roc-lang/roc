@@ -532,6 +532,7 @@ pub const NumericSuffixType = extern struct {
         builtin,
         local,
         external,
+        invalid,
     };
 
     pub const Target = union(enum) {
@@ -541,6 +542,7 @@ pub const NumericSuffixType = extern struct {
             import_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
+        invalid,
     };
 
     pub fn target(self: NumericSuffixType) Target {
@@ -551,6 +553,7 @@ pub const NumericSuffixType = extern struct {
                 .import_idx = @enumFromInt(self.data1),
                 .target_node_idx = self.data2,
             } },
+            .invalid => .invalid,
         };
     }
 };
@@ -3498,6 +3501,12 @@ pub fn recordNumericSuffixType(
             .kind = @intFromEnum(NumericSuffixType.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
+        },
+        .invalid => NumericSuffixType{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixType.Kind.invalid),
+            .data1 = 0,
+            .data2 = 0,
         },
     };
 

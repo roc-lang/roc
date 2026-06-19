@@ -1639,6 +1639,9 @@ fn unifyTypedLiteralWithExplicitType(
                 try self.unifyWith(flex_var, .err, env);
             }
         },
+        .invalid => {
+            try self.unifyWith(flex_var, .err, env);
+        },
     }
 }
 
@@ -1676,6 +1679,9 @@ fn explicitTypeSuffixVar(
                 try self.unifyWith(suffix_var, .err, env);
             }
         },
+        .invalid => {
+            try self.unifyWith(suffix_var, .err, env);
+        },
     }
 
     return suffix_var;
@@ -1685,7 +1691,7 @@ fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kin
     const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
     return switch (suffix_type.target()) {
         .builtin => |target_kind| target_kind == num_kind,
-        else => false,
+        .local, .external, .invalid => false,
     };
 }
 
@@ -6066,12 +6072,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_typed_int => |typed_num| {
             // Typed integer literal like 123.U64
             // Create from_numeral constraint and unify with the explicit type
-            const num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
+            var num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
                 try self.exactNumeralInfoForExpr(expr_idx, expr_region)
             else switch (typed_num.value.kind) {
                 .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
                 .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
             };
+            num_literal_info.explicit_suffix = true;
 
             // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
@@ -6091,7 +6098,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            num_literal_info.explicit_suffix = true;
 
             // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
@@ -6110,7 +6118,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
         },
         .e_typed_num_from_numeral => {
-            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            num_literal_info.explicit_suffix = true;
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(

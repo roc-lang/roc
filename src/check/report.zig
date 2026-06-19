@@ -2035,12 +2035,22 @@ pub const ReportBuilder = struct {
         if (data.origin.literalKind()) |kind| {
             return switch (kind) {
                 // number literal used where a non-number type is expected
-                .numeral => self.buildNumberUsedAsNonNumber(data),
+                .numeral => if (data.num_literal != null and data.num_literal.?.explicit_suffix)
+                    self.buildStaticDispatchMissingMethod(data)
+                else
+                    self.buildNumberUsedAsNonNumber(data),
                 // string/interpolation literal used where a non-string type is expected
                 .quote, .interpolation => self.buildStringUsedAsNonString(data),
             };
         }
 
+        return self.buildStaticDispatchMissingMethod(data);
+    }
+
+    fn buildStaticDispatchMissingMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) Allocator.Error!Report {
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 

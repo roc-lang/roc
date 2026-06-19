@@ -1002,6 +1002,7 @@ fn interpolationDispatcherTypeId(
 
     return switch (suffix_type.target()) {
         .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
+        .invalid => checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
         .builtin, .external => if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
         } else unreachable,

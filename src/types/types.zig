@@ -853,6 +853,9 @@ pub const NumeralInfo = struct {
     /// Source region for error reporting
     region: base.Region,
 
+    /// Whether this literal had an explicit type suffix such as `12.Str`.
+    explicit_suffix: bool = false,
+
     /// Get the value as i128 (may overflow for large u128 values)
     pub fn toI128(self: NumeralInfo) i128 {
         return @bitCast(self.bytes);
@@ -873,6 +876,7 @@ pub const NumeralInfo = struct {
             .fits_dec = null,
             .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 
@@ -886,6 +890,7 @@ pub const NumeralInfo = struct {
             .fits_dec = null,
             .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 
@@ -904,6 +909,7 @@ pub const NumeralInfo = struct {
             else
                 null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 };

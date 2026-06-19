@@ -4971,8 +4971,28 @@ fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.I
         try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
         return;
     }
-    if (try self.scopeLookupOrPrepareTypeDecl(type_ident)) |stmt_idx| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
+        try self.env.recordNumericSuffixType(node_idx, .invalid);
+        return;
+    };
+    switch (binding_location.binding.*) {
+        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
+            try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+        },
+        .external_nominal => |external| {
+            const import_idx = external.import_idx orelse {
+                try self.env.recordNumericSuffixType(node_idx, .invalid);
+                return;
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                try self.env.recordNumericSuffixType(node_idx, .invalid);
+                return;
+            };
+            try self.env.recordNumericSuffixType(node_idx, .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } });
+        },
     }
 }
 
