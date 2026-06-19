@@ -3987,7 +3987,9 @@ const BodyContext = struct {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
-            .local_value => |local| {
+            .local_value,
+            .pattern_binder,
+            => |local| {
                 if (self.selectedHoistedLocalConst(local)) |entry| {
                     if (!self.loweringOwnHoistedConstRoot(entry)) {
                         const hoisted_ty = try self.lowerType(entry.checked_type);
@@ -3998,7 +4000,6 @@ const BodyContext = struct {
             },
             .local_param,
             .local_mutable_version,
-            .pattern_binder,
             .local_proc,
             .top_level_const,
             .imported_const,
@@ -4203,7 +4204,9 @@ const BodyContext = struct {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
-            .local_value => |local| {
+            .local_value,
+            .pattern_binder,
+            => |local| {
                 if (self.selectedHoistedLocalConst(local)) |entry| {
                     if (!self.loweringOwnHoistedConstRoot(entry)) {
                         return try self.restoredHoistedConstAtType(entry, ty);
@@ -4212,7 +4215,6 @@ const BodyContext = struct {
             },
             .local_param,
             .local_mutable_version,
-            .pattern_binder,
             .local_proc,
             .top_level_const,
             .imported_const,

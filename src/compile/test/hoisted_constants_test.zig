@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const build_options = @import("build_options");
+const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const eval = @import("eval");
@@ -26,12 +27,47 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\
         \\import pf.Echo
         \\
-        \\top = 40.I64
+        \\top_a = 40.I64
+        \\top_b = top_a + 1.I64
         \\
-        \\main! = |_args| {
-        \\    x = top + 1.I64
+        \\top_callable = if 1.I64 == 1.I64 {
+        \\    |n| n + 1.I64
+        \\} else {
+        \\    |n| n + 2.I64
+        \\}
+        \\
+        \\main! = |args| {
+        \\    x = top_b + 1.I64
         \\    y = x + 1.I64
-        \\    _ = y
+        \\    called = top_callable(41.I64)
+        \\    { z } = { z: 44.I64 }
+        \\    pair = (40.I64, 6.I64)
+        \\    (left, right) = pair
+        \\    tuple_total = left + right
+        \\    Ok(tag_value) = Ok(45.I64)
+        \\    match_tuple_total = match (50.I64, 8.I64) {
+        \\        (match_left, match_right) => match_left + match_right + List.len(args).to_i64_wrap()
+        \\    }
+        \\    alias_total = match 46.I64 {
+        \\        _n as whole => whole + List.len(args).to_i64_wrap()
+        \\    }
+        \\    rest_total = match [40.I64, 2.I64] {
+        \\        [.. as rest] => List.len(rest).to_i64_wrap() + List.len(args).to_i64_wrap()
+        \\    }
+        \\    closed_match_input : Try(I64, I64)
+        \\    closed_match_input = Ok(40.I64)
+        \\    closed_match_total = match closed_match_input {
+        \\        Ok(n) => n + 2.I64
+        \\        Err(code) => code
+        \\    }
+        \\    _ = y + List.len(args).to_i64_wrap()
+        \\    _ = called + List.len(args).to_i64_wrap()
+        \\    _ = z + tuple_total + List.len(args).to_i64_wrap()
+        \\    _ = tag_value + List.len(args).to_i64_wrap()
+        \\    _ = match_tuple_total
+        \\    _ = alias_total
+        \\    _ = rest_total
+        \\    _ = closed_match_total + List.len(args).to_i64_wrap()
         \\    Echo.line!("done")
         \\    Ok({})
         \\}
@@ -107,6 +143,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const root_view = check.CheckedArtifact.importedView(root);
@@ -117,11 +155,31 @@ test "hoisted local constants are finalized and restored during runtime lowering
             findHoistedArtifact(relations, 2) orelse
             return error.AppHoistedConstantsNotFound;
 
-    try expectTopLevelConstantsBeforeHoisted(app);
+    try expectTopLevelCompileTimeRootsBeforeHoisted(app);
+    try expectTopLevelCompileTimeRootsBeforeHoisted(app_view);
 
-    const forty_one = findStoredI64(app, 41) orelse return error.HoistedFortyOneNotFound;
-    const forty_two = findStoredI64(app, 42) orelse return error.HoistedFortyTwoNotFound;
-    try std.testing.expect(@intFromEnum(forty_one.root) < @intFromEnum(forty_two.root));
+    const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
+    const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
+    const tuple_left = findStoredI64(app_view, 40) orelse return error.HoistedTupleLeftExtractionNotFound;
+    const tuple_right = findStoredI64(app_view, 6) orelse return error.HoistedTupleRightExtractionNotFound;
+    const record_extraction = findStoredI64(app_view, 44) orelse return error.HoistedRecordExtractionNotFound;
+    const tag_extraction = findStoredI64(app_view, 45) orelse return error.HoistedTagPayloadExtractionNotFound;
+    const match_tuple_left = findStoredI64(app_view, 50) orelse return error.HoistedMatchTupleLeftExtractionNotFound;
+    const match_tuple_right = findStoredI64(app_view, 8) orelse return error.HoistedMatchTupleRightExtractionNotFound;
+    const match_alias = findStoredI64(app_view, 46) orelse return error.HoistedMatchAliasExtractionNotFound;
+    try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
+    try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
+    try std.testing.expect(countHoistedMatchRoots(app_artifact) >= 1);
+
+    try expectRootRequestBefore(app_artifact, top_a.id, top_b.id);
+    try expectRootRequestBefore(app_artifact, top_b.id, tuple_left.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, tuple_right.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, record_extraction.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, tag_extraction.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_left.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_right.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, match_alias.root);
+    try expectPatternExtractionSyntheticRegions(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -154,7 +212,9 @@ test "imported checked bodies restore their module's hoisted constants" {
         \\import Helper
         \\
         \\main! = |args| {
+        \\    local_from_import = Helper.base + 1.I64
         \\    value = Helper.helper(List.len(args).to_i64_wrap())
+        \\    _ = local_from_import + List.len(args).to_i64_wrap()
         \\    _ = value
         \\    Echo.line!("done")
         \\    Ok({})
@@ -164,7 +224,9 @@ test "imported checked bodies restore their module's hoisted constants" {
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "Helper.roc",
         .data =
-        \\module [helper]
+        \\module [helper, base]
+        \\
+        \\base = 41.I64
         \\
         \\helper : I64 -> I64
         \\helper = |arg| {
@@ -238,12 +300,19 @@ test "imported checked bodies restore their module's hoisted constants" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const helper = findHoistedArtifact(imports, 2) orelse return error.ImportedHoistedConstantsNotFound;
 
+    const app_imported_const_use = findStoredI64(app_view, 42) orelse return error.AppHoistedImportedConstUseNotFound;
     const forty_one = findStoredI64(helper, 41) orelse return error.ImportedHoistedFortyOneNotFound;
     const forty_two = findStoredI64(helper, 42) orelse return error.ImportedHoistedFortyTwoNotFound;
+    try std.testing.expectEqual(
+        check.CheckedArtifact.CompileTimeRootKind.hoisted_constant,
+        app_artifact.compile_time_roots.root(app_imported_const_use.root).kind,
+    );
     try std.testing.expect(@intFromEnum(forty_one.root) < @intFromEnum(forty_two.root));
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
@@ -356,6 +425,103 @@ test "hoisted constant crash reports original source region" {
     try std.testing.expect(found);
 }
 
+test "hoisted pattern extraction failure reports original destructure region" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    x : Try(I64, Str)
+        \\    x = Err("bad")
+        \\    Ok(foo) = x
+        \\    _ = foo + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "NON-EXHAUSTIVE DESTRUCTURE")) continue;
+        found = true;
+        const region = entry.report.getRegionInfo() orelse return error.NonExhaustiveDestructureReportHadNoRegion;
+        try std.testing.expectEqual(@as(u32, 8), region.start_line_idx);
+        try std.testing.expectEqual(@as(u32, 8), region.end_line_idx);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
 fn findHoistedArtifact(
     views: []const check.CheckedArtifact.ImportedModuleView,
     min_count: usize,
@@ -366,10 +532,11 @@ fn findHoistedArtifact(
     return null;
 }
 
-fn expectTopLevelConstantsBeforeHoisted(
+fn expectTopLevelCompileTimeRootsBeforeHoisted(
     artifact: check.CheckedArtifact.ImportedModuleView,
 ) !void {
     var saw_top_level_constant = false;
+    var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
     var seen_hoisted_root = false;
 
@@ -379,11 +546,14 @@ fn expectTopLevelConstantsBeforeHoisted(
                 if (seen_hoisted_root) return error.TopLevelConstantScheduledAfterHoisted;
                 saw_top_level_constant = true;
             },
+            .callable_binding => {
+                if (seen_hoisted_root) return error.TopLevelCallableScheduledAfterHoisted;
+                saw_top_level_callable = true;
+            },
             .hoisted_constant => {
                 seen_hoisted_root = true;
                 saw_hoisted_constant = true;
             },
-            .callable_binding,
             .expect,
             .numeral_conversion,
             .quote_conversion,
@@ -392,7 +562,250 @@ fn expectTopLevelConstantsBeforeHoisted(
     }
 
     try std.testing.expect(saw_top_level_constant);
+    try std.testing.expect(saw_top_level_callable);
     try std.testing.expect(saw_hoisted_constant);
+}
+
+fn expectRootRequestBefore(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    before: check.CheckedArtifact.ComptimeRootId,
+    after: check.CheckedArtifact.ComptimeRootId,
+) !void {
+    const before_index = compileTimeRequestIndexForRoot(artifact, before) orelse return error.BeforeRootHadNoRequest;
+    const after_index = compileTimeRequestIndexForRoot(artifact, after) orelse return error.AfterRootHadNoRequest;
+    try std.testing.expect(before_index < after_index);
+}
+
+fn compileTimeRequestIndexForRoot(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_id: check.CheckedArtifact.ComptimeRootId,
+) ?usize {
+    const root = artifact.compile_time_roots.root(root_id);
+    for (artifact.root_requests.compile_time_requests, 0..) |request, i| {
+        if (rootRequestMatchesCompileTimeRoot(root, request)) return i;
+    }
+    return null;
+}
+
+fn rootRequestMatchesCompileTimeRoot(
+    root: check.CheckedArtifact.CompileTimeRoot,
+    request: check.CheckedArtifact.RootRequest,
+) bool {
+    if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) return false;
+    if (!rootSourceMatches(root.source, request.source)) return false;
+    return true;
+}
+
+fn compileTimeRootKindMatchesRequest(
+    root_kind: check.CheckedArtifact.CompileTimeRootKind,
+    request_kind: check.CheckedArtifact.RootRequestKind,
+) bool {
+    return switch (root_kind) {
+        .constant, .hoisted_constant => request_kind == .compile_time_constant,
+        .callable_binding => request_kind == .compile_time_callable,
+        .expect => request_kind == .test_expect,
+        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
+    };
+}
+
+fn rootSourceMatches(
+    a: check.CheckedArtifact.RootSource,
+    b: check.CheckedArtifact.RootSource,
+) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .def => |def| def == b.def,
+        .expr => |expr| expr == b.expr,
+        .statement => |statement| statement == b.statement,
+        .required_binding => |required_binding| required_binding == b.required_binding,
+        .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
+    };
+}
+
+fn expectPatternExtractionSyntheticRegions(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) !void {
+    const ModuleEnv = can.ModuleEnv;
+    const module_env = artifact.moduleEnvConst();
+    var extraction_count: usize = 0;
+
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_constant) continue;
+        const body = root.hoisted_body orelse continue;
+        const extraction = switch (body) {
+            .expr => continue,
+            .pattern_extraction => |payload| payload,
+        };
+        extraction_count += 1;
+
+        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
+        const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+
+        const synthetic_match = artifact.checked_bodies.expr(root.expr);
+        try expectRegionEqual(
+            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
+            synthetic_match.source_region,
+        );
+
+        const match_data = switch (synthetic_match.data) {
+            .match_ => |match_| match_,
+            .pending,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .if_,
+            .call,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => return error.PatternExtractionRootWasNotSyntheticMatch,
+        };
+        const checked_base_expr = artifact.checked_bodies.expr(match_data.cond);
+        try expectRegionEqual(
+            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr)),
+            checked_base_expr.source_region,
+        );
+        try std.testing.expectEqual(@as(usize, 1), match_data.branches.len);
+        try std.testing.expect(!match_data.is_try_suffix);
+        try std.testing.expect(!match_data.skip_exhaustiveness);
+
+        const branch = match_data.branches[0];
+        try std.testing.expectEqual(@as(usize, 1), branch.patterns.len);
+        const checked_scrutinee_pattern = artifact.checked_bodies.patterns[@intFromEnum(branch.patterns[0].pattern)];
+        try expectRegionEqual(
+            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
+            checked_scrutinee_pattern.source_region,
+        );
+        try std.testing.expect(!branch.patterns[0].degenerate);
+        try std.testing.expectEqual(@as(usize, 0), branch.patterns[0].binder_remaps.len);
+        try std.testing.expectEqual(@as(?check.CheckedArtifact.CheckedExprId, null), branch.guard);
+
+        const synthetic_lookup = artifact.checked_bodies.expr(branch.value);
+        try expectRegionEqual(
+            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern)),
+            synthetic_lookup.source_region,
+        );
+        const lookup = switch (synthetic_lookup.data) {
+            .lookup_local => |lookup| lookup,
+            .pending,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .call,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => return error.PatternExtractionRootValueWasNotSyntheticLookup,
+        };
+        try std.testing.expectEqual(checked_result_pattern, lookup.pattern);
+        try std.testing.expect(lookup.resolved != null);
+    }
+
+    try std.testing.expect(extraction_count >= 4);
+}
+
+fn expectRegionEqual(expected: base.Region, actual: base.Region) !void {
+    try std.testing.expectEqual(expected.start.offset, actual.start.offset);
+    try std.testing.expectEqual(expected.end.offset, actual.end.offset);
+}
+
+fn findStoredCompileTimeRootI64(
+    artifact: check.CheckedArtifact.ImportedModuleView,
+    kind: check.CheckedArtifact.CompileTimeRootKind,
+    expected: i64,
+) ?check.CheckedArtifact.CompileTimeRoot {
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != kind) continue;
+        if (rootStoredI64(artifact, root)) |actual| {
+            if (actual == expected) return root;
+        } else |_| {}
+    }
+    return null;
 }
 
 fn findStoredI64(
@@ -405,6 +818,43 @@ fn findStoredI64(
         } else |_| {}
     }
     return null;
+}
+
+fn countStoredHoistedI64(
+    artifact: check.CheckedArtifact.ImportedModuleView,
+    expected: i64,
+) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        if (storedI64(artifact, entry)) |actual| {
+            if (actual == expected) count += 1;
+        } else |_| {}
+    }
+    return count;
+}
+
+fn countHoistedMatchRoots(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) usize {
+    var count: usize = 0;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_constant) continue;
+        if (std.meta.activeTag(artifact.checked_bodies.expr(root.expr).data) == .match_) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn countCompileTimeRootKind(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    kind: check.CheckedArtifact.CompileTimeRootKind,
+) usize {
+    var count: usize = 0;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind == kind) count += 1;
+    }
+    return count;
 }
 
 fn storedI64(
@@ -430,7 +880,28 @@ fn storedI64(
     };
     try std.testing.expectEqual(node_from_root, node_from_template);
 
-    const value = artifact.const_store.get(node_from_root);
+    return scalarConstNodeI64(artifact, node_from_root);
+}
+
+fn rootStoredI64(
+    artifact: check.CheckedArtifact.ImportedModuleView,
+    root: check.CheckedArtifact.CompileTimeRoot,
+) !i64 {
+    const node = switch (root.payload) {
+        .const_node => |const_node| const_node,
+        .pending,
+        .fn_value,
+        .expect,
+        => return error.RootDidNotStoreConstNode,
+    };
+    return scalarConstNodeI64(artifact, node);
+}
+
+fn scalarConstNodeI64(
+    artifact: check.CheckedArtifact.ImportedModuleView,
+    node: check.CheckedArtifact.ConstNodeId,
+) !i64 {
+    const value = artifact.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {
             .i64 => |i| i,

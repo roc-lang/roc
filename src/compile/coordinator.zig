@@ -162,13 +162,16 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v1";
-const checked_module_cache_format_version: u64 = 2;
+const checked_module_cache_format_version: u64 = 5;
 const checked_module_cache_no_pattern: u32 = std.math.maxInt(u32);
 const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 8 + 8 + 32;
+const checked_module_cache_root_base_len: usize = 12;
+const checked_module_cache_pattern_extraction_len: usize = 12;
 
 const DecodedCheckedModuleCacheEntry = struct {
     module_env: []const u8,
     hoisted_roots: []const u8,
+    hoisted_root_count: usize,
 };
 
 fn writeU32Little(buf: []u8, value: u32) void {
@@ -221,13 +224,28 @@ fn hashCachePayload(module_env_len: u64, hoisted_root_count: u64, payload: []con
     return hasher.finalResult();
 }
 
+fn checkedModuleCacheHoistedRootLen(root: check.HoistRoots.SelectedHoistedRoot) usize {
+    return checked_module_cache_root_base_len + switch (root.body) {
+        .expr => @as(usize, 0),
+        .pattern_extraction => checked_module_cache_pattern_extraction_len,
+    };
+}
+
+fn checkedModuleCacheHoistedRootsLen(hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot) usize {
+    var len: usize = 0;
+    for (hoisted_roots) |root| {
+        len += checkedModuleCacheHoistedRootLen(root);
+    }
+    return len;
+}
+
 fn encodeCheckedModuleCacheEntry(
     allocator: Allocator,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     module_env_body: []const u8,
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot,
 ) Allocator.Error![]u8 {
-    const hoisted_roots_len = hoisted_roots.len * 8;
+    const hoisted_roots_len = checkedModuleCacheHoistedRootsLen(hoisted_roots);
     const payload_len = module_env_body.len + hoisted_roots_len;
     const bytes = try allocator.alloc(u8, checked_module_cache_header_len + payload_len);
     errdefer allocator.free(bytes);
@@ -251,6 +269,22 @@ fn encodeCheckedModuleCacheEntry(
         root_offset += 4;
         writeU32Little(bytes[root_offset..][0..4], if (root.pattern) |pattern| @intFromEnum(pattern) else checked_module_cache_no_pattern);
         root_offset += 4;
+        switch (root.body) {
+            .expr => {
+                writeU32Little(bytes[root_offset..][0..4], 0);
+                root_offset += 4;
+            },
+            .pattern_extraction => |extraction| {
+                writeU32Little(bytes[root_offset..][0..4], 1);
+                root_offset += 4;
+                writeU32Little(bytes[root_offset..][0..4], @intFromEnum(extraction.base_expr));
+                root_offset += 4;
+                writeU32Little(bytes[root_offset..][0..4], @intFromEnum(extraction.scrutinee_pattern));
+                root_offset += 4;
+                writeU32Little(bytes[root_offset..][0..4], @intFromEnum(extraction.result_pattern));
+                root_offset += 4;
+            },
+        }
     }
     const body_hash = hashCachePayload(
         @intCast(module_env_body.len),
@@ -289,41 +323,555 @@ fn decodeCheckedModuleCacheEntry(
 
     const module_env_len = std.math.cast(usize, module_env_len_u64) orelse return null;
     const hoisted_root_count = std.math.cast(usize, hoisted_root_count_u64) orelse return null;
-    const hoisted_roots_len = std.math.mul(usize, hoisted_root_count, 8) catch return null;
-    const expected_payload_len = std.math.add(usize, module_env_len, hoisted_roots_len) catch return null;
-    if (payload.len != expected_payload_len) return null;
+    if (payload.len < module_env_len) return null;
     if (module_env_len < @sizeOf(ModuleEnv.Serialized)) return null;
 
     return .{
         .module_env = payload[0..module_env_len],
         .hoisted_roots = payload[module_env_len..],
+        .hoisted_root_count = hoisted_root_count,
     };
 }
 
 fn decodeCheckedModuleCacheHoistedRoots(
     allocator: Allocator,
     bytes: []const u8,
-) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
-    std.debug.assert(bytes.len % 8 == 0);
-    const count = bytes.len / 8;
-    if (count == 0) return &.{};
+    count: usize,
+) (Allocator.Error || error{InvalidCheckedModuleCache})![]const check.HoistRoots.SelectedHoistedRoot {
+    if (count == 0) {
+        if (bytes.len != 0) return error.InvalidCheckedModuleCache;
+        return &.{};
+    }
 
     const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
-    errdefer allocator.free(roots);
+    var initialized: usize = 0;
+    errdefer {
+        check.HoistRoots.deinitSelectedRootBodies(allocator, roots[0..initialized]);
+        allocator.free(roots);
+    }
 
     var offset: usize = 0;
     for (roots) |*root| {
+        if (bytes.len - offset < checked_module_cache_root_base_len) return error.InvalidCheckedModuleCache;
         const expr_raw = readU32Little(bytes[offset..][0..4]);
         offset += 4;
         const pattern_raw = readU32Little(bytes[offset..][0..4]);
         offset += 4;
+        const body_tag = readU32Little(bytes[offset..][0..4]);
+        offset += 4;
+        const body: check.HoistRoots.Body = if (body_tag == 0)
+            .expr
+        else if (body_tag == 1) blk: {
+            if (bytes.len - offset < checked_module_cache_pattern_extraction_len) return error.InvalidCheckedModuleCache;
+            const base_expr_raw = readU32Little(bytes[offset..][0..4]);
+            offset += 4;
+            const scrutinee_pattern_raw = readU32Little(bytes[offset..][0..4]);
+            offset += 4;
+            const result_pattern_raw = readU32Little(bytes[offset..][0..4]);
+            offset += 4;
+            break :blk .{ .pattern_extraction = .{
+                .base_expr = @enumFromInt(base_expr_raw),
+                .scrutinee_pattern = @enumFromInt(scrutinee_pattern_raw),
+                .result_pattern = @enumFromInt(result_pattern_raw),
+            } };
+        } else return error.InvalidCheckedModuleCache;
+        const pattern = if (pattern_raw == checked_module_cache_no_pattern) null else @as(CIR.Pattern.Idx, @enumFromInt(pattern_raw));
+        switch (body) {
+            .expr => {},
+            .pattern_extraction => |extraction| {
+                const selected_pattern = pattern orelse return error.InvalidCheckedModuleCache;
+                if (selected_pattern != extraction.result_pattern) return error.InvalidCheckedModuleCache;
+            },
+        }
         root.* = .{
             .expr = @enumFromInt(expr_raw),
-            .pattern = if (pattern_raw == checked_module_cache_no_pattern) null else @enumFromInt(pattern_raw),
+            .pattern = pattern,
+            .body = body,
         };
+        initialized += 1;
     }
+    if (offset != bytes.len) return error.InvalidCheckedModuleCache;
 
     return roots;
+}
+
+fn validateCheckedModuleCacheHoistedRoots(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    roots: []const check.HoistRoots.SelectedHoistedRoot,
+) (Allocator.Error || error{InvalidCheckedModuleCache})!void {
+    var expr_roots = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator);
+    defer expr_roots.deinit();
+    var pattern_roots = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
+    defer pattern_roots.deinit();
+
+    for (roots) |root| {
+        try validateCheckedModuleCacheExprSource(module_env, root.expr);
+        if (root.pattern) |pattern| {
+            try validateCheckedModuleCachePatternSource(module_env, pattern);
+            const entry = try pattern_roots.getOrPut(pattern);
+            if (entry.found_existing) return error.InvalidCheckedModuleCache;
+        }
+
+        switch (root.body) {
+            .expr => {
+                const entry = try expr_roots.getOrPut(root.expr);
+                if (entry.found_existing) return error.InvalidCheckedModuleCache;
+            },
+            .pattern_extraction => |extraction| {
+                if (root.pattern == null) return error.InvalidCheckedModuleCache;
+                if (root.pattern.? != extraction.result_pattern) return error.InvalidCheckedModuleCache;
+                if (root.expr != extraction.base_expr) return error.InvalidCheckedModuleCache;
+                try validateCheckedModuleCacheExprSource(module_env, extraction.base_expr);
+                try validateCheckedModuleCachePatternSource(module_env, extraction.scrutinee_pattern);
+                try validateCheckedModuleCachePatternSource(module_env, extraction.result_pattern);
+            },
+        }
+    }
+}
+
+fn validateCheckedModuleCacheExprSource(
+    module_env: *const ModuleEnv,
+    expr: CIR.Expr.Idx,
+) error{InvalidCheckedModuleCache}!void {
+    const raw = @intFromEnum(expr);
+    if (raw >= module_env.store.nodes.len()) return error.InvalidCheckedModuleCache;
+    const tag = module_env.store.nodes.get(@enumFromInt(raw)).tag;
+    if (!checkedModuleCacheNodeTagIsExpr(tag)) return error.InvalidCheckedModuleCache;
+}
+
+fn validateCheckedModuleCachePatternSource(
+    module_env: *const ModuleEnv,
+    pattern: CIR.Pattern.Idx,
+) error{InvalidCheckedModuleCache}!void {
+    const raw = @intFromEnum(pattern);
+    if (raw >= module_env.store.nodes.len()) return error.InvalidCheckedModuleCache;
+    const tag = module_env.store.nodes.get(@enumFromInt(raw)).tag;
+    if (!checkedModuleCacheNodeTagIsPattern(tag)) return error.InvalidCheckedModuleCache;
+}
+
+fn checkedModuleCacheNodeTagIsExpr(tag: CIR.Node.Tag) bool {
+    return switch (tag) {
+        .expr_var,
+        .expr_tuple,
+        .expr_tuple_access,
+        .expr_list,
+        .expr_empty_list,
+        .expr_call,
+        .expr_record,
+        .expr_empty_record,
+        .expr_field_access,
+        .expr_method_call,
+        .expr_dispatch_call,
+        .expr_interpolation,
+        .expr_structural_eq,
+        .expr_method_eq,
+        .expr_type_method_call,
+        .expr_type_dispatch_call,
+        .expr_static_dispatch,
+        .expr_external_lookup,
+        .expr_required_lookup,
+        .expr_apply,
+        .expr_string,
+        .expr_string_segment,
+        .expr_bytes_literal,
+        .expr_num,
+        .expr_frac_f32,
+        .expr_frac_f64,
+        .expr_dec,
+        .expr_dec_small,
+        .expr_num_from_numeral,
+        .expr_typed_int,
+        .expr_typed_frac,
+        .expr_typed_num_from_numeral,
+        .expr_tag,
+        .expr_nominal,
+        .expr_nominal_external,
+        .expr_zero_argument_tag,
+        .expr_closure,
+        .expr_lambda,
+        .expr_record_update,
+        .expr_bin_op,
+        .expr_unary_minus,
+        .expr_unary_not,
+        .expr_suffix_single_question,
+        .expr_if_then_else,
+        .expr_match,
+        .expr_dbg,
+        .expr_crash,
+        .expr_expect_err,
+        .expr_block,
+        .expr_ellipsis,
+        .expr_anno_only,
+        .expr_hosted_lambda,
+        .expr_low_level,
+        .expr_run_low_level,
+        .expr_expect,
+        .expr_for,
+        .expr_record_builder,
+        .expr_return,
+        => true,
+        .statement_decl,
+        .statement_var,
+        .statement_var_uninitialized,
+        .statement_reassign,
+        .statement_crash,
+        .statement_dbg,
+        .statement_expr,
+        .statement_expect,
+        .statement_for,
+        .statement_while,
+        .statement_infinite_loop,
+        .statement_breakable_loop,
+        .statement_break,
+        .statement_return,
+        .statement_import,
+        .statement_alias_decl,
+        .statement_nominal_decl,
+        .statement_type_anno,
+        .statement_type_var_alias,
+        .record_field,
+        .record_destruct,
+        .match_branch,
+        .match_branch_pattern,
+        .type_header,
+        .annotation,
+        .ty_apply,
+        .ty_apply_external,
+        .ty_rigid_var,
+        .ty_rigid_var_lookup,
+        .ty_lookup,
+        .ty_underscore,
+        .ty_tag_union,
+        .ty_tag,
+        .ty_tuple,
+        .ty_record,
+        .ty_record_field,
+        .ty_fn,
+        .ty_parens,
+        .ty_lookup_external,
+        .ty_malformed,
+        .where_method,
+        .where_alias,
+        .where_malformed,
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        .pattern_num_literal,
+        .pattern_dec_literal,
+        .pattern_f32_literal,
+        .pattern_f64_literal,
+        .pattern_small_dec_literal,
+        .pattern_str_literal,
+        .pattern_str_interpolation,
+        .pattern_underscore,
+        .lambda_capture,
+        .def,
+        .exposed_item,
+        .if_branch,
+        .type_var_slot,
+        .malformed,
+        .diag_not_implemented,
+        .diag_invalid_num_literal,
+        .diag_empty_single_quote,
+        .diag_empty_tuple,
+        .diag_ident_already_in_scope,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_mutually_recursive_local_definitions,
+        .diag_erroneous_value_use,
+        .diag_erroneous_value_expr,
+        .diag_qualified_ident_does_not_exist,
+        .diag_invalid_top_level_statement,
+        .diag_expr_not_canonicalized,
+        .diag_invalid_string_interpolation,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_can_lambda_not_implemented,
+        .diag_lambda_body_not_canonicalized,
+        .diag_if_condition_not_canonicalized,
+        .diag_if_then_not_canonicalized,
+        .diag_if_else_not_canonicalized,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_type_module_missing_matching_type,
+        .diag_type_module_has_alias_not_nominal,
+        .diag_default_app_missing_main,
+        .diag_default_app_wrong_arity,
+        .diag_cannot_import_default_app,
+        .diag_execution_requires_app_or_default_app,
+        .diag_type_name_case_mismatch,
+        .diag_module_header_deprecated,
+        .diag_redundant_expose_main_type,
+        .diag_invalid_main_type_rename_in_exposing,
+        .diag_var_across_function_boundary,
+        .diag_shadowing_warning,
+        .diag_type_redeclared,
+        .diag_undeclared_type,
+        .diag_undeclared_type_var,
+        .diag_type_alias_but_needed_nominal,
+        .diag_type_alias_redeclared,
+        .diag_tuple_elem_not_canonicalized,
+        .diag_file_import_not_found,
+        .diag_file_import_io_error,
+        .diag_file_import_not_utf8,
+        .diag_module_not_found,
+        .diag_value_not_exposed,
+        .diag_type_not_exposed,
+        .diag_private_type_in_exposed_type,
+        .diag_private_type_in_exposed_field,
+        .diag_type_from_missing_module,
+        .diag_module_not_imported,
+        .diag_nested_type_not_found,
+        .diag_nested_value_not_found,
+        .diag_record_builder_map2_not_found,
+        .diag_too_many_exports,
+        .diag_nominal_type_redeclared,
+        .diag_type_shadowed_warning,
+        .diag_type_parameter_conflict,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        .diag_duplicate_record_field,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_unused_type_var_name,
+        .diag_type_var_marked_unused,
+        .diag_type_var_starting_with_dollar,
+        .diag_underscore_in_type_declaration,
+        .diagnostic_exposed_but_not_implemented,
+        .diag_redundant_exposed,
+        .diag_if_expr_without_else,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_return_outside_fn,
+        .diag_mutually_recursive_type_aliases,
+        .diag_deprecated_number_suffix,
+        .diag_range_op_chained,
+        => false,
+    };
+}
+
+fn checkedModuleCacheNodeTagIsPattern(tag: CIR.Node.Tag) bool {
+    return switch (tag) {
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        .pattern_num_literal,
+        .pattern_dec_literal,
+        .pattern_f32_literal,
+        .pattern_f64_literal,
+        .pattern_small_dec_literal,
+        .pattern_str_literal,
+        .pattern_str_interpolation,
+        .pattern_underscore,
+        => true,
+        .statement_decl,
+        .statement_var,
+        .statement_var_uninitialized,
+        .statement_reassign,
+        .statement_crash,
+        .statement_dbg,
+        .statement_expr,
+        .statement_expect,
+        .statement_for,
+        .statement_while,
+        .statement_infinite_loop,
+        .statement_breakable_loop,
+        .statement_break,
+        .statement_return,
+        .statement_import,
+        .statement_alias_decl,
+        .statement_nominal_decl,
+        .statement_type_anno,
+        .statement_type_var_alias,
+        .expr_var,
+        .expr_tuple,
+        .expr_tuple_access,
+        .expr_list,
+        .expr_empty_list,
+        .expr_call,
+        .expr_record,
+        .expr_empty_record,
+        .record_field,
+        .record_destruct,
+        .expr_field_access,
+        .expr_method_call,
+        .expr_dispatch_call,
+        .expr_interpolation,
+        .expr_structural_eq,
+        .expr_method_eq,
+        .expr_type_method_call,
+        .expr_type_dispatch_call,
+        .expr_static_dispatch,
+        .expr_external_lookup,
+        .expr_required_lookup,
+        .expr_apply,
+        .expr_string,
+        .expr_string_segment,
+        .expr_bytes_literal,
+        .expr_num,
+        .expr_frac_f32,
+        .expr_frac_f64,
+        .expr_dec,
+        .expr_dec_small,
+        .expr_num_from_numeral,
+        .expr_typed_int,
+        .expr_typed_frac,
+        .expr_typed_num_from_numeral,
+        .expr_tag,
+        .expr_nominal,
+        .expr_nominal_external,
+        .expr_zero_argument_tag,
+        .expr_closure,
+        .expr_lambda,
+        .expr_record_update,
+        .expr_bin_op,
+        .expr_unary_minus,
+        .expr_unary_not,
+        .expr_suffix_single_question,
+        .expr_if_then_else,
+        .expr_match,
+        .expr_dbg,
+        .expr_crash,
+        .expr_expect_err,
+        .expr_block,
+        .expr_ellipsis,
+        .expr_anno_only,
+        .expr_hosted_lambda,
+        .expr_low_level,
+        .expr_run_low_level,
+        .expr_expect,
+        .expr_for,
+        .expr_record_builder,
+        .expr_return,
+        .match_branch,
+        .match_branch_pattern,
+        .type_header,
+        .annotation,
+        .ty_apply,
+        .ty_apply_external,
+        .ty_rigid_var,
+        .ty_rigid_var_lookup,
+        .ty_lookup,
+        .ty_underscore,
+        .ty_tag_union,
+        .ty_tag,
+        .ty_tuple,
+        .ty_record,
+        .ty_record_field,
+        .ty_fn,
+        .ty_parens,
+        .ty_lookup_external,
+        .ty_malformed,
+        .where_method,
+        .where_alias,
+        .where_malformed,
+        .lambda_capture,
+        .def,
+        .exposed_item,
+        .if_branch,
+        .type_var_slot,
+        .malformed,
+        .diag_not_implemented,
+        .diag_invalid_num_literal,
+        .diag_empty_single_quote,
+        .diag_empty_tuple,
+        .diag_ident_already_in_scope,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_mutually_recursive_local_definitions,
+        .diag_erroneous_value_use,
+        .diag_erroneous_value_expr,
+        .diag_qualified_ident_does_not_exist,
+        .diag_invalid_top_level_statement,
+        .diag_expr_not_canonicalized,
+        .diag_invalid_string_interpolation,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_can_lambda_not_implemented,
+        .diag_lambda_body_not_canonicalized,
+        .diag_if_condition_not_canonicalized,
+        .diag_if_then_not_canonicalized,
+        .diag_if_else_not_canonicalized,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_type_module_missing_matching_type,
+        .diag_type_module_has_alias_not_nominal,
+        .diag_default_app_missing_main,
+        .diag_default_app_wrong_arity,
+        .diag_cannot_import_default_app,
+        .diag_execution_requires_app_or_default_app,
+        .diag_type_name_case_mismatch,
+        .diag_module_header_deprecated,
+        .diag_redundant_expose_main_type,
+        .diag_invalid_main_type_rename_in_exposing,
+        .diag_var_across_function_boundary,
+        .diag_shadowing_warning,
+        .diag_type_redeclared,
+        .diag_undeclared_type,
+        .diag_undeclared_type_var,
+        .diag_type_alias_but_needed_nominal,
+        .diag_type_alias_redeclared,
+        .diag_tuple_elem_not_canonicalized,
+        .diag_file_import_not_found,
+        .diag_file_import_io_error,
+        .diag_file_import_not_utf8,
+        .diag_module_not_found,
+        .diag_value_not_exposed,
+        .diag_type_not_exposed,
+        .diag_private_type_in_exposed_type,
+        .diag_private_type_in_exposed_field,
+        .diag_type_from_missing_module,
+        .diag_module_not_imported,
+        .diag_nested_type_not_found,
+        .diag_nested_value_not_found,
+        .diag_record_builder_map2_not_found,
+        .diag_too_many_exports,
+        .diag_nominal_type_redeclared,
+        .diag_type_shadowed_warning,
+        .diag_type_parameter_conflict,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        .diag_duplicate_record_field,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_unused_type_var_name,
+        .diag_type_var_marked_unused,
+        .diag_type_var_starting_with_dollar,
+        .diag_underscore_in_type_declaration,
+        .diagnostic_exposed_but_not_implemented,
+        .diag_redundant_exposed,
+        .diag_if_expr_without_else,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_return_outside_fn,
+        .diag_mutually_recursive_type_aliases,
+        .diag_deprecated_number_suffix,
+        .diag_range_op_chained,
+        => false,
+    };
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -2192,7 +2740,7 @@ pub const Coordinator = struct {
             try selectedHoistedRootInputsFromArtifact(self.gpa, current_artifact.?)
         else
             &.{};
-        defer if (republish_hoisted_roots.len != 0) self.gpa.free(republish_hoisted_roots);
+        defer check.HoistRoots.freeSelectedRootSlice(self.gpa, republish_hoisted_roots);
         if (publication_with_availability.hoisted_roots.len == 0) {
             publication_with_availability.hoisted_roots = republish_hoisted_roots;
         }
@@ -2277,7 +2825,11 @@ pub const Coordinator = struct {
         if (count == 0) return &.{};
 
         const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
-        errdefer allocator.free(roots);
+        var initialized: usize = 0;
+        errdefer {
+            check.HoistRoots.deinitSelectedRootBodies(allocator, roots[0..initialized]);
+            allocator.free(roots);
+        }
 
         var i: usize = 0;
         for (artifact.compile_time_roots.roots) |root| {
@@ -2291,16 +2843,21 @@ pub const Coordinator = struct {
                 => continue,
             }
             const source_expr = switch (root.source) {
-                .expr => |expr| expr,
+                .hoisted => |hoisted| hoisted.expr,
                 .def,
+                .expr,
                 .statement,
                 .required_binding,
                 => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
             };
+            const body = root.hoisted_body orelse
+                coordinatorInvariant("hoisted constant root was missing selected-root body", .{});
             roots[i] = .{
                 .expr = source_expr,
                 .pattern = root.source_pattern,
+                .body = try check.HoistRoots.cloneBody(allocator, body),
             };
+            initialized += 1;
             i += 1;
         }
         std.debug.assert(i == count);
@@ -2825,7 +3382,7 @@ pub const Coordinator = struct {
             manager.stats.recordStoreFailure();
             return;
         };
-        defer if (hoisted_roots.len != 0) manager.allocator.free(hoisted_roots);
+        defer check.HoistRoots.freeSelectedRootSlice(manager.allocator, hoisted_roots);
 
         const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, body, hoisted_roots) catch {
             manager.stats.recordStoreFailure();
@@ -2899,11 +3456,15 @@ pub const Coordinator = struct {
             module_alloc.destroy(cached_env);
         };
 
-        const hoisted_roots = decodeCheckedModuleCacheHoistedRoots(module_alloc, cached_entry.hoisted_roots) catch {
+        const hoisted_roots = decodeCheckedModuleCacheHoistedRoots(module_alloc, cached_entry.hoisted_roots, cached_entry.hoisted_root_count) catch {
             manager.stats.recordInvalidation();
             return false;
         };
-        defer if (hoisted_roots.len != 0) module_alloc.free(hoisted_roots);
+        defer check.HoistRoots.freeSelectedRootSlice(module_alloc, hoisted_roots);
+        validateCheckedModuleCacheHoistedRoots(module_alloc, cached_env, hoisted_roots) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
 
         var artifact = compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             module_alloc,
@@ -4262,6 +4823,12 @@ const CheckedModuleCacheRunStats = struct {
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
     hoisted_constants: usize,
+    pattern_extraction_regions: PatternExtractionRegionStats,
+};
+
+const PatternExtractionRegionStats = struct {
+    count: usize,
+    digest: [32]u8,
 };
 
 fn compileAppWithCheckedModuleCache(
@@ -4306,12 +4873,133 @@ fn compileAppWithCheckedModuleCache(
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const hoisted_constants = countHoistedConstants(root, imports, relations);
+    const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
         .hoisted_constants = hoisted_constants,
+        .pattern_extraction_regions = pattern_extraction_regions,
     };
+}
+
+fn collectPatternExtractionRegionStats(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) !PatternExtractionRegionStats {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var count: usize = 0;
+
+    try hashPatternExtractionRegionsForView(&hasher, &count, check.CheckedArtifact.importedView(root));
+    for (imports) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+    for (relations) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return .{
+        .count = count,
+        .digest = digest,
+    };
+}
+
+fn hashPatternExtractionRegionsForView(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    count: *usize,
+    view: check.CheckedArtifact.ImportedModuleView,
+) !void {
+    for (view.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_constant) continue;
+        const body = root.hoisted_body orelse continue;
+        const extraction = switch (body) {
+            .expr => continue,
+            .pattern_extraction => |payload| payload,
+        };
+        count.* += 1;
+
+        if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
+        if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
+        const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+
+        const expected_match_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
+        const expected_lookup_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
+        const expected_base_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr));
+
+        const synthetic_match = checkedExprForId(view, root.expr) orelse return error.PatternExtractionMissingSyntheticMatch;
+        if (!expected_match_region.eq(synthetic_match.source_region)) return error.PatternExtractionSyntheticMatchRegionMismatch;
+        if (std.meta.activeTag(synthetic_match.data) != .match_) return error.PatternExtractionRootWasNotSyntheticMatch;
+        const match_data = synthetic_match.data.match_;
+        if (match_data.branches.len != 1) return error.PatternExtractionSyntheticMatchBranchCountMismatch;
+        if (match_data.is_try_suffix) return error.PatternExtractionSyntheticMatchWasTrySuffix;
+        if (match_data.skip_exhaustiveness) return error.PatternExtractionSyntheticMatchSkippedExhaustiveness;
+
+        const base_expr = checkedExprForId(view, match_data.cond) orelse return error.PatternExtractionMissingBaseExpr;
+        if (!expected_base_region.eq(base_expr.source_region)) return error.PatternExtractionBaseRegionMismatch;
+
+        const branch = match_data.branches[0];
+        if (branch.patterns.len != 1) return error.PatternExtractionSyntheticPatternCountMismatch;
+        if (branch.patterns[0].degenerate) return error.PatternExtractionSyntheticPatternWasDegenerate;
+        if (branch.patterns[0].binder_remaps.len != 0) return error.PatternExtractionSyntheticPatternHadRemaps;
+        if (branch.guard != null) return error.PatternExtractionSyntheticBranchHadGuard;
+
+        const scrutinee_pattern = checkedPatternForId(view, branch.patterns[0].pattern) orelse
+            return error.PatternExtractionMissingScrutineePattern;
+        if (!expected_match_region.eq(scrutinee_pattern.source_region)) return error.PatternExtractionScrutineePatternRegionMismatch;
+
+        const synthetic_lookup = checkedExprForId(view, branch.value) orelse return error.PatternExtractionMissingSyntheticLookup;
+        if (!expected_lookup_region.eq(synthetic_lookup.source_region)) return error.PatternExtractionSyntheticLookupRegionMismatch;
+        if (std.meta.activeTag(synthetic_lookup.data) != .lookup_local) return error.PatternExtractionValueWasNotSyntheticLookup;
+        const lookup = synthetic_lookup.data.lookup_local;
+        if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
+        if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
+
+        hasher.update(&view.key.bytes);
+        hashU32IntoSha256(hasher, @intFromEnum(root.id));
+        hashU32IntoSha256(hasher, @intFromEnum(root.expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.base_expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.scrutinee_pattern));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.result_pattern));
+        hashRegionIntoSha256(hasher, expected_base_region);
+        hashRegionIntoSha256(hasher, base_expr.source_region);
+        hashRegionIntoSha256(hasher, expected_match_region);
+        hashRegionIntoSha256(hasher, synthetic_match.source_region);
+        hashRegionIntoSha256(hasher, scrutinee_pattern.source_region);
+        hashRegionIntoSha256(hasher, expected_lookup_region);
+        hashRegionIntoSha256(hasher, synthetic_lookup.source_region);
+    }
+}
+
+fn checkedExprForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    expr: check.CheckedArtifact.CheckedExprId,
+) ?check.CheckedArtifact.CheckedExpr {
+    const index = @intFromEnum(expr);
+    if (index >= view.checked_bodies.exprs.len) return null;
+    return view.checked_bodies.exprs[index];
+}
+
+fn checkedPatternForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    pattern: check.CheckedArtifact.CheckedPatternId,
+) ?check.CheckedArtifact.CheckedPattern {
+    const index = @intFromEnum(pattern);
+    if (index >= view.checked_bodies.patterns.len) return null;
+    return view.checked_bodies.patterns[index];
+}
+
+fn hashRegionIntoSha256(hasher: *std.crypto.hash.sha2.Sha256, region: base.Region) void {
+    hashU32IntoSha256(hasher, region.start.offset);
+    hashU32IntoSha256(hasher, region.end.offset);
+}
+
+fn hashU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    writeU32Little(&bytes, value);
+    hasher.update(&bytes);
 }
 
 fn countHoistedConstants(
@@ -4404,10 +5092,11 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         \\
         \\top = 40.I64
         \\
-        \\main! = |_args| {
-        \\    x = top + 1.I64
-        \\    y = x + 1.I64
-        \\    _ = y
+        \\main! = |args| {
+        \\    pair = (top, 2.I64)
+        \\    (left, right) = pair
+        \\    Ok(tag_value) = Ok(45.I64)
+        \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
         \\    Echo.line!("done")
         \\    Ok({})
         \\}
@@ -4450,10 +5139,17 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
 
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(first.hoisted_constants >= 2);
+    try std.testing.expect(first.pattern_extraction_regions.count >= 3);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(second.cache.hits > 0);
     try std.testing.expectEqual(first.hoisted_constants, second.hoisted_constants);
+    try std.testing.expectEqual(first.pattern_extraction_regions.count, second.pattern_extraction_regions.count);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first.pattern_extraction_regions.digest,
+        &second.pattern_extraction_regions.digest,
+    );
 }
 
 test "Coordinator corrupt checked module cache entries compile from source" {
@@ -4477,6 +5173,217 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
+}
+
+test "checked module cache roundtrips pattern extraction hoisted root payloads" {
+    const allocator = std.testing.allocator;
+    const key = check.CheckedArtifact.CheckedModuleArtifactKey{};
+    const module_env_body = try allocator.alloc(u8, @sizeOf(ModuleEnv.Serialized));
+    defer allocator.free(module_env_body);
+    @memset(module_env_body, 0);
+
+    const root_expr: CIR.Expr.Idx = @enumFromInt(1);
+    const scrutinee_pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const result_pattern: CIR.Pattern.Idx = @enumFromInt(3);
+    const roots = [_]check.HoistRoots.SelectedHoistedRoot{.{
+        .expr = root_expr,
+        .pattern = result_pattern,
+        .body = .{ .pattern_extraction = .{
+            .base_expr = root_expr,
+            .scrutinee_pattern = scrutinee_pattern,
+            .result_pattern = result_pattern,
+        } },
+    }};
+
+    const encoded = try encodeCheckedModuleCacheEntry(allocator, key, module_env_body, &roots);
+    defer allocator.free(encoded);
+    try std.testing.expectEqual(
+        checked_module_cache_header_len + module_env_body.len + checked_module_cache_root_base_len + checked_module_cache_pattern_extraction_len,
+        encoded.len,
+    );
+
+    const decoded_entry = decodeCheckedModuleCacheEntry(key, encoded) orelse return error.ExpectedCheckedModuleCacheEntry;
+    try std.testing.expectEqual(module_env_body.len, decoded_entry.module_env.len);
+    try std.testing.expectEqual(@as(usize, 1), decoded_entry.hoisted_root_count);
+    try std.testing.expectEqual(checked_module_cache_root_base_len + checked_module_cache_pattern_extraction_len, decoded_entry.hoisted_roots.len);
+
+    const decoded_roots = try decodeCheckedModuleCacheHoistedRoots(allocator, decoded_entry.hoisted_roots, decoded_entry.hoisted_root_count);
+    defer check.HoistRoots.freeSelectedRootSlice(allocator, decoded_roots);
+    try std.testing.expectEqual(@as(usize, 1), decoded_roots.len);
+    try std.testing.expectEqual(root_expr, decoded_roots[0].expr);
+    try std.testing.expectEqual(result_pattern, decoded_roots[0].pattern.?);
+    const extraction = switch (decoded_roots[0].body) {
+        .pattern_extraction => |extraction| extraction,
+        .expr => return error.ExpectedPatternExtractionRoot,
+    };
+    try std.testing.expectEqual(root_expr, extraction.base_expr);
+    try std.testing.expectEqual(scrutinee_pattern, extraction.scrutinee_pattern);
+    try std.testing.expectEqual(result_pattern, extraction.result_pattern);
+}
+
+test "checked module cache rejects malformed hoisted root payloads" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        decodeCheckedModuleCacheHoistedRoots(allocator, &.{0}, 0),
+    );
+
+    var invalid_tag: [checked_module_cache_root_base_len]u8 = undefined;
+    writeU32Little(invalid_tag[0..4], 1);
+    writeU32Little(invalid_tag[4..8], 2);
+    writeU32Little(invalid_tag[8..12], 99);
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        decodeCheckedModuleCacheHoistedRoots(allocator, &invalid_tag, 1),
+    );
+
+    var truncated_extraction: [checked_module_cache_root_base_len + checked_module_cache_pattern_extraction_len - 1]u8 = undefined;
+    @memset(&truncated_extraction, 0);
+    writeU32Little(truncated_extraction[0..4], 1);
+    writeU32Little(truncated_extraction[4..8], 2);
+    writeU32Little(truncated_extraction[8..12], 1);
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        decodeCheckedModuleCacheHoistedRoots(allocator, &truncated_extraction, 1),
+    );
+
+    var mismatched_extraction: [checked_module_cache_root_base_len + checked_module_cache_pattern_extraction_len]u8 = undefined;
+    writeU32Little(mismatched_extraction[0..4], 1);
+    writeU32Little(mismatched_extraction[4..8], 4);
+    writeU32Little(mismatched_extraction[8..12], 1);
+    writeU32Little(mismatched_extraction[12..16], 1);
+    writeU32Little(mismatched_extraction[16..20], 2);
+    writeU32Little(mismatched_extraction[20..24], 3);
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        decodeCheckedModuleCacheHoistedRoots(allocator, &mismatched_extraction, 1),
+    );
+
+    var valid_extraction_with_trailing_byte: [checked_module_cache_root_base_len + checked_module_cache_pattern_extraction_len + 1]u8 = undefined;
+    writeU32Little(valid_extraction_with_trailing_byte[0..4], 1);
+    writeU32Little(valid_extraction_with_trailing_byte[4..8], 3);
+    writeU32Little(valid_extraction_with_trailing_byte[8..12], 1);
+    writeU32Little(valid_extraction_with_trailing_byte[12..16], 1);
+    writeU32Little(valid_extraction_with_trailing_byte[16..20], 2);
+    writeU32Little(valid_extraction_with_trailing_byte[20..24], 3);
+    valid_extraction_with_trailing_byte[24] = 0;
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        decodeCheckedModuleCacheHoistedRoots(allocator, &valid_extraction_with_trailing_byte, 1),
+    );
+}
+
+test "checked module cache validates decoded hoisted roots against module nodes" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const expr_a = try env.store.addExpr(.e_empty_list, base.Region.from_raw_offsets(0, 0));
+    const expr_b = try env.store.addExpr(.e_empty_list, base.Region.from_raw_offsets(1, 1));
+    const pattern_a = try env.store.addPattern(.underscore, base.Region.from_raw_offsets(2, 2));
+    const pattern_b = try env.store.addPattern(.underscore, base.Region.from_raw_offsets(3, 3));
+
+    const valid_roots = [_]check.HoistRoots.SelectedHoistedRoot{
+        .{
+            .expr = expr_a,
+            .body = .expr,
+        },
+        .{
+            .expr = expr_a,
+            .pattern = pattern_a,
+            .body = .{ .pattern_extraction = .{
+                .base_expr = expr_a,
+                .scrutinee_pattern = pattern_b,
+                .result_pattern = pattern_a,
+            } },
+        },
+    };
+    try validateCheckedModuleCacheHoistedRoots(allocator, &env, &valid_roots);
+
+    const invalid_expr_index = [_]check.HoistRoots.SelectedHoistedRoot{.{
+        .expr = @enumFromInt(999),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &invalid_expr_index),
+    );
+
+    const pattern_used_as_expr = [_]check.HoistRoots.SelectedHoistedRoot{.{
+        .expr = @enumFromInt(@intFromEnum(pattern_a)),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &pattern_used_as_expr),
+    );
+
+    const expr_used_as_pattern = [_]check.HoistRoots.SelectedHoistedRoot{.{
+        .expr = expr_a,
+        .pattern = @enumFromInt(@intFromEnum(expr_b)),
+        .body = .expr,
+    }};
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &expr_used_as_pattern),
+    );
+
+    const duplicate_expr_roots = [_]check.HoistRoots.SelectedHoistedRoot{
+        .{
+            .expr = expr_a,
+            .body = .expr,
+        },
+        .{
+            .expr = expr_a,
+            .body = .expr,
+        },
+    };
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &duplicate_expr_roots),
+    );
+
+    const duplicate_pattern_roots = [_]check.HoistRoots.SelectedHoistedRoot{
+        .{
+            .expr = expr_a,
+            .pattern = pattern_a,
+            .body = .{ .pattern_extraction = .{
+                .base_expr = expr_a,
+                .scrutinee_pattern = pattern_b,
+                .result_pattern = pattern_a,
+            } },
+        },
+        .{
+            .expr = expr_b,
+            .pattern = pattern_a,
+            .body = .{ .pattern_extraction = .{
+                .base_expr = expr_b,
+                .scrutinee_pattern = pattern_b,
+                .result_pattern = pattern_a,
+            } },
+        },
+    };
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &duplicate_pattern_roots),
+    );
+
+    const mismatched_extraction_base = [_]check.HoistRoots.SelectedHoistedRoot{.{
+        .expr = expr_a,
+        .pattern = pattern_a,
+        .body = .{ .pattern_extraction = .{
+            .base_expr = expr_b,
+            .scrutinee_pattern = pattern_b,
+            .result_pattern = pattern_a,
+        } },
+    }};
+    try std.testing.expectError(
+        error.InvalidCheckedModuleCache,
+        validateCheckedModuleCacheHoistedRoots(allocator, &env, &mismatched_extraction_base),
+    );
 }
 
 test "Coordinator basic initialization" {

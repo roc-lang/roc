@@ -126,33 +126,51 @@ fn finalize(
         var state = try RootCompletionState.init(allocator, module);
         defer state.deinit();
 
-        var ready = std.ArrayList(checked.RootRequest).empty;
-        defer ready.deinit(allocator);
+        var batch_requests = std.ArrayList(checked.RootRequest).empty;
+        defer batch_requests.deinit(allocator);
 
-        var pending = requests.len;
-        while (pending > 0) {
-            ready.clearRetainingCapacity();
-            for (requests) |request| {
-                const root_id = compileTimeRootForRequest(module, request);
-                if (state.isDone(root_id)) continue;
-                if (state.dependenciesComplete(request)) {
-                    try ready.append(allocator, request);
+        var batch_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+        defer batch_root_ids.deinit(allocator);
+
+        for (requests, 0..) |request, request_index| {
+            if (!state.dependenciesComplete(request)) {
+                if (batch_requests.items.len == 0) {
+                    finalizationInvariant("compile-time root request order referenced an unfinished dependency");
+                }
+                if (try lowerEvalAndFinishRoots(
+                    allocator,
+                    module,
+                    lowering_imports,
+                    relation_modules,
+                    batch_requests.items,
+                    batch_root_ids.items,
+                    &state,
+                    problem_store,
+                    &coverage,
+                )) had_problem = true;
+                batch_requests.clearRetainingCapacity();
+                batch_root_ids.clearRetainingCapacity();
+
+                if (!state.dependenciesComplete(request)) {
+                    finalizationInvariant("compile-time root request order referenced a later or cyclic dependency");
                 }
             }
-            if (ready.items.len == 0) {
-                finalizationInvariant("compile-time roots had a cyclic or incomplete local dependency");
-            }
+            try batch_requests.append(allocator, request);
+            try batch_root_ids.append(allocator, state.rootIdForRequestIndex(request_index));
+        }
+
+        if (batch_requests.items.len != 0) {
             if (try lowerEvalAndFinishRoots(
                 allocator,
                 module,
                 lowering_imports,
                 relation_modules,
-                ready.items,
+                batch_requests.items,
+                batch_root_ids.items,
                 &state,
                 problem_store,
                 &coverage,
             )) had_problem = true;
-            pending -= ready.items.len;
         }
 
         try coverage.reportUnusedBranches(allocator, problem_store);
@@ -174,8 +192,11 @@ const RootStatus = enum {
 };
 
 const RootCompletionState = struct {
+    allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     statuses: []RootStatus,
+    requested_roots: []bool,
+    request_root_ids: []checked.ComptimeRootId,
     visited_templates: []u32,
     visit: u32,
 
@@ -187,21 +208,42 @@ const RootCompletionState = struct {
         errdefer allocator.free(statuses);
         @memset(statuses, .pending);
 
+        const requested_roots = try allocator.alloc(bool, module.compile_time_roots.roots.len);
+        errdefer allocator.free(requested_roots);
+        @memset(requested_roots, false);
+
+        const request_root_ids = try allocator.alloc(checked.ComptimeRootId, module.root_requests.compile_time_requests.len);
+        errdefer allocator.free(request_root_ids);
+        for (module.root_requests.compile_time_requests, 0..) |request, i| {
+            const root_id = compileTimeRootForRequest(module, request);
+            const raw = @intFromEnum(root_id);
+            if (requested_roots[raw]) {
+                finalizationInvariant("compile-time root was requested more than once");
+            }
+            requested_roots[raw] = true;
+            request_root_ids[i] = root_id;
+        }
+
         const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.len);
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
         return .{
+            .allocator = allocator,
             .module = module,
             .statuses = statuses,
+            .requested_roots = requested_roots,
+            .request_root_ids = request_root_ids,
             .visited_templates = visited_templates,
             .visit = 0,
         };
     }
 
     fn deinit(self: *RootCompletionState) void {
-        const allocator = self.module.const_store.allocator;
+        const allocator = self.allocator;
         allocator.free(self.visited_templates);
+        allocator.free(self.request_root_ids);
+        allocator.free(self.requested_roots);
         allocator.free(self.statuses);
         self.* = undefined;
     }
@@ -212,6 +254,13 @@ const RootCompletionState = struct {
 
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
         self.statuses[@intFromEnum(root_id)] = .done;
+    }
+
+    fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
+        if (request_index >= self.request_root_ids.len) {
+            finalizationInvariant("compile-time request index was out of range");
+        }
+        return self.request_root_ids[request_index];
     }
 
     fn dependenciesComplete(
@@ -294,7 +343,7 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        return !self.rootHasCompileTimeRequest(root_id) or self.isDone(root_id);
+        return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
     }
 
     fn rootForConstRef(
@@ -346,19 +395,9 @@ const RootCompletionState = struct {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
-                break :blk !self.rootHasCompileTimeRequest(template.root) or self.isDone(template.root);
+                break :blk !self.requested_roots[@intFromEnum(template.root)] or self.isDone(template.root);
             },
         };
-    }
-
-    fn rootHasCompileTimeRequest(
-        self: *RootCompletionState,
-        root_id: checked.ComptimeRootId,
-    ) bool {
-        for (self.module.root_requests.compile_time_requests) |request| {
-            if (compileTimeRootForRequest(self.module, request) == root_id) return true;
-        }
-        return false;
     }
 
     fn callableTemplateDependenciesComplete(
@@ -391,10 +430,15 @@ fn lowerEvalAndFinishRoots(
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
+    root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
 ) anyerror!bool {
+    if (requests.len != root_ids.len) {
+        finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
+    }
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
@@ -424,8 +468,14 @@ fn lowerEvalAndFinishRoots(
     defer writer.deinit();
 
     var had_problem = false;
-    for (lowered.lir_result.const_roots.items) |root| {
-        const root_id = compileTimeRootForRequest(module, root.request);
+    if (lowered.lir_result.const_roots.items.len != requests.len) {
+        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
+    }
+    for (lowered.lir_result.const_roots.items, 0..) |root, i| {
+        if (!std.meta.eql(root.request, requests[i])) {
+            finalizationInvariant("LIR lowering changed compile-time root request order");
+        }
+        const root_id = root_ids[i];
         const compile_time_root = module.compile_time_roots.root(root_id);
         var payload: checked.CompileTimeRootPayload = blk: {
             if (root.request.kind == .compile_time_constant and problem_store == null) {
@@ -454,7 +504,7 @@ fn lowerEvalAndFinishRoots(
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
-            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
+            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, compile_time_root, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
@@ -607,7 +657,7 @@ fn evalCompileTimeRoot(
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
-        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, lir_result, interpreter),
+        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, root, lir_result, interpreter),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
@@ -618,16 +668,15 @@ fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
     lir_result: *const lir.Program.Result,
+    root: checked.CompileTimeRoot,
     hits: []const Interpreter.ComptimeBranchHit,
     root_proc: lir.LIR.LirProcSpecId,
 ) Allocator.Error!void {
     const problem_store = maybe_problem_store orelse return;
     for (hits) |hit| {
         const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
-        switch (site.kind) {
-            .match => problem_store.resolvePendingStaticExhaustiveness(.match, site.region),
-            .destructure => problem_store.resolvePendingStaticExhaustiveness(.destructure, site.region),
-            .if_ => {},
+        if (rootEmpiricalSiteKind(root, site)) |kind| {
+            problem_store.resolvePendingStaticExhaustiveness(kind, site.region);
         }
         if (site.proc == root_proc) {
             try coverage.record(site, hit.branch_index);
@@ -638,6 +687,7 @@ fn recordComptimeSiteHits(
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
+    root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
 ) anyerror!Interpreter.EvalResult {
@@ -648,15 +698,29 @@ fn reportCompileTimeExhaustiveness(
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
     const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
-    const matched = switch (site.kind) {
-        .match => try problem_store.appendEmpiricalExhaustivenessFailure(allocator, .match, site.region),
-        .destructure => try problem_store.appendEmpiricalExhaustivenessFailure(allocator, .destructure, site.region),
+    const kind = rootEmpiricalSiteKind(root, site) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
+        .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
     };
+    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, kind, site.region);
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
     }
     return error.CompileTimeProblem;
+}
+
+fn rootEmpiricalSiteKind(
+    root: checked.CompileTimeRoot,
+    site: lir.LIR.ComptimeSite,
+) ?check.problem.Store.EmpiricalSiteKind {
+    return switch (site.kind) {
+        .match => if (root.hoisted_body) |body| switch (body) {
+            .pattern_extraction => .destructure,
+            .expr => .match,
+        } else .match,
+        .destructure => .destructure,
+        .if_ => null,
+    };
 }
 
 fn reportCompileTimeCrash(
@@ -789,6 +853,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .expr => |left| left == b.expr,
         .statement => |left| left == b.statement,
         .required_binding => |left| left == b.required_binding,
+        .hoisted => |left| left.index == b.hoisted.index and left.expr == b.hoisted.expr,
     };
 }
 

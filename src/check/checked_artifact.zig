@@ -259,6 +259,10 @@ fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void
         .expr => |idx| hashU32(hasher, @intFromEnum(idx)),
         .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
         .required_binding => |idx| hashU32(hasher, idx),
+        .hoisted => |hoisted| {
+            hashU32(hasher, hoisted.index);
+            hashU32(hasher, @intFromEnum(hoisted.expr));
+        },
     }
 }
 
@@ -590,11 +594,17 @@ pub const RootExposure = enum {
 };
 
 /// Public `RootSource` declaration.
+pub const HoistedRootSource = struct {
+    index: u32,
+    expr: CIR.Expr.Idx,
+};
+
 pub const RootSource = union(enum) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
     statement: CIR.Statement.Idx,
     required_binding: u32,
+    hoisted: HoistedRootSource,
 };
 
 /// Public `RootRequest` declaration.
@@ -620,6 +630,9 @@ pub const LoweringEntrypointRequest = union(enum) {
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
     runtime_requests: []RootRequest = &.{},
+    /// Compile-time requests sorted by `CompileTimeRootTable` order. This slice
+    /// is the durable same-module compile-time evaluation schedule consumed by
+    /// checking finalization; it is not required to preserve `requests` order.
     compile_time_requests: []RootRequest = &.{},
 
     pub fn fromModule(
@@ -721,7 +734,8 @@ pub const RootRequestTable = struct {
         const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
         errdefer allocator.free(runtime_requests);
 
-        const compile_time_requests = try collectCompileTimeRootRequests(allocator, all_requests);
+        const compile_time_requests = try collectCompileTimeRootRequests(allocator, all_requests, compile_time_roots);
+        verifyCompileTimeRequestsSorted(compile_time_requests, compile_time_roots);
 
         return .{
             .requests = all_requests,
@@ -767,19 +781,70 @@ fn collectRuntimeRootRequests(
     return try runtime_requests.toOwnedSlice(allocator);
 }
 
+const CompileTimeRequestOrderEntry = struct {
+    request: RootRequest,
+    root_id: ComptimeRootId,
+
+    fn lessThan(_: void, lhs: CompileTimeRequestOrderEntry, rhs: CompileTimeRequestOrderEntry) bool {
+        return @intFromEnum(lhs.root_id) < @intFromEnum(rhs.root_id);
+    }
+};
+
 fn collectCompileTimeRootRequests(
     allocator: Allocator,
     requests: []const RootRequest,
+    compile_time_roots: *const CompileTimeRootTable,
 ) Allocator.Error![]RootRequest {
-    var compile_time_requests = std.ArrayList(RootRequest).empty;
-    errdefer compile_time_requests.deinit(allocator);
+    var entries = std.ArrayList(CompileTimeRequestOrderEntry).empty;
+    defer entries.deinit(allocator);
 
     for (requests) |request| {
         if (request.abi != .compile_time) continue;
-        try compile_time_requests.append(allocator, request);
+        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        try entries.append(allocator, .{
+            .request = request,
+            .root_id = root_id,
+        });
     }
+    std.mem.sort(CompileTimeRequestOrderEntry, entries.items, {}, CompileTimeRequestOrderEntry.lessThan);
 
-    return try compile_time_requests.toOwnedSlice(allocator);
+    const compile_time_requests = try allocator.alloc(RootRequest, entries.items.len);
+    for (entries.items, 0..) |entry, i| {
+        compile_time_requests[i] = entry.request;
+    }
+    return compile_time_requests;
+}
+
+fn compileTimeRootIdForRequest(
+    compile_time_roots: *const CompileTimeRootTable,
+    request: RootRequest,
+) ComptimeRootId {
+    for (compile_time_roots.roots) |root| {
+        if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
+        if (!rootSourceMatches(root.source, request.source)) continue;
+        return root.id;
+    }
+    checkedArtifactInvariant("compile-time request had no matching compile-time root", .{});
+}
+
+fn verifyCompileTimeRequestsSorted(
+    requests: []const RootRequest,
+    compile_time_roots: *const CompileTimeRootTable,
+) void {
+    if (builtin.mode != .Debug) return;
+    var previous: ?ComptimeRootId = null;
+    for (requests) |request| {
+        if (request.abi != .compile_time) {
+            std.debug.panic("checked artifact invariant violated: sorted compile-time requests contained a non compile-time request", .{});
+        }
+        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        if (previous) |prev| {
+            if (@intFromEnum(root_id) <= @intFromEnum(prev)) {
+                std.debug.panic("checked artifact invariant violated: compile-time requests are not sorted by unique root id", .{});
+            }
+        }
+        previous = root_id;
+    }
 }
 
 fn checkedTypeIsConcreteCompileTimeRoot(
@@ -904,17 +969,11 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     if (builtin.mode != .Debug) return;
 
     var runtime_index: usize = 0;
-    var compile_time_index: usize = 0;
+    var compile_time_count: usize = 0;
 
     for (root_requests.requests) |request| {
         if (request.abi == .compile_time) {
-            if (compile_time_index >= root_requests.compile_time_requests.len) {
-                std.debug.panic("checked artifact invariant violated: compile-time root request subset is missing an entry", .{});
-            }
-            if (!std.meta.eql(root_requests.compile_time_requests[compile_time_index], request)) {
-                std.debug.panic("checked artifact invariant violated: compile-time root request subset is out of order", .{});
-            }
-            compile_time_index += 1;
+            compile_time_count += 1;
         } else {
             if (runtime_index >= root_requests.runtime_requests.len) {
                 std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
@@ -929,9 +988,24 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     if (runtime_index != root_requests.runtime_requests.len) {
         std.debug.panic("checked artifact invariant violated: runtime root request subset has extra entries", .{});
     }
-    if (compile_time_index != root_requests.compile_time_requests.len) {
+    if (compile_time_count != root_requests.compile_time_requests.len) {
         std.debug.panic("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
     }
+    for (root_requests.compile_time_requests) |request| {
+        if (request.abi != .compile_time) {
+            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains a runtime request", .{});
+        }
+        if (!rootRequestSliceContains(root_requests.requests, request)) {
+            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains an unknown request", .{});
+        }
+    }
+}
+
+fn rootRequestSliceContains(requests: []const RootRequest, needle: RootRequest) bool {
+    for (requests) |request| {
+        if (std.meta.eql(request, needle)) return true;
+    }
+    return false;
 }
 
 fn rootSourceMatches(a: RootSource, b: RootSource) bool {
@@ -941,6 +1015,7 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
         .expr => |expr| expr == b.expr,
         .statement => |statement| statement == b.statement,
         .required_binding => |binding| binding == b.required_binding,
+        .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
     };
 }
 
@@ -1202,7 +1277,11 @@ fn procedureTemplateForRootSource(
 ) ?canonical.ProcedureTemplateRef {
     return switch (source) {
         .def => |def_idx| procedure_templates.lookupByDef(def_idx),
-        else => null,
+        .expr,
+        .statement,
+        .required_binding,
+        .hoisted,
+        => null,
     };
 }
 
@@ -1266,6 +1345,7 @@ fn checkedTypeIdForRootSource(
         .def => |def_idx| module.defType(def_idx),
         .expr => |expr_idx| module.exprType(expr_idx),
         .statement => |statement_idx| ModuleEnv.varFrom(statement_idx),
+        .hoisted => checkedArtifactInvariant("internal hoisted root source reached external root source type lookup", .{}),
         .required_binding => |binding_idx| blk: {
             const module_env = module.moduleEnvConst();
             if (binding_idx >= module_env.requires_types.items.items.len) {
@@ -6152,6 +6232,36 @@ pub const CheckedBodyStore = struct {
         return id;
     }
 
+    pub fn appendSyntheticExpr(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        ty: CheckedTypeId,
+        source_region: base.Region,
+        data: CheckedExprData,
+    ) Allocator.Error!CheckedExprId {
+        const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len)));
+        const next_exprs = try allocator.alloc(CheckedExpr, self.exprs.len + 1);
+        errdefer allocator.free(next_exprs);
+        const next_diverges = try allocator.alloc(bool, self.expr_diverges.len + 1);
+        errdefer allocator.free(next_diverges);
+
+        @memcpy(next_exprs[0..self.exprs.len], self.exprs);
+        @memcpy(next_diverges[0..self.expr_diverges.len], self.expr_diverges);
+        next_exprs[self.exprs.len] = .{
+            .id = id,
+            .ty = ty,
+            .source_region = source_region,
+            .data = data,
+        };
+        next_diverges[self.expr_diverges.len] = false;
+
+        allocator.free(self.exprs);
+        allocator.free(self.expr_diverges);
+        self.exprs = next_exprs;
+        self.expr_diverges = next_diverges;
+        return id;
+    }
+
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
         allocator.free(self.numeral_conversion_exprs);
         self.source_node_map.deinit(allocator);
@@ -8495,6 +8605,13 @@ pub const ResolvedValueRefTable = struct {
             by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
 
+        try appendSyntheticLocalLookupRefs(
+            allocator,
+            &records,
+            by_checked_expr,
+            checked_bodies,
+        );
+
         return .{
             .records = try records.toOwnedSlice(allocator),
             .by_checked_expr = by_checked_expr,
@@ -8532,6 +8649,35 @@ pub const ResolvedValueRefTable = struct {
 };
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
+
+fn appendSyntheticLocalLookupRefs(
+    allocator: Allocator,
+    records: *std.ArrayList(ResolvedValueRefRecord),
+    by_checked_expr: []?ResolvedValueRefId,
+    checked_bodies: *const CheckedBodyStore,
+) Allocator.Error!void {
+    for (checked_bodies.exprs, 0..) |expr, raw_expr| {
+        if (by_checked_expr[raw_expr] != null) continue;
+        if (std.meta.activeTag(expr.data) != .lookup_local) continue;
+
+        const lookup = expr.data.lookup_local;
+        if (lookup.resolved != null) {
+            checkedArtifactInvariant("synthetic lookup local already had a resolved ref before ref publication", .{});
+        }
+        const binder = checked_bodies.patternBinderForCheckedPattern(lookup.pattern) orelse {
+            checkedArtifactInvariant("synthetic lookup local referenced a pattern without a checked binder", .{});
+        };
+
+        const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
+        try records.append(allocator, .{
+            .expr = expr.id,
+            .ref = .{ .pattern_binder = .{ .binder = binder } },
+            .checked_ty = expr.ty,
+            .scope_depth = 0,
+        });
+        by_checked_expr[raw_expr] = id;
+    }
+}
 
 fn categorizeValueRef(
     _: Allocator,
@@ -13072,6 +13218,7 @@ pub const CompileTimeRoot = struct {
     kind: CompileTimeRootKind,
     source: RootSource,
     source_pattern: ?CIR.Pattern.Idx = null,
+    hoisted_body: ?hoist_roots.Body = null,
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
@@ -13079,6 +13226,14 @@ pub const CompileTimeRoot = struct {
 };
 
 /// Public `CompileTimeRootTable` declaration.
+///
+/// This is the durable compile-time root schedule and payload table. It stores
+/// root identities and selected root bodies only; it deliberately does not
+/// store dependency edges, readiness state, request membership caches, or
+/// per-expression/per-pattern hoistability facts. Ordinary top-level roots are
+/// published first in canonical order, then sparse selected hoisted roots are
+/// appended in checker-selected dependency-first order. Finalization consumes
+/// the sorted request stream and validates this order with temporary scratch.
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
 
@@ -13088,56 +13243,71 @@ pub const CompileTimeRootTable = struct {
         global_value_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *const CheckedTypePublication,
-        checked_bodies: *const CheckedBodyStore,
+        checked_bodies: *CheckedBodyStore,
         procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
-        errdefer roots.deinit(allocator);
-
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const stmt = module_env.store.getStatement(statement_idx);
-            if (stmt != .s_expect) continue;
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .expect,
-                .source = .{ .statement = statement_idx },
-                .pattern = null,
-                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
-                .payload = .expect,
-            });
+        errdefer {
+            deinitCompileTimeRootSlice(allocator, roots.items);
+            roots.deinit(allocator);
         }
 
+        const module_env = module.moduleEnvConst();
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
             const source_ty = module.defType(def_idx);
-            const is_callable = sourceTypeIsFunction(module, source_ty);
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = if (is_callable) .callable_binding else .constant,
-                .source = .{ .def = def_idx },
-                .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
-                .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
-                .payload = .pending,
-            });
+            if (sourceTypeIsFunction(module, source_ty)) {
+                try appendCompileTimeRoot(&roots, allocator, .{
+                    .module_idx = module.moduleIndex(),
+                    .kind = .callable_binding,
+                    .source = .{ .def = def_idx },
+                    .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
+                    .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                    .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                    .payload = .pending,
+                });
+            } else {
+                try appendCompileTimeRoot(&roots, allocator, .{
+                    .module_idx = module.moduleIndex(),
+                    .kind = .constant,
+                    .source = .{ .def = def_idx },
+                    .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
+                    .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                    .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                    .payload = .pending,
+                });
+            }
         }
 
-        for (selected_hoisted_roots) |selected| {
-            const source_ty = module.exprType(selected.expr);
+        for (selected_hoisted_roots, 0..) |selected, selected_index| {
+            const source_ty = if (selected.pattern) |pattern|
+                ModuleEnv.varFrom(pattern)
+            else
+                module.exprType(selected.expr);
             if (sourceTypeIsFunction(module, source_ty)) {
                 checkedArtifactInvariant("function-typed selected hoisted root reached data-constant publication", .{});
             }
+            const checked_expr = try checkedExprIdForSelectedHoistedRoot(
+                allocator,
+                module,
+                checked_types,
+                checked_bodies,
+                selected,
+            );
+            const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .hoisted_constant,
-                .source = .{ .expr = selected.expr },
+                .source = .{ .hoisted = .{
+                    .index = @intCast(selected_index),
+                    .expr = selected.expr,
+                } },
                 .source_pattern = selected.pattern,
+                .hoisted_body = hoisted_body,
                 .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
-                .expr = checkedExprIdForSource(checked_bodies, selected.expr),
+                .expr = checked_expr,
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                 .payload = .pending,
             });
@@ -13190,6 +13360,20 @@ pub const CompileTimeRootTable = struct {
                 .expr = checked_expr,
                 .checked_type = try_ty,
                 .payload = .pending,
+            });
+        }
+
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            const stmt = module_env.store.getStatement(statement_idx);
+            if (stmt != .s_expect) continue;
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .expect,
+                .source = .{ .statement = statement_idx },
+                .pattern = null,
+                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
+                .payload = .expect,
             });
         }
 
@@ -13248,6 +13432,7 @@ pub const CompileTimeRootTable = struct {
     }
 
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
+        deinitCompileTimeRootSlice(allocator, self.roots);
         allocator.free(self.roots);
         self.* = .{};
     }
@@ -13257,6 +13442,7 @@ pub const CompileTimeRootTable = struct {
         kind: CompileTimeRootKind,
         source: RootSource,
         source_pattern: ?CIR.Pattern.Idx = null,
+        hoisted_body: ?hoist_roots.Body = null,
         pattern: ?CheckedPatternId,
         expr: CheckedExprId,
         checked_type: CheckedTypeId,
@@ -13269,19 +13455,32 @@ pub const CompileTimeRootTable = struct {
         entry: RootWithoutId,
     ) Allocator.Error!void {
         const id: ComptimeRootId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
-        try roots.append(allocator, .{
+        roots.append(allocator, .{
             .id = id,
             .module_idx = entry.module_idx,
             .kind = entry.kind,
             .source = entry.source,
             .source_pattern = entry.source_pattern,
+            .hoisted_body = entry.hoisted_body,
             .pattern = entry.pattern,
             .expr = entry.expr,
             .checked_type = entry.checked_type,
             .payload = entry.payload,
-        });
+        }) catch |err| {
+            if (entry.hoisted_body) |body| hoist_roots.deinitBody(allocator, body);
+            return err;
+        };
     }
 };
+
+fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
+    for (roots) |*root| {
+        if (root.hoisted_body) |body| {
+            hoist_roots.deinitBody(allocator, body);
+            root.hoisted_body = null;
+        }
+    }
+}
 
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
     const matches = switch (kind) {
@@ -13320,6 +13519,72 @@ fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Exp
             .{@intFromEnum(expr)},
         );
     };
+}
+
+fn checkedExprIdForSelectedHoistedRoot(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypePublication,
+    checked_bodies: *CheckedBodyStore,
+    selected: hoist_roots.SelectedHoistedRoot,
+) Allocator.Error!CheckedExprId {
+    return switch (selected.body) {
+        .expr => checkedExprIdForSource(checked_bodies, selected.expr),
+        .pattern_extraction => |extraction| try appendCheckedPatternExtractionRootExpr(
+            allocator,
+            module,
+            checked_bodies,
+            extraction,
+            try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern)),
+        ),
+    };
+}
+
+fn appendCheckedPatternExtractionRootExpr(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_bodies: *CheckedBodyStore,
+    extraction: hoist_roots.PatternExtraction,
+    checked_type: CheckedTypeId,
+) Allocator.Error!CheckedExprId {
+    const scrutinee = checkedExprIdForSource(checked_bodies, extraction.base_expr);
+    const checked_result_pattern = checkedPatternIdForSource(checked_bodies, extraction.result_pattern);
+    const result_region = module.regionAt(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
+    const result_lookup = try checked_bodies.appendSyntheticExpr(allocator, checked_type, result_region, .{ .lookup_local = .{
+        .pattern = checked_result_pattern,
+        .resolved = null,
+    } });
+
+    const branch_patterns = try allocator.alloc(CheckedMatchBranchPattern, 1);
+    var branch_patterns_owned = true;
+    errdefer if (branch_patterns_owned) allocator.free(branch_patterns);
+    branch_patterns[0] = .{
+        .pattern = checkedPatternIdForSource(checked_bodies, extraction.scrutinee_pattern),
+        .degenerate = false,
+        .binder_remaps = &.{},
+    };
+
+    const branches = try allocator.alloc(CheckedMatchBranch, 1);
+    var branches_owned = true;
+    errdefer if (branches_owned) allocator.free(branches);
+    branches[0] = .{
+        .patterns = branch_patterns,
+        .value = result_lookup,
+        .guard = null,
+    };
+    branch_patterns_owned = false;
+
+    var data: CheckedExprData = .{ .match_ = .{
+        .cond = scrutinee,
+        .branches = branches,
+        .is_try_suffix = false,
+        .skip_exhaustiveness = false,
+    } };
+    errdefer deinitCheckedExprData(allocator, &data);
+    branches_owned = false;
+
+    const match_region = module.regionAt(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
+    return try checked_bodies.appendSyntheticExpr(allocator, checked_type, match_region, data);
 }
 
 fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) CheckedPatternId {
@@ -13577,6 +13842,11 @@ const HoistedConstByPatternEntry = struct {
 };
 
 /// Public `HoistedConstTable` declaration.
+///
+/// Sparse index for selected hoisted constants. Every entry corresponds to a
+/// published `.hoisted_constant` root. The by-expr, by-pattern, and by-root
+/// indexes are lookup accelerators for later stages; there is no data here for
+/// unselected expressions or patterns, and no scheduling/dependency metadata.
 pub const HoistedConstTable = struct {
     entries: []HoistedConstEntry = &.{},
     by_expr: []HoistedConstByExprEntry = &.{},
@@ -13606,17 +13876,22 @@ pub const HoistedConstTable = struct {
         for (roots.roots) |root| {
             if (root.kind != .hoisted_constant) continue;
             const source_expr = switch (root.source) {
-                .expr => |expr| expr,
+                .hoisted => |hoisted| hoisted.expr,
                 .def,
+                .expr,
                 .statement,
                 .required_binding,
                 => checkedArtifactInvariant("hoisted constant root had non-expression source", .{}),
             };
+            const source_var = if (root.source_pattern) |pattern|
+                ModuleEnv.varFrom(pattern)
+            else
+                ModuleEnv.varFrom(source_expr);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
                 module.identStoreConst(),
-                ModuleEnv.varFrom(source_expr),
+                source_var,
             );
             const const_ref = try const_templates.reserveHoisted(
                 allocator,
@@ -16027,7 +16302,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
         const def_idx = switch (root.source) {
             .def => |def| def,
-            else => return null,
+            .expr,
+            .statement,
+            .required_binding,
+            .hoisted,
+            => return null,
         };
         const top_level = self.top_level_values.lookupByDef(def_idx) orelse return null;
         for (self.provides_requires.provides) |entry| {
@@ -16042,7 +16321,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn requiredEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
         const binding_id = switch (root.source) {
             .required_binding => |id| id,
-            else => return null,
+            .def,
+            .expr,
+            .statement,
+            .hoisted,
+            => return null,
         };
         const binding = self.platform_required_bindings.lookupByBindingId(binding_id) orelse return null;
         const declaration = self.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse return null;
@@ -18349,6 +18632,9 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
     };
+    checked_const_store = ConstStore.init(allocator);
+    errdefer artifact.const_store.deinit();
+
     try inputs.compile_time_finalizer.run(
         allocator,
         &artifact,
