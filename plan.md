@@ -512,7 +512,7 @@ maintain both systems side by side.
 - [ ] Delete any temporary compatibility wrappers introduced during the
   migration. The final tree must not contain helper paths that silently emulate
   the old API.
-- [ ] Delete or rename `ParseFrom*` CLI tests so the test names match `parser`.
+- [x] Delete or rename `ParseFrom*` CLI tests so the test names match `parser`.
 - [ ] Delete old record-field event validation for:
   - [ ] `Field({ name : Str, value : state, rest : state })`
   - [ ] `longest_field_len`
@@ -536,7 +536,7 @@ maintain both systems side by side.
 
 ## Checking Tests To Add Or Update
 
-- [ ] Add/rename CLI test: old `parse_from` method is not accepted.
+- [x] Add/rename CLI test: old `parse_from` method is not accepted.
 - [ ] Add CLI test: missing `parser` on custom nominal type reports a clear
   static-dispatch error.
 - [ ] Add CLI test: record parser missing `rename_field` reports missing

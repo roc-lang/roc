@@ -1,4 +1,4 @@
-ParserOldParseFromMethodRejected :: [].{}
+ParserOldStructuralMethodRejected :: [].{}
 
 Format := [Default]
 
