@@ -55,10 +55,7 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
-<<<<<<< HEAD
-=======
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
->>>>>>> de6c9c175920bc0c7179218a8f9002a271228c0a
 # PROBLEMS
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -73,6 +70,22 @@ The value's type, which does not have a method named **not**, is:
     Str
 
 **Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
+
+**TYPE MISMATCH**
+The `minus` method on `Dec` has an incompatible type:
+**multiline_string_complex.md:37:3:37:4:**
+```roc
+		0 - \\
+```
+		^
+
+The method `minus` has the type:
+
+    Dec, Dec -> Dec
+
+But I need it to have the type:
+
+    Dec, Str -> Dec
 
 # TOKENS
 ~~~zig
@@ -252,28 +265,32 @@ x = {
 		(e-block
 			(s-let
 				(p-assign (ident "#interp_0"))
-				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 142)
+				(e-lookup-local
+					(p-assign (ident "value1"))))
+			(e-interpolation (constraint-fn-var 148)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
 ")))
 				(parts
-					(e-runtime-error (tag "erroneous_value_use"))
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
 					(e-literal (string ""))))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-block
 			(s-let
 				(p-assign (ident "#interp_1"))
-				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 198)
+				(e-lookup-local
+					(p-assign (ident "value2"))))
+			(e-interpolation (constraint-fn-var 204)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
 ")))
 				(parts
-					(e-runtime-error (tag "erroneous_value_use"))
+					(e-lookup-local
+						(p-assign (ident "#interp_1")))
 					(e-literal (string ""))))))
 	(d-let
 		(p-assign (ident "value5"))
@@ -295,13 +312,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 294)
+					(e-dispatch-call (method "minus") (constraint-fn-var 318)
 						(receiver
 							(e-num (value "0")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 306)
+					(e-dispatch-call (method "not") (constraint-fn-var 333)
 						(receiver
 							(e-string))
 						(args))))))
@@ -316,17 +333,17 @@ With multiple lines
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
-		(patt (type "Error")))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "Str")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
-		(expr (type "Error"))))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "Str"))))
 ~~~

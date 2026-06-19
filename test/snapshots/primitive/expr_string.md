@@ -53,7 +53,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "name"))))
-			(e-interpolation (constraint-fn-var 87)
+			(e-interpolation (constraint-fn-var 90)
 				(first
 					(e-literal (string "hello ")))
 				(parts

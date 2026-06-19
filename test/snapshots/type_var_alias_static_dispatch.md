@@ -536,7 +536,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "T") (type-var "t")
 					(ty-rigid-var (name "t")))
-				(e-type-dispatch-call (method "create") (type-var-alias-stmt 123) (constraint-fn-var 272)
+				(e-type-dispatch-call (method "create") (type-var-alias-stmt 123) (constraint-fn-var 275)
 					(args
 						(e-lookup-local
 							(p-assign (ident "name")))
@@ -560,7 +560,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "from_str") (type-var-alias-stmt 140) (constraint-fn-var 361)
+				(e-type-dispatch-call (method "from_str") (type-var-alias-stmt 140) (constraint-fn-var 364)
 					(args
 						(e-lookup-local
 							(p-assign (ident "str")))))))

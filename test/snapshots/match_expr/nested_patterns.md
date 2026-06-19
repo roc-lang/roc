@@ -107,7 +107,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 111)
+					(e-dispatch-call (method "plus") (constraint-fn-var 114)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))

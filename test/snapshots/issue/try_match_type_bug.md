@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 get_greeting : {} -> Try(Str, _)
 get_greeting = |{}| {
-    match 0 {
+    match 0.U64 {
         0 => Try.Ok(List.first(["hello"])?),
         _ => Err(Impossible)
     }
@@ -16,21 +16,12 @@ get_greeting = |{}| {
 # EXPECTED
 NIL
 # PROBLEMS
-**LITERAL DEFAULTED**
-Nothing in this definition's type determines the type of this number literal, so it was given the default type **Dec** instead:
-**try_match_type_bug.md:4:9:4:10:**
-```roc
-        0 => Try.Ok(List.first(["hello"])?),
-```
-        ^
-
-**Hint:** To use a different numeric type here, add a suffix or a type annotation.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,Underscore,CloseRound,
 LowerIdent,OpAssign,OpBar,OpenCurly,CloseCurly,OpBar,OpenCurly,
-KwMatch,Int,OpenCurly,
+KwMatch,Int,NoSpaceDotUpperIdent,OpenCurly,
 Int,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseRound,NoSpaceOpQuestion,CloseRound,Comma,
 Underscore,OpFatArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
 CloseCurly,
@@ -57,7 +48,7 @@ EndOfFile,
 				(e-block
 					(statements
 						(e-match
-							(e-int (raw "0"))
+							(e-typed-int (raw "0") (type "U64"))
 							(branches
 								(branch
 									(p-int (raw "0"))
@@ -79,7 +70,7 @@ EndOfFile,
 ~~~roc
 get_greeting : {} -> Try(Str, _)
 get_greeting = |{}| {
-	match 0 {
+	match 0.U64 {
 		0 => Try.Ok(List.first(["hello"])?)
 		_ => Err(Impossible)
 	}
@@ -98,7 +89,7 @@ get_greeting = |{}| {
 				(e-match
 					(match
 						(cond
-							(e-num (value "0")))
+							(e-typed-int (value "0") (type "U64")))
 						(branches
 							(branch
 								(patterns
@@ -112,7 +103,7 @@ get_greeting = |{}| {
 												(e-match
 													(match
 														(cond
-															(e-call (constraint-fn-var 179)
+															(e-call (constraint-fn-var 274)
 																(e-lookup-external
 																	(builtin))
 																(e-list

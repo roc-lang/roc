@@ -128,7 +128,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 235)
+			(e-call (constraint-fn-var 250)
 				(e-lookup-local
 					(p-assign (ident "mapList")))
 				(e-list
