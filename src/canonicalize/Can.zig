@@ -26,6 +26,7 @@ const RocDec = builtins.dec.RocDec;
 const AST = parse.AST;
 const Token = tokenize.Token;
 const DataSpan = base.DataSpan;
+const StringLiteral = base.StringLiteral;
 const ModuleEnv = @import("ModuleEnv.zig");
 const Node = @import("Node.zig");
 
@@ -4433,6 +4434,16 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Er
             .nominal_external => |nom| {
                 try pending.append(stack_allocator, nom.backing_pattern);
             },
+            .str_interpolation => |str| {
+                var i: u32 = str.steps.span.len;
+                while (i > 0) {
+                    i -= 1;
+                    const step = self.env.store.getStrPatternStep(str.steps, i);
+                    if (step.capture) |capture| {
+                        try pending.append(stack_allocator, capture);
+                    }
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -4515,6 +4526,16 @@ fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allo
             },
             .nominal_external => |nom| {
                 try pending.append(stack_allocator, nom.backing_pattern);
+            },
+            .str_interpolation => |str| {
+                var i: u32 = str.steps.span.len;
+                while (i > 0) {
+                    i -= 1;
+                    const step = self.env.store.getStrPatternStep(str.steps, i);
+                    if (step.capture) |capture| {
+                        try pending.append(stack_allocator, capture);
+                    }
+                }
             },
             .num_literal,
             .small_dec_literal,
@@ -7720,6 +7741,14 @@ const DefiniteInitAnalyzer = struct {
                 },
                 .tuple => |tuple| {
                     for (self.can.env.store.slicePatterns(tuple.patterns)) |child| try pending.append(stack_allocator, child);
+                },
+                .str_interpolation => |str| {
+                    var i: u32 = str.steps.span.len;
+                    while (i > 0) {
+                        i -= 1;
+                        const step = self.can.env.store.getStrPatternStep(str.steps, i);
+                        if (step.capture) |capture| try pending.append(stack_allocator, capture);
+                    }
                 },
                 .num_literal,
                 .small_dec_literal,
@@ -13381,6 +13410,158 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
     return result.toOwnedSlice(allocator);
 }
 
+const PendingStringPatternCapture = struct {
+    pattern: ?Pattern.Idx,
+};
+
+fn appendProcessedStringPatternText(
+    self: *Self,
+    buffer: *std.ArrayList(u8),
+    token: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const part_text = self.parse_ir.resolve(token);
+    const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+    defer if (processed_text.ptr != part_text.ptr) {
+        self.env.gpa.free(processed_text);
+    };
+
+    try buffer.appendSlice(self.env.gpa, processed_text);
+}
+
+fn introduceStringPatternCapture(
+    self: *Self,
+    name: ?Token.Idx,
+    region: base.Region,
+) std.mem.Allocator.Error!?Pattern.Idx {
+    const token = name orelse return null;
+    const ident_idx = self.parse_ir.tokens.resolveIdentifier(token) orelse {
+        const feature = try self.env.insertString("report an error when unable to resolve string pattern capture");
+        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+    };
+
+    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+        .ident = ident_idx,
+    } }, region);
+
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident_idx,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        .top_level_var_error => {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                .invalid_top_level_statement = .{
+                    .stmt = try self.env.insertString("var"),
+                    .region = region,
+                },
+            });
+        },
+        .var_across_function_boundary => {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
+                .ident = ident_idx,
+                .region = region,
+            } });
+        },
+        .var_reassignment_ok => unreachable,
+    }
+
+    return pattern_idx;
+}
+
+fn canonicalizeStringPattern(
+    self: *Self,
+    ast_pattern: anytype,
+) std.mem.Allocator.Error!Pattern.Idx {
+    const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.region);
+    const part_ids = self.parse_ir.store.patternStringPartSlice(ast_pattern.parts);
+
+    var current_text = try std.ArrayList(u8).initCapacity(self.env.gpa, 32);
+    defer current_text.deinit(self.env.gpa);
+
+    var steps = try std.ArrayList(Pattern.StrPatternStep).initCapacity(self.env.gpa, part_ids.len / 2);
+    defer steps.deinit(self.env.gpa);
+
+    var saw_capture = false;
+    var last_part_was_capture = false;
+    var prefix: ?StringLiteral.Idx = null;
+    var pending_capture: ?PendingStringPatternCapture = null;
+
+    for (part_ids) |part_idx| {
+        switch (self.parse_ir.store.getPatternStringPart(part_idx)) {
+            .text => |text| {
+                const text_start = current_text.items.len;
+                try self.appendProcessedStringPatternText(&current_text, text.token);
+                if (current_text.items.len != text_start) {
+                    last_part_was_capture = false;
+                }
+            },
+            .capture => |capture| {
+                if (pending_capture) |pending| {
+                    if (current_text.items.len == 0) {
+                        try self.env.pushDiagnostic(Diagnostic{ .unreachable_string_pattern_capture = .{
+                            .region = self.parse_ir.tokenizedRegionToRegion(capture.region),
+                        } });
+                        continue;
+                    }
+                    const delimiter = try self.env.insertString(current_text.items);
+                    current_text.clearRetainingCapacity();
+                    try steps.append(self.env.gpa, .{
+                        .capture = pending.pattern,
+                        .delimiter = delimiter,
+                    });
+                } else if (!saw_capture) {
+                    prefix = try self.env.insertString(current_text.items);
+                    current_text.clearRetainingCapacity();
+                }
+
+                saw_capture = true;
+                last_part_was_capture = true;
+                pending_capture = .{
+                    .pattern = try self.introduceStringPatternCapture(
+                        capture.name,
+                        self.parse_ir.tokenizedRegionToRegion(capture.region),
+                    ),
+                };
+            },
+        }
+    }
+
+    if (!saw_capture) {
+        const literal = try self.env.insertString(current_text.items);
+        return try self.env.addPattern(Pattern{ .str_literal = .{
+            .literal = literal,
+        } }, region);
+    }
+
+    const final_capture = pending_capture orelse {
+        const feature = try self.env.insertString("string pattern without final capture");
+        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+    };
+    const delimiter = try self.env.insertString(current_text.items);
+    try steps.append(self.env.gpa, .{
+        .capture = final_capture.pattern,
+        .delimiter = delimiter,
+    });
+
+    const step_span = try self.env.store.strPatternStepSpanFromSlice(steps.items);
+    return try self.env.addPattern(Pattern{ .str_interpolation = .{
+        .prefix = prefix orelse try self.env.insertString(""),
+        .steps = step_span,
+        .end = if (last_part_was_capture) .tail else .exact,
+    } }, region);
+}
+
 /// Canonicalize an interpolated string literal.
 ///
 /// ```roc
@@ -15344,61 +15525,7 @@ pub fn canonicalizePattern(
                     };
                 },
                 .string => |e| {
-                    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-                    // Get the string expression which contains the actual string parts
-                    const str_expr = self.parse_ir.store.getExpr(e.expr);
-
-                    switch (str_expr) {
-                        .string => |se| {
-                            // Get the parts of the string expression
-                            const parts = self.parse_ir.store.exprSlice(se.parts);
-
-                            // For simple string literals, there should be exactly one string_part
-                            if (parts.len == 1) {
-                                const part = self.parse_ir.store.getExpr(parts[0]);
-                                switch (part) {
-                                    .string_part => |sp| {
-                                        // Get the actual string content from the string_part token
-                                        const part_text = self.parse_ir.resolve(sp.token);
-
-                                        // Process escape sequences
-                                        const processed_text = try processEscapeSequences(self.env.gpa, part_text);
-                                        defer if (processed_text.ptr != part_text.ptr) {
-                                            self.env.gpa.free(processed_text);
-                                        };
-
-                                        const literal = try self.env.insertString(processed_text);
-
-                                        last_pattern = try self.env.addPattern(Pattern{
-                                            .str_literal = .{
-                                                .literal = literal,
-                                            },
-                                        }, region);
-                                        continue :patternkernel_loop .dispatch;
-                                    },
-                                    else => {},
-                                }
-                            }
-
-                            // For string patterns with interpolation or multiple parts,
-                            // we need more complex handling (not yet supported)
-                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                                .not_implemented = .{
-                                    .feature = try self.env.insertString("string patterns with interpolation"),
-                                    .region = region,
-                                },
-                            });
-                        },
-                        else => {
-                            // Unexpected expression type in string pattern
-                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                                .pattern_arg_invalid = .{
-                                    .region = region,
-                                },
-                            });
-                        },
-                    }
+                    last_pattern = try self.canonicalizeStringPattern(e);
                 },
                 .single_quote => |e| {
                     last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
@@ -15552,7 +15679,7 @@ pub fn canonicalizePattern(
             const field = self.parse_ir.store.getPatternRecordField(field_idx);
             const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
 
-            if (field.rest and field.name == 0) {
+            if (field.rest and field.name == null) {
                 const underscore_pattern_idx = try self.env.addPattern(Pattern{ .underscore = {} }, field_region);
                 const record_destruct = CIR.Pattern.RecordDestruct{
                     .label = self.env.idents.open_ext,
@@ -15570,8 +15697,13 @@ pub fn canonicalizePattern(
                 continue :patternkernel_loop .dispatch;
             }
 
-            // Resolve the field name
-            const field_name_ident = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+            // Resolve the field name. Only a bare rest (`..`) has no name, and that
+            // case is handled above, so any remaining field must carry a name token.
+            const mb_field_name_ident = if (field.name) |name_tok|
+                self.parse_ir.tokens.resolveIdentifier(name_tok)
+            else
+                null;
+            const field_name_ident = mb_field_name_ident orelse {
                 const feature = try self.env.insertString("report an error when unable to resolve field identifier");
                 last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,

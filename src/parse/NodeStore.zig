@@ -42,6 +42,7 @@ scratch_statements: base.Scratch(AST.Statement.Idx),
 scratch_tokens: base.Scratch(Token.Idx),
 scratch_exprs: base.Scratch(AST.Expr.Idx),
 scratch_patterns: base.Scratch(AST.Pattern.Idx),
+scratch_pattern_string_parts: base.Scratch(AST.PatternStringPart.Idx),
 scratch_record_fields: base.Scratch(AST.RecordField.Idx),
 scratch_pattern_record_fields: base.Scratch(AST.PatternRecordField.Idx),
 scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
@@ -58,6 +59,7 @@ scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
 scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
+pattern_string_parts: std.ArrayList(AST.PatternStringPart),
 
 fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
@@ -171,6 +173,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer scratch_exprs.deinit();
     var scratch_patterns = try base.Scratch(AST.Pattern.Idx).init(gpa);
     errdefer scratch_patterns.deinit();
+    var scratch_pattern_string_parts = try base.Scratch(AST.PatternStringPart.Idx).init(gpa);
+    errdefer scratch_pattern_string_parts.deinit();
     var scratch_record_fields = try base.Scratch(AST.RecordField.Idx).init(gpa);
     errdefer scratch_record_fields.deinit();
     var scratch_pattern_record_fields = try base.Scratch(AST.PatternRecordField.Idx).init(gpa);
@@ -203,6 +207,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer numeric_literals.deinit(gpa);
     var numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity);
     errdefer numeric_literal_bytes.deinit(gpa);
+    var pattern_string_parts = try std.ArrayList(AST.PatternStringPart).initCapacity(gpa, capacity / 8);
+    errdefer pattern_string_parts.deinit(gpa);
 
     var store: NodeStore = .{
         .gpa = gpa,
@@ -212,6 +218,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_tokens = scratch_tokens,
         .scratch_exprs = scratch_exprs,
         .scratch_patterns = scratch_patterns,
+        .scratch_pattern_string_parts = scratch_pattern_string_parts,
         .scratch_record_fields = scratch_record_fields,
         .scratch_pattern_record_fields = scratch_pattern_record_fields,
         .scratch_match_branches = scratch_match_branches,
@@ -228,6 +235,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_requires_entries = scratch_requires_entries,
         .numeric_literals = numeric_literals,
         .numeric_literal_bytes = numeric_literal_bytes,
+        .pattern_string_parts = pattern_string_parts,
     };
 
     const expected_idx = store.nodes.items.len;
@@ -256,6 +264,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_tokens.deinit();
     store.scratch_exprs.deinit();
     store.scratch_patterns.deinit();
+    store.scratch_pattern_string_parts.deinit();
     store.scratch_record_fields.deinit();
     store.scratch_pattern_record_fields.deinit();
     store.scratch_match_branches.deinit();
@@ -272,6 +281,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_requires_entries.deinit();
     store.numeric_literals.deinit(store.gpa);
     store.numeric_literal_bytes.deinit(store.gpa);
+    store.pattern_string_parts.deinit(store.gpa);
 }
 
 /// Ensures that all scratch buffers in the store
@@ -281,6 +291,7 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_tokens.clearFrom(0);
     store.scratch_exprs.clearFrom(0);
     store.scratch_patterns.clearFrom(0);
+    store.scratch_pattern_string_parts.clearFrom(0);
     store.scratch_record_fields.clearFrom(0);
     store.scratch_pattern_record_fields.clearFrom(0);
     store.scratch_match_branches.clearFrom(0);
@@ -759,7 +770,8 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.tag = .string_patt;
             node.region = s.region;
             node.main_token = s.string_tok;
-            node.data.lhs = @intFromEnum(s.expr);
+            node.data.lhs = s.parts.span.start;
+            node.data.rhs = s.parts.span.len;
         },
         .single_quote => |sq| {
             node.tag = .single_quote_patt;
@@ -1083,7 +1095,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
 pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) std.mem.Allocator.Error!AST.PatternRecordField.Idx {
     var node = Node{
         .tag = .record_field_patt,
-        .main_token = field.name,
+        .main_token = field.name orelse 0,
         .data = .{
             .lhs = @intFromBool(field.rest),
             .rhs = 0,
@@ -1101,7 +1113,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) s
 pub fn getPatternRecordField(store: *const NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field)));
     return .{
-        .name = node.main_token,
+        .name = if (node.main_token == 0) null else node.main_token,
         .value = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs),
         .rest = node.data.lhs == 1,
         .region = node.region,
@@ -1732,7 +1744,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             return .{ .string = .{
                 .string_tok = node.main_token,
                 .region = node.region,
-                .expr = @enumFromInt(node.data.lhs),
+                .parts = .{ .span = .{
+                    .start = node.data.lhs,
+                    .len = node.data.rhs,
+                } },
             } };
         },
         .single_quote_patt => {
@@ -2514,6 +2529,52 @@ pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AS
 /// as in when parsing fails.
 pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
     store.scratch_patterns.clearFrom(start);
+}
+
+/// Appends a pattern string part and returns its id.
+pub fn addPatternStringPart(store: *NodeStore, part: AST.PatternStringPart) std.mem.Allocator.Error!AST.PatternStringPart.Idx {
+    const id: AST.PatternStringPart.Idx = @enumFromInt(@as(u32, @intCast(store.pattern_string_parts.items.len)));
+    try store.pattern_string_parts.append(store.gpa, part);
+    return id;
+}
+
+/// Returns a pattern string part by id.
+pub fn getPatternStringPart(store: *const NodeStore, idx: AST.PatternStringPart.Idx) AST.PatternStringPart {
+    return store.pattern_string_parts.items[@intFromEnum(idx)];
+}
+
+/// Returns the start position for a new Span of AST.PatternStringPart.Idx in scratch.
+pub fn scratchPatternStringPartTop(store: *NodeStore) u32 {
+    return store.scratch_pattern_string_parts.top();
+}
+
+/// Places a pattern string part id in scratch.
+pub fn addScratchPatternStringPart(store: *NodeStore, idx: AST.PatternStringPart.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_pattern_string_parts.append(idx);
+}
+
+/// Creates a pattern string part span from scratch.
+pub fn patternStringPartSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.PatternStringPart.Span {
+    const end = store.scratch_pattern_string_parts.top();
+    defer store.scratch_pattern_string_parts.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_pattern_string_parts.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Clears pattern string part scratch entries from start.
+pub fn clearScratchPatternStringPartsFrom(store: *NodeStore, start: u32) void {
+    store.scratch_pattern_string_parts.clearFrom(start);
+}
+
+/// Returns pattern string part ids for a span.
+pub fn patternStringPartSlice(store: *const NodeStore, span: AST.PatternStringPart.Span) []AST.PatternStringPart.Idx {
+    return store.sliceFromSpan(AST.PatternStringPart.Idx, span.span);
 }
 
 /// Creates a slice corresponding to a span.

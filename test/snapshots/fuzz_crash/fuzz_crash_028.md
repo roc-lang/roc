@@ -2009,12 +2009,15 @@ EndOfFile,
 							(p-tag (raw "Blue"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "foo")))
 							(e-int (raw "00")))
 						(branch
 							(p-alternatives
-								(p-string (raw """))
-								(p-string (raw """)))
+								(p-string (raw """)
+									(p-string-text (raw "foo")))
+								(p-string (raw """)
+									(p-string-text (raw "bar"))))
 							(e-int (raw "20")))
 						(branch
 							(p-list
@@ -2075,7 +2078,7 @@ EndOfFile,
 									(p-int (raw "1")))
 								(field (name "ar") (rest false)
 									(p-int (raw "2")))
-								(field (name "app") (rest true)))
+								(field (rest true)))
 							(e-int (raw "12")))
 						(branch
 							(p-record
@@ -2718,7 +2721,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 3705)
+					(e-call (constraint-fn-var 3707)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2741,7 +2744,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3796)
+						(e-interpolation (constraint-fn-var 3798)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -2762,7 +2765,7 @@ expect {
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(e-dispatch-call (method "plus") (constraint-fn-var 3974)
+						(e-dispatch-call (method "plus") (constraint-fn-var 3976)
 							(receiver
 								(e-call
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -2856,7 +2859,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 4460)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 4462)
 									(receiver
 										(e-match
 											(match
@@ -2881,7 +2884,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 4455)
+										(e-dispatch-call (method "times") (constraint-fn-var 4457)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2896,18 +2899,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 4577)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 4579)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 4539)
+															(e-dispatch-call (method "plus") (constraint-fn-var 4541)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 4686)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 4688)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 4648)
+															(e-dispatch-call (method "minus") (constraint-fn-var 4650)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2922,11 +2925,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 4805)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 4807)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 4800)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 4802)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2941,12 +2944,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 4871)
+													(e-dispatch-call (method "ned") (constraint-fn-var 4873)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 4838)
+																		(e-dispatch-call (method "od") (constraint-fn-var 4840)
 																			(receiver
 																				(e-match
 																					(match

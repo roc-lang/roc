@@ -10,7 +10,7 @@ const SolvedType = @import("lambda_solved/type.zig");
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
-    direct_call_wrappers,
+    wrappers,
 };
 
 /// Immutable inline eligibility table consumed by later lowering stages.
@@ -55,7 +55,7 @@ pub fn analyze(
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .direct_call_wrappers => try DirectCallWrapperAnalyzer.run(allocator, solved),
+        .wrappers => try WrapperAnalyzer.run(allocator, solved),
     };
 }
 
@@ -63,15 +63,10 @@ const Decision = union(enum) {
     unknown,
     visiting,
     never,
-    inline_direct_call: Lifted.ExprId,
+    inline_body: Lifted.ExprId,
 };
 
-const Candidate = struct {
-    body: Lifted.ExprId,
-    callee: Lifted.FnId,
-};
-
-const DirectCallWrapperAnalyzer = struct {
+const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
     decisions: []Decision,
@@ -85,7 +80,7 @@ const DirectCallWrapperAnalyzer = struct {
         errdefer allocator.free(decisions);
         @memset(decisions, .unknown);
 
-        var analyzer = DirectCallWrapperAnalyzer{
+        var analyzer = WrapperAnalyzer{
             .allocator = allocator,
             .solved = solved,
             .decisions = decisions,
@@ -102,7 +97,7 @@ const DirectCallWrapperAnalyzer = struct {
         errdefer allocator.free(inline_bodies);
         for (decisions, 0..) |decision, index| {
             inline_bodies[index] = switch (decision) {
-                .inline_direct_call => |body| body,
+                .inline_body => |body| body,
                 .unknown,
                 .visiting,
                 .never,
@@ -119,7 +114,7 @@ const DirectCallWrapperAnalyzer = struct {
         };
     }
 
-    fn inlineBody(self: *DirectCallWrapperAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
+    fn inlineBody(self: *WrapperAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
         const index = @intFromEnum(fn_id);
         switch (self.decisions[index]) {
             .unknown => {},
@@ -128,7 +123,7 @@ const DirectCallWrapperAnalyzer = struct {
                 return null;
             },
             .never => return null,
-            .inline_direct_call => |body| return body,
+            .inline_body => |body| return body,
         }
 
         self.decisions[index] = .visiting;
@@ -138,26 +133,31 @@ const DirectCallWrapperAnalyzer = struct {
             if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
         }
 
-        const wrapper = self.wrapperCandidate(fn_id) orelse {
+        const wrapper_body = self.wrapperCandidate(fn_id) orelse {
             self.decisions[index] = .never;
             return null;
         };
 
-        _ = try self.inlineBody(wrapper.callee);
+        // Visit every proc called anywhere in the wrapper body, including calls
+        // nested inside low-level operands or other call arguments. A self-call
+        // re-enters this function while it is `.visiting`, so `markCycle` marks
+        // the whole cycle `.never` and keeps it out of the inline plan instead
+        // of inlining it without bound.
+        try self.visitBodyCallees(wrapper_body);
 
         switch (self.decisions[index]) {
             .never => return null,
             .visiting => {},
             .unknown,
-            .inline_direct_call,
+            .inline_body,
             => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
         }
 
-        self.decisions[index] = .{ .inline_direct_call = wrapper.body };
-        return wrapper.body;
+        self.decisions[index] = .{ .inline_body = wrapper_body };
+        return wrapper_body;
     }
 
-    fn wrapperCandidate(self: *const DirectCallWrapperAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+    fn wrapperCandidate(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
         if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
         if (self.solvedCaptureCount(fn_id) != 0) return null;
@@ -167,16 +167,17 @@ const DirectCallWrapperAnalyzer = struct {
             .hosted => return null,
         };
 
-        const callee = self.directCallCalleeFromBody(body) orelse return null;
-        return .{ .body = body, .callee = callee };
+        if (!self.bodyReadsOnlyArgs(fn_id, body)) return null;
+        if (!self.isInlineableWrapperBody(body)) return null;
+        return body;
     }
 
-    fn solvedCaptureCount(self: *const DirectCallWrapperAnalyzer, fn_id: Lifted.FnId) usize {
+    fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
         return self.solved.types.captureSpan(captures).len;
     }
 
-    fn solvedCapturesForFn(self: *const DirectCallWrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
+    fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
         const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
             .func => |func| func,
@@ -193,23 +194,156 @@ const DirectCallWrapperAnalyzer = struct {
         return .empty();
     }
 
-    fn directCallCalleeFromBody(self: *const DirectCallWrapperAnalyzer, expr_id: Lifted.ExprId) ?Lifted.FnId {
+    fn bodyReadsOnlyArgs(self: *const WrapperAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) bool {
+        const source_fn = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
+        return self.exprReadsOnlyArgs(body, self.solved.lifted.typedLocalSpan(source_fn.args));
+    }
+
+    fn exprReadsOnlyArgs(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId, args: []const Lifted.TypedLocal) bool {
         const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
-            .call_proc => |call| Lifted.callProcCallee(call),
-            .block => |block| blk: {
-                if (self.solved.lifted.stmtSpan(block.statements).len != 0) return null;
-                const final_expr = self.solved.lifted.exprs.items[@intFromEnum(block.final_expr)];
-                break :blk switch (final_expr.data) {
-                    .call_proc => |call| Lifted.callProcCallee(call),
-                    else => null,
-                };
+            .local => |local| localIsArg(local, args),
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .def_ref,
+            .fn_ref,
+            => true,
+            .list,
+            .tuple,
+            => |items| self.exprSpanReadsOnlyArgs(items, args),
+            .record => |fields| {
+                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
+                }
+                return true;
             },
-            else => null,
+            .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
+            .nominal,
+            .dbg,
+            .expect,
+            .return_,
+            => |child| self.exprReadsOnlyArgs(child, args),
+            .expect_err => |expect_err| self.exprReadsOnlyArgs(expect_err.msg, args),
+            .comptime_branch_taken => |taken| self.exprReadsOnlyArgs(taken.body, args),
+            .call_value => |call| self.exprReadsOnlyArgs(call.callee, args) and self.exprSpanReadsOnlyArgs(call.args, args),
+            .call_proc => |call| self.exprSpanReadsOnlyArgs(call.args, args),
+            .low_level => |call| self.exprSpanReadsOnlyArgs(call.args, args),
+            .field_access => |field| self.exprReadsOnlyArgs(field.receiver, args),
+            .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
+            .structural_eq => |eq| self.exprReadsOnlyArgs(eq.lhs, args) and self.exprReadsOnlyArgs(eq.rhs, args),
+            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args),
+            .lambda,
+            .fn_def,
+            .let_,
+            .match_,
+            .if_,
+            .loop_,
+            .break_,
+            .continue_,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            => false,
         };
     }
 
-    fn markCycle(self: *DirectCallWrapperAnalyzer, repeated: Lifted.FnId) void {
+    fn exprSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId), args: []const Lifted.TypedLocal) bool {
+        for (self.solved.lifted.exprSpan(span)) |expr| {
+            if (!self.exprReadsOnlyArgs(expr, args)) return false;
+        }
+        return true;
+    }
+
+    fn localIsArg(local: Lifted.LocalId, args: []const Lifted.TypedLocal) bool {
+        for (args) |arg| {
+            if (arg.local == local) return true;
+        }
+        return false;
+    }
+
+    fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
+        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .call_proc, .low_level => true,
+            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
+                self.isInlineableWrapperBody(block.final_expr),
+            else => false,
+        };
+    }
+
+    /// Visit every proc called within a wrapper body so inline cycles are
+    /// detected even when the recursive call is nested inside low-level
+    /// operands or other call arguments, mirroring the shapes accepted by
+    /// `exprReadsOnlyArgs`.
+    fn visitBodyCallees(self: *WrapperAnalyzer, expr_id: Lifted.ExprId) std.mem.Allocator.Error!void {
+        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .def_ref,
+            .fn_ref,
+            => {},
+            .list,
+            .tuple,
+            => |items| try self.visitSpanCallees(items),
+            .record => |fields| {
+                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                    try self.visitBodyCallees(field.value);
+                }
+            },
+            .tag => |tag| try self.visitSpanCallees(tag.payloads),
+            .nominal,
+            .dbg,
+            .expect,
+            .return_,
+            => |child| try self.visitBodyCallees(child),
+            .expect_err => |expect_err| try self.visitBodyCallees(expect_err.msg),
+            .comptime_branch_taken => |taken| try self.visitBodyCallees(taken.body),
+            .call_value => |call| {
+                try self.visitBodyCallees(call.callee);
+                try self.visitSpanCallees(call.args);
+            },
+            .call_proc => |call| {
+                _ = try self.inlineBody(Lifted.callProcCallee(call));
+                try self.visitSpanCallees(call.args);
+            },
+            .low_level => |call| try self.visitSpanCallees(call.args),
+            .field_access => |field| try self.visitBodyCallees(field.receiver),
+            .tuple_access => |access| try self.visitBodyCallees(access.tuple),
+            .structural_eq => |eq| {
+                try self.visitBodyCallees(eq.lhs);
+                try self.visitBodyCallees(eq.rhs);
+            },
+            .block => |block| try self.visitBodyCallees(block.final_expr),
+            .lambda,
+            .fn_def,
+            .let_,
+            .match_,
+            .if_,
+            .loop_,
+            .break_,
+            .continue_,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            => {},
+        }
+    }
+
+    fn visitSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId)) std.mem.Allocator.Error!void {
+        for (self.solved.lifted.exprSpan(span)) |child| {
+            try self.visitBodyCallees(child);
+        }
+    }
+
+    fn markCycle(self: *WrapperAnalyzer, repeated: Lifted.FnId) void {
         var cycle_start: ?usize = null;
         for (self.stack.items, 0..) |fn_id, index| {
             if (fn_id == repeated) {

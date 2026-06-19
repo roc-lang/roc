@@ -182,8 +182,8 @@ jobs:
         if: runner.os != 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|503|Timeout"
+          command: "zig build run-test-eval -- --llvm"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
           retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
@@ -198,8 +198,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm --timeout 120000
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|503|Timeout"
+          command: "zig build run-test-eval -- --llvm --timeout 120000"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
           retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
@@ -387,9 +387,11 @@ jobs:
           use-cache: true
 
       - name: build roc + repro executables for valgrind
-        run: |
-          git clean -fdx
-          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456"
+          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          retry_count: 3
 
       - name: install valgrind
         run: |

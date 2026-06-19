@@ -234,12 +234,17 @@ const LoweredTemplate = struct {
     status: LoweredTemplateStatus,
 };
 
-/// A lowered nested function specialization together with the Monotype
-/// function type its body was lowered at.
+const LoweredNestedStatus = enum {
+    lowering,
+    ready,
+};
+
+/// A nested function specialization together with the Monotype function type
+/// its body is being lowered or was lowered at.
 const LoweredNestedFn = struct {
-    nested_id: Ast.NestedDefId,
     fn_id: Ast.FnId,
     fn_ty: Type.TypeId,
+    status: LoweredNestedStatus,
 };
 
 const ReservedTemplate = struct {
@@ -1966,16 +1971,18 @@ const Builder = struct {
                 );
                 try request.ctx.graph.drainDirty();
             }
-            return existing.fn_id;
+            switch (existing.status) {
+                .ready,
+                .lowering,
+                => return existing.fn_id,
+            }
         }
 
-        const nested_id: Ast.NestedDefId = @enumFromInt(@as(u32, @intCast(self.program.nested_defs.items.len)));
         const fn_id = try self.program.addFn(fn_template);
-        try self.program.nested_defs.append(self.allocator, undefined);
         try family_entry.value_ptr.append(self.allocator, .{
-            .nested_id = nested_id,
             .fn_id = fn_id,
             .fn_ty = fn_template.mono_fn_ty,
+            .status = .lowering,
         });
 
         try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
@@ -1989,24 +1996,28 @@ const Builder = struct {
         var def_template = fn_template;
         def_template.mono_fn_ty = live_fn_ty;
         self.program.fns.items[@intFromEnum(fn_id)].source = def_template;
-        self.program.nested_defs.items[@intFromEnum(nested_id)] = .{
+        try self.program.nested_defs.append(self.allocator, .{
             .symbol = self.symbols.fresh(),
             .fn_def = def_template,
             .fn_id = fn_id,
             .args = lowered.args,
             .body = lowered.body,
             .ret = lowered.ret,
-        };
-        if (live_fn_ty != fn_template.mono_fn_ty) {
-            const entries = self.lowered_nested_fns.getPtr(family) orelse
-                Common.invariant("lowered nested function family disappeared before completion");
-            for (entries.items) |*entry| {
-                if (entry.nested_id != nested_id) continue;
-                entry.fn_ty = live_fn_ty;
-                break;
-            }
-        }
+        });
+        self.markNestedFnReady(family, fn_id, live_fn_ty);
         return fn_id;
+    }
+
+    fn markNestedFnReady(self: *Builder, family: NestedFnFamily, fn_id: Ast.FnId, fn_ty: Type.TypeId) void {
+        const entries = self.lowered_nested_fns.getPtr(family) orelse
+            Common.invariant("lowered nested function family disappeared before completion");
+        for (entries.items) |*entry| {
+            if (entry.fn_id != fn_id) continue;
+            entry.fn_ty = fn_ty;
+            entry.status = .ready;
+            return;
+        }
+        Common.invariant("lowered nested function disappeared before completion");
     }
 
     /// Process the specialization body requests this specialization enqueued
@@ -2736,13 +2747,6 @@ const LoweredTemplateBody = struct {
 const BinderRestore = struct {
     binder: checked.PatternBinderId,
     previous: ?Ast.LocalId,
-};
-
-const CollectedListPattern = struct {
-    local: Ast.LocalId,
-    ty: Type.TypeId,
-    patterns: []const checked.CheckedPatternId,
-    rest: ?checked.CheckedListRestPattern,
 };
 
 const BodyContext = struct {
@@ -3476,9 +3480,9 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
-            .frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
-            .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
-            .dec => |dec| .{ .dec_lit = dec.value },
+            .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
+            .frac_f64 => |frac| self.lowerFracLiteral(.{ .f64 = frac.value }, ty),
+            .dec => |dec| self.lowerFracLiteral(.{ .dec = dec.value }, ty),
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -6194,75 +6198,10 @@ const BodyContext = struct {
         comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
-        if (!self.matchContainsListPattern(match)) {
-            return try self.builder.program.addExpr(.{
-                .ty = output_ty,
-                .data = try self.lowerMatch(match, output, comptime_site),
-            });
-        }
-
-        const scrutinee = try self.lowerExpr(match.cond);
-        const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
-        const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
-        const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output, comptime_site);
-        return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
-            .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
-            .value = scrutinee,
-            .rest = rest,
-        } } });
-    }
-
-    fn matchContainsListPattern(self: *BodyContext, match: anytype) bool {
-        for (match.branches) |branch| {
-            for (branch.patterns) |pattern| {
-                if (self.patternContainsList(pattern.pattern)) return true;
-            }
-        }
-        return false;
-    }
-
-    fn patternContainsList(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
-        return switch (pattern.data) {
-            .list => true,
-            .as => |as| self.patternContainsList(as.pattern),
-            .applied_tag => |tag| blk: {
-                for (tag.args) |child| {
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |nominal| self.patternContainsList(nominal.backing_pattern),
-            .record_destructure => |destructs| blk: {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required => |child_pattern| child_pattern,
-                        .sub_pattern => |child_pattern| child_pattern,
-                        .rest => |child_pattern| child_pattern,
-                    };
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tuple => |items| blk: {
-                for (items) |child| {
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .assign,
-            .pending,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => false,
-        };
+        return try self.builder.program.addExpr(.{
+            .ty = output_ty,
+            .data = try self.lowerMatch(match, output, comptime_site),
+        });
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -6305,6 +6244,7 @@ const BodyContext = struct {
             .frac_f32_literal,
             .frac_f64_literal,
             .str_literal,
+            .str_interpolation,
             => true,
             .pending,
             .runtime_error,
@@ -6320,270 +6260,6 @@ const BodyContext = struct {
             }
         }
         return false;
-    }
-
-    fn lowerListPatternMatchAlternatives(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        scrutinee_ty: Type.TypeId,
-        branches: []const checked.CheckedMatchBranch,
-        output: MatchOutput,
-        comptime_site: ?Ast.ComptimeSiteId,
-    ) Allocator.Error!Ast.ExprId {
-        const output_ty = self.matchOutputType(output);
-        var fallback = if (comptime_site) |site|
-            try self.comptimeExhaustivenessFailedExpr(output_ty, site)
-        else blk: {
-            const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
-            break :blk try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
-        };
-
-        var branch_index = branches.len;
-        var alternative_index = branchCount(branches);
-        while (branch_index > 0) {
-            branch_index -= 1;
-            const branch = branches[branch_index];
-            var pattern_index = branch.patterns.len;
-            while (pattern_index > 0) {
-                pattern_index -= 1;
-                alternative_index -= 1;
-                fallback = try self.lowerListPatternMatchAlternative(
-                    scrutinee,
-                    scrutinee_ty,
-                    branch.patterns[pattern_index],
-                    branch.guard,
-                    branch.value,
-                    fallback,
-                    output,
-                    comptime_site,
-                    alternative_index,
-                );
-            }
-        }
-
-        return fallback;
-    }
-
-    fn lowerListPatternMatchAlternative(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        scrutinee_ty: Type.TypeId,
-        pattern: checked.CheckedMatchBranchPattern,
-        guard: ?checked.CheckedExprId,
-        body: checked.CheckedExprId,
-        fallback: Ast.ExprId,
-        output: MatchOutput,
-        comptime_site: ?Ast.ComptimeSiteId,
-        alternative_index: usize,
-    ) Allocator.Error!Ast.ExprId {
-        const output_ty = self.matchOutputType(output);
-        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern.pattern)];
-        switch (checked_pattern.data) {
-            .list => |list| {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-
-                try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-
-                var body_lowered = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
-                }
-
-                return try branch_ctx.applyListCheck(scrutinee, scrutinee_ty, list, body_lowered, fallback, output_ty);
-            },
-            .underscore => {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const branch_body = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    return try branch_ctx.builder.ifExpr(guard_cond, branch_body, fallback, output_ty);
-                }
-                return branch_body;
-            },
-            else => {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-
-                try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
-
-                var checks = std.ArrayList(CollectedListPattern).empty;
-                defer checks.deinit(branch_ctx.allocator);
-                const literal_guards_start = branch_ctx.pattern_literal_guards.items.len;
-                const pat = try branch_ctx.lowerPatternAtTypeCollectingLists(pattern.pattern, scrutinee_ty, &checks);
-                const literal_guards = try branch_ctx.drainPatternLiteralGuards(literal_guards_start);
-                defer branch_ctx.allocator.free(literal_guards);
-
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-
-                var body_lowered = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
-                }
-
-                body_lowered = try branch_ctx.applyPatternLiteralGuards(literal_guards, body_lowered, fallback, output_ty);
-
-                var i = checks.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    const entry = checks.items[i];
-                    const scrut_expr = try branch_ctx.builder.localExpr(entry.local, entry.ty);
-                    body_lowered = try branch_ctx.applyListCheck(scrut_expr, entry.ty, entry, body_lowered, fallback, output_ty);
-                }
-
-                const wildcard = try self.builder.program.addPat(.{ .ty = scrutinee_ty, .data = .wildcard });
-                const match_branches = [_]Ast.Branch{
-                    .{ .pat = pat, .body = body_lowered },
-                    .{ .pat = wildcard, .body = fallback },
-                };
-                return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .match_ = .{
-                    .scrutinee = scrutinee,
-                    .branches = try self.builder.program.addBranchSpan(&match_branches),
-                } } });
-            },
-        }
-    }
-
-    fn listPatternCondition(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        list: anytype,
-    ) Allocator.Error!Ast.ExprId {
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const bool_ty = try self.builder.primitiveType(.bool);
-        const len = try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
-        const required = try self.builder.intLiteralExpr(list.patterns.len, u64_ty);
-        const op: can.CIR.Expr.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
-        return try self.builder.lowLevelExpr(op, &.{ len, required }, bool_ty);
-    }
-
-    fn applyListCheck(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        scrutinee_ty: Type.TypeId,
-        list: anytype,
-        body: Ast.ExprId,
-        fallback: Ast.ExprId,
-        output_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const elem_ty = self.constListElemType(scrutinee_ty);
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const needs_len = if (list.rest) |rest| rest.index < list.patterns.len or rest.pattern != null else false;
-        const len = if (needs_len) try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty) else null;
-
-        const values = try self.allocator.alloc(Ast.ExprId, list.patterns.len);
-        defer self.allocator.free(values);
-        const patterns = try self.allocator.alloc(Ast.PatId, list.patterns.len);
-        defer self.allocator.free(patterns);
-        const sub_checks_per_elem = try self.allocator.alloc(std.ArrayList(CollectedListPattern), list.patterns.len);
-        defer {
-            for (sub_checks_per_elem) |*sub| sub.deinit(self.allocator);
-            self.allocator.free(sub_checks_per_elem);
-        }
-        for (sub_checks_per_elem) |*sub| sub.* = std.ArrayList(CollectedListPattern).empty;
-        const literal_guards_per_elem = try self.allocator.alloc([]PatternLiteralGuard, list.patterns.len);
-        defer {
-            for (literal_guards_per_elem) |guards| self.allocator.free(guards);
-            self.allocator.free(literal_guards_per_elem);
-        }
-        for (literal_guards_per_elem) |*guards| guards.* = &.{};
-
-        for (list.patterns, 0..) |pattern_id, index| {
-            const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
-            values[index] = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ scrutinee, item_index }, elem_ty);
-            const guards_start = self.pattern_literal_guards.items.len;
-            patterns[index] = try self.lowerPatternAtTypeCollectingLists(pattern_id, elem_ty, &sub_checks_per_elem[index]);
-            literal_guards_per_elem[index] = try self.drainPatternLiteralGuards(guards_start);
-        }
-
-        var rest_pat: ?Ast.PatId = null;
-        var rest_value: ?Ast.ExprId = null;
-        var rest_sub_checks = std.ArrayList(CollectedListPattern).empty;
-        defer rest_sub_checks.deinit(self.allocator);
-        var rest_literal_guards: []PatternLiteralGuard = &.{};
-        defer self.allocator.free(rest_literal_guards);
-        if (list.rest) |rest| {
-            if (rest.pattern) |rest_pattern| {
-                const list_len = len orelse try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
-                const fixed_count = try self.builder.intLiteralExpr(list.patterns.len, u64_ty);
-                const rest_len = try self.builder.lowLevelExpr(.num_minus, &.{ list_len, fixed_count }, u64_ty);
-                const rest_start = try self.builder.intLiteralExpr(rest.index, u64_ty);
-                const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
-                rest_value = try self.builder.lowLevelExpr(.list_sublist, &.{ scrutinee, range }, scrutinee_ty);
-                const guards_start = self.pattern_literal_guards.items.len;
-                rest_pat = try self.lowerPatternAtTypeCollectingLists(rest_pattern, scrutinee_ty, &rest_sub_checks);
-                rest_literal_guards = try self.drainPatternLiteralGuards(guards_start);
-            }
-        }
-
-        var success = body;
-
-        var index = patterns.len;
-        while (index > 0) {
-            index -= 1;
-            var elem_success = success;
-            var sub_index = sub_checks_per_elem[index].items.len;
-            while (sub_index > 0) {
-                sub_index -= 1;
-                const sub = sub_checks_per_elem[index].items[sub_index];
-                const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
-                elem_success = try self.applyListCheck(sub_scrut, sub.ty, sub, elem_success, fallback, output_ty);
-            }
-            elem_success = try self.applyPatternLiteralGuards(literal_guards_per_elem[index], elem_success, fallback, output_ty);
-            success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], elem_success, fallback, output_ty);
-        }
-
-        if (rest_pat) |pat| {
-            var rest_success = success;
-            var sub_index = rest_sub_checks.items.len;
-            while (sub_index > 0) {
-                sub_index -= 1;
-                const sub = rest_sub_checks.items[sub_index];
-                const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
-                rest_success = try self.applyListCheck(sub_scrut, sub.ty, sub, rest_success, fallback, output_ty);
-            }
-            rest_success = try self.applyPatternLiteralGuards(rest_literal_guards, rest_success, fallback, output_ty);
-            success = try self.wrapPatternMatch(
-                rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
-                scrutinee_ty,
-                pat,
-                rest_success,
-                fallback,
-                output_ty,
-            );
-        }
-
-        const cond = try self.listPatternCondition(scrutinee, list);
-        return try self.builder.ifExpr(cond, success, fallback, output_ty);
     }
 
     fn preRegisterPatternBinders(
@@ -6653,6 +6329,13 @@ const BodyContext = struct {
                     try self.preRegisterPatternBinders(item, item_ty);
                 }
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| {
+                        try self.preRegisterPatternBinders(capture, ty);
+                    }
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -6664,134 +6347,6 @@ const BodyContext = struct {
             .runtime_error,
             => {},
         }
-    }
-
-    fn lowerPatternAtTypeCollectingLists(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!Ast.PatId {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
-        try self.constrainTypeToMono(pattern.ty, ty);
-        const data: Ast.PatData = switch (pattern.data) {
-            .pending,
-            .runtime_error,
-            => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
-            .assign => |binder| blk: {
-                const local = if (self.binders.get(binder)) |existing| existing else inner: {
-                    const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
-                    try bindLocalName(self.builder.program, self.view, new_local, binder);
-                    try self.binders.put(binder, new_local);
-                    break :inner new_local;
-                };
-                break :blk .{ .bind = local };
-            },
-            .as => |as| blk: {
-                const local = if (self.binders.get(as.binder)) |existing| existing else inner: {
-                    const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
-                    try bindLocalName(self.builder.program, self.view, new_local, as.binder);
-                    try self.binders.put(as.binder, new_local);
-                    break :inner new_local;
-                };
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtTypeCollectingLists(as.pattern, ty, checks_out),
-                    .local = local,
-                } };
-            },
-            .applied_tag => |tag| try self.lowerTagPatternCollectingLists(tag, ty, checks_out),
-            .nominal => |nominal| .{ .nominal = try self.lowerPatternAtTypeCollectingLists(nominal.backing_pattern, self.builder.namedBackingType(ty) orelse ty, checks_out) },
-            .record_destructure => |destructs| try self.lowerRecordPatternCollectingLists(destructs, ty, checks_out),
-            .list => |list| blk: {
-                const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
-                try checks_out.append(self.allocator, .{
-                    .local = local,
-                    .ty = ty,
-                    .patterns = list.patterns,
-                    .rest = list.rest,
-                });
-                break :blk .{ .bind = local };
-            },
-            .tuple => |items| .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks_out) },
-            .num_literal => |num| if (num.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => |dec| if (dec.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| if (dec.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                .{ .dec_lit = dec.value },
-            .frac_f32_literal => |value| .{ .frac_f32_lit = value },
-            .frac_f64_literal => |value| .{ .frac_f64_lit = value },
-            .str_literal => |str| if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
-            .underscore => .wildcard,
-        };
-        return try self.builder.program.addPat(.{ .ty = ty, .data = data });
-    }
-
-    fn lowerPatternSpanAtTypesCollectingLists(
-        self: *BodyContext,
-        checked_patterns: []const checked.CheckedPatternId,
-        tys: []const Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!Ast.Span(Ast.PatId) {
-        if (checked_patterns.len != tys.len) Common.invariant("pattern arity differs from concrete checked type");
-        const lowered = try self.allocator.alloc(Ast.PatId, checked_patterns.len);
-        defer self.allocator.free(lowered);
-        for (checked_patterns, tys, 0..) |child, child_ty, i| {
-            lowered[i] = try self.lowerPatternAtTypeCollectingLists(child, child_ty, checks_out);
-        }
-        return try self.builder.program.addPatSpan(lowered);
-    }
-
-    fn lowerTagPatternCollectingLists(
-        self: *BodyContext,
-        tag: anytype,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!Ast.PatData {
-        const name = try self.builder.tagName(self.view, tag.name);
-        return .{ .tag = .{
-            .name = name,
-            .payloads = try self.lowerPatternSpanAtTypesCollectingLists(tag.args, self.builder.tagPayloadTypes(ty, name), checks_out),
-        } };
-    }
-
-    fn lowerRecordPatternCollectingLists(
-        self: *BodyContext,
-        destructs: []const checked.CheckedRecordDestruct,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!Ast.PatData {
-        var lowered = std.ArrayList(Ast.RecordDestruct).empty;
-        defer lowered.deinit(self.allocator);
-        for (destructs) |destruct| {
-            const child = switch (destruct.kind) {
-                .required => |pattern| pattern,
-                .sub_pattern => |pattern| pattern,
-                .rest => |pattern| {
-                    if (self.patternIsIgnored(pattern)) continue;
-                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                },
-            };
-            const name = try self.builder.recordFieldName(self.view, destruct.label);
-            const child_ty = switch (destruct.kind) {
-                .required, .sub_pattern => self.builder.recordFieldType(ty, name),
-                .rest => unreachable,
-            };
-            try lowered.append(self.allocator, .{
-                .name = name,
-                .pattern = try self.lowerPatternAtTypeCollectingLists(child, child_ty, checks_out),
-            });
-        }
-        return .{ .record = try self.builder.program.addRecordDestructSpan(lowered.items) };
     }
 
     fn wrapPatternMatch(
@@ -6812,44 +6367,6 @@ const BodyContext = struct {
             .scrutinee = value,
             .branches = try self.builder.program.addBranchSpan(&branches),
         } } });
-    }
-
-    fn listPatternItemIndex(
-        self: *BodyContext,
-        index: usize,
-        pattern_count: usize,
-        rest: ?checked.CheckedListRestPattern,
-        len: ?Ast.ExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (rest) |rest_info| {
-            if (index >= rest_info.index) {
-                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
-                const trailing_count = try self.builder.intLiteralExpr(pattern_count - index, u64_ty);
-                return try self.builder.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
-            }
-        }
-        return try self.builder.intLiteralExpr(index, u64_ty);
-    }
-
-    fn sublistRangeExpr(
-        self: *BodyContext,
-        start: Ast.ExprId,
-        len: Ast.ExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const len_name = try self.builder.program.names.internRecordFieldLabel("len");
-        const start_name = try self.builder.program.names.internRecordFieldLabel("start");
-        const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = start_name, .ty = u64_ty },
-        };
-        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
-        const exprs = [_]Ast.FieldExpr{
-            .{ .name = len_name, .value = len },
-            .{ .name = start_name, .value = start },
-        };
-        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .record = try self.builder.program.addFieldExprSpan(&exprs) } });
     }
 
     fn lowerBindingContinuation(
@@ -6947,6 +6464,57 @@ const BodyContext = struct {
         const success = try self.lowerListPatternBindingSuccess(value, value_ty, list, result_ty, continuation, miss);
         const cond = try self.listPatternCondition(value, list);
         return try self.builder.ifExpr(cond, success, miss, result_ty);
+    }
+
+    fn listPatternCondition(
+        self: *BodyContext,
+        scrutinee: Ast.ExprId,
+        list: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const len = try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
+        const required = try self.builder.intLiteralExpr(list.patterns.len, u64_ty);
+        const op: can.CIR.Expr.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
+        return try self.builder.lowLevelExpr(op, &.{ len, required }, bool_ty);
+    }
+
+    fn listPatternItemIndex(
+        self: *BodyContext,
+        index: usize,
+        pattern_count: usize,
+        rest: ?checked.CheckedListRestPattern,
+        len: ?Ast.ExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (rest) |rest_info| {
+            if (index >= rest_info.index) {
+                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
+                const trailing_count = try self.builder.intLiteralExpr(pattern_count - index, u64_ty);
+                return try self.builder.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
+            }
+        }
+        return try self.builder.intLiteralExpr(index, u64_ty);
+    }
+
+    fn sublistRangeExpr(
+        self: *BodyContext,
+        start: Ast.ExprId,
+        len: Ast.ExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const len_name = try self.builder.program.names.internRecordFieldLabel("len");
+        const start_name = try self.builder.program.names.internRecordFieldLabel("start");
+        const fields = [_]Type.Field{
+            .{ .name = len_name, .ty = u64_ty },
+            .{ .name = start_name, .ty = u64_ty },
+        };
+        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
+        const exprs = [_]Ast.FieldExpr{
+            .{ .name = len_name, .value = len },
+            .{ .name = start_name, .value = start },
+        };
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .record = try self.builder.program.addFieldExprSpan(&exprs) } });
     }
 
     fn lowerListPatternBindingSuccess(
@@ -7239,6 +6807,11 @@ const BodyContext = struct {
                 if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.savePatternBinders(rest_pattern, saved);
             },
             .tuple => |items| for (items) |child| try self.savePatternBinders(child, saved),
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.savePatternBinders(capture, saved);
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -8882,7 +8455,7 @@ const BodyContext = struct {
             .applied_tag => |tag| try self.lowerTagPattern(tag, ty),
             .nominal => |nominal| .{ .nominal = try self.lowerPatternAtType(nominal.backing_pattern, self.builder.namedBackingType(ty) orelse ty) },
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
-            .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
+            .list => |list| try self.lowerListPattern(list, ty),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
             .num_literal => |num| if (num.conversion) |conversion|
                 try self.bindLiteralGuardPattern(conversion, ty)
@@ -8902,9 +8475,35 @@ const BodyContext = struct {
                 try self.bindLiteralGuardPattern(conversion, ty)
             else
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerStrPattern(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, str.steps.len);
+        defer self.allocator.free(steps);
+
+        for (str.steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null,
+                .delimiter = try self.lowerStringLiteral(step.delimiter),
+            };
+        }
+
+        return .{ .str_pattern = .{
+            .prefix = try self.lowerStringLiteral(str.prefix),
+            .steps = try self.builder.program.addStrPatternStepSpan(steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+        } };
     }
 
     fn lowerPatternSpanAtTypes(
@@ -8923,6 +8522,25 @@ const BodyContext = struct {
 
     fn lowerTuplePattern(self: *BodyContext, items: []const checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!Ast.Span(Ast.PatId) {
         return try self.lowerPatternSpanAtTypes(items, self.builder.tupleItemTypes(ty));
+    }
+
+    fn lowerListPattern(self: *BodyContext, list: anytype, ty: Type.TypeId) Allocator.Error!Ast.PatData {
+        const elem_ty = self.constListElemType(ty);
+        const lowered = try self.allocator.alloc(Ast.PatId, list.patterns.len);
+        defer self.allocator.free(lowered);
+        for (list.patterns, 0..) |child, i| {
+            lowered[i] = try self.lowerPatternAtType(child, elem_ty);
+        }
+        const rest: ?Ast.ListRestPattern = if (list.rest) |r| .{
+            .index = r.index,
+            // A captured rest binds the remaining slice, which has the same
+            // list type as the scrutinee.
+            .pattern = if (r.pattern) |rest_pattern| try self.lowerPatternAtType(rest_pattern, ty) else null,
+        } else null;
+        return .{ .list = .{
+            .patterns = try self.builder.program.addPatSpan(lowered),
+            .rest = rest,
+        } };
     }
 
     fn lowerTagPattern(self: *BodyContext, tag: anytype, ty: Type.TypeId) Allocator.Error!Ast.PatData {
@@ -9005,33 +8623,6 @@ const BodyContext = struct {
         return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
     }
 
-    /// Take ownership of the literal-equality conditions collected since
-    /// `start`, restoring the collection to that length.
-    fn drainPatternLiteralGuards(self: *BodyContext, start: usize) Allocator.Error![]PatternLiteralGuard {
-        const drained = try self.allocator.dupe(PatternLiteralGuard, self.pattern_literal_guards.items[start..]);
-        self.pattern_literal_guards.shrinkRetainingCapacity(start);
-        return drained;
-    }
-
-    /// Wrap a match-branch body so it only runs when every collected literal
-    /// equality holds, jumping to the branch's miss target otherwise.
-    fn applyPatternLiteralGuards(
-        self: *BodyContext,
-        guards: []const PatternLiteralGuard,
-        body: Ast.ExprId,
-        fallback: Ast.ExprId,
-        output_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        var result = body;
-        var i = guards.len;
-        while (i > 0) {
-            i -= 1;
-            const eq = try self.lowerPatternLiteralEq(guards[i]);
-            result = try self.builder.ifExpr(eq, result, fallback, output_ty);
-        }
-        return result;
-    }
-
     /// Conjoin the branch's collected literal-equality conditions with its
     /// (optional) user guard, literal conditions first.
     fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?Ast.ExprId) Allocator.Error!?Ast.ExprId {
@@ -9067,6 +8658,60 @@ const BodyContext = struct {
                 else => .{ .int_lit = value },
             },
             else => .{ .int_lit = value },
+        };
+    }
+
+    /// Lower a fractional literal to the constant form its instantiated
+    /// monotype demands. The checked stage finalizes a fractional literal's
+    /// value to one numeric representation, but a generalized literal can be
+    /// instantiated at a different fractional primitive than its finalized
+    /// default (for example, a literal finalized to `Dec` that this
+    /// specialization unifies to `F64`). The constant kind must follow the
+    /// instantiated type so backends store bits the destination layout
+    /// expects, mirroring `lowerIntLiteral`.
+    fn lowerFracLiteral(self: *BodyContext, value: FracLiteralValue, ty: Type.TypeId) Ast.ExprData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .f32 => .{ .frac_f32_lit = value.asF32() },
+                .f64 => .{ .frac_f64_lit = value.asF64() },
+                .dec => .{ .dec_lit = value.asDec() },
+                else => Common.invariant("fractional literal instantiated to a non-fractional Monotype primitive"),
+            },
+            else => Common.invariant("fractional literal instantiated to a non-primitive Monotype type"),
+        };
+    }
+};
+
+/// A fractional literal value in its checked-stage representation, used to
+/// re-derive the constant kind the instantiated Monotype primitive requires.
+const FracLiteralValue = union(enum) {
+    f32: f32,
+    f64: f64,
+    dec: builtins.dec.RocDec,
+
+    fn asF64(self: FracLiteralValue) f64 {
+        return switch (self) {
+            .f32 => |v| @floatCast(v),
+            .f64 => |v| v,
+            .dec => |v| v.toF64(),
+        };
+    }
+
+    fn asF32(self: FracLiteralValue) f32 {
+        return switch (self) {
+            .f32 => |v| v,
+            .f64 => |v| @floatCast(v),
+            .dec => |v| @floatCast(v.toF64()),
+        };
+    }
+
+    fn asDec(self: FracLiteralValue) builtins.dec.RocDec {
+        return switch (self) {
+            .f32 => |v| builtins.dec.RocDec.fromF64(@floatCast(v)) orelse
+                Common.invariant("f32 fractional literal could not be represented as Dec at its instantiated type"),
+            .f64 => |v| builtins.dec.RocDec.fromF64(v) orelse
+                Common.invariant("f64 fractional literal could not be represented as Dec at its instantiated type"),
+            .dec => |v| v,
         };
     }
 };

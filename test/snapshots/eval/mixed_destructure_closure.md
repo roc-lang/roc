@@ -85,13 +85,13 @@ EndOfFile,
 									(record-destruct (label "e") (ident "e")
 										(required
 											(p-assign (ident "e")))))))))))
-		(e-dispatch-call (method "plus") (constraint-fn-var 49)
+		(e-dispatch-call (method "plus") (constraint-fn-var 51)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 47)
+				(e-dispatch-call (method "plus") (constraint-fn-var 49)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 45)
+						(e-dispatch-call (method "plus") (constraint-fn-var 47)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 43)
+								(e-dispatch-call (method "plus") (constraint-fn-var 45)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "a"))))

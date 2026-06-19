@@ -456,7 +456,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Load a float from memory into a float register, dispatching to the target's emit.
         fn emitFloatLoad(self: *Self, dst: FloatReg, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
-            if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
+            if (comptime @hasDecl(EmitType, "fldrRegMemSoff")) {
+                if (is_f64) {
+                    try self.emit.fldrRegMemSoff(.double, dst, base_reg, offset);
+                } else {
+                    try self.emit.fldrRegMemSoff(.single, dst, base_reg, offset);
+                }
+            } else if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
                 if (is_f64) {
                     try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset));
                 } else {

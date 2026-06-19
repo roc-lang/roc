@@ -168,6 +168,11 @@ pub const Op = struct {
     pub const f64_le: u8 = 0x65;
     pub const f64_ge: u8 = 0x66;
 
+    // i32 unary
+    pub const i32_clz: u8 = 0x67;
+    pub const i32_ctz: u8 = 0x68;
+    pub const i32_popcnt: u8 = 0x69;
+
     // i32 arithmetic
     pub const i32_add: u8 = 0x6A;
     pub const i32_sub: u8 = 0x6B;
@@ -264,6 +269,13 @@ pub const Op = struct {
     // i32 sign extension
     pub const i32_extend8_s: u8 = 0xC0;
     pub const i32_extend16_s: u8 = 0xC1;
+
+    // SIMD prefix and selected 128-bit SIMD sub-opcodes.
+    pub const simd_prefix: u8 = 0xFD;
+    pub const v128_load: u32 = 0x00;
+    pub const i8x16_splat: u32 = 0x0F;
+    pub const i8x16_eq: u32 = 0x23;
+    pub const i8x16_bitmask: u32 = 0x64;
 };
 
 /// Block type for structured control flow

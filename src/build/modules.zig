@@ -409,6 +409,17 @@ pub const RocModules = struct {
     glue: *Module,
     embedded_lld: *Module,
 
+    // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
+    // (like `embedded_lld`) and wired into their specific consumers via
+    // `applyVendorImports`, so it stays clear which code comes from elsewhere.
+    // The sources live under `vendor/`.
+    vendor_parse_float: *Module,
+    vendor_ryu: *Module,
+    vendor_eval_loader: *Module,
+    vendor_macho: *Module,
+    vendor_llvm_ir: *Module,
+    vendor_llvm_compile_bindings: *Module,
+
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
             .collections = b.addModule(
@@ -455,6 +466,13 @@ pub const RocModules = struct {
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
+
+            .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
+            .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
+            .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
+            .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
+            .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
+            .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -475,6 +493,17 @@ pub const RocModules = struct {
         // `embedded_lld` is created outside the dependency table above; it only
         // needs `collections` for the single-threaded arena.
         self.embedded_lld.addImport("collections", self.collections);
+
+        // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
+        // through the `base` module.
+        self.vendor_eval_loader.addImport("base", self.base);
+
+        // The vendored Mach-O code-signing helpers use the build-time `tracy`
+        // tracing shim.
+        self.vendor_macho.addImport("tracy", self.tracy);
+
+        // The vendored LLVM IR library's BitcodeReader reaches roc's `base`.
+        self.vendor_llvm_ir.addImport("base", self.base);
 
         return self;
     }
@@ -528,6 +557,25 @@ pub const RocModules = struct {
                 const dep_module = self.getModule(dep_type);
                 module.addImport(@tagName(dep_type), dep_module);
             }
+
+            self.applyVendorImports(module, module_type);
+        }
+    }
+
+    /// Wire vendored-from-Zig modules into the specific roc modules that use
+    /// them. Called for both the persistent modules and the per-module test
+    /// builds, so a `@import("vendor_x")` resolves in both. Vendored modules
+    /// are deliberately not part of the `ModuleType` dependency graph.
+    fn applyVendorImports(self: RocModules, module: *Module, module_type: ModuleType) void {
+        switch (module_type) {
+            .builtins => {
+                module.addImport("vendor_parse_float", self.vendor_parse_float);
+                module.addImport("vendor_ryu", self.vendor_ryu);
+            },
+            .eval => {
+                module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+            },
+            else => {},
         }
     }
 
@@ -563,6 +611,10 @@ pub const RocModules = struct {
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("embedded_lld", self.embedded_lld);
+
+        // Vendored, used by the CLI linker (Mach-O code signing). Harmless where
+        // unused (it is only @import-ed from CLI code, never from wasm).
+        step.root_module.addImport("vendor_macho", self.vendor_macho);
 
         // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
@@ -628,6 +680,7 @@ pub const RocModules = struct {
             const dep_module = self.getModule(dep_type);
             step.root_module.addImport(@tagName(dep_type), dep_module);
         }
+        self.applyVendorImports(step.root_module, module_type);
     }
 
     pub fn createModuleTests(

@@ -256,15 +256,9 @@ func = {
 	num_container = Container.Value(100)
 
 	chained = num_container
-		.map(
-			|x| x + 1,
-		)
-		.flat_map(
-			|x| Container.Value(x + 2),
-		)
-		.get_or(
-			0,
-		)
+		.map(|x| x + 1)
+		.flat_map(|x| Container.Value(x + 2))
+		.get_or(0)
 
 	chained
 }

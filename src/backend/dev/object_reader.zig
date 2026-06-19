@@ -695,6 +695,24 @@ pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) All
             const r_type: u32 = @truncate(r_info & 0xFFFFFFFF);
             const r_sym: u32 = @truncate(r_info >> 32);
 
+            // Base-relative relocations carry no symbol (sym index 0), so they
+            // would otherwise be dropped at the `resolveSymbol orelse continue`
+            // gate below. The relocatable objects this loader reads do not emit
+            // them today, but handle them explicitly rather than silently skip:
+            // value = load base + addend.
+            const is_relative = switch (builtin.cpu.arch) {
+                .aarch64 => r_type == 1027, // R_AARCH64_RELATIVE
+                .x86_64 => r_type == 8, // R_X86_64_RELATIVE
+                else => false,
+            };
+            if (is_relative) {
+                const rel_patch_off: u64 = target_buf_offset.? + r_offset;
+                if (rel_patch_off + 8 > buf.len) continue;
+                const value: u64 = @intFromPtr(buf.ptr) +% @as(u64, @bitCast(r_addend));
+                std.mem.writeInt(u64, buf[@intCast(rel_patch_off)..][0..8], value, .little);
+                continue;
+            }
+
             // Resolve symbol address
             const sym_addr = resolveSymbol(
                 object_bytes,

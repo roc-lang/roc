@@ -669,6 +669,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .unreachable_string_pattern_capture = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .pattern_arg_invalid = .{
             .region = rand_region(),
         },
@@ -1360,6 +1366,13 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, CIR.Pattern{
         .str_literal = .{
             .literal = rand_idx(StringLiteral.Idx),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
+        .str_interpolation = .{
+            .prefix = rand_idx(StringLiteral.Idx),
+            .steps = CIR.Pattern.StrPatternStep.Span{ .span = rand_span() },
+            .end = .tail,
         },
     });
     try patterns.append(gpa, CIR.Pattern{

@@ -13,6 +13,9 @@ jobs:
   zig-benchmarks:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
+    env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+      ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
     steps:
       # === MAIN BRANCH BUILD ===
       # TEMPORARY: Using PR branch for both to test CI workflow - revert to ref: "main" after testing
@@ -28,6 +31,9 @@ jobs:
 
       - name: Verify prerequisites
         run: nix develop ./src/ -c bash -c "hyperfine --version && jq --version && zig version"
+
+      - name: Clear stale Zig build outputs
+        run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
       - name: Build main branch release binary
         uses: ./.github/actions/flaky-retry
@@ -46,6 +52,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
         with:
           clean: "false"
+
+      - name: Clear main branch Zig build outputs
+        run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
       - name: Build PR branch release binary
         uses: ./.github/actions/flaky-retry
