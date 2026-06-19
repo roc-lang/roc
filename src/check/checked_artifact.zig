@@ -16,6 +16,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const hoist_roots = @import("hoist_roots.zig");
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
 
@@ -371,6 +372,7 @@ pub const PublishInputs = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
+    hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
     problem_store: ?*problem.Store = null,
 };
@@ -698,7 +700,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
+                    .constant, .hoisted_constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -706,7 +708,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
+                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -891,7 +893,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
@@ -950,6 +952,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
 ) bool {
     return switch (root.kind) {
         .constant,
+        .hoisted_constant,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
@@ -4558,6 +4561,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_hoisted_constants = HoistedConstTable{};
     const empty_const_templates = ConstTemplateTable{};
     const empty_method_registry = static_dispatch.MethodRegistry{};
     const empty_interface_capabilities = ModuleInterfaceCapabilities{};
@@ -4588,6 +4592,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
+        .hoisted_constants = &empty_hoisted_constants,
         .const_templates = &empty_const_templates,
         .method_registry = &empty_method_registry,
         .interface_capabilities = &empty_interface_capabilities,
@@ -9145,16 +9150,32 @@ fn sealConstEvalTemplatesForRoots(
     entry_wrappers: *const EntryWrapperTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     top_level_values: *const TopLevelValueTable,
+    hoisted_constants: *const HoistedConstTable,
 ) void {
     for (compile_time_roots.roots) |root| {
-        if (root.kind != .constant) continue;
-        const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
-        const top_level = top_level_values.lookupByPattern(pattern) orelse {
-            checkedArtifactInvariant("constant root has no top-level value entry", .{});
-        };
-        const const_ref = switch (top_level.value) {
-            .const_ref => |ref| ref,
-            .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+        if (!compileTimeRootHasConstBody(root.kind)) continue;
+        const const_ref = switch (root.kind) {
+            .constant => blk: {
+                const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
+                const top_level = top_level_values.lookupByPattern(pattern) orelse {
+                    checkedArtifactInvariant("constant root has no top-level value entry", .{});
+                };
+                break :blk switch (top_level.value) {
+                    .const_ref => |ref| ref,
+                    .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+                };
+            },
+            .hoisted_constant => blk: {
+                const hoisted = hoisted_constants.lookupByRoot(root.id) orelse {
+                    checkedArtifactInvariant("hoisted constant root has no hoisted const entry", .{});
+                };
+                break :blk hoisted.const_ref;
+            },
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
         };
         const body = checked_const_bodies.bodyForRoot(root.id) orelse {
             checkedArtifactInvariant("constant root has no checked const body", .{});
@@ -9786,7 +9807,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
+                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -13019,7 +13040,10 @@ pub const ComptimeRootId = enum(u32) { _ };
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
+    /// Ordinary top-level value constant.
     constant,
+    /// A selected top-level-equivalent expression inside a runtime body.
+    hoisted_constant,
     callable_binding,
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
@@ -13047,6 +13071,7 @@ pub const CompileTimeRoot = struct {
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
+    source_pattern: ?CIR.Pattern.Idx = null,
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
@@ -13061,6 +13086,7 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         global_value_defs: []const CIR.Def.Idx,
+        selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *const CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -13095,6 +13121,23 @@ pub const CompileTimeRootTable = struct {
                 .source = .{ .def = def_idx },
                 .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
                 .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                .payload = .pending,
+            });
+        }
+
+        for (selected_hoisted_roots) |selected| {
+            const source_ty = module.exprType(selected.expr);
+            if (sourceTypeIsFunction(module, source_ty)) {
+                checkedArtifactInvariant("function-typed selected hoisted root reached data-constant publication", .{});
+            }
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .hoisted_constant,
+                .source = .{ .expr = selected.expr },
+                .source_pattern = selected.pattern,
+                .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+                .expr = checkedExprIdForSource(checked_bodies, selected.expr),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                 .payload = .pending,
             });
@@ -13171,10 +13214,18 @@ pub const CompileTimeRootTable = struct {
     /// body is the given checked expression.
     pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
         for (self.roots) |entry| {
-            switch (entry.kind) {
-                .numeral_conversion, .quote_conversion => if (entry.expr == expr) return entry,
-                else => {},
+            if (entry.expr != expr) continue;
+            if (entry.kind == .numeral_conversion or entry.kind == .quote_conversion) {
+                return entry;
             }
+        }
+        return null;
+    }
+
+    /// Look up a selected hoisted constant root by its checked source expression.
+    pub fn lookupHoistedRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
+        for (self.roots) |entry| {
+            if (entry.kind == .hoisted_constant and entry.expr == expr) return entry;
         }
         return null;
     }
@@ -13205,6 +13256,7 @@ pub const CompileTimeRootTable = struct {
         module_idx: u32,
         kind: CompileTimeRootKind,
         source: RootSource,
+        source_pattern: ?CIR.Pattern.Idx = null,
         pattern: ?CheckedPatternId,
         expr: CheckedExprId,
         checked_type: CheckedTypeId,
@@ -13222,6 +13274,7 @@ pub const CompileTimeRootTable = struct {
             .module_idx = entry.module_idx,
             .kind = entry.kind,
             .source = entry.source,
+            .source_pattern = entry.source_pattern,
             .pattern = entry.pattern,
             .expr = entry.expr,
             .checked_type = entry.checked_type,
@@ -13232,25 +13285,32 @@ pub const CompileTimeRootTable = struct {
 
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
     const matches = switch (kind) {
-        .constant => switch (payload) {
+        .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            else => false,
+            .pending, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             .fn_value => true,
-            else => false,
+            .pending, .const_node, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            else => false,
+            .pending, .const_node, .fn_value => false,
         },
         .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
-            else => false,
+            .pending, .fn_value, .expect => false,
         },
     };
     if (matches) return;
     checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
+}
+
+fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
+    return switch (kind) {
+        .constant, .hoisted_constant => true,
+        .callable_binding, .expect, .numeral_conversion, .quote_conversion => false,
+    };
 }
 
 fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Expr.Idx) CheckedExprId {
@@ -13287,12 +13347,19 @@ pub fn constModuleId(ref: ConstRef) ModuleId {
 /// Public `ConstOwner` declaration.
 pub const ConstOwner = union(enum) {
     top_level_binding: ConstTopLevelOwner,
+    hoisted_expr: ConstHoistedOwner,
 };
 
 /// Public `ConstTopLevelOwner` declaration.
 pub const ConstTopLevelOwner = struct {
     module_idx: u32,
     pattern: CheckedPatternId,
+};
+
+/// Public `ConstHoistedOwner` declaration.
+pub const ConstHoistedOwner = struct {
+    module_idx: u32,
+    expr: CheckedExprId,
 };
 
 /// Public `TopLevelValueKind` declaration.
@@ -13476,6 +13543,179 @@ pub const TopLevelValueTable = struct {
     }
 };
 
+/// Public `HoistedConstId` declaration.
+pub const HoistedConstId = enum(u32) { _ };
+
+/// Public `HoistedConstEntry` declaration.
+pub const HoistedConstEntry = struct {
+    id: HoistedConstId,
+    module_idx: u32,
+    root: ComptimeRootId,
+    expr: CheckedExprId,
+    pattern: ?CheckedPatternId,
+    checked_type: CheckedTypeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    const_ref: ConstRef,
+};
+
+const HoistedConstByExprEntry = struct {
+    expr: CheckedExprId,
+    entry: HoistedConstId,
+
+    fn lessThan(_: void, lhs: HoistedConstByExprEntry, rhs: HoistedConstByExprEntry) bool {
+        return @intFromEnum(lhs.expr) < @intFromEnum(rhs.expr);
+    }
+};
+
+const HoistedConstByPatternEntry = struct {
+    pattern: CheckedPatternId,
+    entry: HoistedConstId,
+
+    fn lessThan(_: void, lhs: HoistedConstByPatternEntry, rhs: HoistedConstByPatternEntry) bool {
+        return @intFromEnum(lhs.pattern) < @intFromEnum(rhs.pattern);
+    }
+};
+
+/// Public `HoistedConstTable` declaration.
+pub const HoistedConstTable = struct {
+    entries: []HoistedConstEntry = &.{},
+    by_expr: []HoistedConstByExprEntry = &.{},
+    by_pattern: []HoistedConstByPatternEntry = &.{},
+    by_root: []?HoistedConstId = &.{},
+
+    pub fn fromRoots(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        artifact_key: CheckedModuleArtifactKey,
+        roots: *const CompileTimeRootTable,
+        const_templates: *ConstTemplateTable,
+    ) Allocator.Error!HoistedConstTable {
+        var entries = std.ArrayList(HoistedConstEntry).empty;
+        errdefer entries.deinit(allocator);
+
+        var by_expr = std.ArrayList(HoistedConstByExprEntry).empty;
+        errdefer by_expr.deinit(allocator);
+
+        var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
+        errdefer by_pattern.deinit(allocator);
+
+        const by_root = try allocator.alloc(?HoistedConstId, roots.roots.len);
+        errdefer allocator.free(by_root);
+        @memset(by_root, null);
+
+        for (roots.roots) |root| {
+            if (root.kind != .hoisted_constant) continue;
+            const source_expr = switch (root.source) {
+                .expr => |expr| expr,
+                .def,
+                .statement,
+                .required_binding,
+                => checkedArtifactInvariant("hoisted constant root had non-expression source", .{}),
+            };
+            const source_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                ModuleEnv.varFrom(source_expr),
+            );
+            const const_ref = try const_templates.reserveHoisted(
+                allocator,
+                artifact_key,
+                module.moduleIndex(),
+                root.expr,
+                source_scheme,
+            );
+            const id: HoistedConstId = @enumFromInt(@as(u32, @intCast(entries.items.len)));
+            try entries.append(allocator, .{
+                .id = id,
+                .module_idx = module.moduleIndex(),
+                .root = root.id,
+                .expr = root.expr,
+                .pattern = root.pattern,
+                .checked_type = root.checked_type,
+                .source_scheme = source_scheme,
+                .const_ref = const_ref,
+            });
+            try by_expr.append(allocator, .{
+                .expr = root.expr,
+                .entry = id,
+            });
+            if (root.pattern) |pattern| {
+                try by_pattern.append(allocator, .{
+                    .pattern = pattern,
+                    .entry = id,
+                });
+            }
+            by_root[@intFromEnum(root.id)] = id;
+        }
+
+        std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
+        std.mem.sort(HoistedConstByPatternEntry, by_pattern.items, {}, HoistedConstByPatternEntry.lessThan);
+
+        const entry_slice = try entries.toOwnedSlice(allocator);
+        errdefer allocator.free(entry_slice);
+        const by_expr_slice = try by_expr.toOwnedSlice(allocator);
+        errdefer allocator.free(by_expr_slice);
+        const by_pattern_slice = try by_pattern.toOwnedSlice(allocator);
+
+        return .{
+            .entries = entry_slice,
+            .by_expr = by_expr_slice,
+            .by_pattern = by_pattern_slice,
+            .by_root = by_root,
+        };
+    }
+
+    pub fn lookupByExpr(self: *const HoistedConstTable, expr: CheckedExprId) ?HoistedConstEntry {
+        var lo: usize = 0;
+        var hi: usize = self.by_expr.len;
+        const target = @intFromEnum(expr);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_expr[mid].expr);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_expr.len or self.by_expr[lo].expr != expr) return null;
+        return self.entries[@intFromEnum(self.by_expr[lo].entry)];
+    }
+
+    pub fn lookupByPattern(self: *const HoistedConstTable, pattern: CheckedPatternId) ?HoistedConstEntry {
+        var lo: usize = 0;
+        var hi: usize = self.by_pattern.len;
+        const target = @intFromEnum(pattern);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_pattern[mid].pattern);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_pattern.len or self.by_pattern[lo].pattern != pattern) return null;
+        return self.entries[@intFromEnum(self.by_pattern[lo].entry)];
+    }
+
+    pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
+        const idx = @intFromEnum(root);
+        if (idx >= self.by_root.len) return null;
+        const entry_id = self.by_root[idx] orelse return null;
+        return self.entries[@intFromEnum(entry_id)];
+    }
+
+    pub fn deinit(self: *HoistedConstTable, allocator: Allocator) void {
+        allocator.free(self.by_root);
+        allocator.free(self.by_pattern);
+        allocator.free(self.by_expr);
+        allocator.free(self.entries);
+        self.* = .{};
+    }
+};
+
 /// Public `CheckedCallableBodyRef` declaration.
 pub const CheckedCallableBodyRef = enum(u32) { _ };
 /// Public `CheckedConstBodyRef` declaration.
@@ -13508,7 +13748,7 @@ pub const CheckedConstBodyTable = struct {
         @memset(by_root, null);
 
         for (roots.roots) |root| {
-            if (root.kind != .constant) continue;
+            if (!compileTimeRootHasConstBody(root.kind)) continue;
             const id: CheckedConstBodyRef = @enumFromInt(@as(u32, @intCast(bodies.items.len)));
             try bodies.append(allocator, .{
                 .id = id,
@@ -15424,6 +15664,33 @@ pub const ConstTemplateTable = struct {
         };
     }
 
+    pub fn reserveHoisted(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        expr: CheckedExprId,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+    ) Allocator.Error!ConstRef {
+        const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+        const owner: ConstOwner = .{ .hoisted_expr = .{
+            .module_idx = module_idx,
+            .expr = expr,
+        } };
+        try self.templates.append(allocator, .{
+            .id = id,
+            .owner = owner,
+            .source_scheme = source_scheme,
+            .state = .reserved,
+        });
+        return .{
+            .artifact = artifact_key,
+            .owner = owner,
+            .template = id,
+            .source_scheme = source_scheme,
+        };
+    }
+
     pub fn fillEval(
         self: *ConstTemplateTable,
         ref: ConstRef,
@@ -15661,12 +15928,24 @@ fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
             const right = b.top_level_binding;
             break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
         },
+        .hoisted_expr => |left| blk: {
+            const right = b.hoisted_expr;
+            break :blk left.module_idx == right.module_idx and left.expr == right.expr;
+        },
     };
 }
 
 fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     return switch (ref.owner) {
         .top_level_binding => |owner| owner,
+        .hoisted_expr => null,
+    };
+}
+
+fn constRefHoistedOwner(ref: ConstRef) ?ConstHoistedOwner {
+    return switch (ref.owner) {
+        .top_level_binding => null,
+        .hoisted_expr => |owner| owner,
     };
 }
 
@@ -15716,6 +15995,7 @@ pub const CheckedModuleArtifact = struct {
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
+    hoisted_constants: HoistedConstTable,
     const_templates: ConstTemplateTable,
     const_store: ConstStore,
 
@@ -15790,6 +16070,7 @@ pub const CheckedModuleArtifact = struct {
     fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
         self.const_store.deinit();
         self.const_templates.deinit(allocator);
+        self.hoisted_constants.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
         self.interface_capabilities.deinit(allocator);
@@ -15853,7 +16134,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(body.id) == i);
             std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(root.kind == .constant);
+            std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
@@ -15883,13 +16164,19 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
+                .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
-                    else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+                    .const_node,
+                    .fn_value,
+                    .expect,
+                    => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
                 .expect => switch (root.payload) {
                     .expect => {},
-                    else => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
+                    .pending,
+                    .const_node,
+                    .fn_value,
+                    => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
         }
@@ -15992,7 +16279,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(body.id) == i);
             std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(root.kind == .constant);
+            std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
@@ -16377,6 +16664,7 @@ pub const ImportedModuleView = struct {
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
+    hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
@@ -16418,6 +16706,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
+        .hoisted_constants = &artifact.hoisted_constants,
         .const_templates = &artifact.const_templates,
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
@@ -17797,7 +18086,15 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
-    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, global_value_defs, &checked_type_publication, &checked_bodies, &checked_procedure_templates);
+    var compile_time_roots = try CompileTimeRootTable.fromModule(
+        allocator,
+        module,
+        global_value_defs,
+        inputs.hoisted_roots,
+        &checked_type_publication,
+        &checked_bodies,
+        &checked_procedure_templates,
+    );
     errdefer compile_time_roots.deinit(allocator);
 
     var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
@@ -17841,6 +18138,16 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
     );
     errdefer top_level_values.deinit(allocator);
+
+    var hoisted_constants = try HoistedConstTable.fromRoots(
+        allocator,
+        module,
+        artifact_key,
+        &compile_time_roots,
+        &const_templates,
+    );
+    errdefer hoisted_constants.deinit(allocator);
+
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         modules,
@@ -17908,6 +18215,7 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         &checked_procedure_templates,
         &top_level_values,
+        &hoisted_constants,
     );
 
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
@@ -18037,6 +18345,7 @@ pub fn publishFromTypedModule(
         .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
+        .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
     };
@@ -18121,6 +18430,7 @@ fn expectProvidedExportKind(
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_hoisted_constants = HoistedConstTable{};
     const empty_const_templates = ConstTemplateTable{};
     const empty_method_registry = static_dispatch.MethodRegistry{};
     const empty_interface_capabilities = ModuleInterfaceCapabilities{};
@@ -18151,6 +18461,7 @@ fn expectProvidedExportKind(
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
+        .hoisted_constants = &empty_hoisted_constants,
         .const_templates = &empty_const_templates,
         .method_registry = &empty_method_registry,
         .interface_capabilities = &empty_interface_capabilities,
@@ -18242,6 +18553,7 @@ fn expectProvidedExportKind(
         allocator,
         module,
         global_value_defs,
+        &.{},
         &checked_type_publication,
         &checked_bodies,
         &checked_procedure_templates,
@@ -18283,6 +18595,15 @@ fn expectProvidedExportKind(
         &compile_time_roots,
     );
     defer top_level_values.deinit(allocator);
+
+    var hoisted_constants = try HoistedConstTable.fromRoots(
+        allocator,
+        module,
+        artifact_key,
+        &compile_time_roots,
+        &const_templates,
+    );
+    defer hoisted_constants.deinit(allocator);
 
     const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
     defer allocator.free(provides);
@@ -18610,6 +18931,7 @@ test "artifact views are read-only projections" {
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .hoisted_constants = .{},
         .const_templates = .{},
         .const_store = ConstStore.init(std.testing.allocator),
     };

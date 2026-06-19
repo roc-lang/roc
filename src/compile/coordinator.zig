@@ -2100,6 +2100,16 @@ pub const Coordinator = struct {
 
         var publication_with_availability = publication;
         publication_with_availability.explicit_roots = explicit_roots;
+        const current_artifact = mod.checkedArtifact();
+        const republish_hoisted_roots = if (publication_with_availability.hoisted_roots.len == 0 and current_artifact != null)
+            try selectedHoistedRootInputsFromArtifact(self.gpa, current_artifact.?)
+        else
+            &.{};
+        defer if (republish_hoisted_roots.len != 0) self.gpa.free(republish_hoisted_roots);
+        if (publication_with_availability.hoisted_roots.len == 0) {
+            publication_with_availability.hoisted_roots = republish_hoisted_roots;
+        }
+
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
         defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
@@ -2159,6 +2169,34 @@ pub const Coordinator = struct {
         try mod.replaceRepublishedCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
         artifact_ptr_owned = false;
         try self.registerCheckedArtifact(pkg, mod);
+    }
+
+    fn selectedHoistedRootInputsFromArtifact(
+        allocator: Allocator,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
+        const count = artifact.hoisted_constants.entries.len;
+        if (count == 0) return &.{};
+
+        const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
+        errdefer allocator.free(roots);
+
+        for (artifact.hoisted_constants.entries, 0..) |entry, i| {
+            const root = artifact.compile_time_roots.root(entry.root);
+            const source_expr = switch (root.source) {
+                .expr => |expr| expr,
+                .def,
+                .statement,
+                .required_binding,
+                => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
+            };
+            roots[i] = .{
+                .expr = source_expr,
+                .pattern = root.source_pattern,
+            };
+        }
+
+        return roots;
     }
 
     const RootModuleRef = struct {

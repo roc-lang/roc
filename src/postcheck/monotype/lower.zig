@@ -89,6 +89,7 @@ const ModuleView = struct {
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
     platform_required_bindings: *const checked.PlatformRequiredBindingTable,
     callable_eval_templates: checked.CallableEvalTemplateTableView,
+    hoisted_constants: *const checked.HoistedConstTable,
     const_templates: *const checked.ConstTemplateTable,
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
@@ -3434,6 +3435,8 @@ const BodyContext = struct {
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
+        const expr_ty = try self.lowerExprType(expr_id);
+        if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
@@ -3443,8 +3446,7 @@ const BodyContext = struct {
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
             else => {},
         }
-        const ty = try self.lowerExprType(expr_id);
-        return try self.lowerExprWithType(expr_id, ty);
+        return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
     fn lowerComptimeRootExprAtType(
@@ -3469,6 +3471,48 @@ const BodyContext = struct {
 
     fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {
         return self.comptime_exhaustiveness_depth != 0;
+    }
+
+    fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
+        const wrapper = self.view.entry_wrappers.lookupByRoot(entry.root) orelse
+            Common.invariant("hoisted const root had no checked entry wrapper");
+        return names.procedureTemplateRefEql(wrapper.template, self.owner_template);
+    }
+
+    fn restoredHoistedConstAtType(
+        self: *BodyContext,
+        entry: checked.HoistedConstEntry,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        try self.constrainTypeToMono(entry.checked_type, ty);
+        const template = self.view.const_templates.get(entry.const_ref);
+        return switch (template.state) {
+            .stored_const => |stored| try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty),
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty),
+            .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
+        };
+    }
+
+    fn restoredHoistedExprAtType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
+        if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        return try self.restoredHoistedConstAtType(entry, ty);
+    }
+
+    fn selectedHoistedLocalConst(
+        self: *BodyContext,
+        local: checked.LocalBindingRef,
+    ) ?checked.HoistedConstEntry {
+        const raw = @intFromEnum(local.binder);
+        if (raw >= self.view.bodies.pattern_binders.len) {
+            Common.invariant("hoisted local lookup referenced a missing pattern binder");
+        }
+        const pattern = self.view.bodies.pattern_binders[raw].pattern;
+        return self.view.hoisted_constants.lookupByPattern(pattern);
     }
 
     fn lowerExprWithType(
@@ -3941,12 +3985,37 @@ const BodyContext = struct {
         maybe_ref: ?checked.ResolvedValueId,
     ) Allocator.Error!Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        switch (record.ref) {
+            .local_value => |local| {
+                if (self.selectedHoistedLocalConst(local)) |entry| {
+                    if (!self.loweringOwnHoistedConstRoot(entry)) {
+                        const hoisted_ty = try self.lowerType(entry.checked_type);
+                        try self.constrainTypeToMono(checked_ty, hoisted_ty);
+                        return hoisted_ty;
+                    }
+                }
+            },
+            .local_param,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => {},
+        }
         if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
             try self.constrainTypeToMono(checked_ty, local_ty);
             return local_ty;
         }
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         return switch (record.ref) {
             .top_level_const => |const_use| try self.constUseMonoType(const_use),
             .imported_const => |const_use| try self.constUseMonoType(const_use),
@@ -4133,6 +4202,29 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        switch (record.ref) {
+            .local_value => |local| {
+                if (self.selectedHoistedLocalConst(local)) |entry| {
+                    if (!self.loweringOwnHoistedConstRoot(entry)) {
+                        return try self.restoredHoistedConstAtType(entry, ty);
+                    }
+                }
+            },
+            .local_param,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => {},
+        }
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
@@ -4823,6 +4915,7 @@ const BodyContext = struct {
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
+        if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return restored;
         switch (expr.data) {
             .call => |call| {
                 try self.constrainKnownType(expr.ty, ty);
@@ -7802,7 +7895,7 @@ const BodyContext = struct {
             Common.invariant("checked runtime statement filter referenced a missing statement");
         }
         return switch (self.view.bodies.statements[raw].data) {
-            .decl,
+            .decl => |decl| self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
             .var_,
             .var_uninitialized,
             .reassign,
@@ -9199,6 +9292,7 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
         .top_level_procedure_bindings = view.top_level_procedure_bindings,
         .platform_required_bindings = view.platform_required_bindings,
         .callable_eval_templates = view.callable_eval_templates,
+        .hoisted_constants = view.hoisted_constants,
         .const_templates = view.const_templates,
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,

@@ -686,6 +686,99 @@ as:
 
 Those data must remain target-independent and representation-free.
 
+### Compile-Time Constants and Hoisted Roots
+
+Compile-time constants are checked roots. A compile-time constant root may be an
+ordinary top-level constant or a selected top-level-equivalent expression from a
+runtime body. A top-level-equivalent expression is an expression whose checked
+dependencies are all available without runtime arguments, mutable runtime state,
+host interaction, or observable runtime effects. Its value is computed during
+checking finalization and stored in `ConstStore`; later lowering restores that
+checked value instead of emitting runtime work for the original expression.
+
+Hoisting does not move source syntax. A hoisted root points at the existing
+checked expression and its source region. User-facing compile-time diagnostics,
+debug information, crash locations, and source maps must report the expression's
+original source location. Synthetic root wrappers and ordering metadata are
+compiler-internal only.
+
+Hoistability is computed while checking expressions, as part of the existing
+recursive checking work that already determines types, resolved references, and
+effect information. Checking may return temporary hoistability facts from
+`checkExpr` and keep temporary binding facts in the active lexical scope, but it
+must not add permanent hoistability summaries to every checked expression. The
+checked artifact stores only selected hoisted roots plus sparse lookup indexes
+needed by later lowering, such as checked-expression id to hoisted-root id and
+selected local-binding id to hoisted-root id.
+
+The hoistability decision must use explicit checked data, not source-name scans
+or canonicalization guesses. Allowed dependencies include literals, already
+known compile-time constants, selected hoisted constants, imported constants
+whose checked modules have stored values, and pure checked callables whose
+captures are themselves compile-time-known. Rejected dependencies include
+function arguments, runtime pattern binders, mutable locals, effectful calls,
+host calls, platform requirements whose values are not available during checking
+finalization, and any static dispatch whose checked plan does not identify a
+pure compile-time-evaluable operation. Low-level operations may participate only
+through explicit checked purity and totality metadata; they must never be
+allowed by whitelist, name, or backend knowledge.
+
+The compiler must not create separate hoisted roots inside an ordinary top-level
+constant body. The whole top-level constant body is already a compile-time root,
+so nested hoisted roots would add metadata and scheduling work without removing
+runtime work. With that rule, same-module compile-time constant scheduling has
+two groups:
+
+```text
+top-level constants in canonical dependency order
+hoisted constants in checker-produced dependency order
+```
+
+Top-level constants may depend on other top-level constants, but they cannot
+depend on hoisted constants. Hoisted constants may depend on top-level constants
+and on earlier hoisted constants. Checking should prefer to emit selected
+hoisted roots in dependency-first order as it proves and selects them. For local
+bindings, this naturally follows from checking the right-hand side before later
+uses select the binding root; for arbitrary expressions, maximal eligible child
+roots bubble to the nearest ineligible parent and are selected in the recursive
+checking order. If a future checked construct cannot produce dependency-first
+order online, the compiler may use temporary dependency edges between selected
+hoisted roots only long enough to topologically sort them, then discard those
+edges before publishing the checked artifact.
+
+A checked module must not permanently store a hoisted-root dependency graph or
+per-expression dependency metadata. The durable checked data is the compile-time
+roots, their sorted compile-time request order, their `ConstStore` payloads, and
+sparse root lookup indexes.
+
+The compile-time finalizer consumes sorted root requests and validates that any
+referenced same-module constant has already been filled before a root uses it.
+That availability check is retained for the generic compile-time pipeline,
+which also handles literal conversions, expects, callable roots, imported
+constants, and platform-required values. It is not a scheduling graph for
+hoisted constants, and it must not require storing dependency edges in the
+checked artifact.
+
+Canonicalization's top-level dependency order remains the source for ordinary
+top-level constant order. Hoisted-root ordering is computed after checking has
+selected the sparse hoisted roots, because only checked data can distinguish
+runtime captures, effects, mutable locals, static dispatch behavior, platform
+availability, and concrete compile-time types.
+
+Runtime lowering restores a selected hoisted root by checked expression id. While
+lowering the synthetic compile-time wrapper for that same root, lowering must
+suppress restoration of the root currently being evaluated so the original
+expression is evaluated exactly once by the compile-time finalizer. Nested uses
+of other already-sorted compile-time constants may still restore their stored
+`ConstStore` values.
+
+Hoisted roots use the same compile-time constant semantics as ordinary top-level
+constants. A failure produced while evaluating a hoisted root is a checking-time
+failure reported at the hoisted expression's original source region. If Roc ever
+needs lazy-runtime-preserving hoists, that must be a separate checked root policy
+with explicit totality and failure semantics; it must not be implemented as a
+best-effort variant of top-level constant hoisting.
+
 Imported checked modules must contain every checked procedure template and checked
 body that may be instantiated by an importing root. This includes private helper
 templates reachable from exported templates, static-dispatch targets, and

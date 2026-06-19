@@ -324,6 +324,7 @@ pub const ArtifactPublicationInputs = struct {
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
 };
 
@@ -1721,6 +1722,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = null,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
+                .hoisted_roots = checker.selectedHoistedRoots(),
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
             },
@@ -1801,6 +1803,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
+                .hoisted_roots = publication.hoisted_roots,
                 .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
                 .problem_store = publication.problem_store,
             },

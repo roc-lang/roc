@@ -302,11 +302,20 @@ const RootCompletionState = struct {
         const_ref: checked.ConstRef,
     ) ?checked.ComptimeRootId {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
-        const owner = switch (const_ref.owner) {
-            .top_level_binding => |top_level| top_level,
+        return switch (const_ref.owner) {
+            .top_level_binding => |top_level| {
+                return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
+                    finalizationInvariant("local const dependency had no compile-time root");
+            },
+            .hoisted_expr => |hoisted| {
+                if (hoisted.module_idx != self.module.module_identity.module_idx) {
+                    finalizationInvariant("local hoisted const dependency had mismatched module index");
+                }
+                const entry = self.module.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+                    finalizationInvariant("local hoisted const dependency had no hoisted const entry");
+                return entry.root;
+            },
         };
-        return self.module.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
-            finalizationInvariant("local const dependency had no compile-time root");
     }
 
     fn procedureUseDependenciesComplete(
@@ -715,9 +724,16 @@ fn compileTimeRootForRequest(
 ) checked.ComptimeRootId {
     for (module.compile_time_roots.roots) |root| {
         const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
+            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
             .compile_time_callable => root.kind == .callable_binding,
-            else => finalizationInvariant("non compile-time request reached compile-time root lookup"),
+            .runtime_entrypoint,
+            .provided_export,
+            .platform_required_binding,
+            .hosted_export,
+            .test_expect,
+            .repl_expr,
+            .dev_expr,
+            => finalizationInvariant("non compile-time request reached compile-time root lookup"),
         };
         if (kind_matches and rootSourceEql(root.source, request.source)) return root.id;
     }
@@ -730,21 +746,40 @@ fn finishConstRoot(
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) void {
-    if (root.kind != .constant) return;
+    if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
         .const_node => |id| id,
-        else => finalizationInvariant("constant root finalized with non-constant payload"),
+        .pending,
+        .fn_value,
+        .expect,
+        => finalizationInvariant("constant root finalized with non-constant payload"),
     };
-    const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
-    const top_level = module.top_level_values.lookupByPattern(pattern) orelse
-        finalizationInvariant("constant root had no top-level value");
-    const const_ref = switch (top_level.value) {
-        .const_ref => |ref| ref,
-        .procedure_binding => finalizationInvariant("constant root top-level value was not a constant"),
+    const const_ref = switch (root.kind) {
+        .constant => blk: {
+            const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
+            const top_level = module.top_level_values.lookupByPattern(pattern) orelse
+                finalizationInvariant("constant root had no top-level value");
+            break :blk switch (top_level.value) {
+                .const_ref => |ref| ref,
+                .procedure_binding => finalizationInvariant("constant root top-level value was not a constant"),
+            };
+        },
+        .hoisted_constant => blk: {
+            const hoisted = module.hoisted_constants.lookupByRoot(root.id) orelse
+                finalizationInvariant("hoisted constant root had no hoisted const entry");
+            break :blk hoisted.const_ref;
+        },
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        => unreachable,
     };
     const stored = checked.StoredConstTemplate{ .node = node };
     module.const_templates.fillStoredConst(const_ref, stored);
-    module.exported_const_templates.fillStoredConst(const_ref, stored);
+    if (root.kind == .constant) {
+        module.exported_const_templates.fillStoredConst(const_ref, stored);
+    }
 }
 
 fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
