@@ -400,8 +400,8 @@ fn checkedTypeContainsFunctionInner(
     defer _ = active.remove(root);
 
     const index: usize = @intFromEnum(root);
-    if (index >= types.payloads.len) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payloads[index]) {
+    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
+    return switch (types.payload(root)) {
         .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
         .function => true,
         .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
@@ -450,7 +450,7 @@ fn checkedTagsContainFunction(
     active: *std.AutoHashMap(checked.CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.args, active)) return true;
+        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
     }
     return false;
 }

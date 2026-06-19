@@ -10,6 +10,15 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
+const collections = @import("collections");
+const SafeList = collections.SafeList;
+const CompactWriter = collections.CompactWriter;
+
+/// Relocatable, serial-id string interner used to back the name stores so the
+/// published artifact can be serialized and deserialized with a constant number
+/// of relocation fixups.
+pub const NameInterner = @import("name_interner.zig");
+
 /// Public `ModuleNameId` declaration.
 pub const ModuleNameId = enum(u32) { _ };
 /// Public `TypeNameId` declaration.
@@ -249,79 +258,120 @@ pub const NominalTypeKey = struct {
 
 /// Public `CanonicalNameStore` declaration.
 pub const CanonicalNameStore = struct {
+    /// Build-time allocator used for interner inserts. Not serialized; a
+    /// deserialized (frozen) store carries the load allocator only for the
+    /// build-only fields below.
     allocator: Allocator,
-    module_names: std.ArrayList([]const u8),
-    module_name_by_text: std.StringHashMap(ModuleNameId),
-    type_names: std.ArrayList([]const u8),
-    type_name_by_text: std.StringHashMap(TypeNameId),
-    method_names: std.ArrayList([]const u8),
-    method_name_by_text: std.StringHashMap(MethodNameId),
-    record_field_labels: std.ArrayList([]const u8),
-    record_field_label_by_text: std.StringHashMap(RecordFieldLabelId),
-    tag_labels: std.ArrayList([]const u8),
-    tag_label_by_text: std.StringHashMap(TagLabelId),
-    export_names: std.ArrayList([]const u8),
-    export_name_by_text: std.StringHashMap(ExportNameId),
-    external_symbol_names: std.ArrayList([]const u8),
-    external_symbol_name_by_text: std.StringHashMap(ExternalSymbolNameId),
-    proc_bases: std.ArrayList(ProcBaseKey),
+    // Each name-kind is a relocatable, serial-id interner (transform C). Default
+    // `.{}` is a valid empty interner that lazily initializes on first insert.
+    module_names: NameInterner = .{},
+    type_names: NameInterner = .{},
+    method_names: NameInterner = .{},
+    record_field_labels: NameInterner = .{},
+    tag_labels: NameInterner = .{},
+    export_names: NameInterner = .{},
+    external_symbol_names: NameInterner = .{},
+    /// Serial id -> structured proc-base key. Relocatable (POD elements).
+    proc_bases: SafeList(ProcBaseKey) = .{},
+    /// Build-only dedup index for `internProcBase`. NOT serialized: a frozen
+    /// store is consumed by id via `procBase`, never re-interned.
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
+    /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8),
+    /// True for a store reconstructed from a serialized buffer: its interners
+    /// and `proc_bases` point into buffer-owned memory and must not be freed.
+    serialized: bool = false,
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
             .allocator = allocator,
-            .module_names = .empty,
-            .module_name_by_text = std.StringHashMap(ModuleNameId).init(allocator),
-            .type_names = .empty,
-            .type_name_by_text = std.StringHashMap(TypeNameId).init(allocator),
-            .method_names = .empty,
-            .method_name_by_text = std.StringHashMap(MethodNameId).init(allocator),
-            .record_field_labels = .empty,
-            .record_field_label_by_text = std.StringHashMap(RecordFieldLabelId).init(allocator),
-            .tag_labels = .empty,
-            .tag_label_by_text = std.StringHashMap(TagLabelId).init(allocator),
-            .export_names = .empty,
-            .export_name_by_text = std.StringHashMap(ExportNameId).init(allocator),
-            .external_symbol_names = .empty,
-            .external_symbol_name_by_text = std.StringHashMap(ExternalSymbolNameId).init(allocator),
-            .proc_bases = .empty,
             .proc_base_by_key = std.StringHashMap(ProcBaseKeyRef).init(allocator),
             .scratch_key = .empty,
         };
     }
 
     pub fn deinit(self: *CanonicalNameStore) void {
-        self.freeTextList(self.module_names.items);
-        self.freeTextList(self.type_names.items);
-        self.freeTextList(self.method_names.items);
-        self.freeTextList(self.record_field_labels.items);
-        self.freeTextList(self.tag_labels.items);
-        self.freeTextList(self.export_names.items);
-        self.freeTextList(self.external_symbol_names.items);
+        if (!self.serialized) {
+            // Interners no-op their own free when frozen, but `proc_bases` is a
+            // plain SafeList with no frozen flag, so guard the whole owned set.
+            self.module_names.deinit(self.allocator);
+            self.type_names.deinit(self.allocator);
+            self.method_names.deinit(self.allocator);
+            self.record_field_labels.deinit(self.allocator);
+            self.tag_labels.deinit(self.allocator);
+            self.export_names.deinit(self.allocator);
+            self.external_symbol_names.deinit(self.allocator);
+            self.proc_bases.deinit(self.allocator);
+        }
+        // Build-only fields are always heap-owned (empty on a frozen store).
         freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
-        self.scratch_key.deinit(self.allocator);
         self.proc_base_by_key.deinit();
-        self.proc_bases.deinit(self.allocator);
-        self.external_symbol_name_by_text.deinit();
-        self.external_symbol_names.deinit(self.allocator);
-        self.export_name_by_text.deinit();
-        self.export_names.deinit(self.allocator);
-        self.tag_label_by_text.deinit();
-        self.tag_labels.deinit(self.allocator);
-        self.record_field_label_by_text.deinit();
-        self.record_field_labels.deinit(self.allocator);
-        self.method_name_by_text.deinit();
-        self.method_names.deinit(self.allocator);
-        self.type_name_by_text.deinit();
-        self.type_names.deinit(self.allocator);
-        self.module_name_by_text.deinit();
-        self.module_names.deinit(self.allocator);
+        self.scratch_key.deinit(self.allocator);
         self.* = CanonicalNameStore.init(self.allocator);
     }
 
+    /// Add this store's offset to every relocatable base pointer. Fixed count
+    /// (7 interners × 3 + 1 proc-base list = 22), independent of contents.
+    pub fn relocate(self: *CanonicalNameStore, offset: isize) void {
+        self.module_names.relocate(offset);
+        self.type_names.relocate(offset);
+        self.method_names.relocate(offset);
+        self.record_field_labels.relocate(offset);
+        self.tag_labels.relocate(offset);
+        self.export_names.relocate(offset);
+        self.external_symbol_names.relocate(offset);
+        self.proc_bases.relocate(offset);
+    }
+
+    /// Relocatable serialized form (build-only dedup/scratch fields excluded).
+    pub const Serialized = extern struct {
+        module_names: NameInterner.Serialized,
+        type_names: NameInterner.Serialized,
+        method_names: NameInterner.Serialized,
+        record_field_labels: NameInterner.Serialized,
+        tag_labels: NameInterner.Serialized,
+        export_names: NameInterner.Serialized,
+        external_symbol_names: NameInterner.Serialized,
+        proc_bases: SafeList(ProcBaseKey).Serialized,
+
+        pub fn serialize(
+            self: *Serialized,
+            store: *const CanonicalNameStore,
+            gpa: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!void {
+            try self.module_names.serialize(&store.module_names, gpa, writer);
+            try self.type_names.serialize(&store.type_names, gpa, writer);
+            try self.method_names.serialize(&store.method_names, gpa, writer);
+            try self.record_field_labels.serialize(&store.record_field_labels, gpa, writer);
+            try self.tag_labels.serialize(&store.tag_labels, gpa, writer);
+            try self.export_names.serialize(&store.export_names, gpa, writer);
+            try self.external_symbol_names.serialize(&store.external_symbol_names, gpa, writer);
+            try self.proc_bases.serialize(&store.proc_bases, gpa, writer);
+        }
+
+        /// Reconstruct a frozen store from the relocated buffer. `allocator` is
+        /// retained only for the empty build-only fields.
+        pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) CanonicalNameStore {
+            return .{
+                .allocator = allocator,
+                .module_names = self.module_names.deserialize(base_addr),
+                .type_names = self.type_names.deserialize(base_addr),
+                .method_names = self.method_names.deserialize(base_addr),
+                .record_field_labels = self.record_field_labels.deserialize(base_addr),
+                .tag_labels = self.tag_labels.deserialize(base_addr),
+                .export_names = self.export_names.deserialize(base_addr),
+                .external_symbol_names = self.external_symbol_names.deserialize(base_addr),
+                .proc_bases = self.proc_bases.deserializeInto(base_addr),
+                .proc_base_by_key = std.StringHashMap(ProcBaseKeyRef).init(allocator),
+                .scratch_key = .empty,
+                .serialized = true,
+            };
+        }
+    };
+
     pub fn internModuleName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ModuleNameId {
-        return internText(ModuleNameId, self.allocator, &self.module_names, &self.module_name_by_text, text);
+        return @enumFromInt(try self.module_names.insert(self.allocator, text));
     }
 
     pub fn internModuleIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ModuleNameId {
@@ -329,91 +379,95 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internTypeIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!TypeNameId {
-        return internText(TypeNameId, self.allocator, &self.type_names, &self.type_name_by_text, idents.getText(ident));
+        return self.internTypeName(idents.getText(ident));
     }
 
     pub fn internTypeName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TypeNameId {
-        return internText(TypeNameId, self.allocator, &self.type_names, &self.type_name_by_text, text);
+        return @enumFromInt(try self.type_names.insert(self.allocator, text));
     }
 
     pub fn internMethodIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!MethodNameId {
-        return internText(MethodNameId, self.allocator, &self.method_names, &self.method_name_by_text, idents.getText(ident));
+        return self.internMethodName(idents.getText(ident));
     }
 
     pub fn internMethodName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!MethodNameId {
-        return internText(MethodNameId, self.allocator, &self.method_names, &self.method_name_by_text, text);
+        return @enumFromInt(try self.method_names.insert(self.allocator, text));
     }
 
     pub fn internRecordFieldIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!RecordFieldLabelId {
-        return internText(RecordFieldLabelId, self.allocator, &self.record_field_labels, &self.record_field_label_by_text, idents.getText(ident));
+        return self.internRecordFieldLabel(idents.getText(ident));
     }
 
     pub fn internRecordFieldLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!RecordFieldLabelId {
-        return internText(RecordFieldLabelId, self.allocator, &self.record_field_labels, &self.record_field_label_by_text, text);
+        return @enumFromInt(try self.record_field_labels.insert(self.allocator, text));
     }
 
     pub fn internTagIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!TagLabelId {
-        return internText(TagLabelId, self.allocator, &self.tag_labels, &self.tag_label_by_text, idents.getText(ident));
+        return self.internTagLabel(idents.getText(ident));
     }
 
     pub fn internTagLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TagLabelId {
-        return internText(TagLabelId, self.allocator, &self.tag_labels, &self.tag_label_by_text, text);
+        return @enumFromInt(try self.tag_labels.insert(self.allocator, text));
     }
 
     pub fn internExportIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ExportNameId {
-        return internText(ExportNameId, self.allocator, &self.export_names, &self.export_name_by_text, idents.getText(ident));
+        return self.internExportName(idents.getText(ident));
     }
 
     pub fn internExportName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExportNameId {
-        return internText(ExportNameId, self.allocator, &self.export_names, &self.export_name_by_text, text);
+        return @enumFromInt(try self.export_names.insert(self.allocator, text));
     }
 
     pub fn internExternalSymbolIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ExternalSymbolNameId {
-        return internText(ExternalSymbolNameId, self.allocator, &self.external_symbol_names, &self.external_symbol_name_by_text, idents.getText(ident));
+        return self.internExternalSymbolName(idents.getText(ident));
     }
 
     pub fn internExternalSymbolName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExternalSymbolNameId {
-        return internText(ExternalSymbolNameId, self.allocator, &self.external_symbol_names, &self.external_symbol_name_by_text, text);
+        return @enumFromInt(try self.external_symbol_names.insert(self.allocator, text));
+    }
+
+    fn lookupId(comptime Id: type, it: *const NameInterner, text: []const u8) ?Id {
+        return if (it.lookup(text)) |id| @as(Id, @enumFromInt(id)) else null;
     }
 
     pub fn lookupModuleIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ModuleNameId {
-        return self.module_name_by_text.get(idents.getText(ident));
+        return lookupId(ModuleNameId, &self.module_names, idents.getText(ident));
     }
 
     pub fn lookupTypeIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?TypeNameId {
-        return self.type_name_by_text.get(idents.getText(ident));
+        return lookupId(TypeNameId, &self.type_names, idents.getText(ident));
     }
 
     pub fn lookupMethodIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?MethodNameId {
-        return self.method_name_by_text.get(idents.getText(ident));
+        return lookupId(MethodNameId, &self.method_names, idents.getText(ident));
     }
 
     pub fn lookupRecordFieldIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?RecordFieldLabelId {
-        return self.record_field_label_by_text.get(idents.getText(ident));
+        return lookupId(RecordFieldLabelId, &self.record_field_labels, idents.getText(ident));
     }
 
     pub fn lookupTagIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?TagLabelId {
-        return self.tag_label_by_text.get(idents.getText(ident));
+        return lookupId(TagLabelId, &self.tag_labels, idents.getText(ident));
     }
 
     pub fn lookupExportIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExportNameId {
-        return self.export_name_by_text.get(idents.getText(ident));
+        return lookupId(ExportNameId, &self.export_names, idents.getText(ident));
     }
 
     pub fn lookupExternalSymbolIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExternalSymbolNameId {
-        return self.external_symbol_name_by_text.get(idents.getText(ident));
+        return lookupId(ExternalSymbolNameId, &self.external_symbol_names, idents.getText(ident));
     }
 
     pub fn lookupModuleName(self: *const CanonicalNameStore, text: []const u8) ?ModuleNameId {
-        return self.module_name_by_text.get(text);
+        return lookupId(ModuleNameId, &self.module_names, text);
     }
 
     pub fn lookupTypeName(self: *const CanonicalNameStore, text: []const u8) ?TypeNameId {
-        return self.type_name_by_text.get(text);
+        return lookupId(TypeNameId, &self.type_names, text);
     }
 
     pub fn lookupMethodName(self: *const CanonicalNameStore, text: []const u8) ?MethodNameId {
-        return self.method_name_by_text.get(text);
+        return lookupId(MethodNameId, &self.method_names, text);
     }
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
@@ -430,37 +484,37 @@ pub const CanonicalNameStore = struct {
 
         if (self.proc_base_by_key.get(self.scratch_key.items)) |existing| return existing;
 
-        const id: ProcBaseKeyRef = @enumFromInt(@as(u32, @intCast(self.proc_bases.items.len)));
+        const id: ProcBaseKeyRef = @enumFromInt(@as(u32, @intCast(self.proc_bases.items.items.len)));
         const owned_key = try self.allocator.dupe(u8, self.scratch_key.items);
         errdefer self.allocator.free(owned_key);
 
-        try self.proc_bases.append(self.allocator, key);
+        _ = try self.proc_bases.append(self.allocator, key);
         try self.proc_base_by_key.put(owned_key, id);
         return id;
     }
 
     pub fn procBase(self: *const CanonicalNameStore, id: ProcBaseKeyRef) ProcBaseKey {
-        return self.proc_bases.items[@intFromEnum(id)];
+        return self.proc_bases.items.items[@intFromEnum(id)];
     }
 
     pub fn exportNameText(self: *const CanonicalNameStore, id: ExportNameId) []const u8 {
-        return self.export_names.items[@intFromEnum(id)];
+        return self.export_names.getText(@intFromEnum(id));
     }
 
     pub fn moduleNameText(self: *const CanonicalNameStore, id: ModuleNameId) []const u8 {
-        return self.module_names.items[@intFromEnum(id)];
+        return self.module_names.getText(@intFromEnum(id));
     }
 
     pub fn typeNameText(self: *const CanonicalNameStore, id: TypeNameId) []const u8 {
-        return self.type_names.items[@intFromEnum(id)];
+        return self.type_names.getText(@intFromEnum(id));
     }
 
     pub fn methodNameText(self: *const CanonicalNameStore, id: MethodNameId) []const u8 {
-        return self.method_names.items[@intFromEnum(id)];
+        return self.method_names.getText(@intFromEnum(id));
     }
 
     pub fn recordFieldLabelText(self: *const CanonicalNameStore, id: RecordFieldLabelId) []const u8 {
-        return self.record_field_labels.items[@intFromEnum(id)];
+        return self.record_field_labels.getText(@intFromEnum(id));
     }
 
     /// Compare two record field label ids by their canonical text.
@@ -474,7 +528,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
-        return self.tag_labels.items[@intFromEnum(id)];
+        return self.tag_labels.getText(@intFromEnum(id));
     }
 
     /// Compare two tag label ids by their canonical text.
@@ -488,31 +542,9 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn externalSymbolNameText(self: *const CanonicalNameStore, id: ExternalSymbolNameId) []const u8 {
-        return self.external_symbol_names.items[@intFromEnum(id)];
-    }
-
-    fn freeTextList(self: *CanonicalNameStore, values: []const []const u8) void {
-        for (values) |value| self.allocator.free(value);
+        return self.external_symbol_names.getText(@intFromEnum(id));
     }
 };
-
-fn internText(
-    comptime Id: type,
-    allocator: Allocator,
-    list: *std.ArrayList([]const u8),
-    map: *std.StringHashMap(Id),
-    text: []const u8,
-) Allocator.Error!Id {
-    if (map.get(text)) |existing| return existing;
-
-    const id: Id = @enumFromInt(@as(u32, @intCast(list.items.len)));
-    const owned = try allocator.dupe(u8, text);
-    errdefer allocator.free(owned);
-
-    try list.append(allocator, owned);
-    try map.put(owned, id);
-    return id;
-}
 
 fn appendOptionalNestedProcSiteKey(
     scratch: *std.ArrayList(u8),
@@ -631,4 +663,69 @@ test "proc base identity includes nested owner mono specialization" {
     });
 
     try std.testing.expect(lifted_i64 != lifted_str);
+}
+
+test "CanonicalNameStore: serialize/relocate round-trip preserves names, ids, and proc bases" {
+    const gpa = std.testing.allocator;
+    var store = CanonicalNameStore.init(gpa);
+    defer store.deinit();
+
+    const m = try store.internModuleName("Builtin");
+    const t_list = try store.internTypeName("List");
+    const t_dict = try store.internTypeName("Dict");
+    const meth = try store.internMethodName("map");
+    const exp = try store.internExportName("main!");
+    const tag = try store.internTagLabel("Ok");
+    const field = try store.internRecordFieldLabel("x");
+
+    const pb = try store.internProcBase(.{
+        .module_name = m,
+        .export_name = exp,
+        .kind = .checked_source,
+        .ordinal = 7,
+    });
+    // dedup returns the same ref
+    try std.testing.expectEqual(pb, try store.internProcBase(.{
+        .module_name = m,
+        .export_name = exp,
+        .kind = .checked_source,
+        .ordinal = 7,
+    }));
+
+    // Serialize via CompactWriter into a 16-byte-aligned buffer, then relocate.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var writer = collections.CompactWriter.init();
+    const hdr = try writer.appendAlloc(aa, CanonicalNameStore.Serialized);
+    try hdr.serialize(&store, aa, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const ser: *const CanonicalNameStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = ser.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+
+    // id -> text resolves against the relocated buffer
+    try std.testing.expectEqualStrings("Builtin", loaded.moduleNameText(m));
+    try std.testing.expectEqualStrings("List", loaded.typeNameText(t_list));
+    try std.testing.expectEqualStrings("Dict", loaded.typeNameText(t_dict));
+    try std.testing.expectEqualStrings("map", loaded.methodNameText(meth));
+    try std.testing.expectEqualStrings("main!", loaded.exportNameText(exp));
+    try std.testing.expectEqualStrings("Ok", loaded.tagLabelText(tag));
+    try std.testing.expectEqualStrings("x", loaded.recordFieldLabelText(field));
+
+    // text -> id (frozen lookup, no rebuild) returns the same ids
+    try std.testing.expectEqual(@as(?TypeNameId, t_list), loaded.lookupTypeName("List"));
+    try std.testing.expectEqual(@as(?TypeNameId, t_dict), loaded.lookupTypeName("Dict"));
+    try std.testing.expectEqual(@as(?TypeNameId, null), loaded.lookupTypeName("Set"));
+    try std.testing.expectEqual(@as(?ModuleNameId, m), loaded.lookupModuleName("Builtin"));
+
+    // proc base resolves by id against the relocated SafeList
+    const loaded_pb = loaded.procBase(pb);
+    try std.testing.expectEqual(m, loaded_pb.module_name);
+    try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name);
+    try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
 }

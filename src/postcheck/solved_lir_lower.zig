@@ -4107,35 +4107,44 @@ fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedName
     var cloned = check.CheckedNames.NameStore.init(allocator);
     errdefer cloned.deinit();
 
-    for (source.module_names.items, 0..) |text, index| {
-        const id = try cloned.internModuleName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed module-name ids");
+    // Re-intern every name in serial-id order; the ids must come back identical.
+    var i: u32 = 0;
+    i = 0;
+    while (i < source.module_names.count()) : (i += 1) {
+        const id = try cloned.internModuleName(source.module_names.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed module-name ids");
     }
-    for (source.type_names.items, 0..) |text, index| {
-        const id = try cloned.internTypeName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed type-name ids");
+    i = 0;
+    while (i < source.type_names.count()) : (i += 1) {
+        const id = try cloned.internTypeName(source.type_names.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed type-name ids");
     }
-    for (source.method_names.items, 0..) |text, index| {
-        const id = try cloned.internMethodName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed method-name ids");
+    i = 0;
+    while (i < source.method_names.count()) : (i += 1) {
+        const id = try cloned.internMethodName(source.method_names.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed method-name ids");
     }
-    for (source.record_field_labels.items, 0..) |text, index| {
-        const id = try cloned.internRecordFieldLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed record-field ids");
+    i = 0;
+    while (i < source.record_field_labels.count()) : (i += 1) {
+        const id = try cloned.internRecordFieldLabel(source.record_field_labels.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed record-field ids");
     }
-    for (source.tag_labels.items, 0..) |text, index| {
-        const id = try cloned.internTagLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed tag ids");
+    i = 0;
+    while (i < source.tag_labels.count()) : (i += 1) {
+        const id = try cloned.internTagLabel(source.tag_labels.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed tag ids");
     }
-    for (source.export_names.items, 0..) |text, index| {
-        const id = try cloned.internExportName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed export-name ids");
+    i = 0;
+    while (i < source.export_names.count()) : (i += 1) {
+        const id = try cloned.internExportName(source.export_names.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed export-name ids");
     }
-    for (source.external_symbol_names.items, 0..) |text, index| {
-        const id = try cloned.internExternalSymbolName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed external-symbol ids");
+    i = 0;
+    while (i < source.external_symbol_names.count()) : (i += 1) {
+        const id = try cloned.internExternalSymbolName(source.external_symbol_names.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed external-symbol ids");
     }
-    for (source.proc_bases.items, 0..) |key, index| {
+    for (source.proc_bases.items.items, 0..) |key, index| {
         const id = try cloned.internProcBase(key);
         if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed proc-base ids");
     }

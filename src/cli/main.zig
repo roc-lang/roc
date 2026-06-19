@@ -64,6 +64,7 @@ const lir = @import("lir");
 const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
+const progress = @import("progress.zig");
 
 const cli_args = @import("cli_args.zig");
 const host_symbols = @import("host_symbols.zig");
@@ -85,6 +86,7 @@ const renderProblem = cli_context.renderProblem;
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(progress);
         std.testing.refAllDecls(targets_validator);
         std.testing.refAllDecls(target_selection);
         std.testing.refAllDecls(platform_validation);
@@ -1201,7 +1203,7 @@ fn appendHostedCacheEntriesFromView(
     for (view.hosted_procs.procs) |proc| {
         try entries.append(allocator, .{
             .module_key = view.key.bytes,
-            .order_key = proc.order_key,
+            .order_key = proc.orderKey(view.hosted_procs),
             .external_symbol_name = view.canonical_names.externalSymbolNameText(proc.external_symbol_name),
             .def_idx = @intFromEnum(proc.def_idx),
             .deterministic_index = proc.deterministic_index,
@@ -1642,14 +1644,19 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits));
+    var reporter = makeReporter(ctx, "roc run", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
     if (shm_result.error_count > 0) {
+        reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
+    reporter.finish();
 
     const entrypoint_names = shm_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
@@ -2018,13 +2025,18 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits));
+    var reporter = makeReporter(ctx, "roc run", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
+        reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
+    reporter.finish();
 
     const view = try viewLirImageFromHandle(shm_result.handle, ctx.arena);
 
@@ -2540,7 +2552,10 @@ pub fn buildLirImageWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    reporter: ?*progress.Reporter,
 ) anyerror!SharedMemoryResult {
+    if (reporter) |r| r.begin("Resolving Dependencies");
+
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -2583,6 +2598,7 @@ pub fn buildLirImageWithCoordinator(
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
+    if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
@@ -2674,14 +2690,17 @@ pub fn buildLirImageWithCoordinator(
         }
     }
 
+    if (reporter) |r| r.begin("Type Checking");
     try coord.enqueueParseTask("app", app_module_id);
     coord.coordinatorLoop() catch |err| {
+        if (reporter) |r| r.fail();
         _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
         return err;
     };
 
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
+        if (reporter) |r| r.fail();
         shm.updateHeader();
         return sharedMemoryResult(&shm, counts, &.{}, null);
     }
@@ -2689,8 +2708,16 @@ pub fn buildLirImageWithCoordinator(
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (finalized_counts.errors > 0) {
+        if (reporter) |r| r.fail();
         shm.updateHeader();
         return sharedMemoryResult(&shm, finalized_counts, &.{}, null);
+    }
+    if (reporter) |r| {
+        r.endWithBreakdown(&.{
+            .{ .name = "Parsing", .ns = coord.total_parse_ns },
+            .{ .name = "Name Resolution", .ns = coord.total_canonicalize_ns + coord.total_canonicalize_diag_ns },
+            .{ .name = "Type Inference", .ns = coord.total_typecheck_ns + coord.total_typecheck_diag_ns },
+        });
     }
 
     const root_artifact = coord.executableRootCheckedArtifact();
@@ -2702,6 +2729,7 @@ pub fn buildLirImageWithCoordinator(
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(lir_roots);
 
+    if (reporter) |r| r.begin("Specializing");
     const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
@@ -2714,6 +2742,7 @@ pub fn buildLirImageWithCoordinator(
             .debug_effects = debug_effects,
         },
     );
+    if (reporter) |r| r.end();
 
     const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
@@ -2742,7 +2771,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{});
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
 }
 
 /// Platform resolution result containing the platform source path
@@ -5017,6 +5046,10 @@ fn rocBuildWasmLlvm(
 fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
     else
@@ -5055,10 +5088,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         build_env.setCacheManager(build_cache_manager);
     }
 
+    reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.end();
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx.gpa, ctx.io.stderr(), .{
@@ -5116,14 +5152,18 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     build_env.setTarget(target);
+    reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
+        reporter.fail();
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
@@ -5154,6 +5194,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
+    reporter.begin("Specializing");
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
         .{
@@ -5169,6 +5210,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         },
     );
     defer lowered.deinit();
+    reporter.end();
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -5192,6 +5234,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     if (target == .wasm32) {
+        reporter.begin("Code Generation");
         try rocBuildWasmLlvm(
             ctx,
             args,
@@ -5204,7 +5247,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             entrypoints,
             static_data_exports,
         );
+        reporter.end();
     } else {
+        reporter.begin("Code Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const enable_default_platform_runtime = args.synthetic_default_platform and switch (target) {
             .x64musl, .arm64musl => true,
@@ -5251,7 +5296,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 return error.UnsupportedTarget;
             }
         }
+        reporter.end();
 
+        reporter.begin("Linking");
         if (link_type == .archive) {
             try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
         } else {
@@ -5298,16 +5345,18 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             }
 
             linker.link(ctx, link_config) catch |err| {
+                reporter.fail();
                 return ctx.fail(.{ .linker_failed = .{
                     .err = err,
                     .target = link_inputs.target_name,
                 } });
             };
         }
+        reporter.end();
     }
 
     const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    reporter.finish();
     const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -5315,22 +5364,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         0;
 
     if (!args.suppress_build_status) {
-        const stdout = ctx.io.stdout();
-        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        try stdout.writeAll(" (checked-artifact LLVM backend)\n");
-
-        if (args.verbose) {
-            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-                cache_stats.modules_total,
-                cache_stats.cache_hits,
-                cache_stats.modules_compiled,
-            });
-            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
-        }
-
-        if (total_warning_count > 0) {
-            try stdout.print("  {} warning(s)\n", .{total_warning_count});
-        }
+        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -5345,6 +5379,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
+
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
@@ -5384,10 +5422,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         build_env.setCacheManager(build_cache_manager);
     }
 
+    reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.end();
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx.gpa, ctx.io.stderr(), .{
@@ -5437,14 +5478,18 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     build_env.setTarget(target);
+    reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
+        reporter.fail();
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
@@ -5475,6 +5520,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
+    reporter.begin("Specializing");
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
         .{
@@ -5491,11 +5537,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         },
     );
     defer lowered.deinit();
+    reporter.end();
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
     if (target_arch == .wasm32) {
+        reporter.begin("Code Generation");
         try rocBuildWasmSurgical(
             ctx,
             args,
@@ -5508,9 +5556,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             &lowered,
             entrypoints,
         );
+        reporter.end();
 
         const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-        const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+        reporter.finish();
         const cache_stats = build_env.getBuildStats();
         const cache_percent = if (cache_stats.modules_total > 0)
             @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -5518,26 +5567,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             0;
 
         if (!args.suppress_build_status) {
-            const stdout = ctx.io.stdout();
-            try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-            try stdout.writeAll(" (checked-artifact wasm backend)\n");
-
-            if (args.verbose) {
-                try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-                    cache_stats.modules_total,
-                    cache_stats.cache_hits,
-                    cache_stats.modules_compiled,
-                });
-                try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
-            }
-
-            if (total_warning_count > 0) {
-                try stdout.print("  {} warning(s)\n", .{total_warning_count});
-            }
+            try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
         }
         return;
     }
 
+    reporter.begin("Code Generation");
     const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(
         ctx.gpa,
         .{
@@ -5578,6 +5613,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         obj_path,
         ctx.coreCtx(),
     ) catch |err| {
+        reporter.fail();
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
@@ -5592,7 +5628,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    reporter.end();
 
+    reporter.begin("Linking");
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
@@ -5639,15 +5677,17 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         }
 
         linker.link(ctx, link_config) catch |err| {
+            reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
                 .target = link_inputs.target_name,
             } });
         };
     }
+    reporter.end();
 
     const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    reporter.finish();
     const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -5655,22 +5695,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         0;
 
     if (!args.suppress_build_status) {
-        const stdout = ctx.io.stdout();
-        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        try stdout.writeAll(" (checked-artifact native backend)\n");
-
-        if (args.verbose) {
-            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-                cache_stats.modules_total,
-                cache_stats.cache_hits,
-                cache_stats.modules_compiled,
-            });
-            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
-        }
-
-        if (total_warning_count > 0) {
-            try stdout.print("  {} warning(s)\n", .{total_warning_count});
-        }
+        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -5687,6 +5712,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 /// This is the primary build path that creates executables or libraries without requiring IPC.
 fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
+
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
@@ -5726,10 +5755,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         build_env.setCacheManager(build_cache_manager);
     }
 
+    reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.end();
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx.gpa, ctx.io.stderr(), .{
@@ -5767,14 +5799,18 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     build_env.setTarget(target);
+    reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
+        reporter.fail();
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
+    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
+        reporter.fail();
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
@@ -5801,6 +5837,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(lir_roots);
 
+    reporter.begin("Specializing");
     const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
@@ -5812,7 +5849,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .target_usize = base.target.TargetUsize.native,
         },
     );
+    reporter.end();
 
+    reporter.begin("Code Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     try lir.LirImage.fillHeaderInSharedMemory(
         image_header,
@@ -5859,7 +5898,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     if (platform_shim_path) |path| {
         try object_files.append(path);
     }
+    reporter.end();
 
+    reporter.begin("Linking");
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
@@ -5896,15 +5937,17 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         }
 
         linker.link(ctx, link_config) catch |err| {
+            reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
                 .target = link_inputs.target_name,
             } });
         };
     }
+    reporter.end();
 
     const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns_embed)) / 1_000_000.0;
+    reporter.finish();
     const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -5912,21 +5955,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         0;
 
     if (!args.suppress_build_status) {
-        const stdout = ctx.io.stdout();
-        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        try stdout.writeAll(" (checked-artifact embedded interpreter)\n");
-        if (args.verbose) {
-            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-                cache_stats.modules_total,
-                cache_stats.cache_hits,
-                cache_stats.modules_compiled,
-            });
-            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
-        }
-
-        if (total_warning_count > 0) {
-            try stdout.print("  {} warning(s)\n", .{total_warning_count});
-        }
+        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -7236,6 +7265,70 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) anyerror!void {
     }
 }
 
+/// Create a progress reporter for a CLI operation. The breakdown is drawn to
+/// stderr; it animates only when stderr is a terminal, and is shown when the
+/// operation is slow or `--timings` was requested.
+fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress.Reporter {
+    const is_tty = if (builtin.target.cpu.arch == .wasm32)
+        false
+    else
+        std.Io.File.stderr().isTty(ctx.io.std_io) catch false;
+    return progress.Reporter.init(.{
+        .std_io = ctx.io.std_io,
+        .writer = ctx.io.stderr(),
+        .op_label = op_label,
+        .timings_flag = timings_flag,
+        .is_tty = is_tty,
+    });
+}
+
+/// Split the front-end's accumulated timing into the user-facing phases shown
+/// in the breakdown once type checking completes.
+fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
+    return .{
+        .{ .name = "Parsing", .ns = timing.tokenize_parse_ns },
+        .{ .name = "Name Resolution", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
+        .{ .name = "Type Inference", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+    };
+}
+
+/// Print the friendly post-build summary line and (optionally) cache statistics.
+fn printBuildSuccess(
+    ctx: *CliCtx,
+    final_output_path: []const u8,
+    warning_count: usize,
+    elapsed_ns: u64,
+    verbose: bool,
+    cache_stats: anytype,
+    cache_percent: u32,
+) !void {
+    const stdout = ctx.io.stdout();
+    const is_tty = if (builtin.target.cpu.arch == .wasm32)
+        false
+    else
+        std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
+    const green = if (is_tty) ansi_term.green else "";
+    const yellow = if (is_tty) ansi_term.yellow else "";
+    const reset = if (is_tty) ansi_term.reset else "";
+    const warning_color = if (warning_count == 0) green else yellow;
+    const warnings_word = if (warning_count == 1) "warning" else "warnings";
+
+    try stdout.print("{s}0{s} errors and {s}{d}{s} {s} found in ", .{
+        green, reset, warning_color, warning_count, reset, warnings_word,
+    });
+    try progress.writeDuration(stdout, elapsed_ns);
+    try stdout.print(" while successfully building:\n\n    {s}\n", .{final_output_path});
+
+    if (verbose) {
+        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+            cache_stats.modules_total,
+            cache_stats.cache_hits,
+            cache_stats.modules_compiled,
+        });
+        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+    }
+}
+
 /// Helper function to format elapsed time, showing decimal milliseconds
 fn formatElapsedTime(writer: anytype, elapsed_ns: u64) error{WriteFailed}!void {
     const elapsed_ms_float = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
@@ -7685,6 +7778,10 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
+    var reporter = makeReporter(ctx, "roc check", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -7693,6 +7790,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     };
 
     // Use BuildEnv to check the file
+    reporter.begin("Type Checking");
     var check_result = checkFileWithBuildEnv(
         ctx,
         args.path,
@@ -7701,10 +7799,18 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
     ) catch |err| {
+        reporter.fail();
         try handleProcessFileError(err, stderr, args.path);
         return;
     };
     defer check_result.deinit(ctx.gpa);
+
+    if (builtin.target.cpu.arch == .wasm32) {
+        reporter.end();
+    } else {
+        reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+    }
+    reporter.finish();
 
     const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
 
