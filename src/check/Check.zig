@@ -223,6 +223,10 @@ hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// binding was checked. A candidate becomes a selected root only when a later
 /// lookup actually references the binding.
 hoist_binding_candidates: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+/// Block-scope stack for hoist binding candidates. Candidate entries are scoped
+/// like their source locals; selected roots survive because they are already
+/// tied to an in-scope use.
+hoist_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 /// Selected local binding roots, keyed by their binding pattern. The value is
 /// the index into `selected_hoisted_roots`.
 hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
@@ -585,6 +589,7 @@ fn initAssumePrepared(
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
         .hoist_binding_candidates = .{},
+        .hoist_binding_scope_patterns = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
         .selected_hoisted_roots = .empty,
@@ -667,6 +672,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
     self.hoist_binding_candidates.deinit(self.gpa);
+    self.hoist_binding_scope_patterns.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
     self.selected_hoisted_roots.deinit(self.gpa);
@@ -780,12 +786,27 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
     if (completed.expr != expr or !completed.eligible) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
-    try self.hoist_binding_candidates.put(self.gpa, pattern, expr);
+
+    const entry = try self.hoist_binding_candidates.getOrPut(self.gpa, pattern);
+    if (!entry.found_existing) {
+        self.hoist_binding_scope_patterns.append(self.gpa, pattern) catch |err| {
+            _ = self.hoist_binding_candidates.remove(pattern);
+            return err;
+        };
+    }
+    entry.value_ptr.* = expr;
 }
 
 fn discardHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx) void {
     _ = self.hoist_binding_candidates.remove(pattern);
     _ = self.hoist_selected_bindings.remove(pattern);
+}
+
+fn popHoistBindingCandidateScope(self: *Self, start: usize) void {
+    for (self.hoist_binding_scope_patterns.items[start..]) |pattern| {
+        _ = self.hoist_binding_candidates.remove(pattern);
+    }
+    self.hoist_binding_scope_patterns.shrinkRetainingCapacity(start);
 }
 
 fn ensureHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
@@ -2770,6 +2791,8 @@ fn flatTypeIsConcreteHoistedConst(
 }
 
 fn hoistedRootDependenciesAreKept(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
+
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
             self.hoist_selected_bindings.contains(lookup.pattern_idx),
@@ -2814,7 +2837,8 @@ fn hoistedRootDependenciesAreKept(self: *Self, expr: CIR.Expr.Idx) bool {
             self.hoistedRootExprSpanDependenciesAreKept(call.args),
         .e_method_call => |call| self.hoistedRootDependenciesAreKept(call.receiver) and
             self.hoistedRootExprSpanDependenciesAreKept(call.args),
-        .e_dispatch_call => |call| self.hoistedRootDependenciesAreKept(call.receiver) and
+        .e_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
+            self.hoistedRootDependenciesAreKept(call.receiver) and
             self.hoistedRootExprSpanDependenciesAreKept(call.args),
         .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext),
         .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args),
@@ -2825,16 +2849,74 @@ fn hoistedRootDependenciesAreKept(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_unary_minus => |unary| self.hoistedRootDependenciesAreKept(unary.expr),
         .e_unary_not => |unary| self.hoistedRootDependenciesAreKept(unary.expr),
         .e_field_access => |field| self.hoistedRootDependenciesAreKept(field.receiver),
-        .e_interpolation => |interpolation| self.hoistedRootDependenciesAreKept(interpolation.first) and
-            self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts),
+        .e_interpolation => |interpolation| blk: {
+            if (interpolation.constraint_fn_var) |fn_var| {
+                if (self.varIsEffectfulFunction(fn_var)) break :blk false;
+            }
+            break :blk self.hoistedRootDependenciesAreKept(interpolation.first) and
+                self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts);
+        },
         .e_structural_eq => |eq| self.hoistedRootDependenciesAreKept(eq.lhs) and
             self.hoistedRootDependenciesAreKept(eq.rhs),
-        .e_method_eq => |eq| self.hoistedRootDependenciesAreKept(eq.lhs) and
+        .e_method_eq => |eq| !self.varIsEffectfulFunction(eq.constraint_fn_var) and
+            self.hoistedRootDependenciesAreKept(eq.lhs) and
             self.hoistedRootDependenciesAreKept(eq.rhs),
         .e_type_method_call => |call| self.hoistedRootExprSpanDependenciesAreKept(call.args),
-        .e_type_dispatch_call => |call| self.hoistedRootExprSpanDependenciesAreKept(call.args),
+        .e_type_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
+            self.hoistedRootExprSpanDependenciesAreKept(call.args),
         .e_tuple_access => |access| self.hoistedRootDependenciesAreKept(access.tuple),
     };
+}
+
+fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    const node = ModuleEnv.nodeIdxFrom(expr);
+    if (self.cir.numeralDispatchPlanForNode(node) != null) {
+        if (self.cir.numericSuffixTypeForNode(node)) |suffix_type| {
+            return switch (suffix_type.target()) {
+                .builtin => false,
+                .local,
+                .external,
+                => true,
+            };
+        }
+        return !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr));
+    }
+    if (self.cir.quoteDispatchPlanForNode(node) != null and
+        !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr)))
+    {
+        return true;
+    }
+    return false;
+}
+
+fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat| return switch (flat) {
+                .nominal_type => |nominal| self.nominalIsBuiltinNumberType(nominal) or
+                    self.nominalIsBuiltinStrType(nominal),
+                .record,
+                .record_unbound,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => false,
+            },
+            .err,
+            .flex,
+            .rigid,
+            => return false,
+        }
+    }
 }
 
 fn hoistedRootExprSpanDependenciesAreKept(self: *Self, span: CIR.Expr.Span) bool {
@@ -7164,6 +7246,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // block //
         .e_block => |block| {
+            const hoist_binding_scope_start = self.hoist_binding_scope_patterns.items.len;
+            defer self.popHoistBindingCandidateScope(hoist_binding_scope_start);
+
             // Check all statements in the block
             const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region);
             does_fx = stmt_result.does_fx or does_fx;

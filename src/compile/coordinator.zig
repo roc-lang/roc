@@ -162,8 +162,30 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v1";
-const checked_module_cache_format_version: u64 = 1;
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32;
+const checked_module_cache_format_version: u64 = 2;
+const checked_module_cache_no_pattern: u32 = std.math.maxInt(u32);
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 8 + 8 + 32;
+
+const DecodedCheckedModuleCacheEntry = struct {
+    module_env: []const u8,
+    hoisted_roots: []const u8,
+};
+
+fn writeU32Little(buf: []u8, value: u32) void {
+    std.debug.assert(buf.len == 4);
+    buf[0] = @truncate(value);
+    buf[1] = @truncate(value >> 8);
+    buf[2] = @truncate(value >> 16);
+    buf[3] = @truncate(value >> 24);
+}
+
+fn readU32Little(buf: []const u8) u32 {
+    std.debug.assert(buf.len == 4);
+    return @as(u32, buf[0]) |
+        (@as(u32, buf[1]) << 8) |
+        (@as(u32, buf[2]) << 16) |
+        (@as(u32, buf[3]) << 24);
+}
 
 fn writeU64Little(buf: []u8, value: u64) void {
     std.debug.assert(buf.len == 8);
@@ -189,18 +211,25 @@ fn readU64Little(buf: []const u8) u64 {
         (@as(u64, buf[7]) << 56);
 }
 
-fn hashCacheBody(body: []const u8) [32]u8 {
+fn hashCachePayload(module_env_len: u64, hoisted_root_count: u64, payload: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(body);
+    var len_bytes: [16]u8 = undefined;
+    writeU64Little(len_bytes[0..8], module_env_len);
+    writeU64Little(len_bytes[8..16], hoisted_root_count);
+    hasher.update(&len_bytes);
+    hasher.update(payload);
     return hasher.finalResult();
 }
 
 fn encodeCheckedModuleCacheEntry(
     allocator: Allocator,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    body: []const u8,
+    module_env_body: []const u8,
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot,
 ) Allocator.Error![]u8 {
-    const bytes = try allocator.alloc(u8, checked_module_cache_header_len + body.len);
+    const hoisted_roots_len = hoisted_roots.len * 8;
+    const payload_len = module_env_body.len + hoisted_roots_len;
+    const bytes = try allocator.alloc(u8, checked_module_cache_header_len + payload_len);
     errdefer allocator.free(bytes);
 
     var offset: usize = 0;
@@ -210,10 +239,28 @@ fn encodeCheckedModuleCacheEntry(
     offset += 8;
     @memcpy(bytes[offset..][0..32], &key.bytes);
     offset += 32;
-    const body_hash = hashCacheBody(body);
+    writeU64Little(bytes[offset..][0..8], @intCast(module_env_body.len));
+    offset += 8;
+    writeU64Little(bytes[offset..][0..8], @intCast(hoisted_roots.len));
+    offset += 8;
+    const payload_start = checked_module_cache_header_len;
+    @memcpy(bytes[payload_start..][0..module_env_body.len], module_env_body);
+    var root_offset = payload_start + module_env_body.len;
+    for (hoisted_roots) |root| {
+        writeU32Little(bytes[root_offset..][0..4], @intFromEnum(root.expr));
+        root_offset += 4;
+        writeU32Little(bytes[root_offset..][0..4], if (root.pattern) |pattern| @intFromEnum(pattern) else checked_module_cache_no_pattern);
+        root_offset += 4;
+    }
+    const body_hash = hashCachePayload(
+        @intCast(module_env_body.len),
+        @intCast(hoisted_roots.len),
+        bytes[payload_start..],
+    );
     @memcpy(bytes[offset..][0..32], &body_hash);
     offset += 32;
-    @memcpy(bytes[offset..], body);
+    std.debug.assert(offset == payload_start);
+    std.debug.assert(root_offset == bytes.len);
 
     return bytes;
 }
@@ -221,7 +268,7 @@ fn encodeCheckedModuleCacheEntry(
 fn decodeCheckedModuleCacheEntry(
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     bytes: []const u8,
-) ?[]const u8 {
+) ?DecodedCheckedModuleCacheEntry {
     if (bytes.len < checked_module_cache_header_len) return null;
     var offset: usize = 0;
     if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
@@ -230,13 +277,53 @@ fn decodeCheckedModuleCacheEntry(
     offset += 8;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
     offset += 32;
+    const module_env_len_u64 = readU64Little(bytes[offset..][0..8]);
+    offset += 8;
+    const hoisted_root_count_u64 = readU64Little(bytes[offset..][0..8]);
+    offset += 8;
     const stored_hash = bytes[offset..][0..32];
     offset += 32;
-    const body = bytes[offset..];
-    const actual_hash = hashCacheBody(body);
+    const payload = bytes[offset..];
+    const actual_hash = hashCachePayload(module_env_len_u64, hoisted_root_count_u64, payload);
     if (!std.mem.eql(u8, stored_hash, &actual_hash)) return null;
-    if (body.len < @sizeOf(ModuleEnv.Serialized)) return null;
-    return body;
+
+    const module_env_len = std.math.cast(usize, module_env_len_u64) orelse return null;
+    const hoisted_root_count = std.math.cast(usize, hoisted_root_count_u64) orelse return null;
+    const hoisted_roots_len = std.math.mul(usize, hoisted_root_count, 8) catch return null;
+    const expected_payload_len = std.math.add(usize, module_env_len, hoisted_roots_len) catch return null;
+    if (payload.len != expected_payload_len) return null;
+    if (module_env_len < @sizeOf(ModuleEnv.Serialized)) return null;
+
+    return .{
+        .module_env = payload[0..module_env_len],
+        .hoisted_roots = payload[module_env_len..],
+    };
+}
+
+fn decodeCheckedModuleCacheHoistedRoots(
+    allocator: Allocator,
+    bytes: []const u8,
+) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
+    std.debug.assert(bytes.len % 8 == 0);
+    const count = bytes.len / 8;
+    if (count == 0) return &.{};
+
+    const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
+    errdefer allocator.free(roots);
+
+    var offset: usize = 0;
+    for (roots) |*root| {
+        const expr_raw = readU32Little(bytes[offset..][0..4]);
+        offset += 4;
+        const pattern_raw = readU32Little(bytes[offset..][0..4]);
+        offset += 4;
+        root.* = .{
+            .expr = @enumFromInt(expr_raw),
+            .pattern = if (pattern_raw == checked_module_cache_no_pattern) null else @enumFromInt(pattern_raw),
+        };
+    }
+
+    return roots;
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -2175,14 +2262,34 @@ pub const Coordinator = struct {
         allocator: Allocator,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
-        const count = artifact.hoisted_constants.entries.len;
+        var count: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => count += 1,
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => {},
+            }
+        }
         if (count == 0) return &.{};
 
         const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
         errdefer allocator.free(roots);
 
-        for (artifact.hoisted_constants.entries, 0..) |entry, i| {
-            const root = artifact.compile_time_roots.root(entry.root);
+        var i: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => {},
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => continue,
+            }
             const source_expr = switch (root.source) {
                 .expr => |expr| expr,
                 .def,
@@ -2194,7 +2301,9 @@ pub const Coordinator = struct {
                 .expr = source_expr,
                 .pattern = root.source_pattern,
             };
+            i += 1;
         }
+        std.debug.assert(i == count);
 
         return roots;
     }
@@ -2712,7 +2821,13 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(body);
 
-        const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, body) catch {
+        const hoisted_roots = selectedHoistedRootInputsFromArtifact(manager.allocator, artifact) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer if (hoisted_roots.len != 0) manager.allocator.free(hoisted_roots);
+
+        const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, body, hoisted_roots) catch {
             manager.stats.recordStoreFailure();
             return;
         };
@@ -2746,10 +2861,11 @@ pub const Coordinator = struct {
         const entry = manager.loadRawBytes(cache_key.bytes, entries_dir) orelse return false;
         defer manager.allocator.free(entry);
 
-        const body = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
+        const cached_entry = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
             manager.stats.recordInvalidation();
             return false;
         };
+        const body = cached_entry.module_env;
 
         const module_alloc = self.getModuleAllocator();
         const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, body.len) catch {
@@ -2783,6 +2899,12 @@ pub const Coordinator = struct {
             module_alloc.destroy(cached_env);
         };
 
+        const hoisted_roots = decodeCheckedModuleCacheHoistedRoots(module_alloc, cached_entry.hoisted_roots) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        defer if (hoisted_roots.len != 0) module_alloc.free(hoisted_roots);
+
         var artifact = compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             module_alloc,
             cached_env,
@@ -2796,6 +2918,7 @@ pub const Coordinator = struct {
             .{
                 .available_artifacts = available_artifacts,
                 .explicit_roots = explicit_roots,
+                .hoisted_roots = hoisted_roots,
             },
         ) catch {
             manager.stats.recordInvalidation();
@@ -4138,6 +4261,7 @@ pub const Coordinator = struct {
 const CheckedModuleCacheRunStats = struct {
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
+    hoisted_constants: usize,
 };
 
 fn compileAppWithCheckedModuleCache(
@@ -4175,11 +4299,30 @@ fn compileAppWithCheckedModuleCache(
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const hoisted_constants = countHoistedConstants(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
+        .hoisted_constants = hoisted_constants,
     };
+}
+
+fn countHoistedConstants(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) usize {
+    var count = root.hoisted_constants.entries.len;
+    for (imports) |view| count += view.hoisted_constants.entries.len;
+    for (relations) |view| count += view.hoisted_constants.entries.len;
+    return count;
 }
 
 fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
@@ -4240,6 +4383,77 @@ test "Coordinator checked module cache hits on second compile" {
     try std.testing.expect(second.build.cache_hits > 0);
     try std.testing.expect(second.build.modules_compiled < first.build.modules_compiled);
     try std.testing.expect(second.cache.hits > 0);
+}
+
+test "Coordinator checked module cache preserves hoisted roots on hit" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top = 40.I64
+        \\
+        \\main! = |_args| {
+        \\    x = top + 1.I64
+        \\    y = x + 1.I64
+        \\    _ = y
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(first.hoisted_constants >= 2);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(second.cache.hits > 0);
+    try std.testing.expectEqual(first.hoisted_constants, second.hoisted_constants);
 }
 
 test "Coordinator corrupt checked module cache entries compile from source" {
