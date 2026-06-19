@@ -6,11 +6,11 @@
 //!
 //! The CLI supports two modes for passing compiled Roc programs to the interpreter:
 //!
-//! ### IPC Mode (`roc path/to/app.roc`)
+//! ### IPC Interpreter Mode (`roc --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR image in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `buildLirImageWithCoordinator`, `rocRun`
+//! - See: `buildLirImageWithCoordinator`, `rocRunInterpreter`
 //!
 //! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
@@ -261,17 +261,29 @@ const BuiltinsObjects = struct {
 const DefaultPlatformRuntimeObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
     const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
 
     pub fn forTarget(target: RocTarget) ?[]const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
+            .x64glibc, .x64linux => x64glibc,
+            .arm64glibc, .arm64linux => arm64glibc,
+            .x64mac => x64mac,
+            .arm64mac => arm64mac,
+            .x64win => x64win,
+            .arm64win => arm64win,
             else => null,
         };
     }
 
-    pub fn filename() []const u8 {
-        return "roc_default_platform.o";
+    pub fn filename(target: RocTarget) []const u8 {
+        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
     }
 };
 
@@ -1523,6 +1535,13 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
 }
 
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+    return switch (args.opt) {
+        .interpreter => rocRunInterpreter(ctx, args),
+        .dev, .size, .speed => rocRunBuildAndExec(ctx, args),
+    };
+}
+
+fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1892,6 +1911,96 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 }
 
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_temp_dir = true;
+    defer if (cleanup_temp_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    };
+
+    const output_filename = try compiledRunOutputFilename(ctx, args.path);
+    const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, output_filename });
+
+    var warning_count: usize = 0;
+    try rocBuild(ctx, .{
+        .path = args.path,
+        .opt = args.opt,
+        .target = args.target,
+        .output = exe_path,
+        .debug = false,
+        .allow_errors = args.allow_errors,
+        .verbose = false,
+        .no_cache = args.no_cache,
+        .max_threads = args.max_threads,
+        .wasm_memory = null,
+        .wasm_stack_size = null,
+        .z_bench_tokenize = null,
+        .z_bench_parse = null,
+        .z_dump_linker = false,
+        .exit_on_warnings = false,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .require_host_runnable_output = true,
+        .suppress_build_status = true,
+        .resolve_limits = args.resolve_limits,
+        .synthetic_default_platform = false,
+        .source_dir_override = null,
+    });
+
+    const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
+
+    compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    cleanup_temp_dir = false;
+
+    try finishCompiledRun(ctx, exe_path, term, warning_count);
+}
+
+fn compiledRunOutputFilename(ctx: *CliCtx, roc_path: []const u8) Allocator.Error![]const u8 {
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_path);
+    if (builtin.target.os.tag == .windows) {
+        return try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{module_name});
+    }
+    return module_name;
+}
+
+fn runCompiledExecutable(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    app_args: []const []const u8,
+) (CliError || error{OutOfMemory})!std.process.Child.Term {
+    const argv = ctx.arena.alloc([]const u8, 1 + app_args.len) catch {
+        return error.OutOfMemory;
+    };
+    argv[0] = exe_path;
+    for (app_args, 0..) |arg, i| {
+        argv[1 + i] = arg;
+    }
+
+    var child = std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .cwd = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    return child.wait(ctx.io.std_io) catch |err| {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+}
+
 const NativeRunTermination = union(enum) {
     success,
     exit_code: u8,
@@ -1912,6 +2021,42 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
         .stopped => |signal| .{ .stopped = signal },
         .unknown => |status| .{ .unknown = status },
     };
+}
+
+fn finishCompiledRun(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    term: std.process.Child.Term,
+    warning_count: usize,
+) (CliError || error{WriteFailed})!void {
+    switch (classifyNativeRunTermination(term, warning_count)) {
+        .success => return,
+        .exit_code => |code| {
+            ctx.io.flush();
+            std.process.exit(code);
+        },
+        .signal => |signal| {
+            const sig_num = @intFromEnum(signal);
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = sig_num },
+            };
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            ctx.io.flush();
+            std.process.exit(128 +| @as(u8, @truncate(sig_num)));
+        },
+        .stopped => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = exe_path,
+                .signal = @intFromEnum(signal),
+            } });
+        },
+        .unknown => |status| {
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = exe_path,
+                .exit_code = status,
+            } });
+        },
+    }
 }
 
 /// Check if a file is a default_app (headerless file with a main! function).
@@ -3737,6 +3882,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     var synthetic_args = args;
     synthetic_args.path = app_path;
     synthetic_args.synthetic_default_platform = true;
+    synthetic_args.source_dir_override = std.fs.path.dirname(args.path) orelse ".";
     if (synthetic_args.output == null) {
         synthetic_args.output = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     }
@@ -3965,7 +4111,7 @@ fn verifyHostInputSymbols(
 
 fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename() });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
@@ -4576,11 +4722,19 @@ const LlvmObjectPaths = struct {
 fn staticDataLinkRootSymbols(
     ctx: *CliCtx,
     static_data_exports: []const backend.StaticDataExport,
+    root_default_platform_backtrace: bool,
 ) Allocator.Error![]const []const u8 {
-    var symbols = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, static_data_exports.len);
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        static_data_exports.len + @as(usize, if (root_default_platform_backtrace) 2 else 0),
+    );
     for (static_data_exports) |data_export| {
         if (!data_export.is_global) continue;
         try symbols.append(data_export.symbol_name);
+    }
+    if (root_default_platform_backtrace) {
+        try symbols.append("roc_default_backtrace_table");
+        try symbols.append("roc_default_backtrace_count");
     }
     return symbols.items;
 }
@@ -5027,9 +5181,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5058,7 +5215,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -5195,10 +5355,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
     } else {
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and switch (target) {
-            .x64musl, .arm64musl => true,
-            else => false,
-        };
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -5252,7 +5409,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 args.synthetic_default_platform,
             );
 
-            const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+            const force_undefined_symbols = try staticDataLinkRootSymbols(
+                ctx,
+                static_data_exports,
+                enable_default_platform_runtime and args.debug,
+            );
             const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
             const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
@@ -5356,9 +5517,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5387,7 +5551,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -5546,6 +5713,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -5581,6 +5749,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    if (args.synthetic_default_platform) {
+        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+            try object_files.append(runtime_path);
+        } else {
+            return error.UnsupportedTarget;
+        }
+    }
 
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
@@ -5590,10 +5765,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             try hostInputPaths(ctx, link_inputs),
             try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             link_inputs.target_name,
-            false,
+            args.synthetic_default_platform,
         );
 
-        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+        const force_undefined_symbols = try staticDataLinkRootSymbols(
+            ctx,
+            static_data_exports,
+            false,
+        );
         const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
         const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
@@ -5698,9 +5877,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5729,7 +5911,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 

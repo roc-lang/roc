@@ -182,6 +182,9 @@ pub const BuildEnv = struct {
     /// Compiler role to assign to the root module of this build.
     root_module_role: ModuleEnv.ModuleRole = .user,
 
+    /// Optional source directory used to resolve imports from the root module.
+    root_source_dir_override: ?[]const u8 = null,
+
     /// Size limits applied during package version resolution.
     resolution_config: package_resolution.Config = .{},
 
@@ -444,6 +447,10 @@ pub const BuildEnv = struct {
         self.root_module_role = role;
     }
 
+    pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
+        self.root_source_dir_override = source_dir;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) anyerror!void {
         // Build and let the main function handle everything
@@ -636,6 +643,9 @@ pub const BuildEnv = struct {
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        if (self.root_source_dir_override) |source_dir| {
+            coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
+        }
         if (self.packages.get(pkg_name)) |queued_root_pkg| {
             if (queued_root_pkg.kind == .platform) {
                 coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
