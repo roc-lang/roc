@@ -694,30 +694,16 @@ pub const InstGraph = struct {
     }
 
     fn sameNamedInstance(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
+        _ = self;
         return left.kind == right.kind and
             sameTypeDef(left.def, right.def) and
-            left.builtin_owner == right.builtin_owner and
-            self.sameNodeRoots(left.args, right.args) and
-            sameNamedType(left.named_type, right.named_type);
-    }
-
-    fn sameNodeRoots(self: *InstGraph, left: []const NodeId, right: []const NodeId) bool {
-        if (left.len != right.len) return false;
-        for (left, right) |left_node, right_node| {
-            if (self.find(left_node) != self.find(right_node)) return false;
-        }
-        return true;
+            left.builtin_owner == right.builtin_owner;
     }
 
     fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
         return left.module_name == right.module_name and
             left.type_name == right.type_name and
             left.source_decl == right.source_decl;
-    }
-
-    fn sameNamedType(left: Type.NamedType, right: Type.NamedType) bool {
-        return left.ty == right.ty and
-            std.mem.eql(u8, left.module.bytes[0..], right.module.bytes[0..]);
     }
 
     const RowKind = enum {
@@ -1272,20 +1258,26 @@ pub const InstGraph = struct {
                 };
                 break :blk .{ .record = try self.recordSpanWithReuse(fields.items, existing) };
             },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.monoSpanWithReuse(named.args, switch (previous) {
-                    .named => |old| old.args,
-                    else => null,
-                }),
-                .backing = if (named.backing) |backing| .{
-                    .ty = try self.monoFor(backing.node),
-                    .use = backing.use,
-                } else null,
-            } },
+            .named => |named| blk: {
+                const backing: ?Type.NamedBacking = if (named.backing) |raw_backing| backing: {
+                    const structural = try self.structuralBackingNode(raw_backing.node, named);
+                    break :backing .{
+                        .ty = try self.monoFor(structural.node),
+                        .use = raw_backing.use,
+                    };
+                } else null;
+                break :blk .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.monoSpanWithReuse(named.args, switch (previous) {
+                        .named => |old| old.args,
+                        else => null,
+                    }),
+                    .backing = backing,
+                } };
+            },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
