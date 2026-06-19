@@ -97,26 +97,41 @@ parse_record_field_from_headers : Fields(_shape), Str -> Try(
 	Headers.DecodeErr,
 )
 parse_record_field_from_headers = |fields, headers|
-	match headers.find_first("\r\n") {
-		Ok({ before, after }) if !before.is_empty() =>
+	if headers.is_empty() {
+		Ok(Done({ rest: { raw: "" } }))
+	} else {
+		line_parts = match headers.find_first("\r\n") {
+			Ok(parts) => parts
+			Err(NotFound) => { before: headers, after: "" }
+		}
+
+		if line_parts.before.is_empty() {
+			Ok(Done({ rest: { raw: line_parts.after } }))
+		} else {
 			match headers.find_first(":") {
 				Ok({ before: name, after: value_start }) => {
 					name_len = Str.count_utf8_bytes(name)
-					line_len = Str.count_utf8_bytes(before)
+					line_len = Str.count_utf8_bytes(line_parts.before)
 
 					if name_len < line_len {
 						shorter_than_any_field = name_len < Fields.shortest_name(fields)
 						longer_than_any_field = name_len > Fields.longest_name(fields)
 
 						if shorter_than_any_field {
-							Ok(Continue({ rest: { raw: after } }))
+							Ok(Continue({ rest: { raw: line_parts.after } }))
 						} else if longer_than_any_field {
-							Ok(Continue({ rest: { raw: after } }))
+							Ok(Continue({ rest: { raw: line_parts.after } }))
 						} else {
-							Ok(TryFieldCaseless({
-								name,
-								rest: { raw: value_start },
-							}))
+							match find_header_field(fields, name) {
+								Ok(field) =>
+									Ok(Field({
+										field,
+										rest: { raw: value_start },
+									}))
+
+								Err(NotFound) =>
+									Ok(Continue({ rest: { raw: line_parts.after } }))
+							}
 						}
 					} else {
 						Err(Headers.DecodeErr.BadHeader)
@@ -125,18 +140,37 @@ parse_record_field_from_headers = |fields, headers|
 
 				Err(NotFound) => Err(Headers.DecodeErr.BadHeader)
 			}
-
-	Err(NotFound) | Ok(_) =>
-			Ok(Done({
-				rest: { raw: "" },
-			}))
+		}
 	}
+
+find_header_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_header_field = |fields, name| {
+	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
+
+	while True {
+		match Iter.next($remaining) {
+			One({ item, rest }) =>
+				if name.caseless_ascii_equals(Field.name(item)) {
+					return Ok(item)
+				} else {
+					$remaining = rest
+				}
+
+			Skip({ rest }) => {
+				$remaining = rest
+			}
+
+			Done =>
+				return Err(NotFound)
+		}
+	}
+}
 
 take_header_value : Str -> Try({ value : Str, after : Str }, Headers.DecodeErr)
 take_header_value = |raw|
 	match raw.find_first("\r\n") {
 		Ok({ before, after }) => Ok({ value: before.trim(), after })
-		Err(NotFound) => Err(Headers.DecodeErr.BadHeader)
+		Err(NotFound) => Ok({ value: raw.trim(), after: "" })
 	}
 
 underscores_to_dashes : Str -> Str

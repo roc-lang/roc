@@ -52,6 +52,7 @@ const ParsedHead = struct {
     protocol: []const u8,
     content_length: usize,
     header_start: usize,
+    header_end: usize,
     header_bytes: usize,
 };
 
@@ -289,7 +290,7 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
             .content_length = head.content_length,
             .header_bytes = head.header_bytes,
             .total_bytes = required_total,
-            .header_block = buffer[head.header_start..head.header_bytes],
+            .header_block = buffer[head.header_start..head.header_end],
         };
     }
 
@@ -337,6 +338,7 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
         .protocol = protocol,
         .content_length = content_length,
         .header_start = request_line_end + 2,
+        .header_end = header_end,
         .header_bytes = header_bytes,
     };
 }

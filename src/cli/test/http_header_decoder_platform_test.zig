@@ -97,6 +97,8 @@ test "HTTP header parsing platform derives structural parser without runtime all
         },
     }
 
+    try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "x_auth_token" });
+
     for (0..(@as(usize, 1) << optional_headers.len)) |case_index| {
         const mask: u8 = @intCast(case_index);
         const request = try buildRequest(allocator, mask);
@@ -120,6 +122,36 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const reverse_order_response = try buildExpectedResponse(allocator, expectedHeaderLength(all_optional_mask));
     defer allocator.free(reverse_order_response);
     try runServerAndCheckResponse(allocator, output_path, reverse_order_request, reverse_order_response);
+
+    const scrambled_order_request = try buildKnownHeadersScrambledOrderRequest(allocator);
+    defer allocator.free(scrambled_order_request);
+    const scrambled_order_response = try buildExpectedResponse(allocator, expectedHeaderLength(all_optional_mask));
+    defer allocator.free(scrambled_order_response);
+    try runServerAndCheckResponse(allocator, output_path, scrambled_order_request, scrambled_order_response);
+
+    const lower_case_request = try buildCacheControlCaseRequest(allocator, "cache-control");
+    defer allocator.free(lower_case_request);
+    const lower_case_response = try buildExpectedResponse(allocator, expectedHeaderLength(0));
+    defer allocator.free(lower_case_response);
+    try runServerAndCheckResponse(allocator, output_path, lower_case_request, lower_case_response);
+
+    const upper_case_request = try buildCacheControlCaseRequest(allocator, "CACHE-CONTROL");
+    defer allocator.free(upper_case_request);
+    const upper_case_response = try buildExpectedResponse(allocator, expectedHeaderLength(0));
+    defer allocator.free(upper_case_response);
+    try runServerAndCheckResponse(allocator, output_path, upper_case_request, upper_case_response);
+
+    const mixed_case_request = try buildCacheControlCaseRequest(allocator, "cAcHe-CoNtRoL");
+    defer allocator.free(mixed_case_request);
+    const mixed_case_response = try buildExpectedResponse(allocator, expectedHeaderLength(0));
+    defer allocator.free(mixed_case_response);
+    try runServerAndCheckResponse(allocator, output_path, mixed_case_request, mixed_case_response);
+
+    const large_body_request = try buildLargeBodyRequest(allocator);
+    defer allocator.free(large_body_request);
+    const large_body_response = try buildExpectedResponse(allocator, 123 + request_count_value + cache_control_value.len + required_foo_value.len);
+    defer allocator.free(large_body_response);
+    try runServerAndCheckResponse(allocator, output_path, large_body_request, large_body_response);
 
     const duplicate_known_request = try buildDuplicateKnownRequest(allocator);
     defer allocator.free(duplicate_known_request);
@@ -232,6 +264,62 @@ fn buildKnownHeadersReverseOrderRequest(allocator: std.mem.Allocator) anyerror![
     try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
     try request.appendSlice(allocator, "\r\n");
     try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /scrambled-order HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "X-Unknown-Before", "ignored");
+    try appendHeader(&request, allocator, optional_headers[2].name, optional_headers[2].value);
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, optional_headers[0].name, optional_headers[0].value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "X-Unknown-Middle", "ignored");
+    try appendHeader(&request, allocator, optional_headers[3].name, optional_headers[3].value);
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try appendHeader(&request, allocator, optional_headers[1].name, optional_headers[1].value);
+    try appendHeader(&request, allocator, "X-Unknown-After", "ignored");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildCacheControlCaseRequest(allocator: std.mem.Allocator, cache_control_name: []const u8) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /cache-control-case HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, cache_control_name, cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildLargeBodyRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "POST /large-body HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "Content-Length", "123");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendNTimes(allocator, 'x', 123);
 
     return request.toOwnedSlice(allocator);
 }
@@ -483,6 +571,18 @@ fn expectNoRuntimeAllocation(stderr: []const u8) anyerror!void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);
+}
+
+fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) anyerror!void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(256 * 1024 * 1024));
+    defer allocator.free(bytes);
+
+    for (needles) |needle| {
+        if (std.mem.find(u8, bytes, needle)) |_| {
+            std.debug.print("optimized app binary {s} unexpectedly contains {s}\n", .{ exe_path, needle });
+            return error.BinaryContainsOriginalFieldName;
+        }
+    }
 }
 
 fn readPortLine(stdout: std.Io.File) anyerror!u16 {
