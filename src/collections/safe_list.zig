@@ -16,13 +16,14 @@ fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     CompactWriter.zeroValuePadding(V, ptr);
 }
 
-/// L-10 bounds check shared by `SafeList.Serialized`/`SafeMultiList.Serialized`
-/// `validateRelocations`: reject an `(offset)`+`span_bytes` extent that would reach
+/// L-10 bounds check: reject an `(offset)`+`span_bytes` extent that would reach
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
-/// overflow-safe arithmetic. An empty span is always valid. Mirrors
-/// `artifact_serialize.validateOffsetLen` (kept here because `collections` cannot
-/// depend on `check`).
-fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, backing_len: u64) error{CorruptArtifact}!void {
+/// overflow-safe arithmetic. An empty span is always valid. The single primitive
+/// behind every relocatable marker's `validateRelocations` — `SafeList.Serialized`/
+/// `SafeMultiList.Serialized` call it directly, and `artifact_serialize`'s
+/// element-count-based `validateOffsetLen` delegates here after computing the byte
+/// extent (it lives in `collections`, the shared lower layer both can reach).
+pub fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, backing_len: u64) error{CorruptArtifact}!void {
     if (span_bytes == 0) return;
     if (offset < 0) return error.CorruptArtifact;
     const off: u64 = @intCast(offset);

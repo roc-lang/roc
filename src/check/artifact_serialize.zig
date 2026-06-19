@@ -162,19 +162,13 @@ pub fn SerializedSlice(comptime T: type) type {
     };
 }
 
-/// Shared bounds/alignment check behind every relocatable marker's
-/// `validateRelocations`: an empty range is always valid; otherwise the offset must
-/// be non-negative, aligned for the element type, and the whole `len`-element span
-/// must fit within `backing_len` (with overflow-safe arithmetic so a corrupt huge
-/// `len`/`offset` can't wrap past the bound).
+/// Bounds/alignment check for a `len`-element relocatable slice (`SerializedSlice`):
+/// computes the byte extent overflow-safe (so a corrupt huge `len` can't wrap) and
+/// delegates to the shared `collections.validateRelocatedSpan` primitive, which the
+/// `SafeList`-backed markers also use directly.
 pub fn validateOffsetLen(elem_size: u64, elem_align: u64, offset: i64, len: u64, backing_len: u64) error{CorruptArtifact}!void {
-    if (len == 0) return;
-    if (offset < 0) return error.CorruptArtifact;
-    const off: u64 = @intCast(offset);
-    if (elem_align != 0 and off % elem_align != 0) return error.CorruptArtifact;
     const bytes = std.math.mul(u64, len, elem_size) catch return error.CorruptArtifact;
-    const end = std.math.add(u64, off, bytes) catch return error.CorruptArtifact;
-    if (end > backing_len) return error.CorruptArtifact;
+    return collections.validateRelocatedSpan(elem_align, offset, bytes, backing_len);
 }
 
 /// True if `T` transitively embeds a relocatable marker (a type declaring
