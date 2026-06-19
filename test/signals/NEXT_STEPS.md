@@ -305,13 +305,16 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    Progress: `platform/host.zig` now has recursive scope disposal that retires
    subtree node identities, drops keyed-row keys exactly once, and prevents a
    later matching key from reusing disposed local state. It is not yet wired into
-   the `Ui.when`/`Ui.each` descriptor walk or DOM detachment. The host also has a
+   the app init/render lifecycle or DOM detachment. The host also has a
    typed-key row diff helper that reuses, creates, and disposes row scopes by the
    boxed key equality thunk and records `rows_reused`/`rows_created`/
    `rows_removed`. The `NodeElem` descriptor collector can now consume explicit
    evaluated item values for an `Each` site, invoke `key_of`, run the typed row
    diff, call the row thunk, and walk each returned row body in its keyed row
    scope so row-local state ids survive reorder and removed rows are disposed.
+   It can also collect the active `When` branch while disposing the inactive
+   branch scope, so branch-local state is retired on flips and never silently
+   reused.
 6. **Port `identity_stress.roc`** to the new API; get its current `.txt` spec green
    first (the smallest honest slice).
 7. **Port `ops_dashboard`, `checkout_wizard`, `kanban_board`** to the new API;

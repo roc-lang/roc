@@ -123,6 +123,13 @@ const SignalEventPayload = struct {
 const HostScopeBranch = enum(u8) {
     false_branch,
     true_branch,
+
+    fn opposite(self: HostScopeBranch) HostScopeBranch {
+        return switch (self) {
+            .false_branch => .true_branch,
+            .true_branch => .false_branch,
+        };
+    }
 };
 
 const HostWhenBranchScopeStep = struct {
@@ -2161,6 +2168,40 @@ const HostEnv = struct {
         var ordinal: u64 = 0;
         self.collectNodeElemDescriptors(roc_host, stream, elem, branch_scope_id, site.parent_elem_id, &ordinal, &binder_stack);
         return branch_scope_id;
+    }
+
+    fn activeWhenBranchScopeId(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) ?u64 {
+        self.validateScopeId(parent_scope_id);
+
+        for (self.scopes.items) |scope| {
+            if (!scope.active) continue;
+            if (scope.parent_scope_id != parent_scope_id) continue;
+            switch (scope.step) {
+                .when_branch => |step| {
+                    if (step.site_ordinal == site_ordinal and step.branch == branch) {
+                        return scope.scope_id;
+                    }
+                },
+                .root, .each_row => {},
+            }
+        }
+
+        return null;
+    }
+
+    fn collectNodeElemActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+        if (site.kind != .when) {
+            failHost("NodeElem active branch collection requires a when scope site");
+        }
+        if (site.node_id != when.node_id) {
+            failHost("NodeElem active branch collection received mismatched when descriptors");
+        }
+
+        if (self.activeWhenBranchScopeId(site.scope_id, site.ordinal, active_branch.opposite())) |inactive_scope_id| {
+            self.disposeScopeSubtree(roc_host, inactive_scope_id);
+        }
+
+        return self.collectNodeElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
     }
 
     fn collectNodeElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const abi.NodeValue) HostKeyedRowDiffResult {
@@ -4684,6 +4725,61 @@ test "signals host carries binder context into NodeElem when branch collection" 
     try std.testing.expectEqual(branch_scope_id, stream.signal_text_nodes.items[0].scope_id);
     try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items[0].source_node_ids.len);
     try std.testing.expectEqual(state_site.node_id, stream.signal_text_nodes.items[0].source_node_ids[0]);
+}
+
+test "signals host disposes inactive NodeElem when branch scope" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const branch_true = testNodeState(&roc_host, testNodeText(&roc_host, "true branch"));
+    const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false branch"));
+    const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
+    const root_children = [_]abi.NodeElem{when_elem};
+    const root = testNodeElementWith(&roc_host, "section", &.{}, &root_children);
+    defer abi.decrefNodeElem(root, &roc_host);
+
+    var true_stream: HostNodeDescriptorStream = .{};
+    defer true_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &true_stream, root);
+    const true_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &true_stream, true_stream.scope_sites.items[0], true_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
+
+    try std.testing.expectEqual(@as(usize, 2), true_stream.scope_sites.items.len);
+    const true_state_id = true_stream.scope_sites.items[1].node_id;
+    try std.testing.expectEqual(true_scope, true_stream.scope_sites.items[1].scope_id);
+    try std.testing.expect(host.scopes.items[@intCast(true_scope)].active);
+    try std.testing.expect(host.node_identities.items[@intCast(true_state_id)].active);
+
+    var false_stream: HostNodeDescriptorStream = .{};
+    defer false_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &false_stream, root);
+    const false_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &false_stream, false_stream.scope_sites.items[0], false_stream.whens.items[0], .false_branch, when_elem.payload.when.when_false.*);
+
+    try std.testing.expect(false_scope != true_scope);
+    try std.testing.expect(!host.scopes.items[@intCast(true_scope)].active);
+    try std.testing.expect(!host.node_identities.items[@intCast(true_state_id)].active);
+    try std.testing.expect(host.scopes.items[@intCast(false_scope)].active);
+    try std.testing.expectEqual(@as(u64, 1), host.pending_roc_metrics.scopes_disposed);
+    const false_state_id = false_stream.scope_sites.items[1].node_id;
+
+    var true_again_stream: HostNodeDescriptorStream = .{};
+    defer true_again_stream.deinit(host.gpa.allocator(), &roc_host);
+    host.collectNodeElemRootDescriptors(&roc_host, &true_again_stream, root);
+    const true_again_scope = host.collectNodeElemActiveWhenBranchDescriptors(&roc_host, &true_again_stream, true_again_stream.scope_sites.items[0], true_again_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
+
+    try std.testing.expect(true_again_scope != true_scope);
+    try std.testing.expect(true_again_scope != false_scope);
+    try std.testing.expect(!host.scopes.items[@intCast(false_scope)].active);
+    try std.testing.expect(!host.node_identities.items[@intCast(false_state_id)].active);
+    try std.testing.expect(host.scopes.items[@intCast(true_again_scope)].active);
+    try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.scopes_disposed);
+    try std.testing.expect(true_again_stream.scope_sites.items[1].node_id != true_state_id);
 }
 
 test "signals host collects NodeElem each row bodies by keyed scope" {
