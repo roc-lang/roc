@@ -665,7 +665,7 @@ pub const InstGraph = struct {
                 .named => |named| named,
                 else => Common.invariant("named backing compression reached a structural node before its result"),
             };
-            if (named.kind != .alias and !self.sameNamedInstance(named, owner)) {
+            if (named.kind != .alias and !sameNamedInstance(named, owner)) {
                 Common.invariant("named backing compression reached a non-transparent named type");
             }
             const backing = named.backing orelse
@@ -684,7 +684,7 @@ pub const InstGraph = struct {
         const current = self.find(raw);
         switch (self.nodes.items[@intFromEnum(current)]) {
             .named => |named| {
-                if (named.kind != .alias and !self.sameNamedInstance(named, owner)) return null;
+                if (named.kind != .alias and !sameNamedInstance(named, owner)) return null;
                 const backing = named.backing orelse
                     Common.invariant("named backing chain reached a named type without backing");
                 return self.find(backing.node);
@@ -693,8 +693,7 @@ pub const InstGraph = struct {
         }
     }
 
-    fn sameNamedInstance(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
-        _ = self;
+    fn sameNamedInstance(left: InstNamed, right: InstNamed) bool {
         return left.kind == right.kind and
             sameTypeDef(left.def, right.def) and
             left.builtin_owner == right.builtin_owner;
