@@ -1614,6 +1614,45 @@ const HostEnv = struct {
         };
     }
 
+    fn walkNodeElemIdentitySites(self: *HostEnv, elem: abi.NodeElem, scope_id: u64, ordinal: *u64) void {
+        self.validateScopeId(scope_id);
+
+        switch (elem.tag) {
+            .Element => {
+                for (elem.payload.element.children.items()) |child| {
+                    self.walkNodeElemIdentitySites(child, scope_id, ordinal);
+                }
+            },
+            .State => {
+                _ = self.internNodeIdentity(scope_id, ordinal.*);
+                ordinal.* += 1;
+                self.walkNodeElemIdentitySites(elem.payload.state.child.*, scope_id, ordinal);
+            },
+            .When => {
+                _ = self.internNodeIdentity(scope_id, ordinal.*);
+                ordinal.* += 1;
+            },
+            .Each => {
+                _ = self.internNodeIdentity(scope_id, ordinal.*);
+                ordinal.* += 1;
+            },
+            .Text, .TextSignal => {},
+        }
+    }
+
+    fn walkNodeElemRootIdentitySites(self: *HostEnv, root: abi.NodeElem) void {
+        const root_scope_id = self.internRootScope();
+        var ordinal: u64 = 0;
+        self.walkNodeElemIdentitySites(root, root_scope_id, &ordinal);
+    }
+
+    fn walkNodeElemWhenBranchIdentitySites(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch, elem: abi.NodeElem) u64 {
+        const branch_scope_id = self.internWhenBranchScope(parent_scope_id, site_ordinal, branch);
+        var ordinal: u64 = 0;
+        self.walkNodeElemIdentitySites(elem, branch_scope_id, &ordinal);
+        return branch_scope_id;
+    }
+
     fn clearScopes(self: *HostEnv) void {
         if (self.roc_host) |roc_host| {
             for (self.scopes.items) |*scope| {
@@ -3522,6 +3561,118 @@ fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
 }
 
+fn boxTestNodeElem(roc_host: *abi.RocHost, elem: abi.NodeElem) *abi.NodeElem {
+    const raw = abi.allocateBox(@sizeOf(abi.NodeElem), @alignOf(abi.NodeElem), true, roc_host);
+    const boxed: *abi.NodeElem = @ptrCast(@alignCast(raw));
+    boxed.* = elem;
+    return boxed;
+}
+
+fn boxTestNodeSignalExpr(roc_host: *abi.RocHost, expr: abi.NodeSignalExpr) *abi.NodeSignalExpr {
+    const raw = abi.allocateBox(@sizeOf(abi.NodeSignalExpr), @alignOf(abi.NodeSignalExpr), true, roc_host);
+    const boxed: *abi.NodeSignalExpr = @ptrCast(@alignCast(raw));
+    boxed.* = expr;
+    return boxed;
+}
+
+fn testNodeConstExpr(value: abi.NodeValue) abi.NodeSignalExpr {
+    return .{
+        .payload = .{ .const_value = value },
+        .tag = .ConstValue,
+    };
+}
+
+fn testNodeText(roc_host: *abi.RocHost, text: []const u8) abi.NodeElem {
+    return .{
+        .payload = .{ .text = RocStr.fromSlice(text, roc_host) },
+        .tag = .Text,
+    };
+}
+
+fn testNodeElement(roc_host: *abi.RocHost, children: []const abi.NodeElem) abi.NodeElem {
+    return .{
+        .payload = .{
+            .element = .{
+                .attrs = abi.RocList(abi.NodeAttr).empty(),
+                .children = abi.RocList(abi.NodeElem).fromSlice(children, roc_host),
+                .tag = RocStr.fromSlice("div", roc_host),
+            },
+        },
+        .tag = .Element,
+    };
+}
+
+fn testNodeState(roc_host: *abi.RocHost, child: abi.NodeElem) abi.NodeElem {
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .state = .{
+                .child = boxTestNodeElem(roc_host, child),
+                .eq = eq,
+                .initial = nodeValueI64(0),
+            },
+        },
+        .tag = .State,
+    };
+}
+
+fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.NodeElem, when_false: abi.NodeElem) abi.NodeElem {
+    return .{
+        .payload = .{
+            .when = .{
+                .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueBool(true))),
+                .when_false = boxTestNodeElem(roc_host, when_false),
+                .when_true = boxTestNodeElem(roc_host, when_true),
+            },
+        },
+        .tag = .When,
+    };
+}
+
+fn testNodeEach(roc_host: *abi.RocHost) abi.NodeElem {
+    const key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const key_of = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testUnaryNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const row = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testBinaryNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .each = .{
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(.{
+                    .payload = .{ .nv_list = abi.RocList(abi.NodeValue).empty() },
+                    .tag = .NvList,
+                })),
+                .key_eq = key_eq,
+                .key_of = key_of,
+                .row = row,
+            },
+        },
+        .tag = .Each,
+    };
+}
+
 test "signals host keyed row diff reuses creates and removes by typed key" {
     test_erased_callable_drop_count = 0;
 
@@ -3587,4 +3738,62 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expectEqual(@as(u64, 6), host.pending_roc_metrics.rows_reused);
     try std.testing.expectEqual(@as(u64, 5), host.pending_roc_metrics.rows_created);
     try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.rows_removed);
+}
+
+test "signals host walks NodeElem identity-bearing sites only" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const nested_state = testNodeState(&roc_host, testNodeText(&roc_host, "nested"));
+    const branch_true = testNodeState(&roc_host, testNodeText(&roc_host, "true"));
+    const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false"));
+    const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
+    const each_elem = testNodeEach(&roc_host);
+    const nested_children = [_]abi.NodeElem{
+        testNodeText(&roc_host, "ordinary text"),
+        when_elem,
+        each_elem,
+    };
+    const nested_element = testNodeElement(&roc_host, &nested_children);
+    const root_children = [_]abi.NodeElem{
+        testNodeText(&roc_host, "root text"),
+        nested_state,
+        nested_element,
+    };
+    const root = testNodeElement(&roc_host, &root_children);
+    defer abi.decrefNodeElem(root, &roc_host);
+
+    host.walkNodeElemRootIdentitySites(root);
+    try std.testing.expectEqual(@as(usize, 3), host.node_identities.items.len);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[0].scope_id);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[0].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[1].scope_id);
+    try std.testing.expectEqual(@as(u64, 1), host.node_identities.items[1].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[2].scope_id);
+    try std.testing.expectEqual(@as(u64, 2), host.node_identities.items[2].ordinal);
+
+    host.walkNodeElemRootIdentitySites(root);
+    try std.testing.expectEqual(@as(usize, 3), host.node_identities.items.len);
+
+    const true_scope = host.walkNodeElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
+    try std.testing.expectEqual(@as(usize, 4), host.node_identities.items.len);
+    try std.testing.expectEqual(true_scope, host.node_identities.items[3].scope_id);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[3].ordinal);
+
+    const true_scope_again = host.walkNodeElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
+    try std.testing.expectEqual(true_scope, true_scope_again);
+    try std.testing.expectEqual(@as(usize, 4), host.node_identities.items.len);
+
+    const false_scope = host.walkNodeElemWhenBranchIdentitySites(0, 1, .false_branch, when_elem.payload.when.when_false.*);
+    try std.testing.expect(false_scope != true_scope);
+    try std.testing.expectEqual(@as(usize, 5), host.node_identities.items.len);
+    try std.testing.expectEqual(false_scope, host.node_identities.items[4].scope_id);
+    try std.testing.expectEqual(@as(u64, 0), host.node_identities.items[4].ordinal);
 }

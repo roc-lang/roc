@@ -270,8 +270,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    Progress: `platform/host.zig` now has host-owned scope interning for root,
    `when` branch scopes, keyed row scopes, and dense `(scope_id, ordinal) ->
    node_id` interning. The keyed-row path uses the boxed key equality thunk rather
-   than byte/string comparison. The remaining work is wiring these tables into
-   the `Node.Elem` descriptor walk after the boundary exposes that tree.
+   than byte/string comparison. The host now has a generated-ABI `NodeElem`
+   identity-site walker that advances ordinals only for `State`/`When`/`Each`;
+   branch bodies are walked through explicit branch scopes. The remaining work is
+   wiring this walk into the app init/render lifecycle and DOM descriptors.
 4. **Host-invoked `is_eq` thunks (new host capability).** The host currently never
    invokes erased callables. Wire the `RocErasedCallableFn(host, ret, args, capture)`
    call convention + per-type marshaling so the host can call the boxed key-`is_eq`
