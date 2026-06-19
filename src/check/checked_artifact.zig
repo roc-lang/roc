@@ -2325,6 +2325,42 @@ pub const CheckedTypeStore = struct {
         );
     }
 
+    /// Instantiate a declaration's unnamed padding field types with `actual_args`,
+    /// returning a freshly-allocated slice the caller owns (in declared order).
+    /// Mirrors `ensureInstantiatedNominalBackingRoot` for the padding channel so a
+    /// type-parameterized padding field reserves its instantiated size.
+    pub fn ensureInstantiatedPaddingFieldTypes(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        declaration: CheckedNominalDeclaration,
+        actual_args: []const CheckedTypeId,
+    ) Allocator.Error![]const CheckedTypeId {
+        if (declaration.padding_field_types.len == 0) return &.{};
+        if (declaration.formal_args.len != actual_args.len) {
+            checkedArtifactInvariant("nominal padding instantiation arity did not match declaration", .{});
+        }
+        const out = try allocator.alloc(CheckedTypeId, declaration.padding_field_types.len);
+        errdefer allocator.free(out);
+        if (checkedTypeIdSliceEql(declaration.formal_args, actual_args)) {
+            @memcpy(out, declaration.padding_field_types);
+            return out;
+        }
+        var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        defer active.deinit();
+        for (declaration.padding_field_types, 0..) |padding_ty, i| {
+            out[i] = try self.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                padding_ty,
+                declaration.formal_args,
+                actual_args,
+                &active,
+            );
+        }
+        return out;
+    }
+
     pub fn ensureSchemeForRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
@@ -12688,6 +12724,10 @@ pub const BoxPayloadCapabilityEntry = struct {
     source_ty: canonical.CanonicalTypeKey,
     backing_ty: CheckedTypeId,
     backing_ty_key: canonical.CanonicalTypeKey,
+    /// This instance's unnamed padding field types, instantiated with its type
+    /// arguments (in declared order). Owned by the entry. Empty for nominals with
+    /// no unnamed fields.
+    padding_field_tys: []const CheckedTypeId = &.{},
     instantiated_args: []const canonical.CanonicalTypeKey = &.{},
     is_opaque: bool,
 };
@@ -12751,7 +12791,10 @@ pub const ModuleInterfaceCapabilities = struct {
 
         var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
         errdefer {
-            for (boxed_payload_templates.items) |entry| freeConstSlice(allocator, entry.instantiated_args);
+            for (boxed_payload_templates.items) |entry| {
+                freeConstSlice(allocator, entry.instantiated_args);
+                freeConstSlice(allocator, entry.padding_field_tys);
+            }
             boxed_payload_templates.deinit(allocator);
         }
         var opaque_atomic_proofs = std.ArrayList(OpaqueAtomicProofEntry).empty;
@@ -12801,6 +12844,13 @@ pub const ModuleInterfaceCapabilities = struct {
                 declaration,
                 nominal.args,
             );
+            const padding_field_tys = try checked_types.ensureInstantiatedPaddingFieldTypes(
+                allocator,
+                names,
+                declaration,
+                nominal.args,
+            );
+            errdefer allocator.free(padding_field_tys);
 
             const capability_id: BoxPayloadCapabilityId = @enumFromInt(@as(u32, @intCast(boxed_payload_templates.items.len)));
             try boxed_payload_templates.append(allocator, .{
@@ -12810,6 +12860,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 .source_ty = source_key,
                 .backing_ty = backing_ty,
                 .backing_ty_key = checkedTypeKeyForId(checked_types, backing_ty),
+                .padding_field_tys = padding_field_tys,
                 .instantiated_args = args,
                 .is_opaque = nominal.is_opaque,
             });
@@ -12887,7 +12938,10 @@ pub const ModuleInterfaceCapabilities = struct {
     }
 
     pub fn deinit(self: *ModuleInterfaceCapabilities, allocator: Allocator) void {
-        for (self.boxed_payload_templates) |entry| freeConstSlice(allocator, entry.instantiated_args);
+        for (self.boxed_payload_templates) |entry| {
+            freeConstSlice(allocator, entry.instantiated_args);
+            freeConstSlice(allocator, entry.padding_field_tys);
+        }
         for (self.opaque_atomic_proofs) |entry| freeConstSlice(allocator, entry.instantiated_args);
         freeConstSlice(allocator, self.boxed_payload_templates);
         freeConstSlice(allocator, self.opaque_atomic_proofs);

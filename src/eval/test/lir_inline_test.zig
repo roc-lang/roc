@@ -340,6 +340,36 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
+test "generic nominal record instantiates unnamed padding to the argument's size" {
+    const allocator = std.testing.allocator;
+    // A type-parameterized unnamed field (`_ : a`) must reserve the *instantiated*
+    // size, exactly like a named field of the same type: `Foo(U64)` is 16 bytes
+    // (x:U64 @0 plus 8 bytes of padding), just as `{ x : a, y : a }(U64)` would be.
+    const source =
+        \\module [main]
+        \\
+        \\Foo(a) := { x : a, _ : a }
+        \\
+        \\main : Foo(U64) -> Foo(U64)
+        \\main = |foo| foo
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    // x (the only named field) at offset 0; padding reserves the instantiated
+    // sizeof(U64) = 8 bytes, so the whole struct is 16 bytes (not 8).
+    try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructData(struct_idx).size);
+}
+
 test "nominal record with a parenthesized backing still honors declared order and padding" {
     const allocator = std.testing.allocator;
     // The backing record is wrapped in parentheses. Parens are transparent here:

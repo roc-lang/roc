@@ -1685,6 +1685,11 @@ const Builder = struct {
     const NominalDeclLookup = struct {
         view: ModuleView,
         declaration: checked.CheckedNominalDeclaration,
+        /// Unnamed padding field types (declared order), in `view`'s store. For a
+        /// box-payload capability this is the *instance's* substituted padding, so
+        /// type-parameterized padding reserves its instantiated size; for a direct
+        /// declaration it is the declaration's own padding types.
+        padding_field_tys: []const checked.CheckedTypeId,
     };
 
     /// Resolves a nominal's source declaration across every representation that
@@ -1693,21 +1698,25 @@ const Builder = struct {
     /// publication), so it must be handled, not just `*_declaration`.
     fn nominalDeclarationFor(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclLookup {
         return switch (nominal.representation) {
-            .local_declaration => |id| .{ .view = view, .declaration = view.types.nominalDeclarationById(id) },
+            .local_declaration => |id| blk: {
+                const decl = view.types.nominalDeclarationById(id);
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = decl.padding_field_types };
+            },
             .imported_declaration => |imported| blk: {
                 const sv = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
-                break :blk .{ .view = sv, .declaration = sv.types.nominalDeclarationById(imported.declaration) };
+                const decl = sv.types.nominalDeclarationById(imported.declaration);
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.padding_field_types };
             },
             .local_box_payload_capability => |cap| blk: {
                 const capability = view.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = view, .declaration = decl };
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.padding_field_tys };
             },
             .imported_box_payload_capability => |cap| blk: {
                 const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
                 const capability = sv.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = sv, .declaration = decl };
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.padding_field_tys };
             },
             .builtin, .opaque_without_backing => null,
         };
@@ -1745,7 +1754,12 @@ const Builder = struct {
         // Unnamed fields are layout padding; their resolved checked types ride on
         // the declaration in declared order and are pulled sequentially as each
         // unnamed field is encountered while walking the declared annotation.
-        const padding_types = lookup.declaration.padding_field_types;
+        // Padding types come from the lookup, which for an instantiated nominal
+        // (box-payload capability) carries the *instance's* substituted padding
+        // types — so a type-parameterized padding field (`_ : a`) reserves the
+        // instantiated size, exactly like a named field of the same type.
+        const padding_types = lookup.padding_field_tys;
+        const padding_view = lookup.view;
         var padding_cursor: usize = 0;
         const entries = try self.allocator.alloc(Type.DeclaredField, fields.len);
         defer self.allocator.free(entries);
@@ -1757,7 +1771,7 @@ const Builder = struct {
                 }
                 const checked_ty = padding_types[padding_cursor];
                 padding_cursor += 1;
-                entries[i] = .{ .padding = try self.lowerType(lookup.view, checked_ty) };
+                entries[i] = .{ .padding = try self.lowerType(padding_view, checked_ty) };
             } else {
                 entries[i] = .{ .named = try self.program.names.internRecordFieldLabel(module_env.getIdentText(field.name)) };
             }
