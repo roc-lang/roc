@@ -173,8 +173,8 @@ maintain both systems side by side.
     state argument type.
   - [ ] Preserve ordinary static dispatch for custom nominal `parser` methods.
 - [ ] Update static-dispatch problem reporting:
-  - [ ] Missing `parser` on a custom nominal type should mention `parser`.
-  - [ ] Missing format methods should mention the exact missing method, such as
+  - [x] Missing `parser` on a custom nominal type should mention `parser`.
+  - [x] Missing format methods should mention the exact missing method, such as
     `parse_str`, `parse_record_field`, `skip_record_field`, or `rename_field`.
   - [ ] Remove references to `parse_from` from user-facing errors.
 - [ ] Update any tests that snapshot static-dispatch output.

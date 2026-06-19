@@ -13221,8 +13221,13 @@ fn satisfyImplicitParserConstraint(
     }
 
     self.var_set.clearRetainingCapacity();
-    if (!try self.validateDerivedParseVar(dispatcher_var, encoding_var, state_var, err_var, constraint, env, region, &self.var_set, .shape)) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+    switch (try self.validateDerivedParseVar(dispatcher_var, encoding_var, state_var, err_var, constraint, env, region, &self.var_set, .shape)) {
+        .ok => {},
+        .reported_error => {
+            try self.unifyWith(dispatcher_var, .err, env);
+            try self.markConstraintFunctionAsError(constraint, env);
+        },
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
     }
 }
 
@@ -13334,6 +13339,12 @@ const DerivedParseContext = enum {
     record_field,
 };
 
+const DerivedParseValidation = enum {
+    ok,
+    unsupported,
+    reported_error,
+};
+
 const ParseFormatMethodVar = struct {
     var_: Var,
     dispatcher_name: Ident.Idx,
@@ -13430,6 +13441,29 @@ fn parseFormatMethodVarForEncoding(
     };
 }
 
+fn reportDerivedParseMissingMethod(
+    self: *Self,
+    dispatcher_var: Var,
+    method_name: Ident.Idx,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!DerivedParseValidation {
+    const resolved_content = self.types.resolveVar(dispatcher_var).desc.content;
+    const dispatcher_type: problem.DispatcherDoesNotImplMethod.DispatcherType = switch (resolved_content) {
+        .rigid => .rigid,
+        .alias => .nominal,
+        .structure => |structure| switch (structure) {
+            .nominal_type => .nominal,
+            else => return .unsupported,
+        },
+        else => return .unsupported,
+    };
+    var derived_constraint = constraint;
+    derived_constraint.fn_name = method_name;
+    try self.reportConstraintError(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false);
+    return .reported_error;
+}
+
 fn validateParseFormatMethod(
     self: *Self,
     encoding_var: Var,
@@ -13437,11 +13471,14 @@ fn validateParseFormatMethod(
     shape_var: Var,
     spec_decl: BuiltinParseSpecDecl,
     err_var: Var,
+    constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const method_name = try self.parseFormatMethodName(spec_decl);
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse return false;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
     const expected_ret = switch (spec_decl) {
         .str, .u64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
         .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
@@ -13464,7 +13501,7 @@ fn validateParseFormatMethod(
             .method_name = method_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn validateMissingRecordFieldMethod(
@@ -13472,11 +13509,14 @@ fn validateMissingRecordFieldMethod(
     encoding_var: Var,
     state_var: Var,
     err_var: Var,
+    constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const method_name = try self.missingRecordFieldMethodName();
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse return false;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
     const str_var = try self.freshStr(env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -13486,7 +13526,7 @@ fn validateMissingRecordFieldMethod(
             .method_name = method_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn validateMissingOptionalFieldMethod(
@@ -13494,11 +13534,14 @@ fn validateMissingOptionalFieldMethod(
     encoding_var: Var,
     state_var: Var,
     optional_err_var: Var,
+    constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const method_name = try self.missingOptionalFieldMethodName();
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse return false;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
     const str_var = try self.freshStr(env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, optional_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -13508,7 +13551,7 @@ fn validateMissingOptionalFieldMethod(
             .method_name = method_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn validateSkipRecordFieldMethod(
@@ -13516,11 +13559,14 @@ fn validateSkipRecordFieldMethod(
     encoding_var: Var,
     state_var: Var,
     err_var: Var,
+    constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const method_name = try self.skipRecordFieldMethodName();
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse return false;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -13530,17 +13576,20 @@ fn validateSkipRecordFieldMethod(
             .method_name = method_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn validateRenameFieldMethod(
     self: *Self,
     encoding_var: Var,
+    constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const method_name = try self.renameFieldMethodName();
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse return false;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
     const str_var = try self.freshStr(env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{str_var}, str_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -13550,7 +13599,7 @@ fn validateRenameFieldMethod(
             .method_name = method_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn validateDerivedParseVar(
@@ -13564,33 +13613,42 @@ fn validateDerivedParseVar(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
     context: DerivedParseContext,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, visited, context),
             .record => |record| blk: {
-                if (visited.contains(resolved.var_)) break :blk true;
+                if (visited.contains(resolved.var_)) break :blk .ok;
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseRecord(var_, record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
             },
             .tag_union => |tag_union| blk: {
-                if (visited.contains(resolved.var_)) break :blk true;
+                if (visited.contains(resolved.var_)) break :blk .ok;
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseTagUnion(var_, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited);
             },
             .empty_record => blk: {
-                if (!try self.validateRenameFieldMethod(encoding_var, env, region)) break :blk false;
-                if (!try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_field, err_var, env, region)) break :blk false;
-                if (!try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, env, region)) break :blk false;
-                break :blk true;
+                switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_field, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                break :blk .ok;
             },
-            .empty_tag_union => false,
-            else => false,
+            .empty_tag_union => .unsupported,
+            else => .unsupported,
         },
         .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, context),
-        .err => true,
-        .flex, .rigid => false,
+        .err => .ok,
+        .flex, .rigid => .unsupported,
     };
 }
 
@@ -13605,24 +13663,33 @@ fn validateDerivedParseRecord(
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    if (!try self.validateRenameFieldMethod(encoding_var, env, region)) {
-        return false;
+    switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
     }
-    if (!try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_field, err_var, env, region)) {
-        return false;
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_field, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
     }
-    if (!try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, env, region)) {
-        return false;
+    switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
     }
     if (try self.recordParseNeedsRequiredFieldError(fields_range)) {
-        if (!try self.validateMissingRecordFieldMethod(encoding_var, state_var, err_var, env, region)) return false;
+        switch (try self.validateMissingRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
     }
     for (fields.items(.var_)) |field_var| {
-        if (!try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field)) return false;
+        switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
     }
-    return true;
+    return .ok;
 }
 
 fn recordParseNeedsRequiredFieldError(
@@ -13672,15 +13739,21 @@ fn validateDerivedParseTagUnion(
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) return false;
-    if (!try self.validateParseFormatMethod(encoding_var, state_var, tag_union_var, .tag_union, err_var, env, region)) return false;
+) Allocator.Error!DerivedParseValidation {
+    if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) return .unsupported;
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, tag_union_var, .tag_union, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
 
     const tags = self.types.getTagsSlice(tag_union.tags);
     for (tags.items(.args)) |tag_args_range| {
         const tag_args = self.types.sliceVars(tag_args_range);
         for (tag_args) |tag_arg| {
-            if (!try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited, .shape)) return false;
+            switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited, .shape)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
         }
     }
     return try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, visited);
@@ -13696,16 +13769,16 @@ fn validateDerivedParseTagExt(
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
-            .empty_tag_union => true,
+            .empty_tag_union => .ok,
             .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited),
-            else => false,
+            else => .unsupported,
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
-        .err => true,
-        .flex, .rigid => false,
+        .err => .ok,
+        .flex, .rigid => .unsupported,
     };
 }
 
@@ -13721,18 +13794,21 @@ fn validateDerivedParseNominal(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
     context: DerivedParseContext,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedParseValidation {
     if (self.nominalIsBuiltinStrType(nominal)) {
-        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, env, region);
+        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region);
     }
     if (self.nominalIsBuiltinU64Type(nominal)) {
-        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .u64, err_var, env, region);
+        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .u64, err_var, constraint, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
-        if (context != .record_field) return false;
+        if (context != .record_field) return .unsupported;
         const args = self.types.sliceNominalArgs(nominal);
-        if (args.len != 2) return false;
-        if (!try self.validateMissingOptionalFieldMethod(encoding_var, state_var, args[1], env, region)) return false;
+        if (args.len != 2) return .unsupported;
+        switch (try self.validateMissingOptionalFieldMethod(encoding_var, state_var, args[1], constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
         return try self.validateDerivedParseVar(args[0], encoding_var, state_var, err_var, constraint, env, region, visited, .shape);
     }
 
@@ -13746,7 +13822,9 @@ fn validateDerivedParseNominal(
         self.cir,
         nominal.sourceDeclOptional(),
         self.cir.idents.parser,
-    ) orelse return false;
+    ) orelse {
+        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.parser, constraint, env);
+    };
 
     const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
     const method_var = if (is_this_module) blk: {
@@ -13769,7 +13847,7 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
-    return result.isOk();
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content
