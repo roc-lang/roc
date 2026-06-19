@@ -233,9 +233,7 @@ test "padding-free declared order is kept verbatim" {
     // u64 needs no padding even though it follows lower-alignment fields.
     const fields = shapes(.{
         .{ 16, 16 }, .{ 16, 16 }, .{ 16, 16 }, .{ 16, 16 }, .{ 16, 16 }, .{ 16, 16 },
-        .{ 8, 8 },
-        .{ 4, 4 }, .{ 4, 4 }, .{ 4, 4 },
-        .{ 2, 2 }, .{ 2, 2 },
+        .{ 8, 8 },   .{ 4, 4 },   .{ 4, 4 },   .{ 4, 4 },   .{ 2, 2 },   .{ 2, 2 },
         .{ 8, 8 },
     });
     try expectOrder(&fields, &.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 });
@@ -286,7 +284,7 @@ test "all-equal fields keep declared order" {
 test "repair result is always padding-free for a larger shuffled record" {
     const fields = shapes(.{
         .{ 1, 1 }, .{ 8, 8 }, .{ 2, 2 }, .{ 16, 16 }, .{ 4, 4 },
-        .{ 1, 1 }, .{ 8, 8 }, .{ 2, 2 }, .{ 4, 4 }, .{ 16, 16 },
+        .{ 1, 1 }, .{ 8, 8 }, .{ 2, 2 }, .{ 4, 4 },   .{ 16, 16 },
     });
     var order: [10]u16 = undefined;
     try computeNominalFieldOrder(testing.allocator, &fields, &order);
