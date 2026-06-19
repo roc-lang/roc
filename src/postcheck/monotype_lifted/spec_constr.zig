@@ -2211,6 +2211,9 @@ const Cloner = struct {
                     .backing = backing,
                 } };
             },
+            // List patterns are not statically destructured during
+            // specialization; fall back to the runtime match.
+            .list,
             .int_lit,
             .dec_lit,
             .frac_f32_lit,
@@ -2608,6 +2611,8 @@ const Cloner = struct {
                 };
                 return try self.bindPatToValue(backing_pat, nominal.backing.*);
             },
+            // List patterns are not statically bound during specialization.
+            .list,
             .int_lit,
             .dec_lit,
             .frac_f32_lit,
@@ -2634,6 +2639,13 @@ const Cloner = struct {
             } },
             .record => |fields| .{ .record = try self.cloneRecordDestructSpan(fields) },
             .tuple => |items| .{ .tuple = try self.clonePatSpan(items) },
+            .list => |list| .{ .list = .{
+                .patterns = try self.clonePatSpan(list.patterns),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.clonePat(rest_pattern) else null,
+                } else null,
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.clonePatSpan(tag.payloads),

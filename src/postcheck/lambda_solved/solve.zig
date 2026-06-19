@@ -582,6 +582,14 @@ const Solver = struct {
                     try self.bindPattern(child, item_ty);
                 }
             },
+            .list => |list| {
+                const elem_ty = try self.listElem(pat_ty);
+                for (self.program.lifted.patSpan(list.patterns)) |child| {
+                    try self.bindPattern(child, elem_ty);
+                }
+                // A captured rest is itself a list with the same element type.
+                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPattern(rest_pattern, pat_ty);
+            },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
                 const payloads = self.program.lifted.patSpan(tag.payloads);
