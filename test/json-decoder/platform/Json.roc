@@ -207,33 +207,7 @@ parse_record_field_from_object = |fields, raw| {
 	after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
 	rest = JsonState.Input(after_colon)
 
-	match find_record_field(fields, key) {
-		Ok(field) => Ok(Field({ field, rest }))
-		Err(NotFound) => Ok(TryField({ name: key, rest }))
-	}
-}
-
-find_record_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
-find_record_field = |fields, key| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(key))
-
-	while True {
-		match Iter.next($remaining) {
-			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), key) {
-					return Ok(item)
-				} else {
-					$remaining = rest
-				}
-
-			Skip({ rest }) => {
-				$remaining = rest
-			}
-
-			Done =>
-				return Err(NotFound)
-		}
-	}
+	Ok(TryField({ name: key, rest }))
 }
 
 snake_to_camel : Str -> Str

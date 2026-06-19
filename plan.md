@@ -447,9 +447,9 @@ maintain both systems side by side.
   - [ ] parse one CRLF-delimited line
   - [ ] return `Done` at end of header section
   - [ ] return bad-header error when a non-empty line lacks `:`
-  - [ ] return `TryFieldCaseless({ name, rest: value_start })` for ordinary
+  - [x] return `TryFieldCaseless({ name, rest: value_start })` for ordinary
     header lines
-  - [ ] use `Fields.shortest_name` and `Fields.longest_name` where they can
+  - [x] use `Fields.shortest_name` and `Fields.longest_name` where they can
     cheaply avoid impossible work
 - [ ] Implement `HeaderEncoding.skip_record_field`:
   - [ ] skip from value-start state to the next header line
@@ -492,7 +492,7 @@ maintain both systems side by side.
 - [ ] Define a camel-case JSON encoding if used by tests:
   - [ ] `user_id -> userId`
   - [ ] `cache_control -> cacheControl`
-- [ ] Implement `parse_record_field` to return `TryField`, not converted names.
+- [x] Implement `parse_record_field` to return `TryField`, not converted names.
 - [ ] Implement `skip_record_field` for unknown JSON values:
   - [ ] string values
   - [ ] object values currently supported by the test platform
@@ -734,8 +734,8 @@ where supported.
   - [ ] `zig build run-test-zig-module-postcheck --summary failures`
   - [ ] `zig build run-test-zig-module-compile --summary failures`
 - [ ] Run parser platform regressions:
-  - [ ] `zig build run-test-zig-http-header-decoder-platform --summary failures`
-  - [ ] `zig build run-test-zig-json-decoder-platform --summary failures`
+  - [x] `zig build run-test-zig-http-header-decoder-platform --summary failures`
+  - [x] `zig build run-test-zig-json-decoder-platform --summary failures`
 - [ ] Run combined targeted command used on this branch:
   - [ ] `zig build run-test-zig-module-check run-test-zig-module-postcheck run-test-zig-http-header-decoder-platform run-test-zig-json-decoder-platform --summary failures`
 - [ ] Run source checks:

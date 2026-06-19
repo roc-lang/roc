@@ -122,16 +122,10 @@ parse_record_field_from_headers = |fields, headers|
 						} else if longer_than_any_field {
 							Ok(Continue({ rest: { raw: line_parts.after } }))
 						} else {
-							match find_header_field(fields, name) {
-								Ok(field) =>
-									Ok(Field({
-										field,
-										rest: { raw: value_start },
-									}))
-
-								Err(NotFound) =>
-									Ok(Continue({ rest: { raw: line_parts.after } }))
-							}
+							Ok(TryFieldCaseless({
+								name,
+								rest: { raw: value_start },
+							}))
 						}
 					} else {
 						Err(Headers.DecodeErr.BadHeader)
@@ -142,29 +136,6 @@ parse_record_field_from_headers = |fields, headers|
 			}
 		}
 	}
-
-find_header_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
-find_header_field = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
-
-	while True {
-		match Iter.next($remaining) {
-			One({ item, rest }) =>
-				if name.caseless_ascii_equals(Field.name(item)) {
-					return Ok(item)
-				} else {
-					$remaining = rest
-				}
-
-			Skip({ rest }) => {
-				$remaining = rest
-			}
-
-			Done =>
-				return Err(NotFound)
-		}
-	}
-}
 
 take_header_value : Str -> Try({ value : Str, after : Str }, Headers.DecodeErr)
 take_header_value = |raw|
