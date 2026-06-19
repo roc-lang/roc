@@ -32,22 +32,14 @@ pub const ProcedureTemplateLookup = struct {
     by_def: []const ProcedureTemplateLookupEntry = &.{},
 
     pub fn templateForDef(self: *const ProcedureTemplateLookup, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
-        var lo: usize = 0;
-        var hi: usize = self.by_def.len;
-        const target = @intFromEnum(def_idx);
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            const candidate = @intFromEnum(self.by_def[mid].def);
-            if (candidate < target) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        if (lo >= self.by_def.len or self.by_def[lo].def != def_idx) return null;
-        return self.by_def[lo].template;
+        const found = artifact_serialize.binarySearchByKey(ProcedureTemplateLookupEntry, CIR.Def.Idx, self.by_def, def_idx, templateEntryOrder) orelse return null;
+        return found.template;
     }
 };
+
+fn templateEntryOrder(e: ProcedureTemplateLookupEntry, key: CIR.Def.Idx) std.math.Order {
+    return std.math.order(@intFromEnum(e.def), @intFromEnum(key));
+}
 
 /// Public `ProcedureTemplateLookupEntry` declaration.
 pub const ProcedureTemplateLookupEntry = struct {
@@ -143,20 +135,13 @@ pub const MethodRegistry = struct {
     };
 
     pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
-        var low: usize = 0;
-        var high: usize = self.entries.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const entry = self.entries[mid];
-            switch (methodKeyOrder(entry.key, key)) {
-                .eq => return entry.target,
-                .lt => low = mid + 1,
-                .gt => high = mid,
-            }
-        }
-        return null;
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, key, methodEntryOrder) orelse return null;
+        return found.target;
     }
 
+    /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
+    /// table's `entries` alias the artifact buffer and are freed wholesale by the
+    /// artifact, never here.
     pub fn deinit(self: *MethodRegistry, allocator: Allocator) void {
         allocator.free(self.entries);
         self.* = .{};
@@ -385,6 +370,10 @@ fn methodKeyOrder(a: MethodKey, b: MethodKey) std.math.Order {
     return orderEnum(canonical.MethodNameId, a.method, b.method);
 }
 
+fn methodEntryOrder(e: MethodRegistryEntry, key: MethodKey) std.math.Order {
+    return methodKeyOrder(e.key, key);
+}
+
 fn methodOwnerOrder(a: MethodOwner, b: MethodOwner) std.math.Order {
     const a_tag = methodOwnerTagRank(a);
     const b_tag = methodOwnerTagRank(b);
@@ -474,13 +463,12 @@ pub const StaticDispatchCallPlan = struct {
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
-    args_start: u32 = 0,
-    args_len: u32 = 0,
+    args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
-        return table.operand_pool[self.args_start .. self.args_start + self.args_len];
+        return table.operand_pool[self.args.start .. self.args.start + self.args.len];
     }
 };
 
@@ -503,11 +491,10 @@ pub const IteratorDispatchCall = struct {
     callable_ty: CheckedTypeId,
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
-    args_start: u32 = 0,
-    args_len: u32 = 0,
+    args: artifact_serialize.Span = .{},
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
-        return table.iter_operand_pool[self.args_start .. self.args_start + self.args_len];
+        return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
     }
 };
 
@@ -531,18 +518,15 @@ fn planKvLessThan(_: void, a: PlanKV, b: PlanKV) bool {
     return a.key < b.key;
 }
 
+fn planKvOrder(e: PlanKV, key: u32) std.math.Order {
+    return std.math.order(e.key, key);
+}
+
 /// Binary-search a sorted `PlanKV` slice; returns the value (`@intFromEnum` of
 /// the id) or null.
 fn lookupPlanKV(sorted: []const PlanKV, key: u32) ?u32 {
-    var lo: usize = 0;
-    var hi: usize = sorted.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const k = sorted[mid].key;
-        if (k == key) return sorted[mid].val;
-        if (k < key) lo = mid + 1 else hi = mid;
-    }
-    return null;
+    const found = artifact_serialize.binarySearchByKey(PlanKV, u32, sorted, key, planKvOrder) orelse return null;
+    return found.val;
 }
 
 /// Append `ops` to `pool` and return their `(start, len)` range. Used to flatten
@@ -600,31 +584,9 @@ pub const StaticDispatchPlanTable = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 9);
         }
 
-        pub fn serialize(self: *Serialized, t: *const StaticDispatchPlanTable, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.plans.serialize(t.plans, gpa, writer);
-            try self.by_expr.serialize(t.by_expr, gpa, writer);
-            try self.numeral_by_node.serialize(t.numeral_by_node, gpa, writer);
-            try self.quote_by_node.serialize(t.quote_by_node, gpa, writer);
-            try self.iterator_for_plans.serialize(t.iterator_for_plans, gpa, writer);
-            try self.iterator_for_by_node.serialize(t.iterator_for_by_node, gpa, writer);
-            try self.template_refs.serialize(t.template_refs, gpa, writer);
-            try self.operand_pool.serialize(t.operand_pool, gpa, writer);
-            try self.iter_operand_pool.serialize(t.iter_operand_pool, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) StaticDispatchPlanTable {
-            return .{
-                .plans = self.plans.deserialize(base_addr),
-                .by_expr = self.by_expr.deserialize(base_addr),
-                .numeral_by_node = self.numeral_by_node.deserialize(base_addr),
-                .quote_by_node = self.quote_by_node.deserialize(base_addr),
-                .iterator_for_plans = self.iterator_for_plans.deserialize(base_addr),
-                .iterator_for_by_node = self.iterator_for_by_node.deserialize(base_addr),
-                .template_refs = self.template_refs.deserialize(base_addr),
-                .operand_pool = self.operand_pool.deserialize(base_addr),
-                .iter_operand_pool = self.iter_operand_pool.deserialize(base_addr),
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn fromModule(
@@ -690,8 +652,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
-                        .args_start = ar.start,
-                        .args_len = ar.len,
+                        .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
@@ -714,8 +675,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher = .type_only,
                         .dispatcher_ty = try interpolationDispatcherTypeId(allocator, module, checked_types, expr_idx),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
-                        .args_start = ar.start,
-                        .args_len = ar.len,
+                        .args = ar,
                         .result_mode = .value,
                     });
                 },
@@ -731,8 +691,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher = .type_only,
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
-                        .args_start = ar.start,
-                        .args_len = ar.len,
+                        .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
@@ -747,8 +706,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(eq.lhs)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, eq.constraint_fn_var),
-                        .args_start = ar.start,
-                        .args_len = ar.len,
+                        .args = ar,
                         .result_mode = .{ .equality = .{
                             .structural_allowed = true,
                             .negated = eq.negated,
@@ -808,8 +766,7 @@ pub const StaticDispatchPlanTable = struct {
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
-                .args_start = ar.start,
-                .args_len = ar.len,
+                .args = ar,
                 .result_mode = .value,
             });
             try numeral_by_node.put(allocator, node, plan_id);
@@ -845,8 +802,7 @@ pub const StaticDispatchPlanTable = struct {
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
-                .args_start = ar.start,
-                .args_len = ar.len,
+                .args = ar,
                 .result_mode = .value,
             });
             try quote_by_node.put(allocator, node, plan_id);
@@ -886,16 +842,14 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
                         .callable_ty = iter_callable_ty,
                         .dispatcher_arg_index = 0,
-                        .args_start = iter_ar.start,
-                        .args_len = iter_ar.len,
+                        .args = iter_ar,
                     },
                     .next = .{
                         .method = try names.internMethodName("next"),
                         .dispatcher_ty = iterator_ty,
                         .callable_ty = next_callable_ty,
                         .dispatcher_arg_index = 0,
-                        .args_start = next_ar.start,
-                        .args_len = next_ar.len,
+                        .args = next_ar,
                     },
                     .iterable = iterable_expr,
                     .item_ty = item_ty,
@@ -949,6 +903,12 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.iterator_for_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
     }
 
+    /// Build-time-only teardown: frees the heap-owned slices. A frozen
+    /// (deserialized) table's slices alias the artifact's single backing buffer and are
+    /// NEVER freed here — the artifact's `deinitInternal` frees the buffer wholesale and
+    /// does not call any sub-store `deinit` on the frozen path. (No `serialized` flag is
+    /// needed because, unlike the mutation-guarded stores, this table has no post-load
+    /// mutators.)
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
         allocator.free(self.by_expr);
@@ -1220,8 +1180,7 @@ fn testPlan(expr_raw: u32, args_start: u32, args_len: u32) StaticDispatchCallPla
         .dispatcher = .{ .arg = 0 },
         .dispatcher_ty = @enumFromInt(2),
         .callable_ty = @enumFromInt(3),
-        .args_start = args_start,
-        .args_len = args_len,
+        .args = .{ .start = args_start, .len = args_len },
         .result_mode = .value,
     };
 }

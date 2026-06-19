@@ -9,26 +9,22 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const builtin_loading = @import("builtin_loading.zig");
-const builtins = @import("builtins.zig");
 
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");
 const LoadedModule = builtin_loading.LoadedModule;
 const BuiltinIndices = CIR.BuiltinIndices;
-const BuiltinTypes = builtins.BuiltinTypes;
 const CompactWriter = collections.CompactWriter;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
-
-/// Information about a single builtin module
-pub const ModuleInfo = struct {
-    name: []const u8,
-    module: *const LoadedModule,
-};
 
 /// Centralized container for all builtin modules
 pub const BuiltinModules = struct {
     allocator: Allocator,
+    /// NON-OWNING view of the builtin module: its `env` and `buffer` are owned by
+    /// `checked_artifact` (via its `compiled_buffer` storage / `serialized_backing`).
+    /// `deinit` frees them through `checked_artifact` only — never call
+    /// `builtin_module.deinit()`, which would double-free the env and buffer.
     builtin_module: LoadedModule,
     builtin_indices: BuiltinIndices,
     /// Self-describing frozen artifact: it owns the 16-byte-aligned buffer its
@@ -36,31 +32,10 @@ pub const BuiltinModules = struct {
     /// `checked_artifact.deinit` — no separate buffer field/teardown here.
     checked_artifact: CheckedModuleArtifact,
 
-    /// Get an array of all builtin modules for iteration
-    /// For compatibility, we expose the Builtin module for each auto-imported type
-    pub fn modules(self: *const BuiltinModules) [3]ModuleInfo {
-        return .{
-            .{ .name = "Bool", .module = &self.builtin_module },
-            .{ .name = "Try", .module = &self.builtin_module },
-            .{ .name = "Str", .module = &self.builtin_module },
-        };
-    }
-
-    /// Create a BuiltinTypes instance from these builtin modules
-    pub fn asBuiltinTypes(self: *const BuiltinModules) BuiltinTypes {
-        return BuiltinTypes.init(
-            self.builtin_indices,
-            self.builtin_module.env,
-            self.builtin_module.env,
-            self.builtin_module.env,
-        );
-    }
-
     /// Initialize all builtin modules by relocating the baked CheckedModuleArtifact.
     ///
     /// The artifact is produced at build time and embedded; loading it is a single
-    /// copy-into-aligned-buffer plus an O(1) relocate, replacing the per-startup
-    /// re-publish that previously cost several seconds in Debug builds.
+    /// copy-into-aligned-buffer plus an O(1) relocate (no per-startup re-checking).
     pub fn init(allocator: Allocator) anyerror!BuiltinModules {
         // Load the builtin indices
         const indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
@@ -92,6 +67,9 @@ pub const BuiltinModules = struct {
         @memcpy(artifact_buffer, serialized_bytes);
 
         const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+        // L-10: bounds-check every relocatable marker against the buffer before any
+        // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
+        try serialized.validate(artifact_buffer.len);
         // `deserialize` records `artifact_buffer` in the artifact's `serialized_backing`,
         // so the artifact owns it; `errdefer` above hands ownership over on success.
         const checked_artifact = serialized.deserialize(

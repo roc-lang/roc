@@ -79,7 +79,6 @@ pub const Reporter = struct {
     op_label: []const u8,
     always: bool,
     animate: bool,
-    use_color: bool,
     is_tty: bool,
     threshold_ns: u64,
     start_ts: std.Io.Timestamp,
@@ -105,7 +104,6 @@ pub const Reporter = struct {
             .op_label = config.op_label,
             .always = config.timings_flag,
             .animate = animate,
-            .use_color = config.is_tty,
             .is_tty = config.is_tty,
             .threshold_ns = default_threshold_ns,
             .start_ts = std.Io.Timestamp.now(config.std_io, .awake),
@@ -286,7 +284,7 @@ pub const Reporter = struct {
     /// Write a finished phase as one or more committed rows. Caller holds mutex.
     fn writeCommittedPhase(self: *Reporter, idx: usize) void {
         const p = self.phases[idx];
-        const check = if (self.use_color) ansi.green ++ "\u{2713}" ++ ansi.reset else "\u{2713}";
+        const check = if (self.is_tty) ansi.green ++ "\u{2713}" ++ ansi.reset else "\u{2713}";
         if (p.sub_len > 0) {
             for (p.sub[0..p.sub_len]) |s| {
                 var buf: [32]u8 = undefined;

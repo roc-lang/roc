@@ -742,15 +742,15 @@ pub const RootRequestTable = struct {
         try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types, procedure_templates, provided_exports, top_level_procedure_bindings);
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
-            switch (binding.value_use.kind) {
-                .procedure_value => try appendRoot(&requests, allocator, .{
+            switch (binding.value_use) {
+                .procedure_value => |procedure_use| try appendRoot(&requests, allocator, .{
                     .module_idx = module.moduleIndex(),
                     .kind = .platform_required_binding,
                     .source = .{ .required_binding = @intCast(i) },
                     .checked_type = platformRequiredBindingCheckedType(binding),
                     .abi = .platform,
                     .exposure = .platform_required,
-                    .procedure_use = binding.value_use.procedure_use.procedure,
+                    .procedure_use = procedure_use.procedure,
                 }),
                 .const_value => {},
             }
@@ -1358,11 +1358,11 @@ fn checkedTypeIdForRootSource(
 }
 
 fn platformRequiredBindingCheckedType(binding: PlatformRequiredBinding) CheckedTypeId {
-    return switch (binding.value_use.kind) {
-        .const_value => binding.value_use.const_use.const_use.requested_source_ty_payload orelse {
+    return switch (binding.value_use) {
+        .const_value => |const_use| const_use.const_use.requested_source_ty_payload orelse {
             checkedArtifactInvariant("platform-required const binding missing relation-owned requested payload", .{});
         },
-        .procedure_value => binding.value_use.procedure_use.procedure.source_fn_ty_payload orelse {
+        .procedure_value => |procedure_use| procedure_use.procedure.source_fn_ty_payload orelse {
             checkedArtifactInvariant("platform-required procedure binding missing relation-owned requested payload", .{});
         },
     };
@@ -2904,32 +2904,9 @@ pub const CheckedTypeStore = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 11);
         }
 
-        pub fn serialize(self: *Serialized, store: *const CheckedTypeStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.roots.serialize(store.roots.items, gpa, writer);
-            try self.schemes.serialize(store.schemes.items, gpa, writer);
-            try self.payloads.serialize(store.payloads.items, gpa, writer);
-            try self.nominal_declarations.serialize(store.nominal_declarations.items, gpa, writer);
-            try self.type_id_pool.serialize(store.type_id_pool.items, gpa, writer);
-            try self.record_field_pool.serialize(store.record_field_pool.items, gpa, writer);
-            try self.constraint_pool.serialize(store.constraint_pool.items, gpa, writer);
-            try self.tag_pool.serialize(store.tag_pool.items, gpa, writer);
-            try self.var_names.serialize(&store.var_names, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedTypeStore {
-            return .{
-                .roots = artifact_serialize.arrayListFromSlice(CheckedTypeRoot, self.roots.deserialize(base_addr)),
-                .schemes = artifact_serialize.arrayListFromSlice(CheckedTypeScheme, self.schemes.deserialize(base_addr)),
-                .payloads = artifact_serialize.arrayListFromSlice(StoredCheckedTypePayload, self.payloads.deserialize(base_addr)),
-                .nominal_declarations = artifact_serialize.arrayListFromSlice(CheckedNominalDeclaration, self.nominal_declarations.deserialize(base_addr)),
-                .type_id_pool = artifact_serialize.arrayListFromSlice(CheckedTypeId, self.type_id_pool.deserialize(base_addr)),
-                .record_field_pool = artifact_serialize.arrayListFromSlice(CheckedRecordField, self.record_field_pool.deserialize(base_addr)),
-                .constraint_pool = artifact_serialize.arrayListFromSlice(CheckedStaticDispatchConstraint, self.constraint_pool.deserialize(base_addr)),
-                .tag_pool = artifact_serialize.arrayListFromSlice(CheckedTag, self.tag_pool.deserialize(base_addr)),
-                .var_names = self.var_names.deserialize(base_addr),
-                .serialized = true,
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     fn cloneCheckedTypeRootSubstituting(
@@ -6053,6 +6030,10 @@ pub const StoredCheckedExpr = struct {
     ty: CheckedTypeId,
     source_region: base.Region,
     data: StoredCheckedExprData,
+    /// Whether evaluating this expression diverges (never returns normally). Stored
+    /// inline so it travels and relocates with its expression — there is no parallel
+    /// array to keep in lockstep.
+    diverges: bool = false,
 };
 
 /// POD wrapper for a stored checked pattern.
@@ -6068,6 +6049,9 @@ pub const StoredCheckedStatement = struct {
     id: CheckedStatementId,
     source_region: base.Region,
     data: StoredCheckedStatementData,
+    /// Whether this statement diverges. Stored inline so it travels with its
+    /// statement — no parallel array to keep in lockstep.
+    diverges: bool = false,
 };
 
 /// Materialize the public read-form `CheckedExprData` from its stored POD form.
@@ -6296,10 +6280,8 @@ pub const CheckedStatement = struct {
 pub const CheckedBodyStoreView = struct {
     bodies: []const CheckedBody = &.{},
     stored_exprs: []const StoredCheckedExpr = &.{},
-    expr_diverges: []const bool = &.{},
     stored_patterns: []const StoredCheckedPattern = &.{},
     stored_statements: []const StoredCheckedStatement = &.{},
-    statement_diverges: []const bool = &.{},
     pattern_binders: []const CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
     expr_id_pool: []const CheckedExprId = &.{},
@@ -6400,14 +6382,14 @@ pub const CheckedBodyStoreView = struct {
 
     pub fn exprDiverges(self: CheckedBodyStoreView, expr_id: CheckedExprId) bool {
         const raw = @intFromEnum(expr_id);
-        if (raw >= self.expr_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing expression", .{});
-        return self.expr_diverges[raw];
+        if (raw >= self.stored_exprs.len) checkedArtifactInvariant("checked body view divergence referenced a missing expression", .{});
+        return self.stored_exprs[raw].diverges;
     }
 
     pub fn statementDiverges(self: CheckedBodyStoreView, statement_id: CheckedStatementId) bool {
         const raw = @intFromEnum(statement_id);
-        if (raw >= self.statement_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing statement", .{});
-        return self.statement_diverges[raw];
+        if (raw >= self.stored_statements.len) checkedArtifactInvariant("checked body view divergence referenced a missing statement", .{});
+        return self.stored_statements[raw].diverges;
     }
 };
 
@@ -6886,10 +6868,8 @@ const CheckedSourceNodes = struct {
 pub const CheckedBodyStore = struct {
     bodies: std.ArrayList(CheckedBody) = .empty,
     stored_exprs: std.ArrayList(StoredCheckedExpr) = .empty,
-    expr_diverges: std.ArrayList(bool) = .empty,
     stored_patterns: std.ArrayList(StoredCheckedPattern) = .empty,
     stored_statements: std.ArrayList(StoredCheckedStatement) = .empty,
-    statement_diverges: std.ArrayList(bool) = .empty,
     pattern_binders: std.ArrayList(CheckedPatternBinder) = .empty,
     pattern_binder_by_pattern: std.ArrayList(?PatternBinderId) = .empty,
     /// Flat pool of `CheckedExprId`s for str/list/tuple/call/tag/record-ext-less
@@ -6930,6 +6910,12 @@ pub const CheckedBodyStore = struct {
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
+
+    /// Build-only side tables that are never serialized (L-6): empty on a frozen
+    /// store, so the mixin's `deserialize` resets them to their default. Declared
+    /// here so a *data* field accidentally left out of `Serialized` is a compile
+    /// error rather than a silently-dropped field.
+    pub const serde_transient_fields = [_][]const u8{ "source_node_map", "numeral_conversion_exprs" };
 
     pub const NumeralConversionExpr = struct {
         raw_node: u32,
@@ -7084,8 +7070,12 @@ pub const CheckedBodyStore = struct {
         try store.commitStatements(allocator, statements.items);
         try store.commitStringLiterals(allocator, string_builder.strings.items);
         try store.pattern_binders.appendSlice(allocator, pattern_binders.items);
-        try store.expr_diverges.appendSlice(allocator, expr_diverges);
-        try store.statement_diverges.appendSlice(allocator, statement_diverges);
+        // Stamp the divergence bit onto each stored expr/statement. `commitExprs`/
+        // `commitStatements` produce one stored element per build element in order, so
+        // the zip aligns by construction — this is the lockstep guarantee, replacing a
+        // parallel array that could fall out of sync.
+        for (store.stored_exprs.items, expr_diverges) |*stored, diverges| stored.diverges = diverges;
+        for (store.stored_statements.items, statement_diverges) |*stored, diverges| stored.diverges = diverges;
         try store.pattern_binder_by_pattern.appendSlice(allocator, pattern_binder_by_pattern);
         try store.numeral_conversion_exprs.appendSlice(allocator, numeral_conversion_exprs.items);
 
@@ -7114,10 +7104,8 @@ pub const CheckedBodyStore = struct {
         return .{
             .bodies = self.bodies.items,
             .stored_exprs = self.stored_exprs.items,
-            .expr_diverges = self.expr_diverges.items,
             .stored_patterns = self.stored_patterns.items,
             .stored_statements = self.stored_statements.items,
-            .statement_diverges = self.statement_diverges.items,
             .pattern_binders = self.pattern_binders.items,
             .pattern_binder_by_pattern = self.pattern_binder_by_pattern.items,
             .expr_id_pool = self.expr_id_pool.items,
@@ -7460,29 +7448,37 @@ pub const CheckedBodyStore = struct {
 
     pub fn exprDiverges(self: *const CheckedBodyStore, id: CheckedExprId) bool {
         const raw = @intFromEnum(id);
-        if (raw >= self.expr_diverges.items.len) checkedArtifactInvariant("checked body store divergence referenced a missing expression", .{});
-        return self.expr_diverges.items[raw];
+        if (raw >= self.stored_exprs.items.len) checkedArtifactInvariant("checked body store divergence referenced a missing expression", .{});
+        return self.stored_exprs.items[raw].diverges;
     }
 
     pub fn statementDiverges(self: *const CheckedBodyStore, id: CheckedStatementId) bool {
         const raw = @intFromEnum(id);
-        if (raw >= self.statement_diverges.items.len) checkedArtifactInvariant("checked body store divergence referenced a missing statement", .{});
-        return self.statement_diverges.items[raw];
+        if (raw >= self.stored_statements.items.len) checkedArtifactInvariant("checked body store divergence referenced a missing statement", .{});
+        return self.stored_statements.items[raw].diverges;
     }
 
+    // `source_node_map` and `numeral_conversion_exprs` are BUILD-ONLY side tables: they
+    // are not serialized and are empty on a frozen (deserialized) store. These accessors
+    // are only meaningful during build, so they assert `!serialized` — a frozen access is
+    // a bug, and this makes it a loud panic instead of a silent wrong `null`.
     pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
+        std.debug.assert(!self.serialized);
         return self.source_node_map.expr(source_expr);
     }
 
     pub fn patternIdForSource(self: *const CheckedBodyStore, pattern_idx: CIR.Pattern.Idx) ?CheckedPatternId {
+        std.debug.assert(!self.serialized);
         return self.source_node_map.pattern(pattern_idx);
     }
 
     pub fn statementIdForSource(self: *const CheckedBodyStore, statement_idx: CIR.Statement.Idx) ?CheckedStatementId {
+        std.debug.assert(!self.serialized);
         return self.source_node_map.statement(statement_idx);
     }
 
     pub fn numeralConversionExprAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        std.debug.assert(!self.serialized);
         for (self.numeral_conversion_exprs.items) |entry| {
             if (entry.raw_node == raw_node) return entry.expr;
         }
@@ -7725,8 +7721,6 @@ pub const CheckedBodyStore = struct {
             self.pattern_binders.deinit(allocator);
             self.string_ranges.deinit(allocator);
             self.string_bytes.deinit(allocator);
-            self.statement_diverges.deinit(allocator);
-            self.expr_diverges.deinit(allocator);
             self.stored_statements.deinit(allocator);
             self.stored_patterns.deinit(allocator);
             self.stored_exprs.deinit(allocator);
@@ -7758,10 +7752,8 @@ pub const CheckedBodyStore = struct {
     pub const Serialized = extern struct {
         bodies: SerializedSlice(CheckedBody) = .{},
         stored_exprs: SerializedSlice(StoredCheckedExpr) = .{},
-        expr_diverges: SerializedSlice(bool) = .{},
         stored_patterns: SerializedSlice(StoredCheckedPattern) = .{},
         stored_statements: SerializedSlice(StoredCheckedStatement) = .{},
-        statement_diverges: SerializedSlice(bool) = .{},
         pattern_binders: SerializedSlice(CheckedPatternBinder) = .{},
         pattern_binder_by_pattern: SerializedSlice(?PatternBinderId) = .{},
         expr_id_pool: SerializedSlice(CheckedExprId) = .{},
@@ -7780,63 +7772,14 @@ pub const CheckedBodyStore = struct {
         string_ranges: SerializedSlice(canonical.NameInterner.Range) = .{},
 
         comptime {
-            // 22 SerializedSlice fields → 22 base-pointer fixups, independent of
+            // 20 SerializedSlice fields → 20 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 22);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
         }
 
-        pub fn serialize(self: *Serialized, store: *const CheckedBodyStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.bodies.serialize(store.bodies.items, gpa, writer);
-            try self.stored_exprs.serialize(store.stored_exprs.items, gpa, writer);
-            try self.expr_diverges.serialize(store.expr_diverges.items, gpa, writer);
-            try self.stored_patterns.serialize(store.stored_patterns.items, gpa, writer);
-            try self.stored_statements.serialize(store.stored_statements.items, gpa, writer);
-            try self.statement_diverges.serialize(store.statement_diverges.items, gpa, writer);
-            try self.pattern_binders.serialize(store.pattern_binders.items, gpa, writer);
-            try self.pattern_binder_by_pattern.serialize(store.pattern_binder_by_pattern.items, gpa, writer);
-            try self.expr_id_pool.serialize(store.expr_id_pool.items, gpa, writer);
-            try self.pattern_id_pool.serialize(store.pattern_id_pool.items, gpa, writer);
-            try self.statement_id_pool.serialize(store.statement_id_pool.items, gpa, writer);
-            try self.pattern_binder_id_pool.serialize(store.pattern_binder_id_pool.items, gpa, writer);
-            try self.record_expr_field_pool.serialize(store.record_expr_field_pool.items, gpa, writer);
-            try self.if_branch_pool.serialize(store.if_branch_pool.items, gpa, writer);
-            try self.match_branch_pool.serialize(store.match_branch_pool.items, gpa, writer);
-            try self.match_branch_pattern_pool.serialize(store.match_branch_pattern_pool.items, gpa, writer);
-            try self.binder_remap_pool.serialize(store.binder_remap_pool.items, gpa, writer);
-            try self.capture_pool.serialize(store.capture_pool.items, gpa, writer);
-            try self.record_destruct_pool.serialize(store.record_destruct_pool.items, gpa, writer);
-            try self.interpolation_part_pool.serialize(store.interpolation_part_pool.items, gpa, writer);
-            try self.string_bytes.serialize(store.string_bytes.items, gpa, writer);
-            try self.string_ranges.serialize(store.string_ranges.items, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedBodyStore {
-            return .{
-                .bodies = artifact_serialize.arrayListFromSlice(CheckedBody, self.bodies.deserialize(base_addr)),
-                .stored_exprs = artifact_serialize.arrayListFromSlice(StoredCheckedExpr, self.stored_exprs.deserialize(base_addr)),
-                .expr_diverges = artifact_serialize.arrayListFromSlice(bool, self.expr_diverges.deserialize(base_addr)),
-                .stored_patterns = artifact_serialize.arrayListFromSlice(StoredCheckedPattern, self.stored_patterns.deserialize(base_addr)),
-                .stored_statements = artifact_serialize.arrayListFromSlice(StoredCheckedStatement, self.stored_statements.deserialize(base_addr)),
-                .statement_diverges = artifact_serialize.arrayListFromSlice(bool, self.statement_diverges.deserialize(base_addr)),
-                .pattern_binders = artifact_serialize.arrayListFromSlice(CheckedPatternBinder, self.pattern_binders.deserialize(base_addr)),
-                .pattern_binder_by_pattern = artifact_serialize.arrayListFromSlice(?PatternBinderId, self.pattern_binder_by_pattern.deserialize(base_addr)),
-                .expr_id_pool = artifact_serialize.arrayListFromSlice(CheckedExprId, self.expr_id_pool.deserialize(base_addr)),
-                .pattern_id_pool = artifact_serialize.arrayListFromSlice(CheckedPatternId, self.pattern_id_pool.deserialize(base_addr)),
-                .statement_id_pool = artifact_serialize.arrayListFromSlice(CheckedStatementId, self.statement_id_pool.deserialize(base_addr)),
-                .pattern_binder_id_pool = artifact_serialize.arrayListFromSlice(PatternBinderId, self.pattern_binder_id_pool.deserialize(base_addr)),
-                .record_expr_field_pool = artifact_serialize.arrayListFromSlice(CheckedRecordExprField, self.record_expr_field_pool.deserialize(base_addr)),
-                .if_branch_pool = artifact_serialize.arrayListFromSlice(CheckedIfBranch, self.if_branch_pool.deserialize(base_addr)),
-                .match_branch_pool = artifact_serialize.arrayListFromSlice(CheckedMatchBranch, self.match_branch_pool.deserialize(base_addr)),
-                .match_branch_pattern_pool = artifact_serialize.arrayListFromSlice(CheckedMatchBranchPattern, self.match_branch_pattern_pool.deserialize(base_addr)),
-                .binder_remap_pool = artifact_serialize.arrayListFromSlice(CheckedAlternativeBinderRemap, self.binder_remap_pool.deserialize(base_addr)),
-                .capture_pool = artifact_serialize.arrayListFromSlice(CheckedCapture, self.capture_pool.deserialize(base_addr)),
-                .record_destruct_pool = artifact_serialize.arrayListFromSlice(CheckedRecordDestruct, self.record_destruct_pool.deserialize(base_addr)),
-                .interpolation_part_pool = artifact_serialize.arrayListFromSlice(CheckedInterpolationPart, self.interpolation_part_pool.deserialize(base_addr)),
-                .string_bytes = artifact_serialize.arrayListFromSlice(u8, self.string_bytes.deserialize(base_addr)),
-                .string_ranges = artifact_serialize.arrayListFromSlice(canonical.NameInterner.Range, self.string_ranges.deserialize(base_addr)),
-                .serialized = true,
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 };
 
@@ -10507,14 +10450,14 @@ fn categorizeRequiredValueRef(
         return .{ .platform_required_declaration = declaration.id };
     };
 
-    return switch (binding.value_use.kind) {
-        .const_value => .{ .platform_required_const = .{
+    return switch (binding.value_use) {
+        .const_value => |const_use| .{ .platform_required_const = .{
             .binding = binding.id,
-            .const_use = binding.value_use.const_use.const_use,
+            .const_use = const_use.const_use,
         } },
-        .procedure_value => .{ .platform_required_proc = .{
+        .procedure_value => |procedure_use| .{ .platform_required_proc = .{
             .binding = binding.id,
-            .procedure = binding.value_use.procedure_use.procedure,
+            .procedure = procedure_use.procedure,
         } },
     };
 }
@@ -11999,6 +11942,8 @@ pub const HostedProcTable = struct {
         return stripped;
     }
 
+    /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen table's
+    /// slices alias the artifact buffer and are freed wholesale by the artifact, never here.
     pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
         allocator.free(self.procs);
         allocator.free(@constCast(self.order_key_bytes));
@@ -12164,12 +12109,14 @@ pub const StoredPlatformRequiredConstUse = struct {
 };
 
 /// POD mirror of `PlatformRequiredValueUse`: closures live as ranges into the
-/// owning `PlatformRequiredBindingTable`'s `ClosurePool`. Stored by value in
-/// each `PlatformRequiredBinding` row.
-pub const StoredPlatformRequiredValueUse = struct {
-    kind: PlatformRequiredValueUseKind,
-    const_use: StoredPlatformRequiredConstUse = undefined,
-    procedure_use: StoredPlatformRequiredProcedureUse = undefined,
+/// owning `PlatformRequiredBindingTable`'s `ClosurePool`. Stored by value in each
+/// `PlatformRequiredBinding` row. A real tagged union (not a discriminant + two fixed
+/// fields), so only the active variant's bytes exist — there is no inactive field to
+/// leave `undefined`, and the serializer's union-padding zeroing keeps the blob
+/// byte-deterministic.
+pub const StoredPlatformRequiredValueUse = union(PlatformRequiredValueUseKind) {
+    const_value: StoredPlatformRequiredConstUse,
+    procedure_value: StoredPlatformRequiredProcedureUse,
 };
 
 /// Public `PlatformRequirementRelationInput` declaration.
@@ -12533,9 +12480,9 @@ pub const PlatformRequiredBindingTable = struct {
 
     /// Materialize a binding's relation template closure from this table's pool.
     pub fn relationClosure(self: *const PlatformRequiredBindingTable, binding: PlatformRequiredBinding) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(switch (binding.value_use.kind) {
-            .const_value => binding.value_use.const_use.relation_template_closure,
-            .procedure_value => binding.value_use.procedure_use.relation_template_closure,
+        return self.closure_pool.reconstruct(switch (binding.value_use) {
+            .const_value => |const_use| const_use.relation_template_closure,
+            .procedure_value => |procedure_use| procedure_use.relation_template_closure,
         });
     }
 
@@ -12836,15 +12783,13 @@ fn commitPlatformRequiredValueUse(
 ) Allocator.Error!StoredPlatformRequiredValueUse {
     return switch (value_use) {
         .const_value => |const_use| .{
-            .kind = .const_value,
-            .const_use = .{
+            .const_value = .{
                 .const_use = const_use.const_use,
                 .relation_template_closure = try pool.commit(allocator, const_use.relation_template_closure),
             },
         },
         .procedure_value => |proc_use| .{
-            .kind = .procedure_value,
-            .procedure_use = .{
+            .procedure_value = .{
                 .procedure = proc_use.procedure,
                 .relation_template_closure = try pool.commit(allocator, proc_use.relation_template_closure),
             },
@@ -15625,40 +15570,9 @@ pub const ClosurePool = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
-        pub fn serialize(self: *Serialized, pool: *const ClosurePool, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.checked_bodies.serialize(pool.checked_bodies.items, gpa, writer);
-            try self.checked_type_roots.serialize(pool.checked_type_roots.items, gpa, writer);
-            try self.checked_type_schemes.serialize(pool.checked_type_schemes.items, gpa, writer);
-            try self.checked_callable_bodies.serialize(pool.checked_callable_bodies.items, gpa, writer);
-            try self.checked_const_bodies.serialize(pool.checked_const_bodies.items, gpa, writer);
-            try self.checked_procedure_templates.serialize(pool.checked_procedure_templates.items, gpa, writer);
-            try self.callable_eval_templates.serialize(pool.callable_eval_templates.items, gpa, writer);
-            try self.const_templates.serialize(pool.const_templates.items, gpa, writer);
-            try self.nested_proc_sites.serialize(pool.nested_proc_sites.items, gpa, writer);
-            try self.resolved_value_refs.serialize(pool.resolved_value_refs.items, gpa, writer);
-            try self.static_dispatch_plans.serialize(pool.static_dispatch_plans.items, gpa, writer);
-            try self.method_registry_entries.serialize(pool.method_registry_entries.items, gpa, writer);
-            try self.interface_capabilities.serialize(pool.interface_capabilities.items, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) ClosurePool {
-            return .{
-                .checked_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedBodyRef, self.checked_bodies.deserialize(base_addr)),
-                .checked_type_roots = artifact_serialize.arrayListFromSlice(ArtifactCheckedTypeRef, self.checked_type_roots.deserialize(base_addr)),
-                .checked_type_schemes = artifact_serialize.arrayListFromSlice(ArtifactCheckedTypeSchemeRef, self.checked_type_schemes.deserialize(base_addr)),
-                .checked_callable_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedCallableBodyRef, self.checked_callable_bodies.deserialize(base_addr)),
-                .checked_const_bodies = artifact_serialize.arrayListFromSlice(ArtifactCheckedConstBodyRef, self.checked_const_bodies.deserialize(base_addr)),
-                .checked_procedure_templates = artifact_serialize.arrayListFromSlice(ArtifactProcedureTemplateRef, self.checked_procedure_templates.deserialize(base_addr)),
-                .callable_eval_templates = artifact_serialize.arrayListFromSlice(ArtifactCallableEvalTemplateRef, self.callable_eval_templates.deserialize(base_addr)),
-                .const_templates = artifact_serialize.arrayListFromSlice(ConstRef, self.const_templates.deserialize(base_addr)),
-                .nested_proc_sites = artifact_serialize.arrayListFromSlice(ArtifactNestedProcSiteTableRef, self.nested_proc_sites.deserialize(base_addr)),
-                .resolved_value_refs = artifact_serialize.arrayListFromSlice(ArtifactResolvedValueRefTableRef, self.resolved_value_refs.deserialize(base_addr)),
-                .static_dispatch_plans = artifact_serialize.arrayListFromSlice(ArtifactStaticDispatchPlanTableRef, self.static_dispatch_plans.deserialize(base_addr)),
-                .method_registry_entries = artifact_serialize.arrayListFromSlice(MethodRegistryEntryRef, self.method_registry_entries.deserialize(base_addr)),
-                .interface_capabilities = artifact_serialize.arrayListFromSlice(ArtifactModuleInterfaceCapabilitiesRef, self.interface_capabilities.deserialize(base_addr)),
-                .serialized = true,
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ClosurePool, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 };
 
@@ -15807,7 +15721,7 @@ fn appendRelationArtifactExportedValueClosureKeysFromView(
     relation_artifact: ImportedModuleView,
     binding: PlatformRequiredBinding,
 ) Allocator.Error!void {
-    switch (binding.value_use.kind) {
+    switch (binding.value_use) {
         .procedure_value => {
             var found = false;
             for (relation_artifact.exported_procedure_bindings.bindings) |exported| {
@@ -15824,11 +15738,11 @@ fn appendRelationArtifactExportedValueClosureKeysFromView(
                 checkedArtifactInvariant("platform relation dependency collection could not find exported app procedure binding", .{});
             }
         },
-        .const_value => {
+        .const_value => |const_use| {
             var found = false;
             for (relation_artifact.exported_const_templates.templates) |template| {
                 if (template.pattern != binding.app_value.pattern) continue;
-                if (!constRefEql(template.const_ref, binding.value_use.const_use.const_use.const_ref)) continue;
+                if (!constRefEql(template.const_ref, const_use.const_use.const_ref)) continue;
                 found = true;
                 try appendImportedTemplateClosureArtifactKeys(allocator, keys, relation_artifact.exported_const_templates.rowClosure(template));
             }
@@ -16640,7 +16554,7 @@ pub const ExportedProcedureTemplateTable = struct {
 
     /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedProcedureTemplateTable, row: ExportedProcedureTemplate) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
+        return self.view().rowClosure(row);
     }
 
     pub fn deinit(self: *ExportedProcedureTemplateTable, allocator: Allocator) void {
@@ -17022,7 +16936,7 @@ const ImportedTemplateClosureBuilder = struct {
         return switch (ref) {
             .platform_required_const => |required| blk: {
                 const binding = self.platformRequiredBinding(required.binding);
-                switch (binding.value_use.kind) {
+                switch (binding.value_use) {
                     .const_value => {},
                     .procedure_value => checkedArtifactInvariant("platform-required const ref pointed at procedure binding {d}", .{@intFromEnum(required.binding)}),
                 }
@@ -17031,7 +16945,7 @@ const ImportedTemplateClosureBuilder = struct {
             },
             .platform_required_proc => |required| blk: {
                 const binding = self.platformRequiredBinding(required.binding);
-                switch (binding.value_use.kind) {
+                switch (binding.value_use) {
                     .procedure_value => {},
                     .const_value => checkedArtifactInvariant("platform-required procedure ref pointed at const binding {d}", .{@intFromEnum(required.binding)}),
                 }
@@ -17408,7 +17322,7 @@ pub const ExportedProcedureBindingTable = struct {
 
     /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedProcedureBindingTable, row: ImportedProcedureBindingView) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
+        return self.view().rowClosure(row);
     }
 
     pub fn deinit(self: *ExportedProcedureBindingTable, allocator: Allocator) void {
@@ -17777,7 +17691,7 @@ pub const ExportedConstTemplateTable = struct {
 
     /// Materialize a row's imported template closure from this table's pool.
     pub fn rowClosure(self: *const ExportedConstTemplateTable, row: ImportedConstTemplateView) ImportedTemplateClosureView {
-        return self.closure_pool.reconstruct(row.template_closure);
+        return self.view().rowClosure(row);
     }
 
     /// Relocatable serialized form: the POD row slice plus the closure pool.
@@ -18084,7 +17998,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 171);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 169);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -18140,6 +18054,17 @@ pub const CheckedModuleArtifact = struct {
         /// env blob is relocated/owned separately and injected here, never serialized.
         /// `gpa` is retained only by the sub-stores that keep an allocator for their
         /// build-only fields (`canonical_names`, `const_store`).
+        /// L-10 whole-artifact validation pass. Bounds-check every relocatable
+        /// marker's `(offset, len)` against the `backing`-buffer length BEFORE
+        /// `deserialize` materializes any aliasing slice, so a truncated or corrupt
+        /// blob (builtin trailer / disk cache) fails cleanly instead of producing
+        /// dangling out-of-bounds slices. Callers run this immediately after casting
+        /// the buffer to `*const Serialized` and before `deserialize`.
+        pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
+            if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
+            try artifact_serialize.validateSerialized(Serialized, self, backing_len);
+        }
+
         pub fn deserialize(
             self: *const Serialized,
             backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
@@ -18204,6 +18129,13 @@ pub const CheckedModuleArtifact = struct {
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
         artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
 
+    // A-11: validate the entire serialized sub-store tree at compile time — every
+    // field must be a relocatable marker or relocation-invariant POD (a raw pointer
+    // embedded outside a marker would silently dangle after relocation).
+    comptime {
+        artifact_serialize.assertSerializedRelocatable(Serialized);
+    }
+
     /// Validate a version hash read from a serialized artifact (builtin blob trailer
     /// or cache header) against the running compiler's `SERIALIZED_VERSION_HASH`.
     pub fn expectSerializedVersion(found: *const [32]u8) bool {
@@ -18228,6 +18160,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn splitVersionTrailer(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch }![]const u8 {
         if (blob.len < VERSION_TRAILER_LEN) return error.CorruptBuiltinArtifact;
         const serialized_len = blob.len - VERSION_TRAILER_LEN;
+        // The serialized prefix must be at least a whole `Serialized` header — the loader
+        // `@ptrCast`s it to `*const Serialized`. This mirrors the disk-cache loader's
+        // `< @sizeOf(Serialized)` floor so a truncated builtin blob is a clean error, not
+        // an out-of-bounds read.
+        if (serialized_len < @sizeOf(Serialized)) return error.CorruptBuiltinArtifact;
         if (!expectSerializedVersion(blob[serialized_len..][0..VERSION_TRAILER_LEN])) {
             return error.BuiltinArtifactVersionMismatch;
         }
@@ -18254,6 +18191,13 @@ pub const CheckedModuleArtifact = struct {
             } else {
                 self.module_env = undefined;
             }
+            // `deserialize` allocated `backing` with the same gpa it recorded in
+            // `canonical_names.allocator`, and every teardown site passes that
+            // allocator back here. Assert the coupling so a caller freeing the
+            // frozen buffer with a different allocator trips in Debug rather than
+            // corrupting an unrelated heap.
+            std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
+                allocator.vtable == self.canonical_names.allocator.vtable);
             allocator.free(backing);
             self.* = undefined;
             return;
@@ -18302,8 +18246,6 @@ pub const CheckedModuleArtifact = struct {
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.items.len == self.checked_types.payloads.items.len);
-        std.debug.assert(self.checked_bodies.exprCount() == self.checked_bodies.exprCount());
-        std.debug.assert(self.checked_bodies.statementCount() == self.checked_bodies.statementCount());
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.checked_types.payloads.items, 0..) |payload, i| {
@@ -18369,8 +18311,6 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
-        std.debug.assert(self.checked_bodies.exprCount() == self.checked_bodies.exprCount());
-        std.debug.assert(self.checked_bodies.statementCount() == self.checked_bodies.statementCount());
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.root_requests.requests, 0..) |request, i| {
@@ -18658,7 +18598,7 @@ pub const CheckedModuleArtifact = struct {
                     .{i},
                 );
             };
-            validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, binding.value_use.kind, relation, i);
+            validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, std.meta.activeTag(binding.value_use), relation, i);
             verifyPlatformRequiredValueUse(self, binding);
         }
 
@@ -18787,16 +18727,15 @@ pub const Module = CheckedModuleArtifact;
 fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: PlatformRequiredBinding) void {
     if (builtin.mode != .Debug) return;
 
-    switch (binding.value_use.kind) {
-        .const_value => {
-            const const_use = binding.value_use.const_use;
+    switch (binding.value_use) {
+        .const_value => |const_use| {
             std.debug.assert(std.meta.eql(const_use.const_use.const_ref.artifact.bytes, binding.app_value.artifact.bytes));
             const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
                 std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
             };
             std.debug.assert(owner.pattern == binding.app_value.pattern);
         },
-        .procedure_value => switch (binding.value_use.procedure_use.procedure.binding) {
+        .procedure_value => |procedure_use| switch (procedure_use.procedure.binding) {
             .platform_required => |required| {
                 std.debug.assert(std.meta.eql(required.artifact.bytes, binding.app_value.artifact.bytes));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
@@ -21194,7 +21133,7 @@ test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
     defer gpa.free(templates);
     artifact_serialize.poisonSlice(ConstTemplate, templates, 0x5A);
     artifact_serialize.zeroSlicePadding(ConstTemplate, templates);
-    const store = ConstTemplateTable{ .templates = .{ .items = templates, .capacity = templates.len } };
+    const store = ConstTemplateTable{ .templates = artifact_serialize.arrayListFromSlice(ConstTemplate, templates) };
 
     const rt = try artifact_serialize.roundTripForTest(gpa, ConstTemplateTable, &store);
     defer gpa.free(rt.buffer);
@@ -21472,4 +21411,17 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqualSlices(u8, &ty1_key.bytes, &loaded.checked_types.roots.items[1].key.bytes);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_record, loaded.checked_types.payloads.items[0]);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_tag_union, loaded.checked_types.payloads.items[1]);
+}
+
+test "SERIALIZED_VERSION_HASH golden value" {
+    // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
+    // would make a previously-baked builtin blob / cached artifact relocate into a
+    // mismatched struct. It flips this hash and fails here. On an *intentional* layout
+    // change, bump `serialized_layout_version` and replace the golden bytes below with
+    // the ones this assertion prints.
+    const golden: [32]u8 = .{
+        0x86, 0x99, 0xF2, 0x18, 0x54, 0xFF, 0x4F, 0xDC, 0x2D, 0xEE, 0x5B, 0x41, 0xA6, 0x8A, 0x87, 0xE8,
+        0x15, 0xFF, 0x48, 0x64, 0x22, 0xBE, 0xBF, 0x4C, 0xB9, 0x4C, 0x4E, 0x19, 0x85, 0x86, 0x41, 0x5F,
+    };
+    try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

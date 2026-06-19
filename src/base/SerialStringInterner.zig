@@ -1,7 +1,6 @@
 //! A serialization-friendly string interner that assigns **dense serial ids**.
 //!
-//! This is the relocatable replacement for the `std.ArrayList([]const u8)` +
-//! `std.StringHashMap` pairs that back `CanonicalNameStore`. Like
+//! It backs `CanonicalNameStore`'s name kinds with relocatable storage. Like
 //! `base.SmallStringInterner` it stores all text in one flat byte buffer and an
 //! open-addressing hash table as a flat array of integers — both
 //! `SafeList`-backed, so the whole interner relocates with a **constant** number
@@ -21,12 +20,12 @@
 //! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
+const core = @import("StringInternerCore.zig");
 
 const SerialStringInterner = @This();
 
@@ -94,74 +93,46 @@ pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
     return self.textAt(id);
 }
 
-const Found = struct { id: ?u32, slot: usize };
+/// Id encoding for the shared `StringInternerCore`: dense serial ids (0, 1, 2, …)
+/// stored via the `ranges` array, with hash-table cells holding `id + 1` (so 0 is
+/// the empty-slot sentinel).
+const Encoding = struct {
+    pub const Id = u32;
+    pub const Cell = u32;
+    pub const empty_cell: Cell = 0;
+    pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
-fn findSlot(self: *const SerialStringInterner, string: []const u8) Found {
-    const table_size = self.index.items.items.len;
-    if (table_size == 0) return .{ .id = null, .slot = 0 };
-    const hash = std.hash.Fnv1a_32.hash(string);
-    var slot: usize = @intCast(hash % @as(u32, @intCast(table_size)));
-    while (true) {
-        const v = self.index.items.items[slot];
-        if (v == 0) return .{ .id = null, .slot = slot };
-        const id = v - 1;
-        if (std.mem.eql(u8, string, self.textAt(id))) return .{ .id = id, .slot = slot };
-        slot = (slot + 1) % table_size;
+    pub fn count(self: *const SerialStringInterner) u32 {
+        return self.count();
     }
-}
+    pub fn cellForId(id: Id) Cell {
+        return id + 1;
+    }
+    pub fn idFromCell(cell: Cell) Id {
+        return cell - 1;
+    }
+    pub fn textForId(self: *const SerialStringInterner, id: Id) []const u8 {
+        return self.textAt(id);
+    }
+    pub fn appendEntry(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!Id {
+        const id: u32 = @intCast(self.ranges.items.items.len);
+        const start: u32 = @intCast(self.bytes.items.items.len);
+        _ = try self.bytes.appendSlice(gpa, string);
+        _ = try self.ranges.append(gpa, .{ .start = start, .len = @intCast(string.len) });
+        return id;
+    }
+};
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
 /// (deserialized) interners.
 pub fn lookup(self: *const SerialStringInterner, string: []const u8) ?u32 {
-    return self.findSlot(string).id;
-}
-
-fn rehash(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {
-    const new_size = self.index.items.items.len * 2;
-    self.index.deinit(gpa);
-    self.index = try SafeList(u32).initCapacity(gpa, new_size);
-    try self.index.items.ensureTotalCapacityPrecise(gpa, new_size);
-    self.index.items.items.len = new_size;
-    @memset(self.index.items.items, 0);
-
-    var id: u32 = 0;
-    while (id < self.ranges.items.items.len) : (id += 1) {
-        const found = self.findSlot(self.textAt(id));
-        self.index.items.items[found.slot] = id + 1;
-    }
+    return core.lookup(Encoding, self, string);
 }
 
 /// Intern `string`, returning its serial id. Deduplicates: equal text always
 /// returns the same id.
 pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
-    if (self.index.items.items.len != 0) {
-        if (self.findSlot(string).id) |id| return id;
-    }
-
-    if (builtin.mode == .Debug) {
-        std.debug.assert(self.supports_inserts);
-    } else if (!self.supports_inserts) {
-        unreachable;
-    }
-
-    // Lazily allocate the probing table on first insert so a default-initialized
-    // (`.{}`) interner is valid and `init` paths can stay non-failing.
-    if (self.index.items.items.len == 0) {
-        try self.index.items.ensureTotalCapacityPrecise(gpa, initial_index_capacity);
-        self.index.items.items.len = initial_index_capacity;
-        @memset(self.index.items.items, 0);
-    } else if ((self.count() + 1) * 5 >= self.index.items.items.len * 4) {
-        try self.rehash(gpa);
-    }
-
-    const id: u32 = self.count();
-    const start: u32 = @intCast(self.bytes.items.items.len);
-    _ = try self.bytes.appendSlice(gpa, string);
-    _ = try self.ranges.append(gpa, .{ .start = start, .len = @intCast(string.len) });
-
-    const slot = self.findSlot(string).slot;
-    self.index.items.items[slot] = id + 1;
-    return id;
+    return core.insert(Encoding, self, gpa, string);
 }
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,
@@ -182,14 +153,6 @@ pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocat
     self.ranges = new_ranges;
     self.index = new_index;
     self.supports_inserts = true;
-}
-
-/// Add this interner's offset to its three base pointers. The number of fixups
-/// (3, minus any empty lists) is fixed by the type, never by name count.
-pub fn relocate(self: *SerialStringInterner, offset: isize) void {
-    self.bytes.relocate(offset);
-    self.ranges.relocate(offset);
-    self.index.relocate(offset);
 }
 
 /// Relocatable serialized form. Exactly 3 relocatable base pointers.
@@ -297,7 +260,7 @@ fn roundTrip(gpa: Allocator, src: *const SerialStringInterner) anyerror!struct {
     return .{ .buffer = buffer, .it = ser.deserialize(@intFromPtr(buffer.ptr)) };
 }
 
-test "SerialStringInterner: lookup + getText survive serialize/relocate with no rebuild" {
+test "SerialStringInterner: lookup + getText survive serialize/deserialize with no re-insert" {
     const gpa = testing.allocator;
     var it = try SerialStringInterner.initCapacity(gpa, 8);
     defer it.deinit(gpa);

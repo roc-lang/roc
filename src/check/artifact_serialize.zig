@@ -42,10 +42,79 @@ pub fn assertRelocatablePod(comptime T: type) void {
     }
 }
 
+/// Reject an `= undefined` field default anywhere inside a serialized POD type. A
+/// fixed-layout serialized element always writes every field's bytes, so an `undefined`
+/// default leaks uninitialized memory into the blob — a non-deterministic, cache-poisoning
+/// result. Reading the bytes of an `undefined` comptime default is illegal, so building
+/// this for such a type fails with "use of undefined value" pointing at the offending
+/// type. The fix is to give the field a zero/explicit default (e.g. `= .{}` or
+/// `std.mem.zeroes(T)`), never `= undefined`.
+pub fn assertSerializedDefaultsDefined(comptime T: type) void {
+    comptime {
+        @setEvalBranchQuota(1_000_000);
+        if (@typeInfo(T) != .@"struct") return;
+        for (@typeInfo(T).@"struct".fields) |field| {
+            if (field.defaultValue()) |default| touchAllDefined(field.type, default);
+        }
+    }
+}
+
+/// Comptime-read every scalar reachable from `value`. A read of an `undefined` scalar is
+/// comptime-illegal, which is how `assertSerializedDefaultsDefined` detects an undefined
+/// default; defined values read harmlessly.
+fn touchAllDefined(comptime T: type, comptime value: T) void {
+    comptime {
+        switch (@typeInfo(T)) {
+            .bool, .int, .float, .@"enum" => _ = (value == value),
+            .optional => |o| if (value) |inner| touchAllDefined(o.child, inner),
+            .array => |a| for (value) |elem| touchAllDefined(a.child, elem),
+            .@"struct" => |s| for (s.fields) |f| touchAllDefined(f.type, @field(value, f.name)),
+            .@"union" => |u| if (u.tag_type != null) switch (value) {
+                inline else => |payload| touchAllDefined(@TypeOf(payload), payload),
+            },
+            else => {},
+        }
+    }
+}
+
+/// Comptime guard that every field of a `Serialized` type is either a recognized
+/// relocatable marker (a container that declares `serialized_relocatable_pointers`
+/// and so knows how to fix its own base pointer on load) or a relocation-invariant
+/// POD leaf/aggregate. The hazard this closes: a raw pointer or slice embedded
+/// *directly* in a `Serialized` struct (outside a marker) is silently skipped by
+/// `relocatablePointerCount` — a `.pointer` type falls through to its `else => 0`
+/// arm — so it contributes no fixup and dangles after relocation. A marker is
+/// exempt because it self-describes relocation and its element/payload type was
+/// already validated by `assertRelocatablePod` where the marker was built.
+///
+/// Recurses through nested non-marker aggregates, so one call on the top-level
+/// artifact `Serialized` validates the entire sub-store tree at compile time.
+pub fn assertSerializedRelocatable(comptime T: type) void {
+    comptime {
+        switch (@typeInfo(T)) {
+            .@"struct" => |s| {
+                if (@hasDecl(T, "serialized_relocatable_pointers")) return;
+                for (s.fields) |f| assertSerializedRelocatable(f.type);
+            },
+            .@"union" => |u| {
+                for (u.fields) |f| assertSerializedRelocatable(f.type);
+            },
+            .array => |a| assertSerializedRelocatable(a.child),
+            .optional => |o| assertSerializedRelocatable(o.child),
+            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
+            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
+                "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a SerializedSlice/SerializedOptional."),
+            else => @compileError("Serialized type '" ++ @typeName(T) ++
+                "' has a field with an unsupported (possibly non-relocatable) representation: " ++ @tagName(@typeInfo(T))),
+        }
+    }
+}
+
 /// Relocatable serialized form of a `[]T` of POD elements. Exactly one
 /// relocatable base pointer (`offset`), regardless of `len`.
 pub fn SerializedSlice(comptime T: type) type {
     comptime assertRelocatablePod(T);
+    comptime assertSerializedDefaultsDefined(T);
     comptime std.debug.assert(@alignOf(T) <= CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
     return extern struct {
         /// Byte offset of the first element within the serialized buffer.
@@ -84,7 +153,82 @@ pub fn SerializedSlice(comptime T: type) type {
             const ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
             return ptr[0..@intCast(self.len)];
         }
+
+        /// L-10: reject an `(offset, len)` that would `deserialize` into a slice
+        /// reaching outside the `backing_len`-byte buffer (truncated/corrupt blob).
+        pub fn validateRelocations(self: *const Self, backing_len: u64) error{CorruptArtifact}!void {
+            try validateOffsetLen(@sizeOf(T), @alignOf(T), self.offset, self.len, backing_len);
+        }
     };
+}
+
+/// Shared bounds/alignment check behind every relocatable marker's
+/// `validateRelocations`: an empty range is always valid; otherwise the offset must
+/// be non-negative, aligned for the element type, and the whole `len`-element span
+/// must fit within `backing_len` (with overflow-safe arithmetic so a corrupt huge
+/// `len`/`offset` can't wrap past the bound).
+pub fn validateOffsetLen(elem_size: u64, elem_align: u64, offset: i64, len: u64, backing_len: u64) error{CorruptArtifact}!void {
+    if (len == 0) return;
+    if (offset < 0) return error.CorruptArtifact;
+    const off: u64 = @intCast(offset);
+    if (elem_align != 0 and off % elem_align != 0) return error.CorruptArtifact;
+    const bytes = std.math.mul(u64, len, elem_size) catch return error.CorruptArtifact;
+    const end = std.math.add(u64, off, bytes) catch return error.CorruptArtifact;
+    if (end > backing_len) return error.CorruptArtifact;
+}
+
+/// True if `T` transitively embeds a relocatable marker (a type declaring
+/// `serialized_relocatable_pointers`). Used by `validateSerialized` to reject a
+/// marker hidden inside a union variant, where validation cannot pick the active
+/// variant without a tag.
+fn comptimeHasMarker(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => |s| blk: {
+            if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk true;
+            inline for (s.fields) |f| {
+                if (comptimeHasMarker(f.type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .@"union" => |u| blk: {
+            inline for (u.fields) |f| {
+                if (comptimeHasMarker(f.type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .array => |a| comptimeHasMarker(a.child),
+        .optional => |o| comptimeHasMarker(o.child),
+        else => false,
+    };
+}
+
+/// L-10 whole-artifact validation pass: walk a relocated `Serialized` value and
+/// bounds-check every relocatable marker's `(offset, len)` against `backing_len`
+/// BEFORE any consumer dereferences it, so a truncated or corrupt blob produces a
+/// clean `error.CorruptArtifact` rather than an out-of-bounds read. A marker (a type
+/// declaring `serialized_relocatable_pointers`) self-validates via
+/// `validateRelocations`; everything else is recursed into. Pure structural walk
+/// driven by the type, mirroring `relocatablePointerCount`/`assertSerializedRelocatable`.
+pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) error{CorruptArtifact}!void {
+    switch (@typeInfo(T)) {
+        .@"struct" => |s| {
+            if (@hasDecl(T, "serialized_relocatable_pointers")) {
+                try self.validateRelocations(backing_len);
+                return;
+            }
+            inline for (s.fields) |f| {
+                try validateSerialized(f.type, &@field(self, f.name), backing_len);
+            }
+        },
+        .array => |a| {
+            for (self) |*elem| try validateSerialized(a.child, elem, backing_len);
+        },
+        .@"union" => {
+            if (comptime comptimeHasMarker(T)) @compileError("Serialized union '" ++ @typeName(T) ++
+                "' has a variant containing a relocatable marker; L-10 validation cannot pick the active variant without a tag. Restructure so the marker is a plain struct field.");
+        },
+        else => {},
+    }
 }
 
 /// Relocatable serialized form of an `?T` of POD `T`. Encodes presence as a
@@ -250,11 +394,37 @@ pub fn arrayListFromSlice(comptime T: type, slice: []T) std.ArrayList(T) {
 /// own named range type return this.
 pub const Span = struct { start: u32 = 0, len: u32 = 0 };
 
+/// Binary-search `sorted` (ascending by key) using a 3-way `order` comparator that
+/// ranks an element against the search key. Returns a pointer to the matching element,
+/// or null. This is the single implementation behind the transform-D "sorted-KV pool
+/// replaces an `AutoHashMap`" lookups (`MethodRegistry`, the dispatch-plan `(key,val)`
+/// pools, the procedure-template lookup).
+pub fn binarySearchByKey(
+    comptime Elem: type,
+    comptime Key: type,
+    sorted: []const Elem,
+    key: Key,
+    comptime order: fn (Elem, Key) std.math.Order,
+) ?*const Elem {
+    var lo: usize = 0;
+    var hi: usize = sorted.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        switch (order(sorted[mid], key)) {
+            .eq => return &sorted[mid],
+            .lt => lo = mid + 1,
+            .gt => hi = mid,
+        }
+    }
+    return null;
+}
+
 /// Append `items` to a flat side pool (`ArrayList`), returning their `(start, len)`
 /// range as `RangeT` (a `start: u32, len: u32` struct — a store's named range or the
 /// shared `Span`). This is the single implementation behind every transform-B "flatten
-/// a slice into a shared pool" helper. An empty input appends nothing and yields a
-/// zero-length range at the current end.
+/// a slice into a shared pool" helper. An empty input appends nothing and returns the
+/// canonical empty range `{ .start = 0, .len = 0 }` (a zero-length range never indexes
+/// the pool, so its start is irrelevant — every consumer slices `pool[start..start+0]`).
 pub fn appendSpan(
     comptime RangeT: type,
     comptime T: type,
@@ -268,12 +438,60 @@ pub fn appendSpan(
     return .{ .start = start, .len = @intCast(items.len) };
 }
 
-/// Comptime serialization framework for "transform-A" stores: a store whose *every*
-/// field is backed by a same-named `SerializedSlice`/`SerializedOptional`, with no
-/// extra runtime state. It generates `serialize`/`deserialize` by iterating the
-/// `Serialized` fields, so the two can never drift apart when a field is added or
-/// removed — the hand-written triplet's classic footgun (a missed line silently
-/// drops or misaligns a field). A store opts in inside its `Serialized` extern struct:
+/// Comptime byte-equality of two comptime strings. `std.mem.eql` is banned in
+/// `src/check`, so field-name matching uses this manual loop.
+fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x != y) return false;
+    }
+    return true;
+}
+
+/// The store's `serialized: bool` frozen flag, if present. `deserialize` sets it to
+/// `true`; it never appears in `Serialized` (it is build-only state).
+fn frozenFlagField(comptime Store: type) ?[]const u8 {
+    for (@typeInfo(Store).@"struct".fields) |f| {
+        if (comptimeStrEq(f.name, "serialized") and f.type == bool) return "serialized";
+    }
+    return null;
+}
+
+/// The store's retained build-only `allocator: Allocator` field, if present. A store
+/// with one keeps the load allocator for its build-only fields; its `deserialize`
+/// takes the allocator as a parameter (`deserializeWithAllocator`).
+fn allocatorField(comptime Store: type) ?[]const u8 {
+    for (@typeInfo(Store).@"struct".fields) |f| {
+        if (comptimeStrEq(f.name, "allocator") and f.type == std.mem.Allocator) return "allocator";
+    }
+    return null;
+}
+
+/// Build-only store fields that are NOT serialized, beyond the auto-detected frozen
+/// flag and allocator (e.g. dedup hashmaps, scratch buffers, side-index tables). A
+/// store lists them in a `pub const serde_transient_fields = [_][]const u8{...}` decl;
+/// `deserialize` resets each to its struct default (so they must declare one). They
+/// are excluded from the serialized set, and a store field that is neither serialized,
+/// the flag, the allocator, nor listed here is a compile error — closing the
+/// "forgot to serialize a data field" footgun the strict field set otherwise guards.
+fn transientFields(comptime Store: type) []const []const u8 {
+    if (@hasDecl(Store, "serde_transient_fields")) return &Store.serde_transient_fields;
+    return &.{};
+}
+
+fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
+    for (transientFields(Store)) |t| {
+        if (comptimeStrEq(t, name)) return true;
+    }
+    return false;
+}
+
+/// Comptime serialization framework for "transform-A" stores: a store backed by a
+/// set of same-named `SerializedSlice`/`SerializedOptional`/nested-`Serialized`
+/// fields. It generates `serialize`/`deserialize` by iterating the `Serialized`
+/// fields, so the two can never drift apart when a field is added or removed — the
+/// hand-written triplet's classic footgun (a missed line silently drops or misaligns
+/// a field). A store opts in inside its `Serialized` extern struct:
 ///
 ///     pub const Serialized = extern struct {
 ///         foo: SerializedSlice(Foo) = .{},
@@ -283,25 +501,48 @@ pub fn appendSpan(
 ///         pub const deserialize = Serde.deserialize;
 ///     };
 ///
-/// Stores that carry extra state (a `serialized` flag, an interner, build-only side
-/// tables, or `ArrayList` fields needing `arrayListFromSlice`) keep a hand-written
-/// triplet; the comptime field-count check below rejects them so the mixin is only
-/// ever used where the whole store *is* its serialized fields.
+/// Stores carrying extra runtime state are handled by reflection, not excluded:
+///   * a `serialized: bool` frozen flag — auto-detected and set `true` on load;
+///   * a retained `allocator: Allocator` — auto-detected; the store aliases
+///     `deserialize = Serde.deserializeWithAllocator` and the allocator is injected;
+///   * build-only side tables — declared in `serde_transient_fields` and reset to
+///     their struct default on load;
+///   * `ArrayList`-backed fields — adapted via `.items`/`arrayListFromSlice`.
+/// Every store field must be one of: serialized (a `Serialized` field), the frozen
+/// flag, the allocator, or a declared transient — otherwise a compile error fires, so
+/// a data field accidentally left out of `Serialized` cannot silently vanish. `deinit`
+/// stays hand-written per store: it encodes genuine per-store ownership (slice-free vs
+/// list/interner deinit, frozen gating, allocator retention) that does not belong in
+/// shared infra.
 pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     comptime {
-        const store_fields = @typeInfo(Store).@"struct".fields.len;
-        const ser_fields = @typeInfo(Serialized).@"struct".fields.len;
-        if (store_fields != ser_fields) @compileError(
-            "SliceStoreSerde: " ++ @typeName(Store) ++ " has fields beyond its serialized" ++
-                " ones — it carries extra runtime state and needs a hand-written triplet.",
-        );
+        // Every Serialized field must map to a store field of the same name.
+        for (@typeInfo(Serialized).@"struct".fields) |sf| {
+            if (!@hasField(Store, sf.name)) @compileError(
+                "SliceStoreSerde: Serialized field '" ++ sf.name ++ "' has no matching field in " ++ @typeName(Store),
+            );
+        }
+        // Every store field must be accounted for: serialized, the frozen flag, the
+        // allocator, or a declared transient. A forgotten data field is a compile error.
+        const flag = frozenFlagField(Store);
+        const alloc = allocatorField(Store);
+        for (@typeInfo(Store).@"struct".fields) |f| {
+            const persistent = @hasField(Serialized, f.name);
+            const is_flag = flag != null and comptimeStrEq(f.name, flag.?);
+            const is_alloc = alloc != null and comptimeStrEq(f.name, alloc.?);
+            if (!persistent and !is_flag and !is_alloc and !isTransientField(Store, f.name)) @compileError(
+                "SliceStoreSerde: store field '" ++ f.name ++ "' of " ++ @typeName(Store) ++
+                    " is neither serialized, the frozen flag, the allocator, nor a declared transient" ++
+                    " (add it to `Serialized` or `serde_transient_fields`).",
+            );
+        }
     }
     return struct {
         pub fn serialize(self: *Serialized, store: *const Store, gpa: std.mem.Allocator, writer: *CompactWriter) std.mem.Allocator.Error!void {
             inline for (@typeInfo(Serialized).@"struct".fields) |field| {
                 // `SerializedSlice.serialize` takes the slice by value; `SerializedOptional`
-                // takes a pointer to the optional. Pick the form from the field's own
-                // `serialize` signature so both shapes are handled uniformly, and pull the
+                // and a nested `Serialized` take a pointer. Pick the form from the field's
+                // own `serialize` signature so all shapes are handled uniformly, and pull the
                 // slice out of an `ArrayList`-backed store field via `.items`.
                 const SourceParam = @typeInfo(@TypeOf(field.type.serialize)).@"fn".params[1].type.?;
                 if (@typeInfo(SourceParam).pointer.size == .one) {
@@ -313,19 +554,81 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                 }
             }
         }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) Store {
+
+        fn fill(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) Store {
+            const flag = comptime frozenFlagField(Store);
+            const alloc = comptime allocatorField(Store);
             var store: Store = undefined;
+            // Serialized (persistent) fields come straight from the relocated blob.
+            // `SafeList.Serialized` names its buffer-aliasing loader `deserializeInto`;
+            // `SerializedSlice`/`SerializedOptional`/nested interners use `deserialize`.
+            // Pick whichever the marker provides.
             inline for (@typeInfo(Serialized).@"struct".fields) |field| {
-                const value = @field(self, field.name).deserialize(base_addr);
+                const value = if (comptime @hasDecl(field.type, "deserializeInto"))
+                    @field(self, field.name).deserializeInto(base_addr)
+                else
+                    @field(self, field.name).deserialize(base_addr);
                 if (comptime isArrayListType(@TypeOf(@field(store, field.name)))) {
                     @field(store, field.name) = arrayListFromSlice(@typeInfo(@TypeOf(value)).pointer.child, value);
                 } else {
                     @field(store, field.name) = value;
                 }
             }
+            // The remaining (build-only) fields: the frozen flag is set, the retained
+            // allocator is injected, and every declared transient resets to its default.
+            inline for (@typeInfo(Store).@"struct".fields) |f| {
+                if (comptime @hasField(Serialized, f.name)) continue;
+                if (comptime flag != null and comptimeStrEq(f.name, flag.?)) {
+                    @field(store, f.name) = true;
+                } else if (comptime alloc != null and comptimeStrEq(f.name, alloc.?)) {
+                    @field(store, f.name) = allocator;
+                } else {
+                    @field(store, f.name) = initTransient(@FieldType(Store, f.name), Store, f.name, allocator);
+                }
+            }
             return store;
         }
+
+        /// Materialize a store whose build-only fields need no allocator.
+        pub fn deserialize(self: *const Serialized, base_addr: usize) Store {
+            return fill(self, base_addr, undefined);
+        }
+
+        /// Materialize a store that retains `allocator` for its build-only fields.
+        pub fn deserializeWithAllocator(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) Store {
+            return fill(self, base_addr, allocator);
+        }
     };
+}
+
+fn fieldDefaultValue(comptime Store: type, comptime name: []const u8) ?@FieldType(Store, name) {
+    for (@typeInfo(Store).@"struct".fields) |f| {
+        if (comptimeStrEq(f.name, name)) return f.defaultValue();
+    }
+    unreachable;
+}
+
+fn initTakesOnlyAllocator(comptime FT: type) bool {
+    if (!@hasDecl(FT, "init")) return false;
+    const info = @typeInfo(@TypeOf(FT.init));
+    if (info != .@"fn") return false;
+    const params = info.@"fn".params;
+    return params.len == 1 and params[0].type == std.mem.Allocator;
+}
+
+/// Reset value for a transient store field on deserialize: its struct default if it
+/// has one, else `FT.init(allocator)` for a build-only container that needs the load
+/// allocator (e.g. a managed hashmap). A field with neither is a compile error.
+fn initTransient(comptime FT: type, comptime Store: type, comptime name: []const u8, allocator: std.mem.Allocator) FT {
+    const default = comptime fieldDefaultValue(Store, name);
+    if (comptime default != null) {
+        return comptime default.?;
+    } else if (comptime initTakesOnlyAllocator(FT)) {
+        return FT.init(allocator);
+    } else {
+        @compileError("SliceStoreSerde: transient field '" ++ name ++ "' of " ++ @typeName(Store) ++
+            " needs a struct default (e.g. `= .{}`) or an `init(Allocator)` so deserialize can reset it.");
+    }
 }
 
 /// True for `std.ArrayList(T)`: a struct with both `items` (a slice) and `capacity`.
@@ -436,6 +739,40 @@ test "relocatablePointerCount: counts SafeList.Serialized base pointers and sums
     try testing.expectEqual(@as(usize, 5), relocatablePointerCount(Composed));
 }
 
+test "validateOffsetLen: bounds, alignment, and overflow (L-10)" {
+    // Empty span is always valid, even with a wild offset.
+    try validateOffsetLen(4, 4, 9999, 0, 0);
+    // In-bounds and exactly at the edge.
+    try validateOffsetLen(4, 4, 0, 4, 16);
+    try validateOffsetLen(4, 4, 8, 2, 16);
+    // One element past the edge.
+    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, 8, 3, 16));
+    // Negative offset, misaligned offset.
+    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, -1, 1, 16));
+    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, 2, 1, 16));
+    // len * elem_size overflows u64.
+    try testing.expectError(error.CorruptArtifact, validateOffsetLen(8, 1, 0, std.math.maxInt(u64), 64));
+}
+
+test "validateSerialized: walks markers and rejects out-of-bounds ranges (L-10)" {
+    const Elem = enum(u32) { _ };
+    const Composed = extern struct {
+        a: SerializedSlice(Elem),
+        b: SerializedSlice(Elem),
+    };
+    // Two 2-element u32 slices packed into a 16-byte buffer: a at [0,8), b at [8,16).
+    var c = Composed{
+        .a = .{ .offset = 0, .len = 2 },
+        .b = .{ .offset = 8, .len = 2 },
+    };
+    try validateSerialized(Composed, &c, 16);
+    // Truncating the buffer pushes b's extent past the bound.
+    try testing.expectError(error.CorruptArtifact, validateSerialized(Composed, &c, 12));
+    // A corrupt, impossibly-large len is rejected.
+    c.b.len = std.math.maxInt(u64);
+    try testing.expectError(error.CorruptArtifact, validateSerialized(Composed, &c, 16));
+}
+
 fn versionHashesEqual(a: [32]u8, b: [32]u8) bool {
     // Local byte compare: `std.mem.eql` is banned in src/check.
     for (a, b) |x, y| {
@@ -467,8 +804,8 @@ test "layoutVersionHash: flips on nested reorder, element reorder, and version b
     const hL1 = comptime layoutVersionHash(L1, 1);
     const hL2 = comptime layoutVersionHash(L2, 1);
 
-    // Reordering two same-size fields of a Serialized changes the hash (the bug the
-    // old @typeName+@sizeOf hash missed).
+    // Reordering two same-size fields of a Serialized changes the hash (a naive
+    // @typeName+@sizeOf fingerprint would not detect this).
     try testing.expect(!versionHashesEqual(hA1, hB1));
     // A version-discriminant bump changes the hash.
     try testing.expect(!versionHashesEqual(hA1, hA2));
@@ -539,6 +876,36 @@ test "SerializedSlice.serialize zeroes element padding (deterministic bytes)" {
     // Byte-identical despite the differing source padding.
     try testing.expectEqual(buf_a.len, buf_b.len);
     for (buf_a, buf_b) |x, y| try testing.expectEqual(x, y);
+}
+
+test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no copy buffer)" {
+    const gpa = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // A padding-free element type (u32). The serializer must NOT allocate a
+    // writer-owned copy buffer for it — it iovecs the source directly. Measure the
+    // `allocated_memory` delta across the slice serialize (the header `appendAlloc`
+    // registers one entry up front, which is not what we're measuring).
+    const PodHolder = extern struct { items: SerializedSlice(u32) = .{} };
+    var pod_writer = CompactWriter.init();
+    const pod_hdr = try pod_writer.appendAlloc(aa, PodHolder);
+    const pod_data = [_]u32{ 10, 20, 30, 40 };
+    const pod_before = pod_writer.allocated_memory.items.len;
+    try pod_hdr.items.serialize(pod_data[0..], aa, &pod_writer);
+    try testing.expectEqual(pod_before, pod_writer.allocated_memory.items.len);
+
+    // A padded element type (1-byte field + 8-byte field → inter-field gap) DOES need a
+    // zeroed copy, so the copy path registers exactly one buffer.
+    const Padded = struct { a: u8, b: u64 };
+    const PaddedHolder = extern struct { items: SerializedSlice(Padded) = .{} };
+    var padded_writer = CompactWriter.init();
+    const padded_hdr = try padded_writer.appendAlloc(aa, PaddedHolder);
+    const padded_data = [_]Padded{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 } };
+    const padded_before = padded_writer.allocated_memory.items.len;
+    try padded_hdr.items.serialize(padded_data[0..], aa, &padded_writer);
+    try testing.expectEqual(padded_before + 1, padded_writer.allocated_memory.items.len);
 }
 
 fn serializeHolderToBuffer(

@@ -369,9 +369,9 @@ const RootCompletionState = struct {
         if (!artifactMatches(required.artifact, self.module.key)) return true;
         const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
             finalizationInvariant("platform-required procedure dependency referenced a missing binding");
-        return switch (binding.value_use.kind) {
-            .procedure_value => self.procedureUseDependenciesComplete(binding.value_use.procedure_use.procedure),
-            .const_value => self.constUseComplete(binding.value_use.const_use.const_use),
+        return switch (binding.value_use) {
+            .procedure_value => |procedure_use| self.procedureUseDependenciesComplete(procedure_use.procedure),
+            .const_value => |const_use| self.constUseComplete(const_use.const_use),
         };
     }
 };

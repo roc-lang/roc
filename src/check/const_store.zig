@@ -171,8 +171,8 @@ pub const ConstStore = struct {
         return id;
     }
 
-    /// Store `value` at `id`. Takes ownership of any slices in `value`: their
-    /// contents are copied into the store's pools and the input slices freed.
+    /// Store `value` at `id`. Any slices in `value` are copied into the store's
+    /// pools; the caller retains ownership of the input slices and frees them.
     pub fn fill(self: *ConstStore, id: ConstNodeId, value: ConstValue) void {
         const slot = &self.values.items[@intFromEnum(id)];
         switch (slot.*) {
@@ -184,7 +184,9 @@ pub const ConstStore = struct {
 
     fn storeValue(self: *ConstStore, value: ConstValue) Allocator.Error!StoredValue {
         return switch (value) {
-            .pending => .pending,
+            // `reserve` writes the `.pending` placeholder directly; `fill` always supplies
+            // a concrete value, so filling a node *with* `.pending` is an invariant break.
+            .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
             .str => |s| .{ .str = s },
@@ -192,24 +194,11 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
-            .list => |items| blk: {
-                defer self.allocator.free(items);
-                break :blk .{ .list = try self.appendNodes(items) };
-            },
-            .tuple => |items| blk: {
-                defer self.allocator.free(items);
-                break :blk .{ .tuple = try self.appendNodes(items) };
-            },
-            .record => |items| blk: {
-                defer self.allocator.free(items);
-                break :blk .{ .record = try self.appendNodes(items) };
-            },
+            .list => |items| .{ .list = try self.appendNodes(items) },
+            .tuple => |items| .{ .tuple = try self.appendNodes(items) },
+            .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
-                defer self.allocator.free(tag.tag_name);
-                defer self.allocator.free(tag.payloads);
-                const name_start: u32 = @intCast(self.tag_name_pool.items.len);
-                try self.tag_name_pool.appendSlice(self.allocator, tag.tag_name);
-                const name_range = ConstRange{ .start = name_start, .len = @intCast(tag.tag_name.len) };
+                const name_range = try artifact_serialize.appendSpan(ConstRange, u8, &self.tag_name_pool, self.allocator, tag.tag_name);
                 const payloads_range = try self.appendNodes(tag.payloads);
                 break :blk .{ .tag = .{ .tag_name = name_range, .payloads = payloads_range } };
             },
@@ -222,18 +211,16 @@ pub const ConstStore = struct {
         return id;
     }
 
-    /// Store `fn_value`; takes ownership of its `captures` slice (copied into the
-    /// pool and freed).
+    /// Store `fn_value`; its `captures` are copied into the pool. The caller
+    /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         const id: ConstFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
-        defer self.allocator.free(fn_value.captures);
-        const captures_start: u32 = @intCast(self.capture_pool.items.len);
-        try self.capture_pool.appendSlice(self.allocator, fn_value.captures);
+        const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
-            .captures = .{ .start = captures_start, .len = @intCast(fn_value.captures.len) },
+            .captures = captures_range,
         });
         return id;
     }
@@ -304,29 +291,9 @@ pub const ConstStore = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
         }
 
-        pub fn serialize(self: *Serialized, store: *const ConstStore, gpa: Allocator, writer: *@import("collections").CompactWriter) Allocator.Error!void {
-            try self.values.serialize(store.values.items, gpa, writer);
-            try self.fns.serialize(store.fns.items, gpa, writer);
-            try self.node_pool.serialize(store.node_pool.items, gpa, writer);
-            try self.tag_name_pool.serialize(store.tag_name_pool.items, gpa, writer);
-            try self.capture_pool.serialize(store.capture_pool.items, gpa, writer);
-            try self.str_backing.serialize(store.str_backing.items, gpa, writer);
-            try self.str_views.serialize(store.str_views.items, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) ConstStore {
-            return .{
-                .allocator = allocator,
-                .values = artifact_serialize.arrayListFromSlice(StoredValue, self.values.deserialize(base_addr)),
-                .fns = artifact_serialize.arrayListFromSlice(StoredFn, self.fns.deserialize(base_addr)),
-                .node_pool = artifact_serialize.arrayListFromSlice(ConstNodeId, self.node_pool.deserialize(base_addr)),
-                .tag_name_pool = artifact_serialize.arrayListFromSlice(u8, self.tag_name_pool.deserialize(base_addr)),
-                .capture_pool = artifact_serialize.arrayListFromSlice(ConstCapture, self.capture_pool.deserialize(base_addr)),
-                .str_backing = artifact_serialize.arrayListFromSlice(u8, self.str_backing.deserialize(base_addr)),
-                .str_views = artifact_serialize.arrayListFromSlice(ConstRange, self.str_views.deserialize(base_addr)),
-                .serialized = true,
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserializeWithAllocator;
     };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
@@ -456,16 +423,22 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // Scalars + a list + a tag (exercises node_pool + tag_name_pool).
     const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
     const b = try store.append(.{ .scalar = .{ .i32 = -3 } });
+    // The store copies inputs into its pools and never frees them, so this test
+    // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
+    defer gpa.free(list_items);
     const list = try store.append(.{ .list = list_items });
     const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
+    defer gpa.free(tag_payloads);
     const tag_name = try gpa.dupe(u8, "Ok");
+    defer gpa.free(tag_name);
     const tag = try store.append(.{ .tag = .{ .tag_name = tag_name, .payloads = tag_payloads } });
     // A string backing + a str value (exercises str_backing + str_views).
     const sd = try store.addStrData("hello world");
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
     // A function value with a capture (exercises capture_pool).
     const caps = try gpa.dupe(ConstCapture, &.{.{ .binder = @enumFromInt(1), .value = a }});
+    defer gpa.free(caps);
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
         // fields just need to survive, not be specific values.
@@ -506,4 +479,30 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 1), loaded_fn.captures.len);
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+}
+
+test "ConstStore.appendFn: no leak or double-free under allocation failure" {
+    // `appendFn` copies `captures` into the pool and does not free the input; the
+    // caller owns it. Drive every allocation in that path to fail in turn and assert
+    // no leak and no double-free (the testing allocator panics on a double-free, so
+    // this would have caught the prior `defer free` + caller `errdefer free` overlap).
+    const Helper = struct {
+        fn run(allocator: Allocator) anyerror!void {
+            var store = ConstStore.init(allocator);
+            defer store.deinit();
+            const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+            const caps = try allocator.dupe(ConstCapture, &.{
+                .{ .binder = @enumFromInt(1), .value = a },
+                .{ .binder = @enumFromInt(2), .value = a },
+            });
+            defer allocator.free(caps);
+            _ = try store.appendFn(.{
+                .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+                .source_fn_ty = @enumFromInt(3),
+                .source_fn_key = .{},
+                .captures = caps,
+            });
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
 }

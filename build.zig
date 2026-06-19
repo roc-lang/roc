@@ -1604,7 +1604,7 @@ fn createAndRunBuiltinCompiler(
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
-            // Kept Debug deliberately: this exe now also publishes + serializes the
+            // Kept Debug deliberately: this exe publishes + serializes the
             // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
             // it ReleaseFast would optimize the whole check/eval closure (incl. the
             // large checked_artifact.zig), adding far more `zig build` wall-clock than

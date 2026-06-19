@@ -16,6 +16,21 @@ fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     CompactWriter.zeroValuePadding(V, ptr);
 }
 
+/// L-10 bounds check shared by `SafeList.Serialized`/`SafeMultiList.Serialized`
+/// `validateRelocations`: reject an `(offset)`+`span_bytes` extent that would reach
+/// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
+/// overflow-safe arithmetic. An empty span is always valid. Mirrors
+/// `artifact_serialize.validateOffsetLen` (kept here because `collections` cannot
+/// depend on `check`).
+fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, backing_len: u64) error{CorruptArtifact}!void {
+    if (span_bytes == 0) return;
+    if (offset < 0) return error.CorruptArtifact;
+    const off: u64 = @intCast(offset);
+    if (elem_align != 0 and off % elem_align != 0) return error.CorruptArtifact;
+    const end = std.math.add(u64, off, span_bytes) catch return error.CorruptArtifact;
+    if (end > backing_len) return error.CorruptArtifact;
+}
+
 /// Represents a type safe range in a list; [start, end)
 ///
 /// This is the conceptual equivalent of slice, but since this is based
@@ -165,6 +180,13 @@ pub fn SafeList(comptime T: type) type {
             /// reflect a change to the element's field order/size.
             pub const SerializedElement = T;
 
+            /// L-10: reject an `(offset, len)` whose `len` elements reach outside the
+            /// `backing_len`-byte buffer before `deserializeInto` dereferences it.
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                const span_bytes = std.math.mul(u64, self.len, @sizeOf(T)) catch return error.CorruptArtifact;
+                try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
+            }
+
             /// Serialize a SafeList into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
@@ -182,27 +204,37 @@ pub fn SafeList(comptime T: type) type {
 
                 // Append the raw data without further padding.
                 if (items.len > 0) {
-                    // Ensure deterministic serialization by zeroing padding bytes.
-                    // Auto-layout structs/unions have undefined padding that varies
-                    // between runs (ASLR, stack contents). Assignment copies ALL bytes
-                    // including padding, so we must explicitly zero padding AFTER copy.
-                    const buf = try allocator.alloc(T, items.len);
-                    for (items, 0..) |item, i| {
-                        buf[i] = item;
+                    if (comptime CompactWriter.needsPaddingZeroing(T)) {
+                        // Auto-layout structs/unions/optionals have undefined padding that
+                        // varies between runs (ASLR, stack contents). Assignment copies ALL
+                        // bytes including padding, so copy into writer-owned memory and zero
+                        // the padding for deterministic bytes.
+                        const buf = try allocator.alloc(T, items.len);
+                        for (items, 0..) |item, i| {
+                            buf[i] = item;
+                        }
+                        zeroPadding(buf);
+
+                        // Track the allocated memory for cleanup by the writer
+                        try writer.allocated_memory.append(allocator, .{
+                            .ptr = @ptrCast(buf.ptr),
+                            .size = items.len * @sizeOf(T),
+                            .alignment = @alignOf(T),
+                        });
+
+                        try writer.iovecs.append(allocator, .{
+                            .iov_base = @ptrCast(buf.ptr),
+                            .iov_len = items.len * @sizeOf(T),
+                        });
+                    } else {
+                        // `T` has no padding to zero, so the live items are already
+                        // byte-deterministic: iovec them verbatim (no scratch alloc/copy).
+                        // The list outlives the writer's flush on the serialize path.
+                        try writer.iovecs.append(allocator, .{
+                            .iov_base = @ptrCast(items.ptr),
+                            .iov_len = items.len * @sizeOf(T),
+                        });
                     }
-                    zeroPadding(buf);
-
-                    // Track the allocated memory for cleanup by the writer
-                    try writer.allocated_memory.append(allocator, .{
-                        .ptr = @ptrCast(buf.ptr),
-                        .size = items.len * @sizeOf(T),
-                        .alignment = @alignOf(T),
-                    });
-
-                    try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(buf.ptr),
-                        .iov_len = items.len * @sizeOf(T),
-                    });
                     writer.total_bytes += items.len * @sizeOf(T);
                 }
 
@@ -761,6 +793,14 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// The element type whose bytes are serialized (see `SafeList.Serialized`).
             pub const SerializedElement = T;
+
+            /// L-10: reject an `(offset, capacity)` whose `capacityInBytes` extent (the
+            /// region `serialize` writes) reaches outside the `backing_len`-byte buffer.
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                if (self.capacity == 0) return;
+                const span_bytes = std.MultiArrayList(T).capacityInBytes(@intCast(self.capacity));
+                try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
+            }
 
             // We copy capacity-sized regions below; clear per-field slack so the writer never
             // observes uninitialized bytes. Leaving that memory undefined is UB and makes the

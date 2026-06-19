@@ -13,6 +13,7 @@ const Ident = base.Ident;
 const collections = @import("collections");
 const SafeList = collections.SafeList;
 const CompactWriter = collections.CompactWriter;
+const artifact_serialize = @import("artifact_serialize.zig");
 
 /// Relocatable, serial-id string interner used to back the name stores so the
 /// published artifact can be serialized and deserialized with a constant number
@@ -281,10 +282,16 @@ pub const CanonicalNameStore = struct {
     /// store is consumed by id via `procBase`, never re-interned.
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
-    scratch_key: std.ArrayList(u8),
+    scratch_key: std.ArrayList(u8) = .empty,
     /// True for a store reconstructed from a serialized buffer: its interners
     /// and `proc_bases` point into buffer-owned memory and must not be freed.
     serialized: bool = false,
+
+    /// Build-only dedup/scratch fields excluded from serialization: empty on a
+    /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
+    /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
+    /// field accidentally omitted from `Serialized` is a compile error.
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -314,19 +321,6 @@ pub const CanonicalNameStore = struct {
         self.* = CanonicalNameStore.init(self.allocator);
     }
 
-    /// Add this store's offset to every relocatable base pointer. Fixed count
-    /// (7 interners × 3 + 1 proc-base list = 22), independent of contents.
-    pub fn relocate(self: *CanonicalNameStore, offset: isize) void {
-        self.module_names.relocate(offset);
-        self.type_names.relocate(offset);
-        self.method_names.relocate(offset);
-        self.record_field_labels.relocate(offset);
-        self.tag_labels.relocate(offset);
-        self.export_names.relocate(offset);
-        self.external_symbol_names.relocate(offset);
-        self.proc_bases.relocate(offset);
-    }
-
     /// Relocatable serialized form (build-only dedup/scratch fields excluded).
     pub const Serialized = extern struct {
         module_names: NameInterner.Serialized,
@@ -338,40 +332,9 @@ pub const CanonicalNameStore = struct {
         external_symbol_names: NameInterner.Serialized,
         proc_bases: SafeList(ProcBaseKey).Serialized,
 
-        pub fn serialize(
-            self: *Serialized,
-            store: *const CanonicalNameStore,
-            gpa: Allocator,
-            writer: *CompactWriter,
-        ) Allocator.Error!void {
-            try self.module_names.serialize(&store.module_names, gpa, writer);
-            try self.type_names.serialize(&store.type_names, gpa, writer);
-            try self.method_names.serialize(&store.method_names, gpa, writer);
-            try self.record_field_labels.serialize(&store.record_field_labels, gpa, writer);
-            try self.tag_labels.serialize(&store.tag_labels, gpa, writer);
-            try self.export_names.serialize(&store.export_names, gpa, writer);
-            try self.external_symbol_names.serialize(&store.external_symbol_names, gpa, writer);
-            try self.proc_bases.serialize(&store.proc_bases, gpa, writer);
-        }
-
-        /// Materialize a frozen store from the relocated buffer. `allocator` is
-        /// retained only for the empty build-only fields.
-        pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) CanonicalNameStore {
-            return .{
-                .allocator = allocator,
-                .module_names = self.module_names.deserialize(base_addr),
-                .type_names = self.type_names.deserialize(base_addr),
-                .method_names = self.method_names.deserialize(base_addr),
-                .record_field_labels = self.record_field_labels.deserialize(base_addr),
-                .tag_labels = self.tag_labels.deserialize(base_addr),
-                .export_names = self.export_names.deserialize(base_addr),
-                .external_symbol_names = self.external_symbol_names.deserialize(base_addr),
-                .proc_bases = self.proc_bases.deserializeInto(base_addr),
-                .proc_base_by_key = std.StringHashMap(ProcBaseKeyRef).init(allocator),
-                .scratch_key = .empty,
-                .serialized = true,
-            };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(CanonicalNameStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserializeWithAllocator;
     };
 
     pub fn internModuleName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ModuleNameId {
@@ -669,7 +632,7 @@ test "proc base identity includes nested owner mono specialization" {
     try std.testing.expect(lifted_i64 != lifted_str);
 }
 
-test "CanonicalNameStore: serialize/relocate round-trip preserves names, ids, and proc bases" {
+test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids, and proc bases" {
     const gpa = std.testing.allocator;
     var store = CanonicalNameStore.init(gpa);
     defer store.deinit();
@@ -696,7 +659,7 @@ test "CanonicalNameStore: serialize/relocate round-trip preserves names, ids, an
         .ordinal = 7,
     }));
 
-    // Serialize via CompactWriter into a 16-byte-aligned buffer, then relocate.
+    // Serialize via CompactWriter into a 16-byte-aligned buffer, then deserialize.
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();

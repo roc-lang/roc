@@ -4108,48 +4108,40 @@ fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedName
     errdefer cloned.deinit();
 
     // Re-intern every name in serial-id order; the ids must come back identical.
-    var i: u32 = 0;
-    i = 0;
-    while (i < source.module_names.count()) : (i += 1) {
-        const id = try cloned.internModuleName(source.module_names.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed module-name ids");
-    }
-    i = 0;
-    while (i < source.type_names.count()) : (i += 1) {
-        const id = try cloned.internTypeName(source.type_names.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed type-name ids");
-    }
-    i = 0;
-    while (i < source.method_names.count()) : (i += 1) {
-        const id = try cloned.internMethodName(source.method_names.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed method-name ids");
-    }
-    i = 0;
-    while (i < source.record_field_labels.count()) : (i += 1) {
-        const id = try cloned.internRecordFieldLabel(source.record_field_labels.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed record-field ids");
-    }
-    i = 0;
-    while (i < source.tag_labels.count()) : (i += 1) {
-        const id = try cloned.internTagLabel(source.tag_labels.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed tag ids");
-    }
-    i = 0;
-    while (i < source.export_names.count()) : (i += 1) {
-        const id = try cloned.internExportName(source.export_names.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed export-name ids");
-    }
-    i = 0;
-    while (i < source.external_symbol_names.count()) : (i += 1) {
-        const id = try cloned.internExternalSymbolName(source.external_symbol_names.getText(i));
-        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed external-symbol ids");
-    }
+    try reinternNames("module-name", &source.module_names, &cloned, NameStore.internModuleName);
+    try reinternNames("type-name", &source.type_names, &cloned, NameStore.internTypeName);
+    try reinternNames("method-name", &source.method_names, &cloned, NameStore.internMethodName);
+    try reinternNames("record-field", &source.record_field_labels, &cloned, NameStore.internRecordFieldLabel);
+    try reinternNames("tag", &source.tag_labels, &cloned, NameStore.internTagLabel);
+    try reinternNames("export-name", &source.export_names, &cloned, NameStore.internExportName);
+    try reinternNames("external-symbol", &source.external_symbol_names, &cloned, NameStore.internExternalSymbolName);
     for (source.proc_bases.items.items, 0..) |key, index| {
         const id = try cloned.internProcBase(key);
         if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed proc-base ids");
     }
 
     return cloned;
+}
+
+const NameStore = check.CheckedNames.NameStore;
+
+/// Re-intern every text of one source interner into `dest` in serial-id order,
+/// asserting each id round-trips to its original position. A name interner
+/// deduplicates, so this reproduces ids `0..count-1` exactly UNLESS the source
+/// held the same text under two ids — dedup would collapse those and shift every
+/// later id, which the per-id check turns into a loud invariant break rather than
+/// a silently divergent clone.
+fn reinternNames(
+    comptime label: []const u8,
+    source: anytype,
+    dest: *NameStore,
+    comptime intern: anytype,
+) std.mem.Allocator.Error!void {
+    var i: u32 = 0;
+    while (i < source.count()) : (i += 1) {
+        const id = try intern(dest, source.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed " ++ label ++ " ids (duplicate text in source?)");
+    }
 }
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {

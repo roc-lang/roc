@@ -156,24 +156,53 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 for (uinfo.fields) |f| max = @max(max, @sizeOf(f.type));
                 break :blk max;
             };
-            const meaningful = max_payload + tag_size;
+            const max_payload_align = comptime blk: {
+                var a: usize = 1;
+                for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
+                break :blk a;
+            };
+            // Layout-agnostic: compute where Zig actually places the tag and payload.
+            // Zig puts the tag FIRST when its alignment is >= every payload's alignment,
+            // otherwise the payload comes first (highest-alignment field at offset 0).
+            // This handles both layouts — a wrong tag-after-payload assumption would
+            // otherwise clobber live tag/payload bytes (and miss undefined inactive bytes)
+            // for a tag-first union.
+            const tag_first = @alignOf(TagType) >= max_payload_align;
+            const payload_offset = comptime if (tag_first)
+                std.mem.alignForward(usize, tag_size, max_payload_align)
+            else
+                0;
+            const tag_offset = comptime if (tag_first)
+                0
+            else
+                std.mem.alignForward(usize, max_payload, @alignOf(TagType));
 
-            // Zero tail padding (after tag + max_payload)
-            if (meaningful < vsize) {
-                @memset(ptr[meaningful..vsize], 0);
-            }
-
-            // Per-variant: zero overshoot + recurse into variant payload
-            const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+            // Save the tag + active payload, zero the WHOLE value (so every inactive /
+            // unused / alignment byte becomes deterministic 0 regardless of layout), then
+            // restore the tag + active payload and recurse to zero the active payload's
+            // own internal padding.
+            const item = @as(*V, @ptrCast(@alignCast(ptr)));
             switch (item.*) {
                 inline else => |_, tag| {
                     const VariantType = uinfo.fields[@intFromEnum(tag)].type;
                     const active_size = @sizeOf(VariantType);
-                    // Recurse into variant payload (handles nested struct/union padding)
-                    zeroValuePadding(VariantType, ptr);
-                    // Zero overshoot (unused payload between active variant and max)
-                    if (active_size < max_payload) {
-                        @memset(ptr[active_size..max_payload], 0);
+                    // Self-check the computed payload offset against Zig's actual layout, so
+                    // a future change to union layout fails loudly here instead of silently
+                    // corrupting serialized bytes.
+                    if (active_size > 0) {
+                        std.debug.assert(payload_offset ==
+                            @intFromPtr(&@field(item.*, @tagName(tag))) - @intFromPtr(item));
+                    }
+                    const saved_tag: [tag_size]u8 = ptr[tag_offset..][0..tag_size].*;
+                    const saved_payload: [active_size]u8 = if (active_size > 0)
+                        ptr[payload_offset..][0..active_size].*
+                    else
+                        undefined;
+                    @memset(ptr[0..vsize], 0);
+                    ptr[tag_offset..][0..tag_size].* = saved_tag;
+                    if (active_size > 0) {
+                        ptr[payload_offset..][0..active_size].* = saved_payload;
+                        zeroValuePadding(VariantType, ptr + payload_offset);
                     }
                 },
             }
@@ -237,6 +266,21 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     // Primitives, enums, extern structs: no padding to zero.
 }
 
+/// Whether `zeroValuePadding(V, …)` would write any bytes — i.e. whether `V` has
+/// undefined padding (auto-struct inter-field gaps, tagged-union tail/overshoot, or an
+/// optional). When this is false, a verbatim byte copy of `V` is already deterministic,
+/// so serialization can iovec the source directly instead of allocating a scratch copy
+/// just to run a no-op padding pass. Kept next to `zeroValuePadding` so the two stay in
+/// lockstep: every shape `zeroValuePadding` acts on must return true here.
+pub fn needsPaddingZeroing(comptime V: type) bool {
+    return switch (@typeInfo(V)) {
+        .@"union" => |u| u.tag_type != null,
+        .optional => true,
+        .@"struct" => |s| s.layout == .auto,
+        else => false,
+    };
+}
+
 /// Append a slice of POD elements with DETERMINISTIC bytes: copy into fresh
 /// writer-owned memory, zero each element's padding (`zeroValuePadding`), and gather
 /// it. Unlike `appendSlice` (which iovecs the caller's slice verbatim, including
@@ -256,19 +300,31 @@ pub fn appendSlicePodZeroed(
     const offset = self.total_bytes;
 
     if (len > 0) {
-        const buf = try allocator.alloc(T, len);
-        for (slice, 0..) |item, i| buf[i] = item;
-        for (buf) |*item| zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
+        if (comptime needsPaddingZeroing(T)) {
+            // `T` has undefined padding; copy into writer-owned memory and zero it so the
+            // bytes are deterministic.
+            const buf = try allocator.alloc(T, len);
+            for (slice, 0..) |item, i| buf[i] = item;
+            for (buf) |*item| zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
 
-        try self.allocated_memory.append(allocator, .{
-            .ptr = @ptrCast(buf.ptr),
-            .size = len * @sizeOf(T),
-            .alignment = @alignOf(T),
-        });
-        try self.iovecs.append(allocator, .{
-            .iov_base = @ptrCast(buf.ptr),
-            .iov_len = len * @sizeOf(T),
-        });
+            try self.allocated_memory.append(allocator, .{
+                .ptr = @ptrCast(buf.ptr),
+                .size = len * @sizeOf(T),
+                .alignment = @alignOf(T),
+            });
+            try self.iovecs.append(allocator, .{
+                .iov_base = @ptrCast(buf.ptr),
+                .iov_len = len * @sizeOf(T),
+            });
+        } else {
+            // `T` has no padding to zero, so the source bytes are already deterministic:
+            // iovec them verbatim (no scratch alloc, no copy). The source must outlive the
+            // writer's flush — true on the serialize path, where the store owns the data.
+            try self.iovecs.append(allocator, .{
+                .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
+                .iov_len = len * @sizeOf(T),
+            });
+        }
         self.total_bytes += len * @sizeOf(T);
     }
 

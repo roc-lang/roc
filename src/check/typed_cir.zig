@@ -108,6 +108,40 @@ pub const Modules = struct {
         }
     };
 
+    /// The graph for a single root module plus its imports, with the root's index.
+    pub const RootModules = struct { modules: Modules, module_idx: u32 };
+
+    /// Build the `Modules` graph for `root_env` plus `imported_envs`, returning the
+    /// root's `module_idx`. A builtin root does not re-include builtin imports. This is
+    /// the one place the "source-modules + `init`" dance lives, shared by the publish
+    /// and cache-key paths so a single graph can be built once and reused (e.g. for both
+    /// the cache-key probe and, on a miss, the republish) instead of rebuilt per call.
+    pub fn initForRootModule(
+        allocator: Allocator,
+        root_env: *ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+    ) Allocator.Error!RootModules {
+        var imported_source_count: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+            imported_source_count += 1;
+        }
+
+        const source_modules = try allocator.alloc(SourceModule, imported_source_count + 1);
+        defer allocator.free(source_modules);
+
+        var source_index: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+            source_modules[source_index] = .{ .precompiled = imported_env };
+            source_index += 1;
+        }
+        const module_idx: u32 = @intCast(imported_source_count);
+        source_modules[imported_source_count] = .{ .precompiled = root_env };
+
+        return .{ .modules = try Modules.init(allocator, source_modules), .module_idx = module_idx };
+    }
+
     /// Initialize typed CIR module storage from checked module environments.
     pub fn init(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
         const modules = try allocator.alloc(ModuleData, source_modules.len);
