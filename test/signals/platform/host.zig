@@ -75,6 +75,12 @@ const HostEventDescriptor = struct {
     payload_kind: EventPayloadKind,
 };
 
+const HostActiveEventDesc = struct {
+    target_node_id: u64,
+    payload_kind: EventPayloadKind,
+    transform: abi.RocErasedCallable,
+};
+
 const HostSignalEventRoute = struct {
     event_id: u64,
     signal_ids: []u64,
@@ -316,6 +322,7 @@ const HostNodeEventDesc = struct {
     target_node_id: u64,
     payload_kind: EventPayloadKind,
     transform: abi.RocErasedCallable,
+    owns_transform: bool = true,
 };
 
 const HostNodeStateDesc = struct {
@@ -403,8 +410,10 @@ const HostNodeDescriptorStream = struct {
         self.signal_bool_attrs.deinit(allocator);
 
         for (self.events.items) |desc| {
-            metrics.closure_releases += 1;
-            abi.decrefErasedCallable(desc.transform, roc_host);
+            if (desc.owns_transform) {
+                metrics.closure_releases += 1;
+                abi.decrefErasedCallable(desc.transform, roc_host);
+            }
         }
         self.events.deinit(allocator);
 
@@ -1147,6 +1156,7 @@ const HostEnv = struct {
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
+    active_events: std.ArrayListUnmanaged(HostActiveEventDesc) = .empty,
     event_descriptors: std.ArrayListUnmanaged(HostEventDescriptor) = .empty,
     signal_event_routes: std.ArrayListUnmanaged(HostSignalEventRoute) = .empty,
     signal_descriptors: std.ArrayListUnmanaged(HostSignalDescriptor) = .empty,
@@ -1187,6 +1197,29 @@ const HostEnv = struct {
 
     fn clearEventDescriptors(self: *HostEnv) void {
         self.event_descriptors.items.len = 0;
+    }
+
+    fn clearActiveEvents(self: *HostEnv) void {
+        for (self.active_events.items) |desc| {
+            abi.decrefErasedCallable(desc.transform, self.roc_host.?);
+            self.pending_roc_metrics.closure_releases += 1;
+        }
+        self.active_events.items.len = 0;
+    }
+
+    fn rebuildActiveEventsFromStream(self: *HostEnv, stream: *HostNodeDescriptorStream) void {
+        const allocator = self.gpa.allocator();
+        self.clearActiveEvents();
+
+        for (stream.events.items) |*desc| {
+            if (!desc.owns_transform) failHost("event descriptor transform ownership was already transferred");
+            self.active_events.append(allocator, .{
+                .target_node_id = desc.target_node_id,
+                .payload_kind = desc.payload_kind,
+                .transform = desc.transform,
+            }) catch std.process.exit(1);
+            desc.owns_transform = false;
+        }
     }
 
     fn clearSignalEventRoutes(self: *HostEnv) void {
@@ -2362,6 +2395,11 @@ const HostEnv = struct {
         };
     }
 
+    fn activeEventTransformByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
+        if (event_index >= self.active_events.items.len) failHost("active event table is missing a retained transform");
+        return self.active_events.items[event_index].transform;
+    }
+
     fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
         const allocator = self.gpa.allocator();
         const previous = &self.active_stream;
@@ -2411,9 +2449,10 @@ const HostEnv = struct {
             stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, desc.signal, source_node_ids);
             stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
-        for (previous.events.items) |desc| {
+        for (previous.events.items, 0..) |desc, event_index| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.transform);
+            const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
+            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, transform);
         }
 
         for (previous.scope_sites.items) |desc| {
@@ -2589,6 +2628,8 @@ const HostEnv = struct {
         const allocator = self.gpa.allocator();
 
         self.active_stream.deinit(allocator, self.roc_host.?, &self.pending_roc_metrics);
+        self.clearActiveEvents();
+        self.active_events.deinit(allocator);
 
         if (self.root_elem) |root| {
             abi.decrefElem(root, self.roc_host.?);
@@ -3818,14 +3859,14 @@ fn callErasedNodeValueNodeValueToBool(roc_host: *abi.RocHost, callable: abi.RocE
     return result;
 }
 
-fn hostEventById(host: *HostEnv, event_id: u64) HostNodeEventDesc {
-    if (event_id == 0 or event_id > host.active_stream.events.items.len) {
-        failHost("DOM event referenced an unknown active event descriptor");
+fn hostEventById(host: *HostEnv, event_id: u64) HostActiveEventDesc {
+    if (event_id == 0 or event_id > host.active_events.items.len) {
+        failHost("DOM event referenced an unknown active event");
     }
-    return host.active_stream.events.items[@intCast(event_id - 1)];
+    return host.active_events.items[@intCast(event_id - 1)];
 }
 
-fn validateNodeEventPayload(desc: HostNodeEventDesc, payload: abi.NodeValue) void {
+fn validateNodeEventPayload(desc: HostActiveEventDesc, payload: abi.NodeValue) void {
     switch (desc.payload_kind) {
         .unit => if (payload.tag != .NvUnit) failHost("click event received a non-unit payload"),
         .str => if (payload.tag != .NvStr) failHost("input event received a non-str payload"),
@@ -3858,6 +3899,7 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
 
+    host.rebuildActiveEventsFromStream(&next_stream);
     host.active_stream.deinit(host.gpa.allocator(), roc_host, &host.pending_roc_metrics);
     host.active_stream = next_stream;
     finishHostMetrics(host);
@@ -4474,6 +4516,8 @@ fn deinitTestHostGraph(host: *HostEnv) void {
     if (!builtin.is_test) @compileError("deinitTestHostGraph is test-only");
 
     const allocator = host.gpa.allocator();
+    host.clearActiveEvents();
+    host.active_events.deinit(allocator);
     host.clearEventDescriptors();
     host.event_descriptors.deinit(allocator);
     host.clearSignalEventRoutes();
@@ -4630,6 +4674,20 @@ fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8,
         else => @panic("test binary NodeValue callable expected right NvI64"),
     };
     writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(left + right + capture.amount));
+}
+
+fn testUnitIncrementNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const current = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test unit event callable expected current NvI64"),
+    };
+    switch (call_args.arg1.tag) {
+        .NvUnit => {},
+        else => @panic("test unit event callable expected unit payload"),
+    }
+    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(current + 1));
 }
 
 fn testInitialNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -5739,6 +5797,29 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
     };
 }
 
+fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token: HostBinderToken) abi.NodeAttr {
+    const transform = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testUnitIncrementNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .on_event = .{
+                .kind = @intFromEnum(kind),
+                .msg = .{
+                    .binder = cloneTestBinderToken(binder_token),
+                    .payload_kind = @intFromEnum(EventPayloadKind.unit),
+                    .transform = transform,
+                },
+            },
+        },
+        .tag = .OnEvent,
+    };
+}
+
 fn testElementWith(roc_host: *abi.RocHost, tag: []const u8, attrs: []const abi.NodeAttr, children: []const abi.Elem) abi.Elem {
     return .{
         .payload = .{
@@ -6254,6 +6335,42 @@ test "signals host retains state equality outside descriptor stream" {
 
     try std.testing.expect(!host.updateStateValue(&roc_host, state_id, nodeValueI64(0)));
     try std.testing.expect(host.updateStateValue(&roc_host, state_id, nodeValueI64(1)));
+}
+
+test "signals host dispatches through active event records outside descriptor stream" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const attrs = [_]abi.NodeAttr{
+        testNodeUnitIncrementEventAttr(&roc_host, .click, state_token),
+    };
+    const button = testElementWith(&roc_host, "button", &attrs, &.{});
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(0), button);
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.rebuildActiveEventsFromStream(&stream);
+    host.active_stream = stream;
+
+    const button_id = host.active_stream.elements.items[0].elem_id;
+    const event_id = host.dom_elements.items[@intCast(button_id)].bound_click_event orelse unreachable;
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
+    host.active_stream = .{};
+
+    dispatchRocEvent(&host, &roc_host, event_id, nodeValueUnit());
+    try expectNodeValueI64(host.stateValueByNodeId(state_id), 1);
 }
 
 test "signals host carries binder context into Elem when branch collection" {

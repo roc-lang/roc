@@ -566,7 +566,9 @@ cache-owned edge data rather than looking equality back up through the retained
 `SignalExpr`. Active source state now stores its current bridge value and
 retained equality thunk in a single host value-cell record, matching the shape
 needed for the eventual opaque typed value carrier; signal caches use that same
-value-cell record now that every signal output edge has equality.
+value-cell record now that every signal output edge has equality. Active event
+records now own reducer transforms after stream activation, so dispatch no
+longer reads reducer callables from `active_stream.events`.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
