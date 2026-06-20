@@ -14800,7 +14800,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         try self.appendMergeRecordFields(&fields, platform_row.fields, app_row.fields);
         std.mem.sort(FieldWrite, fields.items, self, fieldWriteLessThan);
 
-        const tail = try self.optionalRecordTailWrite(platform_row.tail, app_row.tail);
+        const tail = optionalRecordTailWrite(platform_row.tail, app_row.tail);
         try self.writeRecordType(fields.items, tail);
     }
 
@@ -14977,11 +14977,9 @@ const PlatformAppRelationTypeDigestBuilder = struct {
     }
 
     fn optionalRecordTailWrite(
-        self: *PlatformAppRelationTypeDigestBuilder,
         platform_ext: ?CheckedTypeId,
         app_ext: ?CheckedTypeId,
-    ) Allocator.Error!?TypeWrite {
-        _ = self;
+    ) ?TypeWrite {
         if (platform_ext) |left| {
             if (app_ext) |right| return .{ .merge = .{ .platform_root = left, .app_root = right, .context = .record_tail } };
             return .{ .finalize = .{ .root = left, .context = .record_tail } };
@@ -15018,7 +15016,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         }
         try self.appendMergeTags(&tags, platform_row.tags, app_row.tags);
         std.mem.sort(TagWrite, tags.items, self, tagWriteLessThan);
-        const tail = try self.optionalTagTailWrite(platform_row.tail, app_row.tail);
+        const tail = optionalTagTailWrite(platform_row.tail, app_row.tail);
         try self.writeTagUnionType(tags.items, tail);
     }
 
@@ -15179,11 +15177,9 @@ const PlatformAppRelationTypeDigestBuilder = struct {
     }
 
     fn optionalTagTailWrite(
-        self: *PlatformAppRelationTypeDigestBuilder,
         platform_ext: ?CheckedTypeId,
         app_ext: ?CheckedTypeId,
-    ) Allocator.Error!?TypeWrite {
-        _ = self;
+    ) ?TypeWrite {
         if (platform_ext) |left| {
             if (app_ext) |right| return .{ .merge = .{ .platform_root = left, .app_root = right, .context = .tag_tail } };
             return .{ .finalize = .{ .root = left, .context = .tag_tail } };
