@@ -602,6 +602,12 @@ fixed-width word compares because unused SSO bytes are zeroed.
       old pointer/length fast return could treat two 9-byte small strings as
       equal when their first 8 bytes and length byte matched but byte 8 differed.
       The fast return now applies only to non-small strings.
+    - Added `test/cli/StrIsEqEdgeCases.roc` to cover the user-visible
+      `Str.is_eq` path for the same SSO lane boundaries and Unicode byte
+      equality. Verified directly with
+      `zig-out/bin/roc test --no-cache test/cli/StrIsEqEdgeCases.roc` and
+      through the CLI runner with
+      `zig build run-test-cli -- --suite subcommands --filter "Str.is_eq edge"`.
 
 - [ ] Use exact string fast paths in generated field dispatch when possible.
   - Tasks:
@@ -662,13 +668,16 @@ Roc API.
       `zig build run-test-zig-http-header-decoder-platform` and
       `zig build run-test-zig-json-decoder-platform`.
 
-- [ ] Run focused string equality tests after the `Str.is_eq` phase.
+- [x] Run focused string equality tests after the `Str.is_eq` phase.
   - Tasks:
     - Use the most targeted builtin/interpreter/backend test steps available.
     - Add missing targeted steps if current coverage is too broad or too weak.
   - Success criteria:
     - SSO equality, heap equality, seamless-slice equality, and Unicode byte
       equality are all covered.
+    - Verified with `zig build run-test-zig-module-builtins`,
+      `zig-out/bin/roc test --no-cache test/cli/StrIsEqEdgeCases.roc`, and
+      `zig build run-test-cli -- --suite subcommands --filter "Str.is_eq edge"`.
 
 - [ ] Run broader compiler checks after targeted tests pass.
   - Required command:
