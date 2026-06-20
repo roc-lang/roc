@@ -4146,8 +4146,10 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_pattern_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootIsIntrinsicallyKept(root)) continue;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) continue;
+        const intrinsic = try self.hoistedRootIsIntrinsicallyKept(root);
+        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle);
+        if (!intrinsic) continue;
+        if (!deps) continue;
 
         keep_roots[i] = true;
         kept_count += 1;
@@ -4318,11 +4320,24 @@ const HoistedDependencyBinding = struct {
     kind: HoistedDependencyBindingKind,
 };
 
+const HoistedCallableKey = struct {
+    module_addr: usize,
+    def: CIR.Def.Idx,
+};
+
+const HoistedCallableState = enum {
+    visiting,
+    stable,
+    unstable,
+};
+
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
+    callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
+        self.callable_stability.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
@@ -4469,7 +4484,8 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_block => |block| self.hoistedRootBlockDependenciesAreKept(block.stmts, block.final_expr, context, keep_oracle),
         .e_match => |match| self.hoistedRootMatchDependenciesAreKept(match, context, keep_oracle),
         .e_if => |if_expr| self.hoistedRootIfDependenciesAreKept(if_expr.branches, if_expr.final_else, context, keep_oracle),
-        .e_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.func, context, keep_oracle)) and
+        .e_call => |call| (try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) and
+            (try self.hoistedRootDependenciesAreKeptInternal(call.func, context, keep_oracle)) and
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
         .e_method_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
@@ -4502,6 +4518,337 @@ fn hoistedRootDependenciesAreKeptInternal(
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
         .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context, keep_oracle),
     };
+}
+
+const HoistedCallableDef = struct {
+    module: *const ModuleEnv,
+    def: CIR.Def.Idx,
+};
+
+fn hoistedRootCalleeAllowsStoredConst(
+    self: *Self,
+    callee: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    const callable_def = self.hoistedCallableDefForExpr(self.cir, callee) orelse return true;
+    return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
+}
+
+fn hoistedCallableDefAllowsStoredConst(
+    self: *Self,
+    callable_def: HoistedCallableDef,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    const key = HoistedCallableKey{
+        .module_addr = @intFromPtr(callable_def.module),
+        .def = callable_def.def,
+    };
+    if (context.callable_stability.get(key)) |state| {
+        return switch (state) {
+            .stable, .visiting => true,
+            .unstable => false,
+        };
+    }
+
+    try context.callable_stability.put(self.gpa, key, .visiting);
+    const def = callable_def.module.store.getDef(callable_def.def);
+    const stable = try self.hoistedExprAllowsStoredConst(callable_def.module, def.expr, context);
+    const state: HoistedCallableState = if (stable) .stable else .unstable;
+    context.callable_stability.getPtr(key).?.* = state;
+    return stable;
+}
+
+fn hoistedExprAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    expr: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    return switch (module.store.getExpr(expr)) {
+        .e_run_low_level => |run| run.op != .dict_pseudo_seed and
+            try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_num,
+        .e_num_from_numeral,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_crash,
+        .e_hosted_lambda,
+        => true,
+        .e_str => |str| self.hoistedExprSpanAllowsStoredConst(module, str.span, context),
+        .e_list => |list| self.hoistedExprSpanAllowsStoredConst(module, list.elems, context),
+        .e_tuple => |tuple| self.hoistedExprSpanAllowsStoredConst(module, tuple.elems, context),
+        .e_block => |block| self.hoistedBlockAllowsStoredConst(module, block.stmts, block.final_expr, context),
+        .e_match => |match| self.hoistedMatchAllowsStoredConst(module, match, context),
+        .e_if => |if_expr| self.hoistedIfAllowsStoredConst(module, if_expr.branches, if_expr.final_else, context),
+        .e_call => |call| (try self.hoistedCalleeAllowsStoredConstInModule(module, call.func, context)) and
+            (try self.hoistedExprAllowsStoredConst(module, call.func, context)) and
+            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
+        .e_method_call => |call| (try self.hoistedExprAllowsStoredConst(module, call.receiver, context)) and
+            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
+        .e_dispatch_call => |call| (try self.hoistedExprAllowsStoredConst(module, call.receiver, context)) and
+            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
+        .e_record => |record| self.hoistedRecordAllowsStoredConst(module, record.fields, record.ext, context),
+        .e_tag => |tag| self.hoistedExprSpanAllowsStoredConst(module, tag.args, context),
+        .e_nominal => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
+        .e_nominal_external => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
+        .e_binop => |binop| (try self.hoistedExprAllowsStoredConst(module, binop.lhs, context)) and
+            try self.hoistedExprAllowsStoredConst(module, binop.rhs, context),
+        .e_unary_minus => |unary| self.hoistedExprAllowsStoredConst(module, unary.expr, context),
+        .e_unary_not => |unary| self.hoistedExprAllowsStoredConst(module, unary.expr, context),
+        .e_field_access => |field| self.hoistedExprAllowsStoredConst(module, field.receiver, context),
+        .e_interpolation => |interpolation| (try self.hoistedExprAllowsStoredConst(module, interpolation.first, context)) and
+            try self.hoistedExprSpanAllowsStoredConst(module, interpolation.parts, context),
+        .e_structural_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
+            try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
+        .e_method_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
+            try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
+        .e_type_method_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
+        .e_type_dispatch_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
+        .e_tuple_access => |access| self.hoistedExprAllowsStoredConst(module, access.tuple, context),
+        .e_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
+        .e_expect_err => |expect_err| self.hoistedExprAllowsStoredConst(module, expect_err.expr, context),
+        .e_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
+        .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
+            try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
+        .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
+        .e_closure => |closure| self.hoistedExprAllowsStoredConst(module, closure.lambda_idx, context),
+        .e_lambda => |lambda| self.hoistedExprAllowsStoredConst(module, lambda.body, context),
+    };
+}
+
+fn hoistedCalleeAllowsStoredConstInModule(
+    self: *Self,
+    module: *const ModuleEnv,
+    callee: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    const callable_def = self.hoistedCallableDefForExpr(module, callee) orelse return true;
+    return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
+}
+
+fn hoistedCallableDefForExpr(
+    self: *Self,
+    module: *const ModuleEnv,
+    expr: CIR.Expr.Idx,
+) ?HoistedCallableDef {
+    return switch (module.store.getExpr(expr)) {
+        .e_lookup_local => |lookup| self.hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
+        .e_lookup_external => |external| blk: {
+            const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
+            break :blk self.hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
+        },
+        .e_str,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_num,
+        .e_num_from_numeral,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_lookup_required,
+        .e_list,
+        .e_tuple,
+        .e_record,
+        .e_block,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_crash,
+        .e_return,
+        => null,
+    };
+}
+
+fn hoistedImportedModule(
+    self: *Self,
+    module: *const ModuleEnv,
+    import_idx: CIR.Import.Idx,
+) ?*const ModuleEnv {
+    const module_idx = module.imports.getResolvedModule(import_idx) orelse return null;
+    if (module_idx >= self.imported_modules.len) return null;
+    return self.imported_modules[module_idx];
+}
+
+fn hoistedTopLevelDefForPattern(
+    self: *Self,
+    module: *const ModuleEnv,
+    pattern: CIR.Pattern.Idx,
+) ?HoistedCallableDef {
+    const pattern_node = ModuleEnv.nodeIdxFrom(pattern);
+    return self.hoistedTopLevelDefForNode(module, pattern_node);
+}
+
+fn hoistedTopLevelDefForNode(
+    self: *Self,
+    module: *const ModuleEnv,
+    node: CIR.Node.Idx,
+) ?HoistedCallableDef {
+    _ = self;
+    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
+        const def = module.store.getDef(def_idx);
+        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
+            return .{ .module = module, .def = def_idx };
+        }
+    }
+    return null;
+}
+
+fn hoistedExprSpanAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    span: CIR.Expr.Span,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    for (module.store.sliceExpr(span)) |expr| {
+        if (!try self.hoistedExprAllowsStoredConst(module, expr, context)) return false;
+    }
+    return true;
+}
+
+fn hoistedBlockAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    statements: CIR.Statement.Span,
+    final_expr: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    for (module.store.sliceStatements(statements)) |statement| {
+        if (!try self.hoistedStatementAllowsStoredConst(module, statement, context)) return false;
+    }
+    return try self.hoistedExprAllowsStoredConst(module, final_expr, context);
+}
+
+fn hoistedStatementAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    statement: CIR.Statement.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    return switch (module.store.getStatement(statement)) {
+        .s_decl => |decl| self.hoistedExprAllowsStoredConst(module, decl.expr, context),
+        .s_var => |var_stmt| self.hoistedExprAllowsStoredConst(module, var_stmt.expr, context),
+        .s_reassign => |reassign| self.hoistedExprAllowsStoredConst(module, reassign.expr, context),
+        .s_expr => |expr_stmt| self.hoistedExprAllowsStoredConst(module, expr_stmt.expr, context),
+        .s_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
+        .s_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
+        .s_for => |for_stmt| (try self.hoistedExprAllowsStoredConst(module, for_stmt.expr, context)) and
+            try self.hoistedExprAllowsStoredConst(module, for_stmt.body, context),
+        .s_while => |while_stmt| (try self.hoistedExprAllowsStoredConst(module, while_stmt.cond, context)) and
+            try self.hoistedExprAllowsStoredConst(module, while_stmt.body, context),
+        .s_infinite_loop => |loop_stmt| (try self.hoistedExprAllowsStoredConst(module, loop_stmt.cond, context)) and
+            try self.hoistedExprAllowsStoredConst(module, loop_stmt.body, context),
+        .s_breakable_loop => |loop_stmt| (try self.hoistedExprAllowsStoredConst(module, loop_stmt.cond, context)) and
+            try self.hoistedExprAllowsStoredConst(module, loop_stmt.body, context),
+        .s_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
+        .s_var_uninitialized,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_crash,
+        .s_break,
+        .s_runtime_error,
+        => true,
+    };
+}
+
+fn hoistedRecordAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    fields: CIR.RecordField.Span,
+    ext: ?CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    if (ext) |ext_expr| {
+        if (!try self.hoistedExprAllowsStoredConst(module, ext_expr, context)) return false;
+    }
+    for (module.store.sliceRecordFields(fields)) |field_id| {
+        const field = module.store.getRecordField(field_id);
+        if (!try self.hoistedExprAllowsStoredConst(module, field.value, context)) return false;
+    }
+    return true;
+}
+
+fn hoistedMatchAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    match: CIR.Expr.Match,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    if (!try self.hoistedExprAllowsStoredConst(module, match.cond, context)) return false;
+    for (module.store.sliceMatchBranches(match.branches)) |branch_id| {
+        const branch = module.store.getMatchBranch(branch_id);
+        if (branch.guard) |guard| {
+            if (!try self.hoistedExprAllowsStoredConst(module, guard, context)) return false;
+        }
+        if (!try self.hoistedExprAllowsStoredConst(module, branch.value, context)) return false;
+    }
+    return true;
+}
+
+fn hoistedIfAllowsStoredConst(
+    self: *Self,
+    module: *const ModuleEnv,
+    branches: CIR.Expr.IfBranch.Span,
+    final_else: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    for (module.store.sliceIfBranches(branches)) |branch_id| {
+        const branch = module.store.getIfBranch(branch_id);
+        if (!try self.hoistedExprAllowsStoredConst(module, branch.cond, context)) return false;
+        if (!try self.hoistedExprAllowsStoredConst(module, branch.body, context)) return false;
+    }
+    return try self.hoistedExprAllowsStoredConst(module, final_else, context);
 }
 
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {

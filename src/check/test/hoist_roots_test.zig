@@ -843,3 +843,17 @@ test "hoist roots are not selected for effectful static dispatch calls" {
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
+
+test "hoist roots are not selected for dict pseudo-seed dependent values" {
+    var test_env = try TestEnv.init("Test",
+        \\main! = || {
+        \\    dict = Dict.single("a", "b")
+        \\    _ = Dict.get(dict, "a")
+        \\    {}
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
