@@ -558,7 +558,10 @@ the temporary `NodeValue` list as the current bridge input, but the output edge
 is owned by the call-site thunk rather than by host-side output construction.
 Live host state records now retain their equality thunk directly, so event
 updates prune through state-owned data instead of recovering equality from the
-active descriptor stream.
+active descriptor stream. Dirty signal sink and structural-site caches now also
+retain the equality thunk beside the cached bridge value, so dirty pruning uses
+cache-owned edge data rather than looking equality back up through the retained
+`SignalExpr`.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
