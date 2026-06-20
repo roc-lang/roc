@@ -427,6 +427,16 @@ and dispatch directly to the field parser.
       `roc_builtins_str_caseless_ascii_equals`. The large parser-state frame and
       cold allocation/error paths remain separate open work: in the refreshed
       HTTP dump, `_roc__proc_11b` still reserves `0x1640` bytes of stack.
+    - Follow-up LLVM lowering cleanup removed the two backend-local stack
+      temporaries from the static word compare helper by threading the loaded
+      runtime word and active-byte mask through SSA phi values. Verified with
+      `zig build run-test-zig-module-builtins -- --test-filter staticSmallWord`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`. Refreshed comparison
+      report `/tmp/roc-http-header-disasm-after-static-lane-ssa-report.txt`
+      still shows `_roc__proc_11b` at 260088 code bytes and 4192 total stack
+      bytes, so the remaining frame/code-size gap is the generic parser-state
+      and cold/error-path machinery tracked by later phases.
 
 - [x] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
   - Tasks:

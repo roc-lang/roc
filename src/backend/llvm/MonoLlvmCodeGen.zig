@@ -3084,18 +3084,16 @@ pub const MonoLlvmCodeGen = struct {
         const active_in_remaining = wip.icmp(.ule, active_len, remaining_len, "") catch return error.OutOfMemory;
         const in_range = wip.bin(.@"and", active_len_in_range, wip.bin(.@"and", offset_in_range, active_in_remaining, "") catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
-        const compare_block = wip.block(0, "str_static_lane_compare") catch return error.OutOfMemory;
-        const full_load_block = wip.block(0, "str_static_lane_full_load") catch return error.OutOfMemory;
-        const tail_block = wip.block(0, "str_static_lane_tail") catch return error.OutOfMemory;
-        const mask_block = wip.block(0, "str_static_lane_mask") catch return error.OutOfMemory;
-        const mask_zero_block = wip.block(0, "str_static_lane_mask_zero") catch return error.OutOfMemory;
-        const mask_full_block = wip.block(0, "str_static_lane_mask_full") catch return error.OutOfMemory;
-        const mask_eight_block = wip.block(0, "str_static_lane_mask_eight") catch return error.OutOfMemory;
-        const mask_partial_block = wip.block(0, "str_static_lane_mask_partial") catch return error.OutOfMemory;
-        const finish_block = wip.block(0, "str_static_lane_finish") catch return error.OutOfMemory;
+        const compare_block = wip.block(1, "str_static_lane_compare") catch return error.OutOfMemory;
+        const full_load_block = wip.block(1, "str_static_lane_full_load") catch return error.OutOfMemory;
+        const tail_block = wip.block(1, "str_static_lane_tail") catch return error.OutOfMemory;
+        const mask_block = wip.block(2, "str_static_lane_mask") catch return error.OutOfMemory;
+        const mask_zero_block = wip.block(1, "str_static_lane_mask_zero") catch return error.OutOfMemory;
+        const mask_full_block = wip.block(1, "str_static_lane_mask_full") catch return error.OutOfMemory;
+        const mask_eight_block = wip.block(1, "str_static_lane_mask_eight") catch return error.OutOfMemory;
+        const mask_partial_block = wip.block(1, "str_static_lane_mask_partial") catch return error.OutOfMemory;
+        const finish_block = wip.block(3, "str_static_lane_finish") catch return error.OutOfMemory;
         const done_block = wip.block(0, "str_static_lane_done") catch return error.OutOfMemory;
-        const runtime_word_ptr = wip.alloca(.normal, .i64, .@"1", LlvmBuilder.Alignment.fromByteUnits(8), .default, "str_static_lane_word") catch return error.OutOfMemory;
-        const mask_ptr = wip.alloca(.normal, .i64, .@"1", LlvmBuilder.Alignment.fromByteUnits(8), .default, "str_static_lane_mask_value") catch return error.OutOfMemory;
 
         _ = wip.brCond(in_range, compare_block, done_block, .then_likely) catch return error.OutOfMemory;
 
@@ -3113,15 +3111,15 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = full_load_block };
         const full_load_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{offset}, "") catch return error.OutOfMemory;
         const full_word = wip.load(.normal, .i64, full_load_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        _ = wip.store(.normal, full_word, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
         _ = wip.br(mask_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = tail_block };
-        _ = wip.store(.normal, builder.intValue(.i64, 0) catch return error.OutOfMemory, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
+        var tail_word = builder.intValue(.i64, 0) catch return error.OutOfMemory;
         inline for (0..8) |index| {
             const byte_needed = wip.icmp(.ugt, active_len, builder.intValue(usize_ty, @as(i64, @intCast(index))) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const load_byte_block = wip.block(0, "str_static_lane_tail_byte") catch return error.OutOfMemory;
-            const next_byte_block = wip.block(0, "str_static_lane_tail_next") catch return error.OutOfMemory;
+            const branch_block = wip.cursor.block;
+            const load_byte_block = wip.block(1, "str_static_lane_tail_byte") catch return error.OutOfMemory;
+            const next_byte_block = wip.block(2, "str_static_lane_tail_next") catch return error.OutOfMemory;
             _ = wip.brCond(byte_needed, load_byte_block, next_byte_block, .then_likely) catch return error.OutOfMemory;
 
             wip.cursor = .{ .block = load_byte_block };
@@ -3135,21 +3133,26 @@ pub const MonoLlvmCodeGen = struct {
             if (index != 0) {
                 byte_word = wip.bin(.shl, byte_word, builder.intValue(.i64, @as(i64, @intCast(index * 8))) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
             }
-            const current_word = wip.load(.normal, .i64, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
-            const updated_word = wip.bin(.@"or", current_word, byte_word, "") catch return error.OutOfMemory;
-            _ = wip.store(.normal, updated_word, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
+            const updated_word = wip.bin(.@"or", tail_word, byte_word, "") catch return error.OutOfMemory;
             _ = wip.br(next_byte_block) catch return error.OutOfMemory;
 
             wip.cursor = .{ .block = next_byte_block };
+            const next_tail_word = wip.phi(.i64, "str_static_lane_tail_word") catch return error.OutOfMemory;
+            next_tail_word.finish(&.{ tail_word, updated_word }, &.{ branch_block, load_byte_block }, wip);
+            tail_word = next_tail_word.toValue();
         }
+        const tail_exit_block = wip.cursor.block;
         _ = wip.br(mask_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = mask_block };
+        const runtime_word_phi = wip.phi(.i64, "str_static_lane_word") catch return error.OutOfMemory;
+        runtime_word_phi.finish(&.{ full_word, tail_word }, &.{ full_load_block, tail_exit_block }, wip);
+        const runtime_word = runtime_word_phi.toValue();
         const active_len_is_zero = wip.icmp(.eq, active_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         _ = wip.brCond(active_len_is_zero, mask_zero_block, mask_full_block, .else_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = mask_zero_block };
-        _ = wip.store(.normal, builder.intValue(.i64, 0) catch return error.OutOfMemory, mask_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
+        const zero_mask = builder.intValue(.i64, 0) catch return error.OutOfMemory;
         _ = wip.br(finish_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = mask_full_block };
@@ -3157,7 +3160,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(active_len_is_full, mask_eight_block, mask_partial_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = mask_eight_block };
-        _ = wip.store(.normal, builder.intValue(.i64, -1) catch return error.OutOfMemory, mask_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
+        const full_mask = builder.intValue(.i64, -1) catch return error.OutOfMemory;
         _ = wip.br(finish_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = mask_partial_block };
@@ -3166,12 +3169,12 @@ pub const MonoLlvmCodeGen = struct {
         const active_bits_i64 = try self.coerceScalar(active_bits, .i64, false);
         const shifted_one = wip.bin(.shl, one, active_bits_i64, "") catch return error.OutOfMemory;
         const partial_mask = wip.bin(.sub, shifted_one, one, "") catch return error.OutOfMemory;
-        _ = wip.store(.normal, partial_mask, mask_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
         _ = wip.br(finish_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = finish_block };
-        const mask = wip.load(.normal, .i64, mask_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
-        const runtime_word = wip.load(.normal, .i64, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
+        const mask_phi = wip.phi(.i64, "str_static_lane_mask_value") catch return error.OutOfMemory;
+        mask_phi.finish(&.{ zero_mask, full_mask, partial_mask }, &.{ mask_zero_block, mask_eight_block, mask_partial_block }, wip);
+        const mask = mask_phi.toValue();
         const is_equal = switch (mode) {
             .exact => blk: {
                 const runtime_masked = wip.bin(.@"and", runtime_word, mask, "") catch return error.OutOfMemory;
