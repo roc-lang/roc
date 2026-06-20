@@ -13384,7 +13384,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 if (row.tail) |tail| break :blk try self.finalizeIsEmptyRecord(tail, .record_tail);
                 break :blk true;
             },
-            .record_unbound => |fields| fields.len == 0,
+            .record_unbound => false,
             else => false,
         };
     }
@@ -20588,6 +20588,8 @@ test "platform app relation resolver returns empty roots before reserving normal
         .fields = &.{},
         .ext = record_tail,
     } });
+    const empty_record_unbound = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(64));
+    try store.fillSyntheticTypeRoot(allocator, empty_record_unbound, .{ .record_unbound = &.{} });
 
     const tag_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(62));
     try store.fillSyntheticTypeRoot(allocator, tag_tail, .{ .flex = .{} });
@@ -20602,6 +20604,13 @@ test "platform app relation resolver returns empty roots before reserving normal
 
     const finalized_record = try resolver.finalize(open_record, .value);
     try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payloads.items[@intFromEnum(finalized_record)]);
+
+    const finalized_record_unbound = try resolver.finalize(empty_record_unbound, .value);
+    const finalized_record_unbound_fields = switch (store.payloads.items[@intFromEnum(finalized_record_unbound)]) {
+        .record_unbound => |fields| fields,
+        else => return error.ExpectedRecordUnbound,
+    };
+    try std.testing.expectEqual(@as(usize, 0), finalized_record_unbound_fields.len);
 
     const finalized_tags = try resolver.finalize(open_tags, .value);
     try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payloads.items[@intFromEnum(finalized_tags)]);
