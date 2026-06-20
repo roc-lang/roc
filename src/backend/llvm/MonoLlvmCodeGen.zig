@@ -1602,7 +1602,6 @@ pub const MonoLlvmCodeGen = struct {
             .alignment = alignment,
             .allocated = true,
         };
-        if (sa.size > 0) try self.zeroBytes(ptr, sa.size);
     }
 
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
