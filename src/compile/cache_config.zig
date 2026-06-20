@@ -25,7 +25,9 @@ pub const Constants = struct {
     /// this whenever the serialized layout changes in a way the automatic
     /// top-level-field hash can't see (e.g. a node-payload layout edit).
     /// 3: annotation node payload gained mentions/introduces-type-var flags.
-    pub const CACHE_VERSION = 3;
+    /// 4: nominal record declared-field-order and unnamed padding fields added
+    ///    node, diagnostic, and type-annotation payloads.
+    pub const CACHE_VERSION = 4;
 };
 
 /// Configuration for the Roc cache system.
