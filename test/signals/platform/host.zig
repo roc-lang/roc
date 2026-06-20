@@ -581,7 +581,7 @@ const HostNodeDescriptorStream = struct {
 
 fn nodeSignalExprDirectCallableCount(expr: abi.NodeSignalExpr) u64 {
     return switch (expr.tag) {
-        .Map, .Map2 => 1,
+        .Map, .Map2 => 2,
         .Combine, .ConstValue, .Ref => 0,
     };
 }
@@ -4958,11 +4958,19 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
         &testErasedCallableOnDrop,
         .{ .amount = 1 },
     );
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
     return .{
         .payload = .{
             .map = .{
                 ._0 = boxTestNodeSignalExpr(roc_host, input),
                 ._1 = transform,
+                ._2 = eq,
             },
         },
         .tag = .Map,
@@ -5464,13 +5472,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 6), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 6), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 6), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host carries binder context into Elem when branch collection" {

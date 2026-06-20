@@ -32,8 +32,8 @@ Node := [].{
 	SignalExpr := [
 		Ref(BinderRef),
 		ConstValue(NodeValue),
-		Map(Box(SignalExpr), Box((NodeValue -> NodeValue))),
-		Map2(Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue))),
+		Map(Box(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		Map2(Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
 		Combine(List(SignalExpr)),
 	]
 

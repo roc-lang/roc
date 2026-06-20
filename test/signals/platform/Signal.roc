@@ -41,6 +41,8 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 			where [
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 				b.encode : b, NodeValue -> Try(NodeValue, []),
+				b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
+				b.is_eq : b, b -> Bool,
 			]
 	map = |signal, f| {
 		wrapped : NodeValue -> NodeValue
@@ -60,11 +62,33 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				Ok(encoded) => encoded
 			}
 		}
+		eq : NodeValue, NodeValue -> Bool
+		eq = |left_nv, right_nv| {
+			B : b
+			left : b
+			left =
+				match B.decode(left_nv, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Signal.map equality received a left value that does not match the output type"
+					}
+				}
+			right : b
+			right =
+				match B.decode(right_nv, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Signal.map equality received a right value that does not match the output type"
+					}
+				}
+			left.is_eq(right)
+		}
 
 		{
 			expr: Box.box(Node.SignalExpr.Map(
 				Signal.clone_expr(signal.expr),
 				Box.box(wrapped),
+				Box.box(eq),
 			)),
 		}
 	}
@@ -75,6 +99,8 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 				b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
 				c.encode : c, NodeValue -> Try(NodeValue, []),
+				c.decode : NodeValue, NodeValue -> (Try(c, [TypeMismatch]), NodeValue),
+				c.is_eq : c, c -> Bool,
 			]
 	map2 = |left, right, f| {
 		wrapped : NodeValue, NodeValue -> NodeValue
@@ -103,12 +129,34 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				Ok(encoded) => encoded
 			}
 		}
+		eq : NodeValue, NodeValue -> Bool
+		eq = |left_nv, right_nv| {
+			C : c
+			left_v : c
+			left_v =
+				match C.decode(left_nv, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Signal.map2 equality received a left value that does not match the output type"
+					}
+				}
+			right_v : c
+			right_v =
+				match C.decode(right_nv, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Signal.map2 equality received a right value that does not match the output type"
+					}
+				}
+			left_v.is_eq(right_v)
+		}
 
 		{
 			expr: Box.box(Node.SignalExpr.Map2(
 				Signal.clone_expr(left.expr),
 				Signal.clone_expr(right.expr),
 				Box.box(wrapped),
+				Box.box(eq),
 			)),
 		}
 	}

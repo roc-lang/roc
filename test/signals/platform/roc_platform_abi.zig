@@ -688,6 +688,7 @@ comptime {
 pub const NodeSignalExprMapPayload = extern struct {
     _0: *NodeSignalExpr,
     _1: RocErasedCallable,
+    _2: RocErasedCallable,
 };
 
 /// Payload struct for Map2 variant.
@@ -695,6 +696,7 @@ pub const NodeSignalExprMap2Payload = extern struct {
     _0: *NodeSignalExpr,
     _1: *NodeSignalExpr,
     _2: RocErasedCallable,
+    _3: RocErasedCallable,
 };
 
 /// Tag discriminant for Node.SignalExpr.
@@ -877,12 +879,14 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         const payload = value.payload.map;
         decrefBoxWith(@ptrCast(payload._0), @alignOf(NodeSignalExpr), &decrefBoxPayloadType5, roc_host);
         decrefErasedCallable(payload._1, roc_host);
+        decrefErasedCallable(payload._2, roc_host);
         },
         .Map2 => {
         const payload = value.payload.map2;
         decrefBoxWith(@ptrCast(payload._0), @alignOf(NodeSignalExpr), &decrefBoxPayloadType5, roc_host);
         decrefBoxWith(@ptrCast(payload._1), @alignOf(NodeSignalExpr), &decrefBoxPayloadType5, roc_host);
         decrefErasedCallable(payload._2, roc_host);
+        decrefErasedCallable(payload._3, roc_host);
         },
         .Ref => {
         decrefBox(@ptrCast(value.payload.ref), roc_host);
@@ -903,12 +907,14 @@ pub fn increfNodeSignalExpr(value: NodeSignalExpr, amount: isize) void {
         const payload = value.payload.map;
         increfBox(@ptrCast(payload._0), amount);
         increfErasedCallable(payload._1, amount);
+        increfErasedCallable(payload._2, amount);
         },
         .Map2 => {
         const payload = value.payload.map2;
         increfBox(@ptrCast(payload._0), amount);
         increfBox(@ptrCast(payload._1), amount);
         increfErasedCallable(payload._2, amount);
+        increfErasedCallable(payload._3, amount);
         },
         .Ref => {
         increfBox(@ptrCast(value.payload.ref), amount);

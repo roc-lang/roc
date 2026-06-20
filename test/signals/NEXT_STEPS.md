@@ -334,11 +334,14 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    Progress: `platform/host.zig` now has typed helper calls for
    `NodeValue -> NodeValue`, `(NodeValue, NodeValue) -> NodeValue`, and
    `(NodeValue, NodeValue) -> Bool`, with Zig unit coverage that allocates boxed
-   erased callables through the real ABI payload/capture path. The host also has
-   the `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each` row
+   erased callables through the real ABI payload/capture path. `Signal.map` and
+   `Signal.map2` descriptors now carry retained output equality thunks produced
+   by static dispatch at the map call site. The host also has the
+   `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each` row
    thunks and explicitly release the returned descriptor tree. These helpers are
    now wired into keyed-row diffing, reducer dispatch, and signal transforms;
-   value-pruning still needs fuller typed edge equality.
+   value-pruning still needs the host value-cell/cache path that consumes the
+   retained map/map2 equality thunks.
 3. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
    `is_eq` thunk; reuse surviving row scopes (and their local state) → `rows_reused`;
    mint new keys → `rows_created`; dispose removed keys → drop one refcount per
