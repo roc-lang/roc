@@ -60,6 +60,7 @@ const strCaselessAsciiEquals = builtins.str.strCaselessAsciiEquals;
 const strEqual = builtins.str.strEqual;
 const strEqualStaticSmall = builtins.str.strEqualStaticSmall;
 const strStaticSmallWordEq = builtins.str.strStaticSmallWordEq;
+const strStaticSmallWordCaselessEq = builtins.str.strStaticSmallWordCaselessEq;
 const strRepeatC = builtins.str.repeatC;
 const strTrim = builtins.str.strTrim;
 const strTrimStart = builtins.str.strTrimStart;
@@ -186,6 +187,7 @@ pub const BuiltinFn = enum {
     str_equal,
     str_equal_static_small,
     str_static_small_word_eq,
+    str_static_small_word_caseless_eq,
     str_count_utf8_bytes,
     str_find_first,
     str_caseless_ascii_equals,
@@ -304,6 +306,7 @@ pub const BuiltinFn = enum {
             .str_equal => "roc_builtins_str_equal",
             .str_equal_static_small => "roc_builtins_str_equal_static_small",
             .str_static_small_word_eq => "roc_builtins_str_static_small_word_eq",
+            .str_static_small_word_caseless_eq => "roc_builtins_str_static_small_word_caseless_eq",
             .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
             .str_find_first => "roc_builtins_str_find_first",
             .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
@@ -493,6 +496,12 @@ fn wrapStrEqualStaticSmall(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_l
 fn wrapStrStaticSmallWordEq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     return strStaticSmallWordEq(a, offset, active_len, word);
+}
+
+/// Wrapper: strStaticSmallWordCaselessEq(RocStr, u64, u64, u64) -> bool
+fn wrapStrStaticSmallWordCaselessEq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return strStaticSmallWordCaselessEq(a, offset, active_len, word);
 }
 
 /// Wrapper: countUtf8Bytes(RocStr) -> u64
@@ -2802,6 +2811,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const active_len_off = try self.ensureOnStack(active_len_loc, 8);
                     const word_off = try self.ensureOnStack(word_loc, 8);
                     const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, @intFromPtr(&wrapStrStaticSmallWordEq), .str_static_small_word_eq);
+                    const eq_reg = try self.ensureInGeneralReg(eq_loc);
+                    return .{ .general_reg = eq_reg };
+                },
+                .str_static_small_word_caseless_eq => {
+                    if (args.len != 4) unreachable;
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const offset_loc = try self.emitValueLocal(args[1]);
+                    const active_len_loc = try self.emitValueLocal(args[2]);
+                    const word_loc = try self.emitValueLocal(args[3]);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    const offset_off = try self.ensureOnStack(offset_loc, 8);
+                    const active_len_off = try self.ensureOnStack(active_len_loc, 8);
+                    const word_off = try self.ensureOnStack(word_loc, 8);
+                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, @intFromPtr(&wrapStrStaticSmallWordCaselessEq), .str_static_small_word_caseless_eq);
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },

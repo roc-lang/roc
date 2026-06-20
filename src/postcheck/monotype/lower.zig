@@ -6320,7 +6320,7 @@ const BodyContext = struct {
             index -= 1;
             const length = renamed_field_lengths[index];
             if (fieldLengthAlreadyHandled(renamed_field_lengths, index, length)) continue;
-            const static_lane: ?StaticFieldLane = if (mode == .exact and length <= 24)
+            const static_lane: ?StaticFieldLane = if ((mode == .exact or mode == .caseless) and length <= 24)
                 if (renamed_field_texts) |texts| selectStaticFieldLane(renamed_field_lengths, texts, length) else null
             else
                 null;
@@ -6335,11 +6335,19 @@ const BodyContext = struct {
                 if (static_lane) |lane| {
                     const texts = renamed_field_texts orelse Common.invariant("static field lane requested without field text");
                     const field_text = texts[field_index];
-                    const probe = try self.recordFieldNameStaticSmallWordMatch(key_local, key_ty, field_text, lane.offset, lane.active_len);
+                    const probe = switch (mode) {
+                        .direct => Common.invariant("direct field handles do not use string matching"),
+                        .exact => try self.recordFieldNameStaticSmallWordMatch(key_local, key_ty, field_text, lane.offset, lane.active_len),
+                        .caseless => try self.recordFieldNameStaticSmallWordCaselessMatch(key_local, key_ty, field_text, lane.offset, lane.active_len),
+                    };
                     const matched_or_next = if (lane.offset == 0 and lane.active_len == length)
                         matched_bodies[field_index]
                     else blk: {
-                        const full_cond = try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text);
+                        const full_cond = switch (mode) {
+                            .direct => Common.invariant("direct field handles do not use string matching"),
+                            .exact => try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text),
+                            .caseless => try self.recordFieldNameStaticSmallCaselessMatch(key_local, key_ty, field_text),
+                        };
                         break :blk try self.builder.ifExpr(full_cond, matched_bodies[field_index], group_body, ret_ty);
                     };
                     group_body = try self.builder.ifExpr(probe, matched_or_next, group_body, ret_ty);
@@ -7350,6 +7358,55 @@ const BodyContext = struct {
         return try self.builder.lowLevelExpr(.str_static_small_word_eq, &args, try self.builder.primitiveType(.bool));
     }
 
+    fn recordFieldNameStaticSmallCaselessMatch(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        field_text: []const u8,
+    ) Allocator.Error!Ast.ExprId {
+        if (field_text.len > 24) Common.invariant("static small caseless field match requested for a long field name");
+
+        const bool_ty = try self.builder.primitiveType(.bool);
+        var body = try self.boolLiteral(true, bool_ty);
+        var offset: u32 = @intCast(((field_text.len + 7) / 8) * 8);
+        while (offset > 0) {
+            offset -= 8;
+            const remaining: u32 = @intCast(field_text.len - offset);
+            const active_len: u32 = @min(remaining, 8);
+            const cond = try self.recordFieldNameStaticSmallWordCaselessMatch(key_local, key_ty, field_text, offset, active_len);
+            body = try self.builder.ifExpr(cond, body, try self.boolLiteral(false, bool_ty), bool_ty);
+        }
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const key_len_expr = try self.builder.lowLevelExpr(.str_count_utf8_bytes, &.{key_expr}, u64_ty);
+        const length_expr = try self.builder.intLiteralExpr(@intCast(field_text.len), u64_ty);
+        const length_matches = try self.builder.lowLevelExpr(.num_is_eq, &.{ key_len_expr, length_expr }, bool_ty);
+        return try self.builder.ifExpr(length_matches, body, try self.boolLiteral(false, bool_ty), bool_ty);
+    }
+
+    fn recordFieldNameStaticSmallWordCaselessMatch(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        field_text: []const u8,
+        offset: u32,
+        active_len: u32,
+    ) Allocator.Error!Ast.ExprId {
+        if (field_text.len > 24) Common.invariant("static small caseless field lane requested for a long field name");
+        const word = staticFieldLaneWord(field_text, offset, active_len);
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const args = [_]Ast.ExprId{
+            key_expr,
+            try self.builder.intLiteralExpr(offset, u64_ty),
+            try self.builder.intLiteralExpr(active_len, u64_ty),
+            try self.builder.intLiteralExpr(word, u64_ty),
+        };
+        return try self.builder.lowLevelExpr(.str_static_small_word_caseless_eq, &args, try self.builder.primitiveType(.bool));
+    }
+
     fn renamedRecordFieldNameExpr(
         self: *BodyContext,
         encoding_expr: Ast.ExprId,
@@ -7394,6 +7451,9 @@ const BodyContext = struct {
             else
                 try self.recordFieldNameExactMatch(key_local, key_ty, field_expr),
             .caseless => blk: {
+                if (precomputed_field_text) |field_text| {
+                    if (field_text.len <= 24) break :blk try self.recordFieldNameStaticSmallCaselessMatch(key_local, key_ty, field_text);
+                }
                 const key_expr = try self.builder.localExpr(key_local, key_ty);
                 break :blk try self.builder.lowLevelExpr(.str_caseless_ascii_equals, &.{ key_expr, field_expr }, try self.builder.primitiveType(.bool));
             },

@@ -349,6 +349,25 @@ pub const RocStr = extern struct {
         return (runtime_word & mask) == (word & mask);
     }
 
+    /// Compare one packed static word lane against this RocStr using the same
+    /// ASCII-caseless semantics as `strCaselessAsciiEquals`.
+    ///
+    /// This is an internal discriminator for generated field-name dispatch. It
+    /// does not lowercase, allocate, or normalize either side. Exact-equal byte
+    /// lanes can contain any byte; differing lanes must differ by `0x20` and be
+    /// ASCII letters.
+    pub fn staticSmallWordCaselessEq(self: RocStr, offset: usize, active_len: usize, word: u64) bool {
+        if (active_len > @sizeOf(u64)) return false;
+
+        const self_len = self.len();
+        if (offset > self_len) return false;
+        if (active_len > self_len - offset) return false;
+
+        const active = lowBytesMask64(active_len);
+        const runtime_word = staticSmallRuntimeWord(self, offset, active_len);
+        return wordCaselessAsciiEqualMasked(runtime_word, word, active);
+    }
+
     pub fn clone(
         str: RocStr,
         roc_ops: *RocOps,
@@ -704,6 +723,11 @@ pub fn strEqualStaticSmall(self: RocStr, static_len: u64, word0: u64, word1: u64
 /// Internal helper for generated static small word-lane comparison.
 pub fn strStaticSmallWordEq(self: RocStr, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
     return self.staticSmallWordEq(@intCast(offset), @intCast(active_len), word);
+}
+
+/// Internal helper for generated static small ASCII-caseless word-lane comparison.
+pub fn strStaticSmallWordCaselessEq(self: RocStr, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    return self.staticSmallWordCaselessEq(@intCast(offset), @intCast(active_len), word);
 }
 
 // Str.numberOfBytes
@@ -2575,6 +2599,62 @@ test "RocStr.staticSmallWordEq: rejects out-of-range lanes" {
     try std.testing.expect(!roc_str.staticSmallWordEq(0, 9, words[0]));
     try std.testing.expect(!roc_str.staticSmallWordEq(4, 1, words[0]));
     try std.testing.expect(!roc_str.staticSmallWordEq(2, 2, words[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: compares selected lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("content-length");
+    const mismatch = packStaticSmallForTest("lengxh");
+
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(8, 6, words[1]));
+    try std.testing.expect(!roc_str.staticSmallWordCaselessEq(8, 6, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: exact ineligible bytes and unicode lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("A_\x7Fé-Z9", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("a_\x7Fé-z9");
+    try std.testing.expectEqual(@as(usize, 8), roc_str.len());
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: rejects punctuation case-bit pairs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const leading = RocStr.fromSlice("_abc", test_env.getOps());
+    defer leading.decref(test_env.getOps());
+    try std.testing.expect(!leading.staticSmallWordCaselessEq(0, 4, packStaticSmallForTest("\x7FABC")[0]));
+
+    const trailing = RocStr.fromSlice("abc_", test_env.getOps());
+    defer trailing.decref(test_env.getOps());
+    try std.testing.expect(!trailing.staticSmallWordCaselessEq(0, 4, packStaticSmallForTest("ABC\x7F")[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "012345678901234567890123456789aBc";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 3, 3, test_env.getOps());
+    const words = packStaticSmallForTest("AbC");
+    const mismatch = packStaticSmallForTest("AbD");
+
+    try std.testing.expect(slice.staticSmallWordCaselessEq(0, 3, words[0]));
+    try std.testing.expect(!slice.staticSmallWordCaselessEq(0, 3, mismatch[0]));
 }
 
 test "RocStr.eq: embedded nul bytes use byte equality" {

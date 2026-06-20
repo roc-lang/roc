@@ -2267,6 +2267,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_is_eq => try self.emitStrBoolBuiltin(target, "roc_builtins_str_equal", arg_locals),
             .str_is_eq_static_small => try self.emitStrEqStaticSmall(target, arg_locals),
             .str_static_small_word_eq => try self.emitStrStaticSmallWordEq(target, arg_locals),
+            .str_static_small_word_caseless_eq => try self.emitStrStaticSmallWordCaselessEq(target, arg_locals),
             .str_contains => try self.emitStrBoolBuiltin(target, "roc_builtins_str_contains", arg_locals),
             .str_starts_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_starts_with", arg_locals),
             .str_ends_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_ends_with", arg_locals),
@@ -3033,7 +3034,20 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = done_block };
     }
 
+    const StaticSmallWordCompareMode = enum {
+        exact,
+        caseless,
+    };
+
     fn emitStrStaticSmallWordEq(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        try self.emitStrStaticSmallWordCompare(target, args, .exact);
+    }
+
+    fn emitStrStaticSmallWordCaselessEq(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        try self.emitStrStaticSmallWordCompare(target, args, .caseless);
+    }
+
+    fn emitStrStaticSmallWordCompare(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, comptime mode: StaticSmallWordCompareMode) Error!void {
         if (args.len != 4) return error.CompilationFailed;
 
         const builder = self.builder orelse return error.CompilationFailed;
@@ -3158,13 +3172,115 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = finish_block };
         const mask = wip.load(.normal, .i64, mask_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
         const runtime_word = wip.load(.normal, .i64, runtime_word_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
-        const runtime_masked = wip.bin(.@"and", runtime_word, mask, "") catch return error.OutOfMemory;
-        const static_masked = wip.bin(.@"and", static_word, mask, "") catch return error.OutOfMemory;
-        const is_equal = wip.icmp(.eq, runtime_masked, static_masked, "") catch return error.OutOfMemory;
+        const is_equal = switch (mode) {
+            .exact => blk: {
+                const runtime_masked = wip.bin(.@"and", runtime_word, mask, "") catch return error.OutOfMemory;
+                const static_masked = wip.bin(.@"and", static_word, mask, "") catch return error.OutOfMemory;
+                break :blk wip.icmp(.eq, runtime_masked, static_masked, "") catch return error.OutOfMemory;
+            },
+            .caseless => try self.emitSwarCaselessAsciiEqualMasked(runtime_word, static_word, mask),
+        };
         try self.storeBool(target_ptr, is_equal);
         _ = wip.br(done_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = done_block };
+    }
+
+    fn llvmI64Value(self: *MonoLlvmCodeGen, value: u64) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return builder.intValue(.i64, @as(i64, @bitCast(value))) catch return error.OutOfMemory;
+    }
+
+    fn emitSwarSplat(self: *MonoLlvmCodeGen, byte: u8) Error!LlvmBuilder.Value {
+        return try self.llvmI64Value(@as(u64, byte) * 0x0101010101010101);
+    }
+
+    fn emitSwarNot(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.bin(.xor, value, try self.llvmI64Value(std.math.maxInt(u64)), "") catch return error.OutOfMemory;
+    }
+
+    fn emitSwarZeroHigh(self: *MonoLlvmCodeGen, word: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const low7 = try self.llvmI64Value(0x7f7f7f7f7f7f7f7f);
+        const highs = try self.llvmI64Value(0x8080808080808080);
+        const masked = wip.bin(.@"and", word, low7, "") catch return error.OutOfMemory;
+        const added = wip.bin(.add, masked, low7, "") catch return error.OutOfMemory;
+        const carries_or_original = wip.bin(.@"or", added, word, "") catch return error.OutOfMemory;
+        const inverted = try self.emitSwarNot(carries_or_original);
+        return wip.bin(.@"and", inverted, highs, "") catch return error.OutOfMemory;
+    }
+
+    fn emitSwarByteEq(self: *MonoLlvmCodeGen, word: LlvmBuilder.Value, byte: u8) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const diff = wip.bin(.xor, word, try self.emitSwarSplat(byte), "") catch return error.OutOfMemory;
+        return try self.emitSwarZeroHigh(diff);
+    }
+
+    fn emitSwarByteGeAscii(self: *MonoLlvmCodeGen, word: LlvmBuilder.Value, lo: u8) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const low7 = try self.llvmI64Value(0x7f7f7f7f7f7f7f7f);
+        const highs = try self.llvmI64Value(0x8080808080808080);
+        const masked = wip.bin(.@"and", word, low7, "") catch return error.OutOfMemory;
+        const biased = wip.bin(.add, masked, try self.emitSwarSplat(0x80 - lo), "") catch return error.OutOfMemory;
+        const not_word = try self.emitSwarNot(word);
+        const ascii_ge = wip.bin(.@"and", biased, not_word, "") catch return error.OutOfMemory;
+        return wip.bin(.@"and", ascii_ge, highs, "") catch return error.OutOfMemory;
+    }
+
+    fn emitSwarByteLeAscii(self: *MonoLlvmCodeGen, word: LlvmBuilder.Value, hi: u8) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const low7 = try self.llvmI64Value(0x7f7f7f7f7f7f7f7f);
+        const highs = try self.llvmI64Value(0x8080808080808080);
+        const masked = wip.bin(.@"and", word, low7, "") catch return error.OutOfMemory;
+        const biased = wip.bin(.add, masked, try self.emitSwarSplat(0x7f - hi), "") catch return error.OutOfMemory;
+        const carries_or_original = wip.bin(.@"or", biased, word, "") catch return error.OutOfMemory;
+        const ascii_le = try self.emitSwarNot(carries_or_original);
+        return wip.bin(.@"and", ascii_le, highs, "") catch return error.OutOfMemory;
+    }
+
+    fn emitSwarByteInAsciiRange(self: *MonoLlvmCodeGen, word: LlvmBuilder.Value, lo: u8, hi: u8) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ge = try self.emitSwarByteGeAscii(word, lo);
+        const le = try self.emitSwarByteLeAscii(word, hi);
+        return wip.bin(.@"and", ge, le, "") catch return error.OutOfMemory;
+    }
+
+    fn emitSwarCaselessAsciiEqualMasked(
+        self: *MonoLlvmCodeGen,
+        left: LlvmBuilder.Value,
+        right: LlvmBuilder.Value,
+        active: LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        // This mirrors builtins.str.wordCaselessAsciiEqualMasked. The fixed
+        // integer dataflow is intentional: optimized native field dispatch
+        // should become a handful of word-size mask operations, not a helper
+        // call and not a byte loop. Exact-equal lanes are accepted for any byte;
+        // lanes that differ must differ by ASCII's case bit and must be letters.
+        const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const highs = try self.llvmI64Value(0x8080808080808080);
+        const ascii_case = try self.llvmI64Value(0x2020202020202020);
+
+        const raw_diff = wip.bin(.xor, left, right, "") catch return error.OutOfMemory;
+        const diff = wip.bin(.@"and", raw_diff, active, "") catch return error.OutOfMemory;
+        const diff_zero = wip.icmp(.eq, diff, zero, "") catch return error.OutOfMemory;
+
+        const active_highs = wip.bin(.@"and", active, highs, "") catch return error.OutOfMemory;
+        const exact_bytes = wip.bin(.@"and", try self.emitSwarZeroHigh(diff), active_highs, "") catch return error.OutOfMemory;
+        const case_diff_bytes = wip.bin(.@"and", try self.emitSwarByteEq(diff, 0x20), active_highs, "") catch return error.OutOfMemory;
+        const accepted_diff_bytes = wip.bin(.@"or", exact_bytes, case_diff_bytes, "") catch return error.OutOfMemory;
+        const valid_diff = wip.icmp(.eq, accepted_diff_bytes, active_highs, "") catch return error.OutOfMemory;
+
+        const left_lower = wip.bin(.@"or", left, ascii_case, "") catch return error.OutOfMemory;
+        const left_alpha = wip.bin(.@"and", try self.emitSwarByteInAsciiRange(left_lower, 'a', 'z'), active_highs, "") catch return error.OutOfMemory;
+        const invalid_alpha = wip.bin(.@"and", case_diff_bytes, try self.emitSwarNot(left_alpha), "") catch return error.OutOfMemory;
+        const valid_alpha = wip.icmp(.eq, invalid_alpha, zero, "") catch return error.OutOfMemory;
+
+        const folded_ok = wip.bin(.@"and", valid_diff, valid_alpha, "") catch return error.OutOfMemory;
+        return wip.bin(.@"or", diff_zero, folded_ok, "") catch return error.OutOfMemory;
     }
 
     /// `unique_args` is non-null for wrappers whose first argument carries the

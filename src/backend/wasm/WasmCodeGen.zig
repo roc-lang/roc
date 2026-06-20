@@ -10149,6 +10149,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_static_small_word_eq => {
             try self.generateLLStrStaticSmallWordEq(args);
         },
+        .str_static_small_word_caseless_eq => {
+            try self.generateLLStrStaticSmallWordCaselessEq(args);
+        },
         .str_concat => {
             // LowLevel str_concat: concatenate 2 strings
             try self.emitProcLocal(args[0]);
@@ -13724,7 +13727,20 @@ fn generateLLStrEqStaticSmall(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitLocalGet(result);
 }
 
+const StaticSmallWordCompareMode = enum {
+    exact,
+    caseless,
+};
+
 fn generateLLStrStaticSmallWordEq(self: *Self, args: anytype) Allocator.Error!void {
+    try self.generateLLStrStaticSmallWordCompare(args, .exact);
+}
+
+fn generateLLStrStaticSmallWordCaselessEq(self: *Self, args: anytype) Allocator.Error!void {
+    try self.generateLLStrStaticSmallWordCompare(args, .caseless);
+}
+
+fn generateLLStrStaticSmallWordCompare(self: *Self, args: anytype, comptime mode: StaticSmallWordCompareMode) Allocator.Error!void {
     if (args.len != 4) unreachable;
 
     try self.emitProcLocal(args[0]);
@@ -13784,6 +13800,9 @@ fn generateLLStrStaticSmallWordEq(self: *Self, args: anytype) Allocator.Error!vo
     self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
 
+    const runtime_byte_local = if (mode == .caseless) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else undefined;
+    const static_byte_local = if (mode == .caseless) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else undefined;
+
     inline for (0..8) |index| {
         try self.emitLocalGet(active_len_local);
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -13803,6 +13822,9 @@ fn generateLLStrStaticSmallWordEq(self: *Self, args: anytype) Allocator.Error!vo
         self.currentCode().append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        if (mode == .caseless) {
+            try self.emitLocalSet(runtime_byte_local);
+        }
 
         try self.emitLocalGet(word_local);
         if (index != 0) {
@@ -13814,7 +13836,51 @@ fn generateLLStrStaticSmallWordEq(self: *Self, args: anytype) Allocator.Error!vo
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0xff) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+        switch (mode) {
+            .exact => {
+                self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+            },
+            .caseless => {
+                try self.emitLocalSet(static_byte_local);
+
+                // ASCII-caseless byte equality:
+                //   same byte, or bytes differ by 0x20 and the runtime byte is
+                //   an ASCII letter after setting the case bit. Exact-equal
+                //   non-ASCII and punctuation bytes are accepted; punctuation
+                //   pairs such as "_" and "\x7f" are rejected.
+                try self.emitLocalGet(runtime_byte_local);
+                try self.emitLocalGet(static_byte_local);
+                self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+
+                try self.emitLocalGet(runtime_byte_local);
+                try self.emitLocalGet(static_byte_local);
+                self.currentCode().append(self.allocator, Op.i32_xor) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0x20) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+
+                try self.emitLocalGet(runtime_byte_local);
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0x20) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 'a') catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
+
+                try self.emitLocalGet(runtime_byte_local);
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0x20) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 'z') catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_le_u) catch return error.OutOfMemory;
+
+                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+            },
+        }
 
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;

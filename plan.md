@@ -375,7 +375,7 @@ and dispatch directly to the field parser.
       phase is the analogous direct caseless dispatcher plus reducing the
       generic parser-state traffic.
 
-- [ ] Generate an SSO ASCII-caseless dispatcher.
+- [x] Generate an SSO ASCII-caseless dispatcher.
   - Tasks:
     - Reuse the SWAR ASCII case-folding algorithm from
       `Str.is_caseless_eq`/`roc_builtins_str_caseless_ascii_equals`.
@@ -388,6 +388,30 @@ and dispatch directly to the field parser.
       generic caseless helper on the hot static-field path.
     - Edge-case tests for mixed case, underscore, dash, non-ASCII, and different
       lengths still pass.
+    - Implemented an internal `str_static_small_word_caseless_eq` low-level
+      operation for generated static field-name dispatch. LLVM lowers it to the
+      same fixed-word SWAR predicate used by `Str.is_caseless_eq`; Wasm, dev
+      backend, and the interpreter all have corresponding support.
+    - Lowering now uses selected static SSO word-lane probes for both exact and
+      ASCII-caseless generated record dispatch, then performs full static-small
+      verification only on a discriminator hit.
+    - Verified with
+      `zig build run-test-zig-module-builtins -- --test-filter staticSmallWordCaselessEq`,
+      `zig build run-test-zig-module-builtins`,
+      `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`,
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`, and
+      `zig build run-test-wasm-static-lib`.
+    - Optimized disassembly dumps
+      `/tmp/roc_http_after_caseless_static_lane.s` and
+      `/tmp/roc_json_camel_direct_after_caseless_static_lane.s` contain no
+      references to `roc_builtins_str_equal`,
+      `roc_builtins_str_equal_static_small`,
+      `roc_builtins_str_static_small_word_eq`,
+      `roc_builtins_str_static_small_word_caseless_eq`, or
+      `roc_builtins_str_caseless_ascii_equals`. The large parser-state frame and
+      cold allocation/error paths remain separate open work: in the refreshed
+      HTTP dump, `_roc__proc_11b` still reserves `0x1640` bytes of stack.
 
 - [ ] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
   - Tasks:
@@ -800,7 +824,7 @@ The plan is not complete until every item below is true:
 - [ ] Immediately-consumed `{ value, rest }` parser result records are avoided
       where direct locals are semantically equivalent.
 - [ ] Static known `Fields` dispatch emits direct exact small-string compares.
-- [ ] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
+- [x] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
       for eligible small strings.
 - [ ] Generic iterator/string-helper dispatch is not used on the static SSO hot
       path.
