@@ -268,25 +268,66 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
     );
 }
 
-fn printDefs(self: *ReplSession) Allocator.Error![]u8 {
+fn printDefs(self: *ReplSession) anyerror![]u8 {
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(self.allocator);
 
+    // start setup
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
+    defer self.allocator.free(source);
+
+    var ret = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        self.prePublishedBuiltin(),
+    );
+    defer ret.deinit(self.allocator);
+    const env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+    // end setup
+
     for (self.definitions.items.items) |item| {
-        const desc = switch (item.kind) {
-            .value => "value",
-            .annotation => "annotation",
-            .type_decl => "type",
-            .import => "import",
-        };
-        try output.print(
-            self.allocator,
-            "\x1b[90m{s}: {s}\x1b[0m\n",
-            .{ item.name, desc },
-        );
-        try output.print(self.allocator, "{s}\n", .{ item.source });
+        switch (item.kind) {
+            .value => {
+                const name = item.name;
+                const def_idx = getDefOfName(env, name) orelse continue;
+                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+
+                try output.print(
+                    self.allocator,
+                    "\x1b[90m{s} : {s}\x1b[0m\n{s}\n",
+                    .{ name, tw.get(), item.source },
+                );
+            },
+            .annotation => {
+                // italics, usually succeeded by a .value let-binding
+                try output.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+            },
+            .type_decl, .import => {
+                try output.print(self.allocator, "{s}\n", .{item.source});
+            },
+        }
     }
+
     return try output.toOwnedSlice(self.allocator);
+}
+
+fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pat = env.store.getPattern(def.pattern);
+        if (pat == .assign and std.mem.eql(u8, env.getIdent(pat.assign.ident), name)) {
+            return def_idx;
+        }
+    }
+    return null;
 }
 
 const DefinitionValidation = struct {
