@@ -4648,10 +4648,10 @@ fn hoistedCallableDefForExpr(
     expr: CIR.Expr.Idx,
 ) ?HoistedCallableDef {
     return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
+        .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk self.hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
+            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
         },
         .e_str,
         .e_str_segment,
@@ -4719,20 +4719,17 @@ fn hoistedImportedModule(
 }
 
 fn hoistedTopLevelDefForPattern(
-    self: *Self,
     module: *const ModuleEnv,
     pattern: CIR.Pattern.Idx,
 ) ?HoistedCallableDef {
     const pattern_node = ModuleEnv.nodeIdxFrom(pattern);
-    return self.hoistedTopLevelDefForNode(module, pattern_node);
+    return hoistedTopLevelDefForNode(module, pattern_node);
 }
 
 fn hoistedTopLevelDefForNode(
-    self: *Self,
     module: *const ModuleEnv,
     node: CIR.Node.Idx,
 ) ?HoistedCallableDef {
-    _ = self;
     for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
         const def = module.store.getDef(def_idx);
         if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
