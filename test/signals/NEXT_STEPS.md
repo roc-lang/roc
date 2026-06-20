@@ -545,6 +545,12 @@ against `DESIGN.md`, and it unlocks the retained-thunk node table, true
 per-edge equality pruning, and the final structural no-rebuild path. Avoid
 parallel work that only improves the current `NodeValue` compromise.
 
+Progress: `Ui.state` no longer stores its initial value as a direct
+heterogeneous `NodeValue` field in `Elem.State`. The descriptor now carries a
+retained initializer thunk, and the host calls that thunk only when a new state
+node is created. This matches the target `ValueInitThunk` ownership shape while
+the thunk body still returns the current internal `NodeValue` bridge value.
+
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
   at the call site and specialized by monomorphization at the platform-glue

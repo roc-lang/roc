@@ -108,10 +108,12 @@ Ui := [].{
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 	state = |init, body| {
-		initial_nv =
+		initial : NodeValue -> NodeValue
+		initial = |_unit| {
 			match init.encode(NodeValue.format) {
 				Ok(encoded) => encoded
 			}
+		}
 		eq : NodeValue, NodeValue -> Bool
 		eq = |left, right| {
 			A : a
@@ -137,7 +139,7 @@ Ui := [].{
 		handle : State(a)
 		handle = { ref: Node.BinderRef.BinderRef(token) }
 		child = body(handle)
-		Elem.State({ binder: handle.ref, initial: initial_nv, eq: Box.box(eq), child: Box.box(child) })
+		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), child: Box.box(child) })
 	}
 
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.

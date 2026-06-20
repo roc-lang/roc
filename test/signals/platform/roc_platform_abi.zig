@@ -631,12 +631,12 @@ pub const __AnonStruct32 = extern struct {
     binder: *u64,
     child: *Elem,
     eq: RocErasedCallable,
-    initial: NodeValue,
+    initial: RocErasedCallable,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct32) != 56) @compileError("__AnonStruct32 size mismatch");
+        if (@sizeOf(__AnonStruct32) != 32) @compileError("__AnonStruct32 size mismatch");
         if (@alignOf(__AnonStruct32) != 8) @compileError("__AnonStruct32 alignment mismatch");
     }
 }
@@ -1086,7 +1086,7 @@ pub fn decref__AnonStruct32(value: __AnonStruct32, roc_host: *RocHost) void {
     decrefBox(@ptrCast(value.binder), roc_host);
     decrefBoxWith(@ptrCast(value.child), @alignOf(Elem), &decrefBoxPayloadType2, roc_host);
     decrefErasedCallable(value.eq, roc_host);
-    decrefNodeValue(value.initial, roc_host);
+    decrefErasedCallable(value.initial, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct32.
@@ -1094,7 +1094,7 @@ pub fn incref__AnonStruct32(value: __AnonStruct32, amount: isize) void {
     increfBox(@ptrCast(value.binder), amount);
     increfBox(@ptrCast(value.child), amount);
     increfErasedCallable(value.eq, amount);
-    increfNodeValue(value.initial, amount);
+    increfErasedCallable(value.initial, amount);
 }
 
 /// Recursively decrement Roc-owned fields in __AnonStruct34.

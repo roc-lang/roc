@@ -279,7 +279,7 @@ const HostNodeEventDesc = struct {
 
 const HostNodeStateDesc = struct {
     node_id: u64,
-    initial: abi.NodeValue,
+    initial: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
 };
 
@@ -373,8 +373,8 @@ const HostNodeDescriptorStream = struct {
         self.scope_sites.deinit(allocator);
 
         for (self.states.items) |desc| {
-            abi.decrefNodeValue(desc.initial, roc_host);
-            metrics.closure_releases += 1;
+            metrics.closure_releases += 2;
+            abi.decrefErasedCallable(desc.initial, roc_host);
             abi.decrefErasedCallable(desc.eq, roc_host);
         }
         self.states.deinit(allocator);
@@ -551,17 +551,17 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, initial: abi.NodeValue, eq: abi.RocErasedCallable) void {
-        abi.increfNodeValue(initial, 1);
+    fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, initial: abi.RocErasedCallable, eq: abi.RocErasedCallable) void {
+        abi.increfErasedCallable(initial, 1);
         abi.increfErasedCallable(eq, 1);
-        metrics.closure_retains += 1;
+        metrics.closure_retains += 2;
         self.states.append(allocator, .{
             .node_id = node_id,
             .initial = initial,
             .eq = eq,
         }) catch {
-            abi.decrefNodeValue(initial, roc_host);
-            metrics.closure_releases += 1;
+            metrics.closure_releases += 2;
+            abi.decrefErasedCallable(initial, roc_host);
             abi.decrefErasedCallable(eq, roc_host);
             std.process.exit(1);
         };
@@ -1636,14 +1636,14 @@ const HostEnv = struct {
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
         if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
-        abi.increfNodeValue(desc.initial, 1);
+        const initial = callStateInitialThunk(roc_host, desc.initial);
         self.states.append(self.gpa.allocator(), .{
             .state_id = desc.node_id,
-            .value = desc.initial,
+            .value = initial,
             .version = 0,
             .active = true,
         }) catch {
-            abi.decrefNodeValue(desc.initial, roc_host);
+            abi.decrefNodeValue(initial, roc_host);
             std.process.exit(1);
         };
     }
@@ -3724,6 +3724,10 @@ fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErase
     return result;
 }
 
+fn callStateInitialThunk(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) abi.NodeValue {
+    return callErasedNodeValueToNodeValue(roc_host, callable, nodeValueUnit());
+}
+
 fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.NodeValue {
     const payload = erasedCallablePayload(callable);
     abi.increfNodeValue(arg0, 1);
@@ -4515,6 +4519,10 @@ const TestErasedBinderCapture = extern struct {
     condition_binder: HostBinderToken,
 };
 
+const TestErasedNodeValueCapture = extern struct {
+    value: abi.NodeValue,
+};
+
 var test_erased_callable_drop_count: u64 = 0;
 var test_row_elem_call_count: u64 = 0;
 
@@ -4569,6 +4577,13 @@ fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8,
         else => @panic("test binary NodeValue callable expected right NvI64"),
     };
     writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(left + right + capture.amount));
+}
+
+fn testInitialNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = args;
+    const capture = testCapturePtrAs(TestErasedNodeValueCapture, capture_ptr);
+    abi.increfNodeValue(capture.value, 1);
+    writeTestErasedResult(abi.NodeValue, ret, capture.value);
 }
 
 fn testBinaryElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -4702,6 +4717,12 @@ fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv
     test_erased_callable_drop_count += 1;
     const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
     abi.decrefBox(@ptrCast(capture.condition_binder), roc_host);
+}
+
+fn testNodeValueCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
+    test_erased_callable_drop_count += 1;
+    const capture = testCapturePtrAs(TestErasedNodeValueCapture, capture_ptr);
+    abi.decrefNodeValue(capture.value, roc_host);
 }
 
 fn expectNodeValueI64(value: abi.NodeValue, expected: i64) !void {
@@ -5665,7 +5686,18 @@ fn testElement(roc_host: *abi.RocHost, children: []const abi.Elem) abi.Elem {
     return testElementWith(roc_host, "div", &.{}, children);
 }
 
+fn testNodeValueInitialThunk(roc_host: *abi.RocHost, initial: abi.NodeValue) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedNodeValueCapture,
+        roc_host,
+        &testInitialNodeValueCallable,
+        &testNodeValueCaptureOnDrop,
+        .{ .value = initial },
+    );
+}
+
 fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBinderToken, initial: abi.NodeValue, child: abi.Elem) abi.Elem {
+    const initial_thunk = testNodeValueInitialThunk(roc_host, initial);
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5679,7 +5711,7 @@ fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBi
                 .binder = binder_token,
                 .child = boxTestElem(roc_host, child),
                 .eq = eq,
-                .initial = initial,
+                .initial = initial_thunk,
             },
         },
         .tag = .State,
@@ -6118,13 +6150,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host carries binder context into Elem when branch collection" {
