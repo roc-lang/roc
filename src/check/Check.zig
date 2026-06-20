@@ -4621,9 +4621,10 @@ fn hoistedExprAllowsStoredConst(
         .e_type_method_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
         .e_type_dispatch_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
         .e_tuple_access => |access| self.hoistedExprAllowsStoredConst(module, access.tuple, context),
-        .e_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
-        .e_expect_err => |expect_err| self.hoistedExprAllowsStoredConst(module, expect_err.expr, context),
-        .e_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        => false,
         .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
         .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
@@ -4775,8 +4776,9 @@ fn hoistedStatementAllowsStoredConst(
         .s_var => |var_stmt| self.hoistedExprAllowsStoredConst(module, var_stmt.expr, context),
         .s_reassign => |reassign| self.hoistedExprAllowsStoredConst(module, reassign.expr, context),
         .s_expr => |expr_stmt| self.hoistedExprAllowsStoredConst(module, expr_stmt.expr, context),
-        .s_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
-        .s_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
+        .s_dbg,
+        .s_expect,
+        => false,
         .s_for => |for_stmt| (try self.hoistedExprAllowsStoredConst(module, for_stmt.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_stmt.body, context),
         .s_while => |while_stmt| (try self.hoistedExprAllowsStoredConst(module, while_stmt.cond, context)) and

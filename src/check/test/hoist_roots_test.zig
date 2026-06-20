@@ -75,6 +75,43 @@ test "hoist roots selected for direct closed ordinary call function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
+test "hoist roots are not selected for ordinary call with dbg in reachable body" {
+    var test_env = try TestEnv.init("Test",
+        \\dbg_value = || {
+        \\    x = 42.I64
+        \\    dbg x
+        \\    x
+        \\}
+        \\
+        \\main = |arg| {
+        \\    x = dbg_value()
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for ordinary call with expect in reachable body" {
+    var test_env = try TestEnv.init("Test",
+        \\expect_value = || {
+        \\    expect 1.I64 == 1.I64
+        \\    42.I64
+        \\}
+        \\
+        \\main = |arg| {
+        \\    x = expect_value()
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots selected for direct closed arithmetic function body" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| 1.I64 + 2.I64
