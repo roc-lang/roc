@@ -3989,6 +3989,18 @@ fn checkedTypePayloadKeyBuild(
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
+fn checkedTypePayloadKey(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *const CheckedTypeStore,
+    payload: CheckedTypePayload,
+) Allocator.Error!canonical.CanonicalTypeKey {
+    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, store, &.{}, &.{});
+    defer builder.deinit();
+    try builder.writePayload(payload);
+    return .{ .bytes = builder.hasher.finalResult() };
+}
+
 fn appendCheckedNominalDeclarationFromPayload(
     allocator: Allocator,
     store: *CheckedTypeStore,
@@ -13625,7 +13637,7 @@ const PlatformAppRelationTypeResolver = struct {
         platform_payload: CheckedTypePayload,
         app_root: CheckedTypeId,
         app_payload: CheckedTypePayload,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         return switch (platform_payload) {
             .pending => checkedArtifactInvariant("platform/app relation merge reached pending platform payload", .{}),
             .flex, .rigid, .empty_record, .empty_tag_union => unreachable,
@@ -13741,7 +13753,7 @@ const PlatformAppRelationTypeResolver = struct {
     fn finalizePayload(
         self: *PlatformAppRelationTypeResolver,
         root_payload: CheckedTypePayload,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         return switch (root_payload) {
             .pending => checkedArtifactInvariant("platform/app relation finalization reached pending payload", .{}),
             .flex, .rigid, .empty_record, .empty_tag_union => unreachable,
@@ -13824,7 +13836,7 @@ const PlatformAppRelationTypeResolver = struct {
         platform_alias: CheckedAliasType,
         app_root: CheckedTypeId,
         app_payload: CheckedTypePayload,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         const app_backing = switch (app_payload) {
             .alias => |alias| alias.backing,
             else => app_root,
@@ -13846,7 +13858,7 @@ const PlatformAppRelationTypeResolver = struct {
         self: *PlatformAppRelationTypeResolver,
         platform_nominal: CheckedNominalType,
         app_payload: CheckedTypePayload,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         const app_nominal = switch (app_payload) {
             .nominal => |nominal| nominal,
             .alias => unreachable,
@@ -13879,7 +13891,7 @@ const PlatformAppRelationTypeResolver = struct {
         self: *PlatformAppRelationTypeResolver,
         platform_root: CheckedTypeId,
         app_root: CheckedTypeId,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         const platform_payload = self.payload(platform_root);
         const app_payload = self.payload(app_root);
         const platform_parts = recordParts(platform_payload) orelse {
@@ -13907,7 +13919,7 @@ const PlatformAppRelationTypeResolver = struct {
         self: *PlatformAppRelationTypeResolver,
         platform_root: CheckedTypeId,
         app_root: CheckedTypeId,
-    ) Allocator.Error!CheckedTypePayload {
+    ) Allocator.Error!CheckedTypePayloadBuild {
         const platform_payload = self.payload(platform_root);
         const app_payload = self.payload(app_root);
         const platform_union = switch (platform_payload) {
@@ -14243,8 +14255,12 @@ const PlatformAppRelationTypeResolver = struct {
         try active.put(root, {});
         defer _ = active.remove(root);
 
-        return switch (self.store.payloads.items[index]) {
-            .pending => self.pendingRootContainsIdentityVariables(root),
+        switch (self.store.payloads.items[index]) {
+            .pending => return self.pendingRootContainsIdentityVariables(root),
+            else => {},
+        }
+        return switch (self.payload(root)) {
+            .pending => unreachable,
             .flex,
             .rigid,
             => true,
@@ -14290,7 +14306,7 @@ const PlatformAppRelationTypeResolver = struct {
             },
             .tag_union => |tag_union| blk: {
                 for (tag_union.tags) |tag| {
-                    for (tag.args) |arg| {
+                    for (tag.argsSlice(self.store)) |arg| {
                         if (try self.typeContainsIdentityVariablesHelp(arg, active)) break :blk true;
                     }
                 }
@@ -14463,7 +14479,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         if (index >= self.store.payloads.items.len) {
             checkedArtifactInvariant("platform/app relation type digest referenced missing checked type payload", .{});
         }
-        return self.store.payloads.items[index];
+        return self.store.payload(root);
     }
 
     fn writeMerge(
@@ -15019,9 +15035,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
             out.deinit(self.allocator);
         }
         for (row.tags) |tag| {
-            const args = try self.allocator.alloc(TypeWrite, tag.args.len);
+            const tag_args = tag.argsSlice(self.store);
+            const args = try self.allocator.alloc(TypeWrite, tag_args.len);
             errdefer self.allocator.free(args);
-            for (tag.args, 0..) |arg, i| {
+            for (tag_args, 0..) |arg, i| {
                 args[i] = .{ .finalize = .{ .root = arg, .context = .value } };
             }
             try out.append(self.allocator, .{ .name = tag.name, .args = args });
@@ -15104,9 +15121,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         tags: []const CheckedTag,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            const args = try self.allocator.alloc(TypeWrite, tag.args.len);
+            const tag_args = tag.argsSlice(self.store);
+            const args = try self.allocator.alloc(TypeWrite, tag_args.len);
             errdefer self.allocator.free(args);
-            for (tag.args, 0..) |arg, i| {
+            for (tag_args, 0..) |arg, i| {
                 args[i] = .{ .source = arg };
             }
             try out.append(self.allocator, .{ .name = tag.name, .args = args });
@@ -15121,12 +15139,14 @@ const PlatformAppRelationTypeDigestBuilder = struct {
     ) Allocator.Error!void {
         for (platform_tags) |platform_tag| {
             const args = if (findTag(self.names, app_tags, platform_tag.name)) |app_tag| blk: {
-                if (platform_tag.args.len != app_tag.args.len) {
+                const platform_args = platform_tag.argsSlice(self.store);
+                const app_args = app_tag.argsSlice(self.store);
+                if (platform_args.len != app_args.len) {
                     checkedArtifactInvariant("platform/app relation digest tag payload arity mismatch", .{});
                 }
-                const merged_args = try self.allocator.alloc(TypeWrite, platform_tag.args.len);
+                const merged_args = try self.allocator.alloc(TypeWrite, platform_args.len);
                 errdefer self.allocator.free(merged_args);
-                for (platform_tag.args, app_tag.args, 0..) |platform_arg, app_arg, i| {
+                for (platform_args, app_args, 0..) |platform_arg, app_arg, i| {
                     merged_args[i] = .{ .merge = .{
                         .platform_root = platform_arg,
                         .app_root = app_arg,
@@ -15135,9 +15155,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 }
                 break :blk merged_args;
             } else blk: {
-                const finalized_args = try self.allocator.alloc(TypeWrite, platform_tag.args.len);
+                const platform_args = platform_tag.argsSlice(self.store);
+                const finalized_args = try self.allocator.alloc(TypeWrite, platform_args.len);
                 errdefer self.allocator.free(finalized_args);
-                for (platform_tag.args, 0..) |arg, i| {
+                for (platform_args, 0..) |arg, i| {
                     finalized_args[i] = .{ .finalize = .{ .root = arg, .context = .value } };
                 }
                 break :blk finalized_args;
@@ -15147,9 +15168,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         }
         for (app_tags) |app_tag| {
             if (findTag(self.names, platform_tags, app_tag.name) != null) continue;
-            const args = try self.allocator.alloc(TypeWrite, app_tag.args.len);
+            const app_args = app_tag.argsSlice(self.store);
+            const args = try self.allocator.alloc(TypeWrite, app_args.len);
             errdefer self.allocator.free(args);
-            for (app_tag.args, 0..) |arg, i| {
+            for (app_args, 0..) |arg, i| {
                 args[i] = .{ .finalize = .{ .root = arg, .context = .value } };
             }
             try out.append(self.allocator, .{ .name = app_tag.name, .args = args });
@@ -15465,7 +15487,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 try self.sourceTypeContainsIdentityVariables(function.ret),
             .tag_union => |tag_union| blk: {
                 for (tag_union.tags) |tag| {
-                    if (try self.sourceSliceContainsIdentityVariables(tag.args)) break :blk true;
+                    if (try self.sourceSliceContainsIdentityVariables(tag.argsSlice(self.store))) break :blk true;
                 }
                 break :blk try self.sourceTypeContainsIdentityVariables(tag_union.ext);
             },
@@ -15535,7 +15557,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 const row = try self.flattenTagRow(tag_union.tags, tag_union.ext);
                 defer row.deinit(self.allocator);
                 for (row.tags) |tag| {
-                    for (tag.args) |arg| {
+                    for (tag.argsSlice(self.store)) |arg| {
                         if (try self.finalizeContainsIdentityVariables(arg, .value)) break :blk true;
                     }
                 }
@@ -15709,12 +15731,12 @@ const PlatformAppRelationTypeDigestBuilder = struct {
         defer app_row.deinit(self.allocator);
         for (platform_row.tags) |platform_tag| {
             if (findTag(self.names, app_row.tags, platform_tag.name)) |app_tag| {
-                if (try self.mergeSliceContainsIdentityVariables(platform_tag.args, app_tag.args)) return true;
-            } else if (try self.finalizeSliceContainsIdentityVariables(platform_tag.args)) return true;
+                if (try self.mergeSliceContainsIdentityVariables(platform_tag.argsSlice(self.store), app_tag.argsSlice(self.store))) return true;
+            } else if (try self.finalizeSliceContainsIdentityVariables(platform_tag.argsSlice(self.store))) return true;
         }
         for (app_row.tags) |app_tag| {
             if (findTag(self.names, platform_row.tags, app_tag.name) != null) continue;
-            if (try self.finalizeSliceContainsIdentityVariables(app_tag.args)) return true;
+            if (try self.finalizeSliceContainsIdentityVariables(app_tag.argsSlice(self.store))) return true;
         }
         if (platform_row.tail) |left| {
             if (app_row.tail) |right| return try self.mergeContainsIdentityVariables(left, right, .tag_tail);
@@ -16586,7 +16608,7 @@ fn appendRecursiveNominalTestType(
 
     const tag_args = try allocator.alloc(CheckedTypeId, 1);
     tag_args[0] = nominal_root;
-    const tags = try allocator.alloc(CheckedTag, 1);
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = tag_name, .args = tag_args };
 
     const nominal_args = if (arg) |arg_root| blk: {
@@ -16595,11 +16617,11 @@ fn appendRecursiveNominalTestType(
         break :blk args;
     } else &.{};
 
-    store.payloads.items[@intFromEnum(backing_root)] = .{ .tag_union = .{
+    try store.fillSyntheticTypeRoot(allocator, backing_root, .{ .tag_union = .{
         .tags = tags,
         .ext = empty_root,
-    } };
-    store.payloads.items[@intFromEnum(nominal_root)] = .{ .nominal = .{
+    } });
+    try store.fillSyntheticTypeRoot(allocator, nominal_root, .{ .nominal = .{
         .name = type_name,
         .origin_module = module_name,
         .source_decl = 0,
@@ -16608,23 +16630,13 @@ fn appendRecursiveNominalTestType(
         .backing = backing_root,
         .representation = .{ .local_declaration = @enumFromInt(0) },
         .args = nominal_args,
-    } };
+    } });
 
-    const backing_key = try checkedTypePayloadKey(
-        allocator,
-        names,
-        store.payloads.items,
-        store.payloads.items[@intFromEnum(backing_root)],
-    );
+    const backing_key = try checkedTypePayloadKey(allocator, names, store, store.payload(backing_root));
     store.roots.items[@intFromEnum(backing_root)].key = backing_key;
     try store.ensureSyntheticSchemeForRoot(allocator, backing_root, backing_key);
 
-    const nominal_key = try checkedTypePayloadKey(
-        allocator,
-        names,
-        store.payloads.items,
-        store.payloads.items[@intFromEnum(nominal_root)],
-    );
+    const nominal_key = try checkedTypePayloadKey(allocator, names, store, store.payload(nominal_root));
     store.roots.items[@intFromEnum(nominal_root)].key = nominal_key;
     try store.ensureSyntheticSchemeForRoot(allocator, nominal_root, nominal_key);
 
@@ -23024,7 +23036,7 @@ test "platform app relation resolver merges recursive structural checked roots a
 
     const platform_a_args = try allocator.alloc(CheckedTypeId, 1);
     platform_a_args[0] = platform_root;
-    const platform_tags = try allocator.alloc(CheckedTag, 2);
+    const platform_tags = try allocator.alloc(CheckedTagBuild, 2);
     platform_tags[0] = .{ .name = tag_a, .args = platform_a_args };
     platform_tags[1] = .{ .name = tag_c, .args = &.{} };
     try store.fillSyntheticTypeRoot(allocator, platform_root, .{ .tag_union = .{
@@ -23034,7 +23046,7 @@ test "platform app relation resolver merges recursive structural checked roots a
 
     const app_a_args = try allocator.alloc(CheckedTypeId, 1);
     app_a_args[0] = app_root;
-    const app_tags = try allocator.alloc(CheckedTag, 1);
+    const app_tags = try allocator.alloc(CheckedTagBuild, 1);
     app_tags[0] = .{ .name = tag_a, .args = app_a_args };
     try store.fillSyntheticTypeRoot(allocator, app_root, .{ .tag_union = .{
         .tags = app_tags,
@@ -23046,13 +23058,14 @@ test "platform app relation resolver merges recursive structural checked roots a
 
     const result = try resolver.merge(platform_root, app_root, .value);
     try std.testing.expect(result != app_root);
-    const result_union = switch (store.payloads.items[@intFromEnum(result)]) {
+    const result_union = switch (store.payload(result)) {
         .tag_union => |tag_union| tag_union,
         else => return error.ExpectedTagUnion,
     };
     const result_a = findTagById(result_union.tags, tag_a) orelse return error.ExpectedRecursiveTag;
-    try std.testing.expectEqual(@as(usize, 1), result_a.args.len);
-    try std.testing.expectEqual(result, result_a.args[0]);
+    const result_a_args = result_a.argsSlice(&store);
+    try std.testing.expectEqual(@as(usize, 1), result_a_args.len);
+    try std.testing.expectEqual(result, result_a_args[0]);
     _ = findTagById(result_union.tags, tag_c) orelse return error.ExpectedPlatformTag;
 }
 
@@ -23073,7 +23086,7 @@ test "platform app relation resolver finalizes recursive structural checked root
 
     const tag_args = try allocator.alloc(CheckedTypeId, 1);
     tag_args[0] = root;
-    const tags = try allocator.alloc(CheckedTag, 1);
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = tag_a, .args = tag_args };
     try store.fillSyntheticTypeRoot(allocator, root, .{ .tag_union = .{
         .tags = tags,
@@ -23085,14 +23098,15 @@ test "platform app relation resolver finalizes recursive structural checked root
 
     const finalized = try resolver.finalize(root, .value);
     try std.testing.expect(finalized != root);
-    const finalized_union = switch (store.payloads.items[@intFromEnum(finalized)]) {
+    const finalized_union = switch (store.payload(finalized)) {
         .tag_union => |tag_union| tag_union,
         else => return error.ExpectedTagUnion,
     };
     const finalized_a = findTagById(finalized_union.tags, tag_a) orelse return error.ExpectedRecursiveTag;
-    try std.testing.expectEqual(@as(usize, 1), finalized_a.args.len);
-    try std.testing.expectEqual(finalized, finalized_a.args[0]);
-    try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payloads.items[@intFromEnum(finalized_union.ext)]);
+    const finalized_a_args = finalized_a.argsSlice(&store);
+    try std.testing.expectEqual(@as(usize, 1), finalized_a_args.len);
+    try std.testing.expectEqual(finalized, finalized_a_args[0]);
+    try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(finalized_union.ext));
 }
 
 test "platform app relation resolver returns empty roots before reserving normalized empty results" {
@@ -23126,17 +23140,17 @@ test "platform app relation resolver returns empty roots before reserving normal
     defer resolver.deinit();
 
     const finalized_record = try resolver.finalize(open_record, .value);
-    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payloads.items[@intFromEnum(finalized_record)]);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(finalized_record));
 
     const finalized_record_unbound = try resolver.finalize(empty_record_unbound, .value);
-    const finalized_record_unbound_fields = switch (store.payloads.items[@intFromEnum(finalized_record_unbound)]) {
+    const finalized_record_unbound_fields = switch (store.payload(finalized_record_unbound)) {
         .record_unbound => |fields| fields,
         else => return error.ExpectedRecordUnbound,
     };
     try std.testing.expectEqual(@as(usize, 0), finalized_record_unbound_fields.len);
 
     const finalized_tags = try resolver.finalize(open_tags, .value);
-    try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payloads.items[@intFromEnum(finalized_tags)]);
+    try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(finalized_tags));
 }
 
 test "provided callable-containing record constant is a data export, not a runtime root" {
