@@ -277,8 +277,10 @@ pub const RocStr = extern struct {
     }
 
     pub fn eql(self: RocStr, other: RocStr) bool {
-        // If they are byte-for-byte equal, they're definitely equal!
-        if (self.bytes == other.bytes and self.length == other.length) {
+        // For non-small strings, equal byte pointers and lengths imply equal
+        // contents. Small strings store their payload across these same struct
+        // fields, so they must always compare the inline bytes below.
+        if (!self.isSmallStr() and !other.isSmallStr() and self.bytes == other.bytes and self.length == other.length) {
             return true;
         }
 
@@ -545,44 +547,69 @@ pub const RocStr = extern struct {
 };
 
 inline fn bytesEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
-    const word_size = @sizeOf(usize);
+    const word_size = @sizeOf(u64);
 
     var index: usize = 0;
     while (index + word_size <= len) : (index += word_size) {
-        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
-        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
         if (left_word != right_word) return false;
     }
 
-    while (index < len) : (index += 1) {
-        if (left[index] != right[index]) return false;
+    const tail_len = len - index;
+    if (tail_len != 0) {
+        const mask = lowBytesMask64(tail_len);
+        const left_tail = readTailU64(left, len, index, tail_len);
+        const right_tail = readTailU64(right, len, index, tail_len);
+        return (left_tail & mask) == (right_tail & mask);
     }
 
     return true;
 }
 
 inline fn smallBytesEqual(left: [@sizeOf(RocStr)]u8, right: [@sizeOf(RocStr)]u8, len: usize) bool {
-    const word_size = @sizeOf(usize);
+    const word_size = @sizeOf(u64);
 
     var index: usize = 0;
     while (index + word_size <= len) : (index += word_size) {
-        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
-        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
         if (left_word != right_word) return false;
     }
 
     const tail_len = len - index;
     if (tail_len == 0) return true;
 
-    const left_tail = std.mem.readInt(usize, left[index..][0..word_size], .native);
-    const right_tail = std.mem.readInt(usize, right[index..][0..word_size], .native);
-    const mask = lowBytesMask(tail_len);
+    const left_tail = readSmallStringU64(left, index);
+    const right_tail = readSmallStringU64(right, index);
+    const mask = lowBytesMask64(tail_len);
     return (left_tail & mask) == (right_tail & mask);
 }
 
-inline fn lowBytesMask(byte_count: usize) usize {
-    if (byte_count >= @sizeOf(usize)) return std.math.maxInt(usize);
-    return (@as(usize, 1) << @intCast(byte_count * 8)) - 1;
+inline fn readSmallStringU64(bytes: [@sizeOf(RocStr)]u8, index: usize) u64 {
+    // Roc small strings store their bytes inline in the RocStr value and zero
+    // unused inline bytes. That gives the hot equality path a real fixed-width
+    // source to load from even when the logical string length is not a multiple
+    // of eight.
+    //
+    // On 64-bit targets the inline buffer is 24 bytes, so every 8-byte SSO lane
+    // can be loaded directly. On 32-bit targets the inline buffer is 12 bytes:
+    // a string with 9-11 bytes has its tail starting at byte 8, where an
+    // ordinary 8-byte load would run past the RocStr value. In that rare case,
+    // load the final in-bounds u64 and shift the requested lane down to byte 0.
+    if (index + @sizeOf(u64) <= @sizeOf(RocStr)) {
+        return std.mem.readInt(u64, bytes[index..][0..@sizeOf(u64)], .little);
+    }
+
+    const load_index = @sizeOf(RocStr) - @sizeOf(u64);
+    const shift = (index - load_index) * 8;
+    const word = std.mem.readInt(u64, bytes[load_index..][0..@sizeOf(u64)], .little);
+    return word >> @intCast(shift);
+}
+
+inline fn lowBytesMask64(byte_count: usize) u64 {
+    if (byte_count >= @sizeOf(u64)) return std.math.maxInt(u64);
+    return (@as(u64, 1) << @intCast(byte_count * 8)) - 1;
 }
 
 pub fn init(
@@ -2276,6 +2303,188 @@ test "RocStr.eq: small, not equal, same length" {
     }
 
     try std.testing.expect(!roc_str1.eql(roc_str2));
+}
+
+test "RocStr.eq: small, exact u64 chunk" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str1 = RocStr.init("abcdefgh", 8, test_env.getOps());
+    const roc_str2 = RocStr.init("abcdefgh", 8, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 8), roc_str1.len());
+    try std.testing.expect(roc_str1.eql(roc_str2));
+}
+
+test "RocStr.eq: small, masked tail detects last byte difference" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const equal_text = if (SMALL_STR_MAX_LENGTH >= 23)
+        "abcdefghijklmnopqrstuvw"
+    else
+        "abcdefghijk";
+    const different_text = if (SMALL_STR_MAX_LENGTH >= 23)
+        "abcdefghijklmnopqrstuvX"
+    else
+        "abcdefghijX";
+
+    const roc_str1 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
+    const roc_str2 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
+    const roc_str3 = RocStr.init(different_text, different_text.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.isSmallStr());
+    try std.testing.expect(roc_str2.isSmallStr());
+    try std.testing.expect(roc_str3.isSmallStr());
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: all small lengths compare by bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var left_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+    var right_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+
+    for (0..SMALL_STR_MAX_LENGTH) |i| {
+        left_buf[i] = @as(u8, @intCast('a' + (i % 26)));
+        right_buf[i] = left_buf[i];
+    }
+
+    for (0..SMALL_STR_MAX_LENGTH + 1) |len| {
+        const equal_left = RocStr.init(&left_buf, len, test_env.getOps());
+        const equal_right = RocStr.init(&right_buf, len, test_env.getOps());
+
+        try std.testing.expect(equal_left.isSmallStr());
+        try std.testing.expect(equal_right.isSmallStr());
+        try std.testing.expect(equal_left.eql(equal_right));
+
+        equal_left.decref(test_env.getOps());
+        equal_right.decref(test_env.getOps());
+
+        if (len == 0) continue;
+
+        right_buf[len - 1] ^= 1;
+        const unequal_left = RocStr.init(&left_buf, len, test_env.getOps());
+        const unequal_right = RocStr.init(&right_buf, len, test_env.getOps());
+
+        try std.testing.expect(unequal_left.isSmallStr());
+        try std.testing.expect(unequal_right.isSmallStr());
+        try std.testing.expect(!unequal_left.eql(unequal_right));
+
+        unequal_left.decref(test_env.getOps());
+        unequal_right.decref(test_env.getOps());
+        right_buf[len - 1] = left_buf[len - 1];
+    }
+}
+
+test "RocStr.eq: embedded nul bytes use byte equality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "ab\x00cd";
+    const same = "ab\x00cd";
+    const different = "ab\x00ce";
+
+    const roc_str1 = RocStr.init(text, text.len, test_env.getOps());
+    const roc_str2 = RocStr.init(same, same.len, test_env.getOps());
+    const roc_str3 = RocStr.init(different, different.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: utf8 content uses exact byte equality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const composed = "caf\xc3\xa9";
+    const same = "caf\xc3\xa9";
+    const decomposed = "cafe\xcc\x81";
+
+    const roc_str1 = RocStr.init(composed, composed.len, test_env.getOps());
+    const roc_str2 = RocStr.init(same, same.len, test_env.getOps());
+    const roc_str3 = RocStr.init(decomposed, decomposed.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: boundary between small and heap strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var small_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+    var heap_buf: [SMALL_STRING_SIZE]u8 = undefined;
+
+    for (&small_buf, 0..) |*byte, i| {
+        byte.* = @as(u8, @intCast('a' + (i % 26)));
+    }
+    for (&heap_buf, 0..) |*byte, i| {
+        byte.* = @as(u8, @intCast('a' + (i % 26)));
+    }
+
+    const small1 = RocStr.init(&small_buf, small_buf.len, test_env.getOps());
+    const small2 = RocStr.init(&small_buf, small_buf.len, test_env.getOps());
+    const heap1 = RocStr.init(&heap_buf, heap_buf.len, test_env.getOps());
+    const heap2 = RocStr.init(&heap_buf, heap_buf.len, test_env.getOps());
+
+    defer {
+        small1.decref(test_env.getOps());
+        small2.decref(test_env.getOps());
+        heap1.decref(test_env.getOps());
+        heap2.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(small1.isSmallStr());
+    try std.testing.expect(!heap1.isSmallStr());
+    try std.testing.expect(small1.eql(small2));
+    try std.testing.expect(heap1.eql(heap2));
+    try std.testing.expect(!small1.eql(heap1));
+}
+
+test "RocStr.eq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("012345678901234567890123456789abc", test_env.getOps());
+    const str1 = substringUnsafeC(source, source.len() - 3, 3, test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("abc", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const str3 = RocStr.fromSlice("abX", test_env.getOps());
+    defer str3.decref(test_env.getOps());
+
+    try std.testing.expect(str1.isSeamlessSlice());
+    try std.testing.expect(str1.eql(str2));
+    try std.testing.expect(!str1.eql(str3));
 }
 
 test "RocStr.eq: large, equal" {

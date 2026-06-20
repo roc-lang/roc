@@ -7,8 +7,8 @@ pub const std_options: std.Options = .{
 
 pub const panic = std.debug.FullPanic(panicImpl);
 
-const request_buffer_size = 16 * 1024;
-const max_content_length = 8 * 1024;
+const request_buffer_size = 2 * 1024;
+const max_content_length = 1024;
 const listen_backlog = 16;
 const stdout_fd: c_int = 1;
 const stderr_fd: c_int = 2;

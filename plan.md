@@ -1,838 +1,794 @@
-# Curried Structural Parser Implementation Plan
+# Generated Parser Hot Path Optimization Plan
 
-This plan implements the method-based structural parsing design described in
-`design.md`, section `Structural Serialization Methods`. That section is the
-source of truth for:
+This plan covers the next optimization pass for the structural `parser_for`
+pipeline described in `design.md`, especially the `Structural Serialization
+Methods` section. The public Roc API must not change. The work is entirely about
+making the existing generated implementation lower to code that is closer to
+hand-written C/Rust HTTP parsing code while preserving the format-agnostic,
+pure, safe, allocation-free invariants.
 
-- `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`
-- direct state construction such as `Headers.{ raw }`
-- `Fields(_shape)` and `Field(_shape)` opaque values
-- compile-time field renaming with `Fields.rename_fields`
-- `TryField` and `TryFieldCaseless` record events
-- value parsers owning value consumption and returning the continuation state
-- no runtime field maps, callback tables, or shape interpreters
-- no runtime allocation on the benchmark header parsing path
+The current optimized HTTP header example works correctly and does not allocate
+at runtime, but disassembly shows that the generated Roc parser still has much
+larger code and stack frames than picohttpparser and may/httparse:
 
-The implementation must replace the current `parse_from`-based machinery. Do not
-maintain both systems side by side.
+- Roc `_roc__proc_e3`, the main generated parser/app proc, is about 247 KB of
+  code and reserves about 4 KB of stack.
+- pico `phr_parse_request` is about 720 bytes of code and reserves about 80
+  bytes of stack.
+- may/httparse's parser core is a few KB of code with roughly 112-160 byte
+  parser frames, and the comparable may per-connection read/parse/respond loop
+  is about 3.3 KB with about 1.5 KB of stack.
 
-## Design Reference Map
+The goal is not to copy either library's public API. The goal is to keep Roc's
+method-based structural parsing API and make the generated hot path much closer
+to the code shape a hand-written C/Rust parser would produce.
 
-- [x] Re-read `design.md`, `Structural Serialization Methods`, before each
-  implementation phase that changes checking, lowering, or platform examples.
-- [x] Treat the public API examples in that section as normative:
-  - [x] convenience APIs such as `Headers.parse(raw)`;
-  - [x] structural method shape
-    `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`;
-  - [x] direct state construction such as `Headers.{ raw }`;
-  - [x] opaque `Fields(_shape)` / `Field(_shape)` metadata;
-  - [x] record events carrying `rest` at the value-start position;
-  - [x] construction-time field renaming through `Fields.rename_fields`;
-  - [x] no builtin user-facing `Decoder`, `Parser`, or `Encoding` type.
-- [x] Treat the phantom-type explanation in `design.md` as normative:
-  `Field(_shape)` handles produced from a `Fields(_shape)` value are already
-  tied to that exact record shape, so generated code must not need a
-  release-build bounds check against the record arity.
-- [x] Treat the performance section in `design.md` as normative:
-  transformed field data is built before the runtime lambda, SSO field names
-  are the hot path, long field names still work, and the generated runtime scan
-  must not allocate or build temporary maps.
-- [x] Treat the HTTP and JSON examples in `design.md` as the acceptance model for
-  platform tests, while keeping the compiler fully format-agnostic.
+## Global Invariants
 
-## Definition Of Done
+- [ ] No public API changes.
+  - Success criteria:
+    - Existing platform examples keep using `Headers.parse`, `Json.parse`,
+      `parser_for`, `Fields(_shape)`, `Field(_shape)`, and format methods as
+      described in `design.md`.
+    - No new builtin user-facing `Decoder`, `Parser`, `Encoding`, slot, unsafe,
+      raw-byte-indexing, or field-index API appears.
 
-- [x] The old `parse_from` structural derivation path is gone from the compiler
-  and tests, except for any deliberately retained migration note that is not
-  compiler source or Roc fixture source.
-- [x] The new `parser_for` derivation is implemented through ordinary static
-  dispatch and direct generated code, not callback tables or a runtime shape
-  interpreter.
-- [x] The HTTP header regression demonstrates zero runtime allocation in both
-  the Zig host and Roc app.
-- [x] The HTTP and JSON regressions demonstrate field-order independence.
-- [x] The HTTP header regression demonstrates field-name renaming,
-  case-insensitive matching, required fields, optional fields, mixed field
-  value shapes, and continuation from each value parser's returned `rest`.
-- [x] Unsupported parser shapes fail during checking with static-dispatch errors
-  instead of reaching post-check invariants.
-- [x] Optimized binary inspection confirms the hot header path has no allocator
-  calls, no runtime field map, and no per-header runtime field-name conversion.
-- [x] Compile-time parser construction is fully supported: generated parser
-  closures can be stored, restored, captured, and lowered as ordinary generated
-  code without rebuilding field metadata at runtime.
-- [x] Targeted test steps pass first; then `zig build minici` passes by using the
-  targeted-failure loop described at the end of this file.
+- [ ] The compiler remains format-agnostic.
+  - Success criteria:
+    - Compiler code does not hardcode HTTP headers, JSON, `Missing`, `Null`,
+      kebab-case, camelCase, content-length, `foo`, `bar`, or any benchmark
+      field name.
+    - All format-specific behavior remains in Roc platform/test format code or
+      ordinary format methods.
 
-## Design Invariants
+- [ ] Runtime allocation remains forbidden on the HTTP header benchmark path.
+  - Success criteria:
+    - The Zig host still has no allocator.
+    - The HTTP platform's `roc_alloc` still crashes.
+    - End-to-end HTTP header tests still pass, proving no runtime Roc allocation
+      is taken.
+    - Optimized disassembly still has no reachable hot-path allocator call in
+      the request parse/respond path.
 
-- [x] Preserve the method-based public model. Do not introduce builtin interface
-  types for parsing or encoding.
-- [x] Keep the compiler format-agnostic. The compiler may know Roc record
-  fields, tag labels, method names, and matching modes; it must not know JSON,
-  HTTP headers, null, missing-header rules, kebab-case, camelCase, or any other
-  format concept.
-- [x] Keep parsing effect-free. All parsing methods are pure functions from
-  state to `Try`.
-- [x] Keep userspace safe. Do not expose raw byte indexing, unchecked memory
-  primitives, raw field slot integers, or unchecked field construction.
-- [x] Keep runtime header parsing allocation-free in the regression platform.
-  Compile-time allocation during parser construction is allowed.
-- [x] Keep the host allocation-free in the HTTP header regression platform.
-  `roc_alloc` must still crash for that test.
-- [x] Keep record parsing one pass over the serialized record fields after the
-  host has found the header section. The generated parser must not require a
-  temporary map.
-- [x] Preserve seamless slices. Parsed `Str` values that are slices of input
-  must remain slices into validated request memory or validated JSON input.
-- [x] Preserve order independence for records. HTTP header order and JSON object
-  field order must not need to match Roc record field order.
-- [x] Preserve duplicate-field behavior. If an input repeats a field, keep the
-  current chosen rule, expected to be last value wins unless tests reveal a
-  documented existing rule.
-- [x] Unsupported structural shapes must fail during checking through missing
-  static-dispatch methods, not as runtime parse failures.
-- [x] Runtime parse failures are only for input conditions known while scanning,
-  such as invalid JSON syntax, bad header lines, missing required fields, or
-  user-defined nominal parser errors.
-- [x] Do not add new language syntax. This change is method dispatch and
-  compiler derivation only.
-- [x] Follow `design.md` post-check rules: later stages consume explicit checked
-  data produced by earlier stages, and no later stage guesses missing
-  information.
+- [ ] Seamless slices remain the representation for parsed input strings.
+  - Success criteria:
+    - Header path and header values remain borrowed slices into validated request
+      memory.
+    - JSON string paths that can borrow validated input still return slices.
+    - No optimization introduces a copied or normalized field-name/value string
+      on the hot parse path.
 
-## Current Implementation Inventory
+- [ ] Required/missing field behavior is unchanged.
+  - Success criteria:
+    - Required fields still produce the format's missing-record-field error when
+      absent.
+    - Optional `Try(value, [Missing])` fields still get `Err(missing)` using the
+      format's `missing_optional_field`.
+    - Existing tests for `Err(Missing)`, `Err(_)`, and `?` remain passing.
 
-- [x] Read the current implementation entry points before editing:
-  - [x] `src/check/static_dispatch_registry.zig`
-  - [x] `src/check/Check.zig`
-  - [x] `src/postcheck/monotype/lower.zig`
-  - [x] `src/build/roc/Builtin.roc`
-  - [x] `src/build/builtin_compiler/main.zig`
-  - [x] `src/canonicalize/BuiltinLowLevel.zig`
-  - [x] `test/http-headers/platform/Headers.roc`
-  - [x] `test/json-decoder/platform/Json.roc`
-  - [x] CLI tests named `ParseFrom*`
-- [x] Search for all old parse method names:
-  - [x] `rg -n "parse_from" src test examples design.md`
-  - [x] `rg -n "ParseFrom|parse_record_field|missing_record_field|ParseTagUnionSpec" src test`
-  - [x] `rg -n "Field\\(\\{ name : Str, value|Field\\.value|longest_field_len" src test`
-- [x] Record which uses are true implementation code, which are tests, and which
-  are comments or docs.
-- [x] Confirm `design.md` remains the only design source for the new API.
+- [ ] Order independence is preserved.
+  - Success criteria:
+    - HTTP headers decode correctly regardless of input header order.
+    - JSON object fields decode correctly regardless of object field order.
+    - Duplicate-field behavior remains whatever the current tests/documentation
+      specify.
 
-## Builtin Surface To Add
+## Phase 1: Establish The Baseline And Regression Harness
 
-- [x] Update every builtin-indexing and canonicalization location that must know
-  about new opaque builtin nominal types:
-  - [x] generated builtin node index collection;
-  - [x] builtin compiler index installation;
-  - [x] common identifier interning;
-  - [x] canonicalization auto-imports;
-  - [x] intrinsic annotation allowlists;
-  - [x] CheckedModule builtin nominal encoding;
-  - [x] post-check null-layout handling for opaque compile-time-only values;
-  - [x] glue/runtime encoding code that classifies builtin nominals.
-- [x] Add opaque compiler-owned field types to `Builtin.roc`:
-  - [x] `Fields(_shape) : opaque`
-  - [x] `Field(_shape) : opaque`
-- [x] Add builtin method annotations for field sets:
-  - [x] `Fields.rename_fields : Fields(_shape), (Str -> Str) -> Fields(_shape)`
-  - [x] `Fields.shortest_name : Fields(_shape) -> U64`
-  - [x] `Fields.longest_name : Fields(_shape) -> U64`
-  - [x] `Fields.iter : Fields(_shape) -> Iter(Field(_shape))`
-  - [x] `Fields.for_size : Fields(_shape), U64 -> Iter(Field(_shape))`
-  - [x] `Field.name : Field(_shape) -> Str`
-- [x] Do not provide crash bodies for compiler-generated builtin functions.
-  Follow the existing builtin style: annotations only where the compiler
-  supplies implementation.
-- [x] Ensure the phantom `_shape` type parameter is present in every public field
-  set or field handle type that can cross userspace method boundaries.
-- [x] Ensure no public method exposes the internal field slot integer.
-- [x] Add or update comments in `Builtin.roc` explaining that these are
-  compiler-generated opaque values used by structural parser derivation.
-- [x] Decide the exact public event tag names and keep them aligned with
-  `design.md`:
-  - [x] `Field({ field : Field(_shape), rest : state })`
-  - [x] `TryField({ name : Str, rest : state })`
-  - [x] `TryFieldCaseless({ name : Str, rest : state })`
-  - [x] `Continue({ rest : state })`
-  - [x] `Done({ rest : state })`
+- [x] Save fresh baseline disassembly before making further optimizer changes.
+  - Tasks:
+    - Build the Roc binary through the existing ReleaseFast host and
+      `roc build --opt=speed` path:
+      `zig build run-test-zig-http-header-decoder-platform`.
+    - Dump the Roc binary:
+      `xcrun llvm-objdump --macho --disassemble --demangle zig-out/bin/http_header_decoder_server_prebuilt > /tmp/roc_http_header_before_next_hotpath_pass.s`.
+    - Build/dump picohttpparser under `/tmp`.
+    - Build/dump the comparable may_minihttp example under `/tmp`.
+  - Success criteria:
+    - Baseline files exist for Roc, pico, and may.
+    - The report captures function code extents, stack reservations, total
+      binary/object size, and relevant calls for all three.
+    - Completed baseline report:
+      `/tmp/roc-http-header-disasm-baseline-next-report.txt`.
+    - Completed baseline disassemblies:
+      `/tmp/roc-http-header-disasm-baseline-next/roc_http_header.s`,
+      `/tmp/roc-http-header-disasm-baseline-next/picohttpparser_arm64_o3.s`,
+      and `/tmp/roc-http-header-disasm-baseline-next/may_minihttp_roc_compare.s`.
 
-## Method Names And Dispatch Registry
+- [x] Add automated or scripted extraction for the metrics we keep comparing.
+  - Tasks:
+    - Produce a small local script or documented command sequence that extracts:
+      - function start symbols;
+      - approximate function extents from adjacent symbols;
+      - prologue stack reservations;
+      - calls to allocator, string equality helpers, caseless equality helpers,
+        crash helpers, and parser helper procs;
+      - total `__TEXT` and on-disk size.
+    - Keep the script in a test/support location if it is generally useful, or
+      document the exact commands in this plan if it remains ad hoc.
+  - Success criteria:
+    - The same commands can be rerun after each phase.
+    - The output is stable enough to compare before/after numbers without hand
+      scanning tens of thousands of disassembly lines.
+    - Completed script: `tools/http-header-disasm-report.sh`.
 
-- [x] Replace the old structural parse method name:
-  - [x] Remove special handling for `parse_from`.
-  - [x] Add special handling for `parser_for`.
-  - [x] Update identifier initialization so `parser_for` is interned wherever
-    builtin method names are initialized.
-- [x] Update `src/check/static_dispatch_registry.zig`:
-  - [x] Replace the old `.parse_from` result mode with `.parser_for`.
-  - [x] Track that `parser_for` returns a function.
-  - [x] Track the `encoding` argument type separately from the returned runtime
-    state argument type.
-  - [x] Preserve ordinary static dispatch for custom nominal `parser_for` methods.
-- [x] Update static-dispatch problem reporting:
-  - [x] Missing `parser_for` on a custom nominal type should mention `parser_for`.
-  - [x] Missing format methods should mention the exact missing method, such as
-    `parse_str`, `parse_record_field`, `skip_record_field`, or `rename_field`.
-  - [x] Remove references to `parse_from` from user-facing errors.
-- [x] Update any tests that snapshot static-dispatch output.
-- [x] Ensure `parser_for` remains a normal method users can call directly:
-  - [x] `Shape.parser_for(encoding)` should work.
-  - [x] `({ foo: "x" }).encode_to(encoding)` should work once structural
-    `encode_to` derivation is implemented.
+- [x] Add focused regression tests before changing lowering behavior.
+  - Tasks:
+    - Confirm existing HTTP and JSON platform tests cover:
+      - required fields;
+      - optional fields;
+      - field order independence;
+      - mixed field shapes such as `Str` and `U64`;
+      - value parsers returning the continuation `rest`;
+      - unknown field/header skipping.
+    - Add missing tests before changing the implementation.
+  - Success criteria:
+    - Any broken parser state, `Try`, field-dispatch, or continuation behavior
+      is caught by a targeted test before the final disassembly step.
+    - Current focused coverage was confirmed with:
+      `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Existing HTTP coverage includes required fields, optional fields, field
+      order independence, mixed `Str`/`U64` fields, value parsers returning
+      continuation `rest`, unknown header skipping, duplicate known headers,
+      malformed headers, UTF-8 validation, and max content-length rejection.
+    - Existing JSON coverage includes required fields, optional fields, field
+      order independence, nested records, nested tag unions, custom nominal
+      parsing, top-level strings, duplicate fields, unknown field skipping,
+      missing required fields, invalid UTF-8, and invalid JSON.
 
-## Parser Type Shape In Checking
+## Phase 2: Lower Generated Record Parser State To Presence Bits Plus Payload Locals
 
-- [x] Validate the derived method shape:
-  - [x] `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`
-  - [x] The returned function must take exactly one runtime state argument.
-  - [x] The returned `Try` `Ok` payload must be a record with `value` and `rest`.
-  - [x] The `value` field must match the parsed shape.
-  - [x] The `rest` field must have the same state type as the runtime argument.
-  - [x] All parse errors in one derived parser must unify to the same error
-    type.
-- [x] Validate the structural `encode_to` shape remains coherent with the new
-  parse design:
-  - [x] `a.encode_to : a, encoding -> (state -> Try(state, err))`
-  - [x] Do not change encoding implementation unless needed for shared method
-    infrastructure.
-- [x] Ensure checking derives `parser_for` for supported structural types:
-  - [x] `Str`
-  - [x] records
-  - [x] tag unions currently supported by the branch
-  - [x] `Try(Str, [Missing])`
-  - [x] `Try(value, [Missing])` where `value` has a `parser_for` method, if
-    this falls out naturally from the field-type machinery
-  - [x] custom nominal types with explicit `parser_for`
-  - [x] `U64`, at minimum for the new header `content_length` test
-- [x] Decide which numeric primitives are implemented now:
-  - [x] If only `U64` is implemented, unsupported numeric primitives must report
-    missing method requirements during checking.
-  - [x] Other integer widths are out of scope for this slice; add method
-    validation and tests when each width becomes supported.
-- [x] Ensure unsupported shapes do not reach post-check lowering as invariants.
-  Checking must reject them first.
+Today the generated parser loop no longer carries one aggregate
+`record_state` tuple at the Monotype level, but the compiled output still
+materializes and zeroes many stack-shaped slot values. The intended code shape
+is a set of scalar locals:
 
-## Format Method Requirements
+- one presence bitset for the record;
+- one payload local per field whose value was actually parsed;
+- no fake zero/default value for missing required fields;
+- no release-build read of a payload unless the corresponding presence bit is
+  known to be set.
 
-- [x] For every derived parser, generate constraints on the encoding/state pair
-  for exactly the needed shape methods.
-- [x] Required methods for strings:
-  - [x] `encoding.parse_str : state -> Try({ value : Str, rest : state }, err)`
-- [x] Required methods for `U64`:
-  - [x] `encoding.parse_u64 : state -> Try({ value : U64, rest : state }, err)`
-  - [x] If method naming follows a different existing numeric naming pattern,
-    update this plan and tests before implementation.
-- [x] Required methods for records:
-  - [x] `encoding.rename_field : encoding, Str -> Str`
-  - [x] `encoding.parse_record_field : Fields(_shape), state -> Try(event, err)`
-  - [x] `encoding.skip_record_field : state -> Try(state, err)`
-  - [x] `encoding.missing_record_field : Str, state -> err` only when the target
-    record has at least one required field.
-  - [x] `encoding.missing_optional_field : Str, state -> optional_err` only when
-    the target record has at least one `Try(value, optional_err)` field.
-- [x] Required methods for optional-only records:
-  - [x] Do not require `missing_record_field` if no required field can be
-    missing.
-  - [x] Keep the existing optional-only regression intent.
-- [x] Required methods for tag unions:
-  - [x] Keep the current opaque tag spec operations, updated to use `parser_for`
-    instead of `parse_from`.
-  - [x] Do not add tag-name renaming in this change.
-- [x] Custom nominal parser requirements:
-  - [x] Use the custom nominal's explicit `parser_for`.
-  - [x] Eagerly call that parser constructor before the enclosing parser returns
-    its runtime lambda.
-  - [x] Use the returned runtime parser at the matched value position.
+- [ ] Identify the first IR stage where payload locals can be represented
+      without sentinel/default values.
+  - Tasks:
+    - Inspect Monotype, lifted Monotype, Lambda Solved, Lambda Mono, and LIR
+      value representations.
+    - Confirm whether any stage has an explicit `undefined` or uninitialized
+      local concept that satisfies the `design.md` rule against sentinel values.
+    - If no such representation exists, add one in the correct IR instead of
+      using crash/default placeholders.
+  - Success criteria:
+    - The chosen representation can express "field payload storage exists, but
+      may not be read until its presence bit is set."
+    - Debug builds can assert invalid reads.
+    - Release builds do not emit runtime checks for compiler invariants.
 
-## Fields And Field Runtime Representation
+- [ ] Replace generated slot tag values with presence bits in the lowered parser
+      state.
+  - Tasks:
+    - Lower each record parser's state to:
+      - `presence_bits` or a small fixed set of machine-word bitsets;
+      - scalar payload locals for each parsed field;
+      - cursor state local.
+    - Use one bit per record field.
+    - Keep the phantom `Field(_shape)` guarantee: no field-handle bounds checks
+      are introduced in release builds.
+    - For records wider than one machine word, use multiple explicit words
+      rather than a heap allocation.
+  - Success criteria:
+    - The generated parser no longer initializes every field slot to `Missing`
+      at loop entry.
+    - Disassembly for the HTTP example no longer has broad `q0` zeroing of fake
+      slot/tag aggregates at the start of `_roc__proc_e3`.
+    - The generated parser updates one presence bit and one payload local on a
+      matched field.
 
-- [x] Define the hidden representation for `Fields(_shape)` explicitly:
-  - [x] transformed field names as `Str`
-  - [x] hidden result positions for generated record construction
-  - [x] length metadata for `shortest_name` and `longest_name`
-  - [x] buckets for `for_size`
-  - [x] any SSO comparison metadata needed by generated dispatch
-- [x] Define the hidden representation for `Field(_shape)` explicitly:
-  - [x] transformed field name as `Str`
-  - [x] hidden result position
-  - [x] no user-visible slot number
-- [x] Ensure the phantom `_shape` parameter has no runtime representation.
-- [x] Ensure the only ordinary userspace way to obtain `Field(_shape)` is by
-  iterating the corresponding `Fields(_shape)`.
-- [x] Use the phantom type to avoid runtime bounds checks in generated record
-  parsers:
-  - [x] `encoding.parse_record_field` returning `Field(_shape)` proves the field
-    belongs to the same field set passed into the method.
-  - [x] Generated code can dispatch by the hidden position without checking
-    whether it is less than the record's field count.
-  - [x] Keep debug assertions only if they check compiler invariants and do not
-    become release-build runtime checks.
-- [x] If implementation constraints make a release-build bounds check appear
-  necessary, stop and revisit the representation. Do not silently keep a check
-  that contradicts the phantom-type design.
-- [x] Ensure `Field.name(field)` returns the transformed field name.
-- [x] Ensure original field names are discarded from the transformed `Fields`
-  returned by `Fields.rename_fields`.
-- [x] Ensure `Fields.rename_fields` rebuilds all length buckets from transformed
-  names, not original names.
-- [x] Ensure `Fields.shortest_name` and `Fields.longest_name` operate on
-  transformed names.
-- [x] Ensure `Fields.iter` and `Fields.for_size` are allocation-free iterators
-  over already-built field data.
-- [x] Ensure runtime calls to `Fields.rename_fields` remain valid Roc code even
-  if they allocate. The no-runtime-allocation guarantee is tested by constructing
-  the parser at compile time.
-- [x] Ensure compile-time calls to `Fields.rename_fields` can allocate during
-  checking and then store the transformed result as checked constant data.
-- [x] Add explicit checked constant support for storing and restoring `Fields`
-  values.
-- [x] Add explicit checked constant support for storing and restoring generated
-  parser closures that capture transformed `Fields` and nested runtime parser
-  functions.
-- [x] Do not key generated parser closure captures only by source pattern
-  binders. Generated parser construction can create capture values that have no
-  source binder, so the checked constant representation must have explicit
-  generated capture identities.
-- [x] Ensure restored compile-time parser closures participate in normal
-  monomorphic lowering as generated code, rather than becoming an interpretation
-  path or forcing parser construction back into the runtime request path.
+- [ ] Lower required-field finishing to presence-bit checks.
+  - Tasks:
+    - At `Done`, test presence bits for required fields.
+    - For absent required fields, call the format's `missing_record_field`.
+    - For present required fields, read the corresponding payload local.
+    - Do not create or inspect a `Missing/Present` tag for required fields.
+  - Success criteria:
+    - Required missing behavior is unchanged.
+    - Required present fields read only initialized payload locals.
+    - Disassembly shows bit tests and direct payload loads instead of tag
+      construction/destruction for required fields.
 
-## Derived Parser Construction
+- [ ] Lower optional-field finishing without fake values.
+  - Tasks:
+    - For optional fields, test the presence bit.
+    - If present, construct `Ok(payload)`.
+    - If absent, call `missing_optional_field` and construct `Err(missing)`.
+    - Do not initialize optional payloads on loop entry.
+  - Success criteria:
+    - Existing optional-field tests pass.
+    - Disassembly shows absent optional fields are handled at finish time, not by
+      prebuilt `Missing` slot values.
 
-- [x] Change derived parser lowering so a structural `parser_for` method returns
-  a function.
-- [x] Decide which compiler stage owns each piece of derivation data, and make
-  the ownership explicit:
-  - [x] checking owns user-facing static-dispatch requirements and shape
-    validation;
-  - [x] checked output owns enough explicit data for post-check lowering;
-  - [x] post-check lowering consumes that checked data without reconstructing
-    method requirements from names or source syntax;
-  - [x] compile-time evaluation owns any parser-construction constants that are
-    evaluated during checking.
-- [x] Emit parser-construction work before returning the runtime lambda:
-  - [x] create the original compiler field set for the current record shape
-  - [x] call `Fields.rename_fields(original_fields, |name| encoding.rename_field(name))`
-  - [x] build nested field parsers eagerly
-  - [x] build tag payload parsers eagerly where required
-  - [x] build custom nominal parsers eagerly
-  - [x] return a lambda that captures only transformed field sets and nested
-    runtime parser functions
-- [x] Ensure parser construction does not capture original record field names in
-  the returned lambda.
-- [x] Ensure nested records each get their own `Fields(_nested_shape)` and
-  repeat the same rename/rebucket construction.
-- [x] Ensure recursive nominal/tag-union parsers still terminate through the
-  existing recursive function handling rather than trying to build an infinite
-  parser value. Recursive nominal tag unions without an explicit `parser_for`
-  produce a checking error; recursive nominal tag unions with an explicit
-  method use the ordinary custom nominal `parser_for` path.
-- [x] Ensure type aliases expand to the same structural parser as their backing
-  structure.
-- [x] Ensure generalized `parser_for` methods specialize normally when
-  monomorphic
-  types are requested.
+- [ ] Keep ARC correct for scalarized field payloads.
+  - Tasks:
+    - Ensure ARC insertion sees explicit ownership for payload locals that may be
+      initialized conditionally.
+    - Ensure decrefs are emitted only for initialized payloads on error paths,
+      early returns, and duplicate-field overwrites.
+    - Ensure backends do not infer RC behavior; they only lower explicit LIR RC
+      statements.
+  - Success criteria:
+    - ARC certifier passes.
+    - Tests with repeated/overwritten string fields do not leak or double free.
+    - LIR has explicit conditional cleanup based on presence bits where needed.
 
-## Runtime Record Loop
+- [ ] Add regression coverage for wide and nested records.
+  - Tasks:
+    - Add a record with more fields than fit in one simple small bitset if the
+      implementation supports multi-word bitsets now.
+    - Add nested records and tag unions to make sure independent presence bitsets
+      do not collide.
+  - Success criteria:
+    - Nested parser tests pass.
+    - Disassembly does not reintroduce aggregate slot tuples for nested records.
 
-- [x] Replace the old record loop that consumed `Field({ name, value, rest })`.
-- [x] Keep the userspace record event API slot-free. Userspace returns field
-  handles or names and `rest`; it never returns or receives a raw record slot.
-- [x] Implement the new event loop:
-  - [x] call `encoding.parse_record_field(fields, state)`
-  - [x] on `Done({ rest })`, finish required/optional field state
-  - [x] on `Continue({ rest })`, continue the loop with `rest`
-  - [x] on `Field({ field, rest })`, dispatch directly by hidden field position
-  - [x] on `TryField({ name, rest })`, exact-match `name` against transformed
-    fields
-  - [x] on `TryFieldCaseless({ name, rest })`, ASCII-caseless-match `name`
-    against transformed fields
-  - [x] if `TryField` or `TryFieldCaseless` misses, call
-    `encoding.skip_record_field(rest)` and continue with the returned state
-- [x] For matched fields, call the parser for that field's type from the
-  value-start state.
-- [x] Continue the record loop from the matched field parser's returned `rest`.
-- [x] Do not use the record-field event's state as the post-value continuation
-  for matched fields.
-- [x] Store parsed values in generated record state with the correct field type.
-- [x] Track required-field presence separately from field values.
-- [x] For optional fields:
-  - [x] missing field calls `encoding.missing_optional_field(field_name, rest)`
-    and stores `Err(missing)` in the field
-  - [x] the compiler does not hardcode the optional absence tag name
-  - [x] present field produces `Ok(value)`
-  - [x] `Err(_)` matching remains accepted
-  - [x] postfix `?` use in tests continues to behave correctly
-- [x] For required fields:
-  - [x] missing field calls `encoding.missing_record_field(field_name, rest)`
-  - [x] the field name passed to `missing_record_field` is the transformed name
-    because original names are discarded after rename
-- [x] Preserve last-value-wins behavior for repeated input fields, unless an
-  existing test proves a different documented rule.
-- [x] Keep the generated record loop direct. Do not introduce callback dispatch
-  or a shape interpreter.
+## Phase 3: Lower Generated Parser `Try` Sequencing To Direct Control Flow Through LIR
 
-## Matching And Performance
+The current Monotype expression shape can avoid explicit helper-return records,
+but generated parser code still flows through many stack-shaped `Try` and
+`{ value, rest }` temporaries. The intended code shape is direct:
 
-- [x] Implement exact matching for `TryField`.
-- [x] Implement ASCII-caseless matching for `TryFieldCaseless`.
-- [x] Keep caseless matching generic string matching; do not encode HTTP header
-  knowledge in the compiler.
-- [x] Implement SSO-oriented generated dispatch:
-  - [x] direct packed-small-string comparisons for common small field names
-  - [x] length buckets based on transformed field names
-  - [x] no allocation on the matching path
-  - [x] long-name path stays correct and allocation-free when the format uses
-    field iteration and slice comparisons
-- [x] Ensure the generated dispatch can handle field order independent of input
-  order.
-- [x] Ensure `Fields.for_size` narrows candidates using transformed name length.
-- [x] Ensure `Fields.iter` exposes all fields in a deterministic order, but do
-  not make parser correctness depend on that order.
-- [x] Add a future optimization note only if needed; do not block correctness on
-  perfect hashing.
-- [x] Verify generated code does not allocate or build a runtime map for record
-  fields.
+- call format method;
+- branch on Ok/Err;
+- on Ok, update cursor/state scalar locals and jump/continue;
+- on Err, return the error immediately;
+- avoid materializing aggregate `Try({ value, rest }, err)` values when the
+  producer and consumer are both compiler-generated parser code.
 
-## Tag Union Integration
+- [ ] Identify all compiler-generated parser `Try` producer/consumer pairs.
+  - Tasks:
+    - Inventory generated calls to:
+      - `parse_record_field`;
+      - `skip_record_field`;
+      - field value parsers;
+      - `missing_record_field`;
+      - `missing_optional_field`;
+      - tag-union parser operations.
+    - Mark which are public-format calls whose `Try` value must remain an
+      ordinary Roc value, and which are internal generated immediately-consumed
+      control-flow edges.
+  - Success criteria:
+    - No user-authored `Try` semantics are changed.
+    - Only generated internal parser edges are eligible for direct-control-flow
+      lowering.
 
-- [x] Keep tag-union specs opaque and compiler-generated.
-- [x] Update tag-union derived parsing to use `parser_for` methods.
-- [x] Ensure tag-union payload parsing uses value-start state and returned
-  `rest`, same as record fields.
-- [x] Keep externally tagged JSON examples working:
-  - [x] `{ "Admin": { "name": "Sam" } }`
-- [x] Do not implement tag-name renaming in this change.
-- [x] Ensure nested combinations work:
-  - [x] record containing tag union
-  - [x] tag union payload containing record
-  - [x] record containing nested record containing tag union
-  - [x] tag union payload containing record containing another tag union
-- [x] Ensure recursive tag unions either work through existing recursive method
-  handling or fail during checking with a clear unsupported-shape diagnostic.
+- [ ] Add an explicit direct parser control-flow lowering path.
+  - Tasks:
+    - Lower internal generated parser `Try` sequences into branches in the IR
+      stage that feeds LIR.
+    - Represent success continuations as block/loop jumps with scalar locals.
+    - Represent error continuations as direct returns of the format error.
+    - Preserve ordinary `Try` values for code that observes them as Roc data.
+  - Success criteria:
+    - LIR for the generated HTTP parser has direct conditional branches instead
+      of stack allocation for immediately-consumed `Try` records.
+    - No user-visible Try behavior changes in non-parser tests.
 
-## Numeric And Non-Str Field Parsing
+- [ ] Remove stack-shaped `{ value, rest }` temporaries where the value is
+      immediately destructured by generated code.
+  - Tasks:
+    - Field value parsers may still publicly return
+      `Try({ value, rest }, err)`, but generated call sites should lower the
+      returned fields into direct locals when possible.
+    - Avoid building a temporary record only to access `.value` and `.rest`.
+  - Success criteria:
+    - Disassembly shows fewer stack stores/loads around field parser calls.
+    - Function frame size for `_roc__proc_e3` decreases.
 
-- [x] Add `U64` parsing support sufficient for:
-  - [x] HTTP `Content-Length`
-  - [x] JSON string/record tests if needed later
-- [x] Define the expected format method:
-  - [x] `encoding.parse_u64 : state -> Try({ value : U64, rest : state }, err)`
-- [x] Implement userspace header `parse_u64` by parsing the value slice without
-  allocation.
-- [x] Decide whether JSON numeric support is in this change:
-  - [x] JSON numeric value parsing is out of scope for this change.
-  - [x] If no, keep JSON proof-of-concept to records and strings and add a
-    checking test that numeric JSON parsing reports a missing method.
-- [x] Add tests that prove field value parsers determine continuation state:
-  - [x] a `U64` field followed by another field
-  - [x] a `Str` field followed by another field
-  - [x] unknown field followed by known field through `skip_record_field`
+- [ ] Keep direct-control-flow lowering format-agnostic.
+  - Tasks:
+    - Trigger the optimization from generated parser provenance and IR shape, not
+      from HTTP/JSON-specific names.
+    - Do not detect source strings or format module paths.
+  - Success criteria:
+    - The same lowering applies to HTTP, JSON, and future structural formats.
 
-## HTTP Header Platform Changes
+## Phase 4: Emit Direct Static Field Dispatch For Known `Fields`
 
-- [x] Replace `output.parse_from` constraints with `output.parser_for`.
-- [x] Replace the old `HeaderFormat` value/rest event API.
-- [x] Define the runtime state as the header value itself, for example:
-  - [x] `Headers := { raw : Str }.{ ... }`
-  - [x] value states if needed for parsing a current value slice
-- [x] Define a header encoding value, for example:
-  - [x] `HeaderEncoding.Caseless`
-  - [x] zero-sized or tag-union shape owned by the platform
-- [x] Implement `HeaderEncoding.rename_field`:
-  - [x] `content_length -> content-length`
-  - [x] `cache_control -> cache-control`
-  - [x] `x_auth_token -> x-auth-token`
-  - [x] run this in parser construction, not in the runtime header scan
-- [x] Implement `HeaderEncoding.parse_record_field`:
-  - [x] parse one CRLF-delimited line
-  - [x] return `Done` at end of header section
-  - [x] return bad-header error when a non-empty line lacks `:`
-  - [x] return `Field({ field, rest: value_start })` for matching requested
-    header lines
-  - [x] return `Continue({ rest: next_line })` for unknown header lines
-  - [x] use `Fields.shortest_name` and `Fields.longest_name` where they can
-    cheaply avoid impossible work
-- [x] Implement `HeaderEncoding.skip_record_field`:
-  - [x] skip from value-start state to the next header line
-  - [x] no allocation
-- [x] Implement `HeaderEncoding.missing_optional_field`:
-  - [x] return the header format's optional absence tag
-  - [x] do not require the compiler to know the tag name
-- [x] Implement `HeaderEncoding.parse_str`:
-  - [x] return a trimmed seamless slice for the current header value
-  - [x] continue from the end of that header line
-- [x] Implement `HeaderEncoding.parse_u64`:
-  - [x] parse ASCII decimal from the trimmed value slice
-  - [x] reject empty values
-  - [x] reject non-digits
-  - [x] reject overflow
-  - [x] return continuation state after the value
-  - [x] no allocation
-- [x] Keep `Headers.DecodeErr` public as an associated type on `Headers`.
-- [x] Update the host/app regression so the decoded record includes:
-  - [x] `content_length : U64`
-  - [x] `x_auth_token : Try(Str, [Missing])`
-  - [x] `cache_control : Str`
-  - [x] existing required/optional fields needed by prior tests
-- [x] Ensure the Roc app computes a response that proves all field values were
-  parsed by the correct field parsers.
-- [x] Keep the host response construction allocation-free.
-- [x] Keep host UTF-8 validation for path and headers before passing `Str` to
-  Roc.
-- [x] Keep the maximum content-length rejection behavior.
+The generated parser already has compile-time knowledge of transformed
+`Fields(_shape)`. The hot path should not walk a generic iterator or call a
+generic `Str` helper for every candidate when the concrete field set is known.
+For small SSO field names, generated code should compare immediate packed words
+and dispatch directly to the field parser.
 
-## JSON Platform Changes
+- [ ] Add a compiler-owned field-dispatch plan for transformed `Fields`.
+  - Tasks:
+    - Use transformed field names only, after `Fields.rename_fields`.
+    - Preserve field handles through the phantom `_shape` type.
+    - Store enough compile-time metadata for:
+      - field length;
+      - packed SSO words;
+      - selected discriminating word lane;
+      - exact/caseless matching mode;
+      - field result position.
+  - Success criteria:
+    - Runtime parser code does not reconstruct a field plan.
+    - Original unrenamed field names do not appear in optimized runtime data
+      when parser construction happened at compile time.
 
-- [x] Replace `a.parse_from` constraints with `a.parser_for`.
-- [x] Replace old `JsonFormat` value/rest event shape.
-- [x] Define JSON runtime state as ordinary Roc data:
-  - [x] input cursor over `Str`
-  - [x] object cursor state if useful
-  - [x] value-start state for the current field value
-- [x] Define a plain JSON encoding with identity `rename_field`.
-- [x] Define a camel-case JSON encoding if used by tests:
-  - [x] `user_id -> userId`
-  - [x] `cache_control -> cacheControl`
-- [x] Implement `parse_record_field` to match transformed `Fields` directly
-  for known object keys and return `Continue` after skipping unknown keys.
-- [x] Implement `skip_record_field` for unknown JSON values:
-  - [x] string values
-  - [x] object values currently supported by the test platform
-  - [x] nested object braces as far as current tests require
-- [x] Keep JSON `Str` parsing strict:
-  - [x] JSON string succeeds
-  - [x] missing field is separate
-  - [x] `null` is not accepted by `Json.str` / plain `Str`
-- [x] Preserve JSON field order independence.
-- [x] Keep externally tagged JSON tag-union tests working.
-- [x] Do not implement JSON null-specific behavior in this change unless needed
-  for existing tests.
+- [ ] Generate an SSO exact-match dispatcher.
+  - Tasks:
+    - Group fields by SSO size class as described in `design.md`.
+    - Choose a discriminating word lane for each group.
+    - Compare one word per candidate on the hot miss path.
+    - Verify the full SSO key only after a discriminator hit.
+    - Dispatch directly to the matched field parser.
+  - Success criteria:
+    - For static small field names, disassembly has immediate word compares, not
+      a call to `roc_builtins_str_equal`.
+    - Hot miss path compares one selected word per candidate in the relevant
+      size class.
+    - Long fields still work via a correct allocation-free fallback.
 
-## Obsolete Code To Delete Or Rewrite
+- [ ] Generate an SSO ASCII-caseless dispatcher.
+  - Tasks:
+    - Reuse the SWAR ASCII case-folding algorithm from
+      `Str.is_caseless_eq`/`roc_builtins_str_caseless_ascii_equals`.
+    - Inline the fast path for static transformed field names when the field set
+      is known.
+    - Avoid allocating lowercased copies.
+    - Correctly fall back for non-ASCII or SWAR-ineligible bytes.
+  - Success criteria:
+    - HTTP `TryFieldCaseless` or direct `Field` matching does not call the
+      generic caseless helper on the hot static-field path.
+    - Edge-case tests for mixed case, underscore, dash, non-ASCII, and different
+      lengths still pass.
 
-- [x] Delete or fully rewrite old `parse_from` static-dispatch special cases.
-- [x] Delete any temporary compatibility wrappers introduced during the
-  migration. The final tree must not contain helper paths that silently emulate
-  the old API.
-- [x] Delete or rename `ParseFrom*` CLI tests so the test names match
-  `parser_for`.
-- [x] Delete old record-field event validation for:
-  - [x] `Field({ name : Str, value : state, rest : state })`
-  - [x] `longest_field_len`
-  - [x] uniform value-state storage
-- [x] Delete old runtime header name conversion from hot parsing paths:
-  - [x] ASCII lowercase allocation path
-  - [x] dash-to-underscore runtime conversion
-  - [x] any helper used only to produce old exact record field names at runtime
-- [x] Keep a compile-time `rename_field` helper for headers, but do not call it
-  while scanning each runtime header line.
-- [x] Delete old checks that hardcode the header state shape in type lowering.
-- [x] Delete any obsolete compiler-generated record spec type used only by the
-  old record parser API.
-- [x] Delete stale comments mentioning old parse method names.
-- [x] Delete stale design tests that expect old errors.
-- [x] Delete any compatibility path that lets old `parse_from` code keep
-  compiling.
-- [x] After deletion, run:
-  - [x] `rg -n "parse_from|ParseFrom|longest_field_len|Field\\.value" src test design.md`
-  - [x] inspect every remaining match and justify or remove it
+- [ ] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
+  - Tasks:
+    - Users may still iterate field sets at runtime.
+    - Runtime iteration must remain allocation-free.
+    - The optimized generated dispatcher must not require changing the public
+      `Fields` representation or behavior.
+  - Success criteria:
+    - Existing userspace format code using `Fields.for_size` keeps working.
+    - Runtime-created parsers still work even if parser construction was not
+      evaluated at compile time; they may be slower, but must be correct.
 
-## Checking Tests To Add Or Update
+- [ ] Handle static and runtime parser-construction paths with one semantics.
+  - Tasks:
+    - Avoid a different public compilation model depending on whether
+      `parser_for` ran at compile time.
+    - Let compile-time field values optimize down to immediates.
+    - Let runtime field values use the same ordinary Roc value semantics with an
+      expected performance cost.
+  - Success criteria:
+    - Tests cover both compile-time-created parsers and runtime-created parsers.
+    - Both paths produce the same parse results.
+    - Only the compile-time path is expected to have immediate static field
+      compares in disassembly.
 
-- [x] Add/rename CLI test: old `parse_from` method is not accepted.
-- [x] Add CLI test: missing `parser_for` on custom nominal type reports a clear
-  static-dispatch error.
-- [x] Add CLI test: record parser missing `rename_field` reports missing
-  `rename_field`.
-- [x] Add CLI test: record parser missing `parse_record_field` reports missing
-  `parse_record_field`.
-- [x] Add CLI test: record parser missing `skip_record_field` reports missing
-  `skip_record_field` when `TryField` can miss.
-- [x] Add CLI test: required-field record missing `missing_record_field` reports
-  missing `missing_record_field`.
-- [x] Add CLI test: optional-only record does not require `missing_record_field`.
-- [x] Add CLI test: wrong `parse_record_field` event shape is rejected.
-- [x] Add CLI test: wrong `Field` phantom shape cannot be passed to another
-  record parser.
-- [x] Add CLI test: users cannot construct `Field(_shape)` directly.
-- [x] Add CLI test: users cannot inspect or pattern-match opaque `Field` or
-  `Fields`.
-- [x] Add CLI test: `Fields.iter` and `Fields.for_size` are usable from
-  userspace parser code.
-- [x] Add CLI test: `Field.name` returns `Str` and typechecks only for a valid
-  field handle.
-- [x] Add CLI test: unsupported structural field shape reports a checking error,
-  not a post-check invariant.
-- [x] Add CLI test: custom nominal `parser_for` is used inside a derived record.
-- [x] Add CLI test: structural record `parser_for` is callable directly.
+## Phase 5: Defer Full Roc `Str` Construction For Borrowed Header Values
 
-## HTTP Header Regression Tests
+Header parsing currently hands Roc `Str` values around as slices. That is
+correct, but the generated parser may still build full Roc `Str` values earlier
+than necessary. The hot path should internally carry pointer/length or an
+equivalent borrowed slice descriptor until the final record field requires a
+real Roc `Str` value.
 
-- [x] Update the main platform regression to build the Roc app with the new
-  `parser_for` API.
-- [x] Add required typed field test:
-  - [x] request contains `Content-Length: 123`
-  - [x] Roc record field is `content_length : U64`
-  - [x] response proves numeric value `123` was parsed as `U64`
-- [x] Add required string field test:
-  - [x] `Cache-Control: no-cache`
-  - [x] Roc record field is `cache_control : Str`
-  - [x] response proves the exact value length or value-dependent result
-- [x] Add optional field test:
-  - [x] `x_auth_token : Try(Str, [Missing])`
-  - [x] present case returns `Ok(value)`
-  - [x] absent case returns `Err(Missing)`
-  - [x] one test uses `Err(Missing)`
-  - [x] one test uses `Err(_)`
-  - [x] one test uses postfix `?`
-  - [x] a compiler-only fixture uses a non-`Missing` absence tag to prove the
-    tag is format-owned
-  - [x] a compiler-only fixture uses an optional non-`Str` field
-- [x] Add mixed-shape record test:
-  - [x] required `U64`
-  - [x] required `Str`
-  - [x] optional `Str`
-  - [x] unknown headers before, between, and after known headers
-- [x] Add order-independence tests:
-  - [x] same known headers in Roc record order
-  - [x] reverse order
-  - [x] scrambled order with unknown headers between them
-- [x] Add case-insensitive header name tests:
-  - [x] `Cache-Control`
-  - [x] `cache-control`
-  - [x] `CACHE-CONTROL`
-  - [x] mixed-case variant
-- [x] Add dash/underscore rename tests:
-  - [x] `cache_control` field matches `Cache-Control`
-  - [x] `x_auth_token` field matches `X-Auth-Token`
-- [x] Add invalid header test:
-  - [x] non-empty line without `:` returns the bad-header error response or
-    fails the request as the platform defines
-- [x] Add invalid U64 tests:
-  - [x] empty content length value
-  - [x] non-digit
-  - [x] overflow
-- [x] Add duplicate field test:
-  - [x] duplicate known header follows current chosen behavior
-- [x] Add no-allocation test:
-  - [x] `roc_alloc` crashes
-  - [x] request succeeds
-  - [x] therefore no Roc runtime allocation occurred
-- [x] Add no-host-allocation review/test guard:
-  - [x] no allocator is initialized in the Zig host
-  - [x] no allocator is passed through host parsing code
-  - [x] fixed buffers only
-- [x] Add binary string test for compile-time renaming:
-  - [x] build the final app in optimized mode
-  - [x] scan the final app binary for original Roc field names such as
-    `cache_control` and `x_auth_token`
-  - [x] assert they are absent from runtime data
-  - [x] allow transformed names such as `cache-control` and `x-auth-token`
-  - [x] run against the final app binary, not the unstripped compiler binary
+- [ ] Identify where borrowed field names and values become full Roc `Str`
+      values.
+  - Tasks:
+    - Trace host header slice construction.
+    - Trace `Headers.roc` record-field parsing.
+    - Trace Monotype and LIR lowering for `Str` value parser results.
+  - Success criteria:
+    - The plan for deferring `Str` construction is based on explicit IR data, not
+      inferred source names or backend guessing.
 
-## JSON Regression Tests
+- [ ] Introduce an internal borrowed-string parse value where appropriate.
+  - Tasks:
+    - Represent borrowed input as pointer/length plus lifetime/ownership facts
+      already guaranteed by host validation and request lifetime.
+    - Keep this internal to generated parser lowering; do not expose unsafe
+      pointer/length values to userspace.
+    - Convert to an ordinary Roc `Str` only when a user-visible Roc value is
+      produced.
+  - Success criteria:
+    - Userspace still sees ordinary `Str`.
+    - No allocations are introduced.
+    - Host lifetime and UTF-8 validation invariants remain explicit.
 
-- [x] Update JSON proof-of-concept platform to the new `parser_for` API.
-- [x] Add identity rename record test:
-  - [x] Roc field `foo`
-  - [x] JSON key `"foo"`
-- [x] Add camel-case rename record test:
-  - [x] Roc field `user_id`
-  - [x] JSON key `"userId"`
-  - [x] original `user_id` does not need to appear in final runtime data when
-    parser construction is compile-time evaluated
-- [x] Add missing field tests:
-  - [x] required `Str` missing fails
-  - [x] `Try(Str, [Missing])` missing produces `Err(Missing)`
-  - [x] present optional produces `Ok(value)`
-- [x] Add order-independence tests:
-  - [x] object keys in record order
-  - [x] reverse order
-  - [x] scrambled order with unknown keys
-- [x] Add unknown-key skip tests:
-  - [x] unknown string value before known key
-  - [x] unknown object value before known key
-  - [x] unknown key between two known keys
-- [x] Add nested record tests:
-  - [x] record containing nested record
-  - [x] nested record uses its own renamed `Fields`
-  - [x] nested object keys can be in any order
-- [x] Add tag-union nesting tests:
-  - [x] record field containing externally tagged union
-  - [x] tag payload containing record
-  - [x] nested record containing tag union
-- [x] Keep JSON `null` out of scope except for tests proving plain `Str` does
-  not accept it if current JSON tests include that behavior.
+- [ ] Use deferred string construction for field names where generated dispatch
+      can consume raw slice metadata.
+  - Tasks:
+    - Exact/caseless generated dispatch should be able to compare against
+      pointer/length bytes directly.
+    - It should not need to construct a Roc `Str` for an unknown field name just
+      to skip it.
+  - Success criteria:
+    - Unknown header skip path has no Roc `Str` construction.
+    - Matched field dispatch for static fields has direct byte/word compares.
+    - Intermediate progress: `test/http-headers/platform/Headers.roc` now uses
+      `Fields.for_size` and returns direct `Field` events for known headers.
+      Unknown headers return `Continue` after the format consumes the line, so
+      they no longer enter generated record string-dispatch or
+      `skip_record_field`. The format still represents the parsed header name
+      as a safe Roc `Str` slice; the lower-level borrowed pointer/length
+      representation remains open.
 
-## Compile-Time Constant And Binary Data Tests
+- [ ] Use deferred string construction for `Str` field values.
+  - Tasks:
+    - When the target field type is `Str`, carry the borrowed slice through the
+      parser result and build the Roc `Str` at final record construction or the
+      latest equivalent point.
+    - When the target field type is not `Str`, call that field's parser from the
+      value-start state and avoid constructing a temporary `Str` first.
+  - Success criteria:
+    - Mixed-shape record tests still pass.
+    - The `content_length : U64` style path does not construct a temporary value
+      string if the U64 parser can consume the state directly.
 
-- [x] Add a test that constructs the parser at a compile-time-evaluated position.
-- [x] Verify transformed `Fields` are stored as checked constants or equivalent
-  explicit checked data.
-- [x] Verify original field names are not captured by the returned runtime
-  parser closure.
-- [x] Verify nested parser construction also discards original nested field
-  names.
-- [x] Build an optimized app binary and scan strings:
-  - [x] original HTTP Roc names absent: `cache_control`, `content_length`,
-    `x_auth_token`
-  - [x] transformed HTTP names are allowed but not required as searchable
-    strings; runtime tests prove transformed input names still match.
-  - [x] original JSON snake_case names absent in camel-case test:
-    `user_id`, `cache_control`
-  - [x] transformed JSON names are allowed but not required as searchable
-    strings; runtime tests prove transformed input names still match.
-- [x] Ensure debug/unstripped compiler symbols are not used for this assertion.
+## Phase 6: Outline Cold Decode-Error And Crash Paths
 
-## Host And Platform Verification
+The current generated parser proc includes large amounts of cold error,
+missing-field, decref, and crash-path code. The hot path should be straight-line
+or locally-branching parser code. Cold paths should be outlined so they do not
+inflate the main parser frame and instruction footprint.
 
-- [x] Keep the Zig host raw-socket and fixed-buffer model.
-- [x] Keep request memory alive for the full request.
-- [x] Validate UTF-8 for the path and full header section before producing Roc
-  `Str`.
-- [x] Enforce maximum content length before reading/accepting oversized bodies.
-- [x] Keep body reading bounded by parsed content length.
-- [x] Keep host parsing of the first pass limited to:
-  - [x] finding blank line
-  - [x] finding `Content-Length`
-  - [x] validating limits
-  - [x] validating UTF-8
-- [x] Keep Roc parser responsible for header decoding.
-- [x] Ensure host does not build a header map.
-- [x] Ensure host does not allocate.
-- [x] Ensure Roc app response proves values were parsed by Roc `parser_for`
-  methods.
+- [ ] Inventory cold paths inside the generated parser proc.
+  - Tasks:
+    - Identify calls/branches to:
+      - `roc_builtins_roc_crashed`;
+      - missing required field errors;
+      - bad header/json errors;
+      - ARC cleanup after errors;
+      - invariant traps;
+      - allocation failure paths from non-hot support code.
+  - Success criteria:
+    - Every major cold region in `_roc__proc_e3` is categorized.
 
-## Source And Symbol Audits
+- [ ] Add cold outlining for generated parser error paths.
+  - Tasks:
+    - Move rarely-taken error construction and crash code into separate generated
+      cold procs or cold blocks that LLVM can place out of line.
+    - Keep hot branches short: test, branch to cold label/proc, continue.
+    - Preserve correct ARC cleanup on the cold path.
+  - Success criteria:
+    - `_roc__proc_e3` code size decreases materially.
+    - Hot-path disassembly has fewer interleaved crash/error blocks.
+    - Correctness tests for errors still pass.
 
-- [x] After implementation, run these searches and resolve every unexpected
-  match:
-  - [x] `rg -n "parse_from|ParseFrom" src test examples design.md`
-  - [x] `rg -n "longest_field_len|Field\\.value|Field\\(\\{ name : Str, value" src test design.md`
-  - [x] `rg -n "Decoder\\.dispatch|\\bDecoder\\b" src test design.md`
-  - [x] `rg -n "dispatch\\(" src/build/roc/Builtin.roc src/check src/postcheck test`
-  - [x] `rg -n "cache_control|content_length|x_auth_token" test/http-headers`
-- [x] Inspect generated/optimized app binaries separately for string absence;
-  source tests are allowed to contain original Roc field names.
-- [x] Check that no compiler stage hardcodes the header state shape.
-- [x] Check that no compiler stage mentions HTTP, JSON, camelCase, kebab-case,
-  null, or missing-header rules except in tests or platform examples.
-- [x] Check that generated parser code calls direct static methods, not callback
-  tables.
+- [ ] Mark or structure cold compiler-generated paths in a backend-appropriate
+      way.
+  - Tasks:
+    - Prefer explicit IR/procedure structure over backend heuristics.
+    - If LLVM cold attributes are used, they must be emitted from explicit
+      compiler provenance, not guessed from source names.
+  - Success criteria:
+    - The implementation follows `design.md`: later stages consume explicit data
+      from earlier stages and do not guess.
 
-## Targeted Test Runs
+## Phase 7: Revisit The Host's 16 KiB Stack Buffer
 
-Run targeted tests before the full CI-sized command. Use `--summary failures`
-where supported.
+The host currently keeps the no-allocation invariant by using a large stack
+buffer. That keeps behavior simple, but it makes the host frame much larger than
+the C/Rust comparison. We should keep "no allocator" while reducing stack
+pressure.
 
-- [x] Before running tests, run focused source searches and clean up stale API
-  names:
-  - [x] `rg -n "parse_from|ParseFrom" src test examples design.md`
-  - [x] `rg -n "longest_field_len|Field\\.value|Field\\(\\{ name : Str, value" src test`
-  - [x] `rg -n "Decoder\\.dispatch|dispatch\\(" src/build/roc src/check src/postcheck test`
-- [x] Check/build the compiler:
-  - [x] `zig build roc --summary failures`
-- [x] Run checking-focused tests:
-  - [x] `zig build run-test-zig-module-check --summary failures`
-  - [x] `zig build run-test-cli --summary failures`
-- [x] Run post-check/lowering focused tests:
-  - [x] `zig build run-test-zig-module-postcheck --summary failures`
-  - [x] `zig build run-test-zig-module-compile --summary failures`
-- [x] Run parser platform regressions:
-  - [x] `zig build run-test-zig-http-header-decoder-platform --summary failures`
-  - [x] `zig build run-test-zig-json-decoder-platform --summary failures`
-- [x] Run combined targeted command used on this branch:
-  - [x] `zig build run-test-zig-module-check run-test-zig-module-postcheck run-test-zig-http-header-decoder-platform run-test-zig-json-decoder-platform --summary failures`
-- [x] Run source checks:
-  - [x] `zig build run-check-zig-format --summary failures`
-  - [x] `zig build run-check-tidy --summary failures`
-  - [x] `zig build run-check-unused-suppression --summary failures`
-  - [x] the repository compiler-stage wording audit build step
-- [x] Run any newly added focused tests directly if the build exposes a narrower
-  step.
-  - [x] `zig-out/bin/roc check --no-cache test/cli/ParserRecursiveNominalMissingMethod.roc`
-  - [x] `zig-out/bin/roc test --no-cache test/cli/EncodeToStructuralRecord.roc`
+- [x] Decide the correct no-allocation storage model for request bytes.
+  - Options to evaluate:
+    - fixed static storage if the test server is single-connection/single-thread;
+    - per-connection fixed arena embedded in a connection object;
+    - smaller stack buffer plus a strict maximum header/content length;
+    - compile-time configured fixed buffer owned by the host server state.
+  - Success criteria:
+    - No Zig allocator is introduced.
+    - The host still rejects content/header lengths over the configured maximum
+      before accepting the bytes.
+    - The memory lifetime still safely covers the Roc request parse call.
+    - Implemented as a smaller fixed stack buffer in
+      `test/http-headers/platform/host.zig`: 2 KiB request storage with a 1 KiB
+      maximum content length. The host rejects `Content-Length: 1025` before
+      reading a body.
 
-## Release Builds And Assembly Verification
+- [x] Preserve correctness of UTF-8 validation and request slicing.
+  - Tasks:
+    - Validate path and full header section before constructing Roc `Str` values.
+    - Keep body/content-length handling unchanged except for maximum length
+      enforcement if needed.
+  - Success criteria:
+    - Invalid UTF-8 tests still fail correctly.
+    - Valid request tests still pass.
+    - Roc never receives invalid `Str`.
+    - Verified with `zig build run-test-zig-http-header-decoder-platform`.
 
-- [x] Build the Roc compiler in release mode with symbols:
-  - [x] `zig build roc -Doptimize=ReleaseFast -Dstrip=false --summary failures`
-- [x] Build the HTTP header platform/app with:
-  - [x] Zig host in `ReleaseFast`
-  - [x] Roc app with `--opt=speed`
-- [x] Save baseline and final disassembly under `/tmp` when comparing changes:
-  - [x] compiler relevant symbols if parser lowering is being audited
-  - [x] final platform app hot request handler
-  - [x] final Roc parser code for header record parsing if symbol names are
-    available
-- [x] Use `xcrun llvm-objdump` on macOS:
-  - [x] `xcrun llvm-objdump --macho --disassemble --demangle <binary> > /tmp/<name>.s`
-- [x] Inspect the hot header parsing path for:
-  - [x] no allocator calls
-  - [x] no runtime field map construction
-  - [x] no callback-table dispatch
-  - [x] direct calls or inlined code for field value parsers
-  - [x] no runtime lowercase/dash conversion for each header name
-  - [x] caseless comparison over input header name slices and transformed static
-    field names
-  - [x] `U64` parser consumes the value and returns the continuation state
-- [x] Scan optimized final app binary strings:
-  - [x] original field names absent where the test expects compile-time renaming
-  - [x] transformed field names may be present or optimized away, but behavior
-    must prove transformed input names still match
-- [x] Record the disassembly files and the key observations in the final
-  implementation summary.
+- [x] Reduce the host frame in optimized disassembly.
+  - Success criteria:
+    - `_main`/`_host.cMain` no longer reserves roughly 16 KiB of stack for the
+      request buffer.
+    - The new storage is visible in disassembly or symbols as static/fixed
+      storage or a smaller frame.
+    - Verified in
+      `/tmp/roc-http-header-disasm-after-direct-field-report.txt`: `_main`
+      total stack dropped from 16,480 bytes in the baseline report to 2,384
+      bytes after reducing the fixed host request buffer.
 
-## Full Verification Loop
+## Phase 8: Optimize `Str.is_eq` / `roc_builtins_str_equal`
 
-- [x] After targeted tests pass, run:
-  - [x] `zig build minici`
-- [x] If `zig build minici` fails in one section:
-  - [x] identify the failing section
-  - [x] run the narrow failing section directly
-  - [x] fix the issue
-  - [x] rerun that narrow section until it passes
-  - [x] rerun `zig build minici`
-  - [x] repeat this loop until `zig build minici` passes
-- [x] Do not use the full `zig build minici` command as the inner retry loop.
-- [x] After macOS verification, run target-specific checks needed for CI:
-  - [x] Windows mirror sync through `/Users/rtfeldman/.agents/roc-windows.sh sync`
-  - [x] Windows CLI tests if the changed code affects Windows:
-    `/Users/rtfeldman/.agents/roc-windows.sh test-cli --sync`
-    and `/Users/rtfeldman/.agents/roc-windows.sh run --arch x64 -- zig build run-test-cli`
-    were both run. The default-arch full runs exposed unrelated VM/toolchain
-    instability, and the explicit-x64 full run had one unrelated transient
-    `roc fmt --check` access violation after printing success. Its exact repro
-    passed immediately. The branch-specific `encode_to` x64 filter passed all
-    four cases.
-  - [x] Windows glue/platform tests if the changed code affects glue or platform
-    ABI:
-    `/Users/rtfeldman/.agents/roc-windows.sh test-glue --sync`
-    passed all 9 glue tests.
-  - [x] Any Linux/musl or cross-target steps exposed by the Roc build for the
-    touched code paths
-- [x] Do not build directly from the Parallels shared folder on Windows.
+`Str.is_caseless_eq` has a SWAR-style fast path for ASCII-caseless comparison.
+Plain `Str.is_eq` should get equivalent attention, especially for SSO strings
+and static field comparisons. Exact equality is simpler than caseless equality:
+length mismatch returns false, and equal small strings can be checked with
+fixed-width word compares because unused SSO bytes are zeroed.
 
-## Final Review Checklist
+- [x] Inventory all string equality implementations.
+  - Tasks:
+    - Inspect:
+      - `roc_builtins_str_equal`;
+      - interpreter low-level `.str_is_eq`;
+      - LLVM lowering for `.str_is_eq`;
+      - Wasm `str_is_eq`;
+      - list string equality if it reuses string equality;
+      - any dev backend direct equality path.
+  - Success criteria:
+    - Every backend/runtime path for `Str.is_eq` is listed with its current
+      behavior.
+    - Current paths:
+      - `roc_builtins_str_equal` in `src/builtins/dev_wrappers.zig` forwards to
+        `strEqual`, which forwards to `RocStr.eql` in `src/builtins/str.zig`;
+      - interpreter low-level `.str_is_eq` calls `builtins.str.strEqual`;
+      - LLVM lowering emits a call to `roc_builtins_str_equal`;
+      - dev backend calls the same wrapper through `wrapStrEqual`;
+      - Wasm imports `roc_builtins_str_equal`.
 
-- [x] Re-read `design.md`, section `Structural Serialization Methods`, and
-  confirm the implementation matches it.
-- [x] Re-read this `plan.md` and check off every completed item.
-- [x] Run `git diff --check`.
-- [x] Run source searches for obsolete API names one final time.
-- [x] Review the whole branch with code-review posture:
-  - [x] correctness bugs
-  - [x] missing checking errors
-  - [x] hidden runtime allocation
-  - [x] stale old API compatibility paths
-  - [x] format-specific knowledge in compiler code
-  - [x] test gaps
-  - [x] release-build checks that should be checked-stage errors
-- [x] Commit only after targeted verification is green for the implemented
-  slice.
-- [x] Push after the commit if requested or if continuing the existing branch
-  workflow.
+- [x] Add a fast SSO equality path.
+  - Tasks:
+    - Check length first.
+    - If both strings are SSO:
+      - compare the inline words directly;
+      - use one word on 32-bit SSO capacity and up to the required words on
+        64-bit SSO capacity;
+      - rely on zeroed unused SSO bytes, not tail masking.
+    - If one string is SSO and the other is heap/seamless:
+      - compare length;
+      - compare the SSO inline bytes against the other pointer bytes with
+        fixed-width safe loads only when proven safe, otherwise use bounded
+        loads/memcmp.
+    - If both are heap/seamless:
+      - use length check plus efficient word/memcmp comparison.
+  - Success criteria:
+    - SSO vs SSO equality compiles to direct word compares in optimized builds.
+    - No allocation or normalization occurs.
+    - No out-of-bounds load is introduced for seamless slices.
+    - `RocStr.eql` already routes SSO-vs-SSO through inline bytes. This pass
+      changed the exact equality helper to use fixed u64 word comparisons and a
+      safe final-u64 tail strategy, including safe 32-bit SSO tail handling and
+      no overread for short seamless slices.
+
+- [x] Share safe low-level primitives with caseless equality where appropriate.
+  - Tasks:
+    - Reuse helpers for:
+      - SSO detection;
+      - length extraction;
+      - inline-byte pointer extraction;
+      - safe word comparison boundaries.
+    - Do not make caseless equality slower.
+  - Success criteria:
+    - Existing caseless equality disassembly remains at least as good as before.
+    - Plain equality gets the same small-string attention without duplicate
+      fragile code.
+    - Plain equality now uses the same `readTailU64`/bounded tail strategy used
+      by caseless equality for non-small tails, while keeping the caseless SWAR
+      path unchanged.
+
+- [ ] Add edge-case tests for `Str.is_eq`.
+  - Tasks:
+    - Equal and unequal SSO strings of lengths 0 through SSO max.
+    - Equal and unequal heap strings.
+    - SSO vs heap/seamless equal and unequal strings.
+    - Strings with embedded NUL bytes.
+    - Unicode strings where byte equality is the expected semantic.
+    - Different lengths with shared prefixes.
+    - Boundary lengths around SSO max and SSO max plus one.
+  - Success criteria:
+    - Tests pass across dev/LLVM/Wasm paths that support string equality.
+    - Optimized disassembly confirms SSO equality no longer calls a generic
+      heavy helper when both operands are statically known SSO-compatible.
+    - Added builtin tests for exact u64 SSO chunks, all small-string lengths,
+      masked SSO tails, embedded NUL bytes, exact UTF-8 byte equality, the
+      small/heap boundary, and short seamless slices at allocation end.
+      Verified so far with `zig build run-test-zig-module-builtins`.
+    - These tests caught and fixed an existing small-string equality bug: the
+      old pointer/length fast return could treat two 9-byte small strings as
+      equal when their first 8 bytes and length byte matched but byte 8 differed.
+      The fast return now applies only to non-small strings.
+
+- [ ] Use exact string fast paths in generated field dispatch when possible.
+  - Tasks:
+    - For static small field names, prefer generated direct compares over calling
+      `Str.is_eq`.
+    - Keep optimized `Str.is_eq` as the general fallback and for ordinary user
+      code.
+  - Success criteria:
+    - Field-dispatch disassembly uses immediates/direct word compares.
+    - Ordinary `Str.is_eq` also benefits outside generated parser code.
+
+## Phase 9: Remove Remaining Generic Parser State Traffic
+
+After the core phases above, inspect the generated HTTP parser again and remove
+whatever generic parser machinery remains in the hot path without changing the
+Roc API.
+
+- [ ] Inspect hot loop register and stack traffic.
+  - Tasks:
+    - Identify stores/loads that exist only because generated parser state is
+      represented too generically.
+    - Identify any remaining aggregate copies of field sets, parser closures,
+      parse results, or states.
+  - Success criteria:
+    - Every large stack object in `_roc__proc_e3` has a known reason.
+    - Unnecessary stack objects have follow-up patches or are removed.
+
+- [ ] Keep nested parser construction eager and runtime parser loops small.
+  - Tasks:
+    - Verify derived `parser_for` still constructs nested parsers before
+      returning the runtime lambda.
+    - Ensure runtime lambda closes over transformed static field data and nested
+      parser functions, not original names or construction machinery.
+  - Success criteria:
+    - Compile-time parser construction tests still verify original field names
+      are not in the final binary when renamed at compile time.
+    - Runtime parser construction tests still pass.
+
+- [ ] Avoid introducing backend-specific semantic logic.
+  - Tasks:
+    - LIR must contain explicit operations for presence bits, control flow,
+      field dispatch, and ARC cleanup.
+    - Backends lower the explicit LIR and do not infer parser semantics.
+  - Success criteria:
+    - Dev, LLVM, and Wasm backends either lower explicit operations correctly or
+      have targeted unsupported-test coverage if a backend does not yet support
+      this platform example.
+
+## Phase 10: Verification Before Final Disassembly
+
+- [ ] Run focused parser/platform tests after each phase.
+  - Required commands:
+    - `zig build run-test-zig-http-header-decoder-platform`
+    - `zig build run-test-zig-json-decoder-platform`
+  - Success criteria:
+    - Both pass after every behavior-affecting phase.
+    - Passed after the host-buffer and `Str.is_eq` changes:
+      `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`.
+
+- [ ] Run focused string equality tests after the `Str.is_eq` phase.
+  - Tasks:
+    - Use the most targeted builtin/interpreter/backend test steps available.
+    - Add missing targeted steps if current coverage is too broad or too weak.
+  - Success criteria:
+    - SSO equality, heap equality, seamless-slice equality, and Unicode byte
+      equality are all covered.
+
+- [ ] Run broader compiler checks after targeted tests pass.
+  - Required command:
+    - `zig build minici`
+  - Failure protocol:
+    - If `minici` fails in one section, switch to that targeted failing section.
+    - Fix the targeted failure.
+    - Rerun the targeted failing section until it passes.
+    - Return to `zig build minici` only after the targeted section passes.
+  - Success criteria:
+    - `zig build minici` passes.
+
+- [ ] Check optimized allocation invariants.
+  - Tasks:
+    - Rebuild the HTTP header platform with ReleaseFast host and `--opt=speed`
+      Roc app.
+    - Confirm `roc_alloc` is still a crashing implementation in the test host.
+    - Confirm the HTTP tests send all required request combinations and receive
+      correct responses.
+  - Success criteria:
+    - No runtime allocation is possible on the tested path without failing the
+      test.
+
+- [ ] Check generated code shape before final report.
+  - Tasks:
+    - Search the optimized Roc disassembly for:
+      - allocator calls on the hot path;
+      - calls to generic `roc_builtins_str_equal` from static field dispatch;
+      - calls to generic `roc_builtins_str_caseless_ascii_equals` from static
+        field dispatch;
+      - broad stack zeroing at parser entry;
+      - large cold crash/error blocks interleaved into the hot parser proc.
+  - Success criteria:
+    - Any remaining instance is either removed or documented with the exact
+      reason it is still necessary.
+
+## Completion Checklist
+
+The plan is not complete until every item below is true:
+
+- [ ] Generated record parser state is represented as presence bits plus payload
+      locals through the lowering path that reaches LIR.
+- [ ] Missing required fields do not require initializing fake values.
+- [ ] Optional absent fields are constructed at finish time from format
+      `missing_optional_field`, not from preinitialized slot tags.
+- [ ] Generated parser `Try` sequencing lowers to direct control flow through
+      LIR where producer and consumer are compiler-generated parser code.
+- [ ] Immediately-consumed `{ value, rest }` parser result records are avoided
+      where direct locals are semantically equivalent.
+- [ ] Static known `Fields` dispatch emits direct exact small-string compares.
+- [ ] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
+      for eligible small strings.
+- [ ] Generic iterator/string-helper dispatch is not used on the static SSO hot
+      path.
+- [ ] Runtime-created parsers still work correctly, even if they are slower than
+      compile-time-created parsers.
+- [ ] Full Roc `Str` construction for borrowed header field names/values is
+      delayed until a user-visible Roc `Str` is actually needed.
+- [ ] Unknown header skip paths do not construct temporary Roc `Str` values.
+- [ ] Cold decode-error, missing-field, ARC-cleanup, and crash paths are outlined
+      out of the main generated parser hot proc where practical.
+- [x] The host no longer reserves roughly 16 KiB of stack for the request buffer,
+      while still using no allocator and preserving request-memory lifetime.
+- [ ] `Str.is_eq` has a fast SSO path comparable in spirit to
+      `Str.is_caseless_eq`, with tests and disassembly confirmation.
+- [ ] HTTP header platform tests pass.
+- [ ] JSON platform tests pass.
+- [ ] String equality tests pass across the relevant execution paths.
+- [ ] `zig build minici` passes after targeted failures, if any, have been fixed
+      through the targeted-failure loop.
+- [ ] Optimized HTTP header disassembly has no hot-path allocation, no hot-path
+      runtime field map, and no per-header runtime field-name conversion.
+
+## Final Step: Redo Disassembly And Compare Roc To pico And may
+
+This must be the last step after every checklist item above is complete.
+
+- [ ] Rebuild all comparison artifacts.
+  - Roc:
+    - `zig build run-test-zig-http-header-decoder-platform`
+    - dump `zig-out/bin/http_header_decoder_server_prebuilt`
+  - pico:
+    - build `h2o/picohttpparser` with optimized arm64 macOS settings equivalent
+      to the prior comparison.
+    - dump the optimized object.
+  - may:
+    - build `Xudong-Huang/may_minihttp` release mode with the comparable
+      `roc_compare` example.
+    - dump the optimized binary.
+
+- [ ] Produce a full side-by-side report.
+  - Required Roc numbers:
+    - on-disk binary size;
+    - `__TEXT` size;
+    - disassembly line count;
+    - hot function names;
+    - hot function code byte extents;
+    - hot function stack reservations;
+    - calls to allocator/crash/string-helper/parser-helper functions;
+    - presence or absence of broad stack zeroing;
+    - whether field dispatch is direct immediate/SWAR code.
+  - Required pico numbers:
+    - object size;
+    - text size;
+    - disassembly line count;
+    - `phr_parse_request` code size and stack;
+    - internal `parse_headers` code size and stack;
+    - relevant helper code sizes.
+  - Required may numbers:
+    - binary size;
+    - `__TEXT` size;
+    - disassembly line count;
+    - `httparse` request/header parser code sizes and stacks;
+    - response encoder size/stack;
+    - comparable per-connection read/parse/respond loop size/stack.
+
+- [ ] Analyze remaining gaps without proposing Roc API changes.
+  - Success criteria:
+    - The report explains which differences are due to unavoidable Roc semantics,
+      which are due to remaining compiler implementation overhead, and which are
+      likely removable with further lowering/backend work.
+    - Any new follow-up item is grounded in disassembly evidence from the final
+      comparison.

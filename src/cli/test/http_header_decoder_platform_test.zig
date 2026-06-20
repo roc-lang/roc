@@ -35,7 +35,7 @@ const too_large_content_length_request =
     "POST /too-large HTTP/1.1\r\n" ++
     "Host: localhost\r\n" ++
     "Foo: abcdefghijklmnopqrstuvwxyz\r\n" ++
-    "Content-Length: 8193\r\n" ++
+    "Content-Length: 1025\r\n" ++
     "\r\n";
 
 test "HTTP header parsing platform derives structural parser without runtime allocations" {
