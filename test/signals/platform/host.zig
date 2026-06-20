@@ -190,10 +190,8 @@ const HostWhenBranchScopeStep = struct {
 
 const HostEachRowScopeStep = struct {
     site_ordinal: u64,
-    key: abi.NodeValue,
-    item: abi.NodeValue,
-    key_eq: abi.RocErasedCallable,
-    item_eq: abi.RocErasedCallable,
+    key: HostValueCell,
+    item: HostValueCell,
 };
 
 const HostScopeStep = union(enum) {
@@ -203,12 +201,9 @@ const HostScopeStep = union(enum) {
 
     fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
         switch (self.*) {
-            .each_row => |row| {
-                abi.decrefNodeValue(row.key, roc_host);
-                abi.decrefNodeValue(row.item, roc_host);
-                abi.decrefErasedCallable(row.key_eq, roc_host);
-                abi.decrefErasedCallable(row.item_eq, roc_host);
-                metrics.closure_releases += 2;
+            .each_row => |*row| {
+                row.key.deinit(roc_host, metrics);
+                row.item.deinit(roc_host, metrics);
             },
             .root, .when_branch => {},
         }
@@ -1828,28 +1823,21 @@ const HostEnv = struct {
         return scope_id;
     }
 
-    fn createEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
+    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
         self.validateScopeId(parent_scope_id);
 
-        abi.increfNodeValue(key, 1);
-        errdefer abi.decrefNodeValue(key, roc_host);
-        abi.increfNodeValue(item, 1);
-        errdefer abi.decrefNodeValue(item, roc_host);
-        abi.increfErasedCallable(key_eq, 1);
-        errdefer abi.decrefErasedCallable(key_eq, roc_host);
-        abi.increfErasedCallable(item_eq, 1);
-        errdefer abi.decrefErasedCallable(item_eq, roc_host);
+        const key_cell = HostValueCell.initRetained(key, key_eq, &self.pending_roc_metrics);
+        const item_cell = HostValueCell.initRetained(item, item_eq, &self.pending_roc_metrics);
 
         const scope_id: u64 = @intCast(self.scopes.items.len);
         self.scopes.append(self.gpa.allocator(), .{
             .scope_id = scope_id,
             .parent_scope_id = parent_scope_id,
-            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key, .item = item, .key_eq = key_eq, .item_eq = item_eq } },
+            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key_cell, .item = item_cell } },
             .active = true,
         }) catch std.process.exit(1);
         var metrics = self.pending_roc_metrics;
         metrics.scopes_created += 1;
-        metrics.closure_retains += 2;
         self.pending_roc_metrics = metrics;
         return scope_id;
     }
@@ -1957,38 +1945,20 @@ const HostEnv = struct {
         return ids.toOwnedSlice(allocator) catch std.process.exit(1);
     }
 
-    fn eachRowScopeKey(self: *HostEnv, scope_id: u64) abi.NodeValue {
+    fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: abi.NodeValue) bool {
         self.validateScopeId(scope_id);
-        const scope = self.scopes.items[@intCast(scope_id)];
+        const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
-            .each_row => |row| row.key,
+            .each_row => |*row| row.key.valueEquals(roc_host, key),
             .root, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
 
-    fn eachRowScopeItem(self: *HostEnv, scope_id: u64) abi.NodeValue {
+    fn eachRowScopeItemEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: abi.NodeValue) bool {
         self.validateScopeId(scope_id);
-        const scope = self.scopes.items[@intCast(scope_id)];
+        const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
-            .each_row => |row| row.item,
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
-    }
-
-    fn eachRowScopeKeyEq(self: *HostEnv, scope_id: u64) abi.RocErasedCallable {
-        self.validateScopeId(scope_id);
-        const scope = self.scopes.items[@intCast(scope_id)];
-        return switch (scope.step) {
-            .each_row => |row| row.key_eq,
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
-    }
-
-    fn eachRowScopeItemEq(self: *HostEnv, scope_id: u64) abi.RocErasedCallable {
-        self.validateScopeId(scope_id);
-        const scope = self.scopes.items[@intCast(scope_id)];
-        return switch (scope.step) {
-            .each_row => |row| row.item_eq,
+            .each_row => |*row| row.item.valueEquals(roc_host, item),
             .root, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
@@ -2001,9 +1971,7 @@ const HostEnv = struct {
             .root, .when_branch => failHost("scope id does not reference an each-row scope"),
         }
 
-        abi.increfNodeValue(item, 1);
-        abi.decrefNodeValue(scope.step.each_row.item, roc_host);
-        scope.step.each_row.item = item;
+        scope.step.each_row.item.replaceValue(roc_host, item);
     }
 
     fn nextKeyIsDuplicate(roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, keys: []const abi.NodeValue, key_index: usize) bool {
@@ -2046,8 +2014,7 @@ const HostEnv = struct {
             var matched_scope_id: ?u64 = null;
             for (existing_scope_ids, 0..) |scope_id, existing_index| {
                 if (matched_existing[existing_index]) continue;
-                const existing_key = self.eachRowScopeKey(scope_id);
-                if (callErasedNodeValueNodeValueToBool(roc_host, self.eachRowScopeKeyEq(scope_id), existing_key, key)) {
+                if (self.eachRowScopeKeyEquals(roc_host, scope_id, key)) {
                     matched_existing[existing_index] = true;
                     matched_scope_id = scope_id;
                     break;
@@ -2057,8 +2024,7 @@ const HostEnv = struct {
             if (matched_scope_id) |scope_id| {
                 next_scope_ids[key_index] = scope_id;
                 rows_reused += 1;
-                const existing_item = self.eachRowScopeItem(scope_id);
-                if (callErasedNodeValueNodeValueToBool(roc_host, self.eachRowScopeItemEq(scope_id), existing_item, item)) {
+                if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
                     row_items_changed[key_index] = false;
                     row_items_unchanged += 1;
                 } else {
@@ -2067,7 +2033,7 @@ const HostEnv = struct {
                     row_items_updated += 1;
                 }
             } else {
-                next_scope_ids[key_index] = self.createEachRowScope(roc_host, parent_scope_id, site_ordinal, key, item, key_eq, item_eq);
+                next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, item_eq);
                 row_items_changed[key_index] = true;
                 rows_created += 1;
             }
@@ -5029,7 +4995,7 @@ test "signals host disposal retires scope subtree identities" {
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
     const root = host.internRootScope();
-    const row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
+    const row = host.createEachRowScope(root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
     const branch = host.internWhenBranchScope(row, 4, .true_branch);
     const row_state = host.internNodeIdentity(row, 0);
     const branch_state = host.internNodeIdentity(branch, 0);
@@ -5041,7 +5007,7 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(!host.node_identities.items[@intCast(row_state)].active);
     try std.testing.expect(!host.node_identities.items[@intCast(branch_state)].active);
 
-    const recreated_row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
+    const recreated_row = host.createEachRowScope(root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
     try std.testing.expect(recreated_row != row);
 
     const recreated_state = host.internNodeIdentity(recreated_row, 0);
