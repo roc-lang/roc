@@ -17,6 +17,7 @@ const SourceLoc = lir.SourceLoc;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
+const roc_target = @import("roc_target");
 
 const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("Builder.zig");
@@ -34,7 +35,7 @@ fn getLlvmTriple(target: std.Target) []const u8 {
     return switch (target.cpu.arch) {
         .x86_64 => switch (target.os.tag) {
             .windows => if (target.abi == .msvc) "x86_64-pc-windows-msvc" else "x86_64-w64-windows-gnu",
-            .macos => "x86_64-apple-macosx13.0.0",
+            .macos => "x86_64-apple-macosx" ++ roc_target.macos_deployment.llvm_version,
             .linux => switch (target.abi) {
                 .musl => "x86_64-unknown-linux-musl",
                 .android => "x86_64-unknown-linux-android",
@@ -48,7 +49,7 @@ fn getLlvmTriple(target: std.Target) []const u8 {
         },
         .aarch64 => switch (target.os.tag) {
             .windows => if (target.abi == .msvc) "aarch64-pc-windows-msvc" else "aarch64-w64-windows-gnu",
-            .macos => "aarch64-apple-macosx13.0.0",
+            .macos => "aarch64-apple-macosx" ++ roc_target.macos_deployment.llvm_version,
             .ios => "aarch64-apple-ios",
             .linux => switch (target.abi) {
                 .musl => "aarch64-unknown-linux-musl",

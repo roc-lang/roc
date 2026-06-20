@@ -4674,13 +4674,16 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
 }
 
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
-    if (target == RocTarget.detectNative()) return builtin.target;
+    if (target == RocTarget.detectNative() and target.toOsTag() != .macos) return builtin.target;
 
-    const query = std.Target.Query{
+    var query = std.Target.Query{
         .cpu_arch = target.toCpuArch(),
         .os_tag = target.toOsTag(),
         .abi = stdTargetAbiForLlvmBuild(target),
     };
+    if (target.toOsTag() == .macos) {
+        query.os_version_min = roc_target.macos_deployment.query_os_version;
+    }
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 }
 

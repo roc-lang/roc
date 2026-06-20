@@ -131,6 +131,12 @@ fn nativeSharedArchiveTarget(b: *std.Build, target: ResolvedTarget) NativeShared
     };
 }
 
+fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+    if (target.result.os.tag != .macos) return target;
+
+    return b.resolveTargetQuery(roc_target.macos_deployment.query(target.result.cpu.arch));
+}
+
 /// Returns the optimal target query for release builds on the current host.
 /// - Linux: Uses musl for fully static binaries
 /// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
@@ -1655,25 +1661,26 @@ fn createTestPlatformHostLib(
     omit_frame_pointer: ?bool,
     options: TestHostOptions,
 ) *Step.Compile {
+    const host_target = withRocMacosDeploymentTarget(b, target);
     const lib = b.addLibrary(.{
         .name = name,
         .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path(host_path),
-            .target = target,
+            .target = host_target,
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             // These archives are linked into Roc-produced ELF outputs without
             // a Zig runtime; keep safe-mode stack probes out of that ABI.
-            .stack_check = if (isGlibcTestHost(target)) false else null,
+            .stack_check = if (isGlibcTestHost(host_target)) false else null,
             .pic = true, // Enable Position Independent Code for PIE compatibility
             // Only linked so host code can set up stack overflow handling.
-            .link_libc = testHostNeedsLibc(options, target),
+            .link_libc = testHostNeedsLibc(options, host_target),
         }),
     });
-    configureBackend(lib, target);
-    if (testHostNeedsLlvm(target)) {
+    configureBackend(lib, host_target);
+    if (testHostNeedsLlvm(host_target)) {
         // The symbol-ABI platform tests depend on the visibility declared in
         // @export options: default-visibility host functions are public shared
         // library exports, while hidden runtime and hosted symbols are internal
@@ -1692,7 +1699,7 @@ fn createTestPlatformHostLib(
     // routines that are not supplied by the OS libraries. Linux and x86_64
     // macOS LLVM builds can emit symbols like __zig_probe_stack; ARM64 Windows
     // Zig code can emit stack-protector calls to __stack_chk_fail.
-    lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
+    lib.bundle_compiler_rt = testHostNeedsCompilerRt(host_target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;
     lib.link_data_sections = true;
@@ -2561,6 +2568,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("ctx", roc_modules.ctx);
     llvm_codegen_module.addImport("builtins", roc_modules.builtins);
     llvm_codegen_module.addImport("build_options", roc_modules.build_options);
+    llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -2707,6 +2715,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
@@ -2949,6 +2958,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
@@ -5129,8 +5139,8 @@ fn addMainExe(
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
-        .{ .name = "x64mac", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none } },
-        .{ .name = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none } },
+        .{ .name = "x64mac", .query = roc_target.macos_deployment.query(.x86_64) },
+        .{ .name = "arm64mac", .query = roc_target.macos_deployment.query(.aarch64) },
     };
 
     for (cross_compile_builtins_targets) |cross_target| {
@@ -5316,6 +5326,7 @@ fn addLlvmSupportToStep(
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
