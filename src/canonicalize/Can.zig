@@ -5986,6 +5986,26 @@ fn introduceItemsAliased(
                 .target = target,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+
+            // An exposed type is a first-class type binding, exactly like the
+            // module's auto-exposed main type above. This is what lets its
+            // associated functions be reached through the exposed short name
+            // (e.g. `Square.create` after `import Chess exposing [Square]`).
+            if (is_type_name) {
+                if (target.typeDeclNode()) |type_node_idx| {
+                    try self.setExternalTypeBinding(
+                        current_scope,
+                        item_name,
+                        module_name,
+                        exposed_item.name,
+                        self.env.getIdent(exposed_item.name),
+                        type_node_idx,
+                        module_import_idx,
+                        import_region,
+                        .module_was_found,
+                    );
+                }
+            }
         }
     } else {
         // No module_envs provided, introduce all items without validation
@@ -6664,6 +6684,29 @@ fn canonicalizeTypeAssociatedLookup(
             if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, type_qualified_idx, region)) |pattern_idx| {
                 return try self.canonicalizedAssociatedLookup(owner_path, pattern_idx, region);
             }
+        }
+
+        // A type imported via `import M exposing [T]` is an `external_nominal`
+        // binding. Its associated functions live in `M` under the
+        // `<M>.<T>.<method>` exposed name, reached through the binding's import.
+        switch (binding_location.binding.*) {
+            .external_nominal => |ext| {
+                if (self.lookupAvailableModuleEnv(ext.module_ident)) |external_type_env| {
+                    const module_env = external_type_env.env;
+                    const original_type_text = self.env.getIdent(ext.original_ident);
+                    const qualified_type_idx = try self.insertQualifiedIdent(module_env.module_name, original_type_text);
+                    const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), field_text);
+                    const qualified_text = self.env.getIdent(fully_qualified_idx);
+
+                    if (module_env.common.findIdent(qualified_text)) |qname_ident| {
+                        if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
+                            const import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident);
+                            return try self.canonicalizedExternalLookup(import_idx, target_node_idx, type_qualified_idx, region);
+                        }
+                    }
+                }
+            },
+            else => {},
         }
     }
 
@@ -18665,6 +18708,18 @@ fn setExternalTypeBinding(
 ) Allocator.Error!void {
     // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
     if (scope.type_bindings.get(local_ident)) |existing_binding| {
+        // Binding the same external type to the same name twice is idempotent,
+        // not a conflict. This happens when a type module's main type is both
+        // auto-exposed and named explicitly, as in `import M exposing [M]`.
+        switch (existing_binding) {
+            .external_nominal => |ext| {
+                if (ext.module_ident.eql(module_ident) and ext.original_ident.eql(original_ident)) {
+                    return;
+                }
+            },
+            else => {},
+        }
+
         // Extract the original region from the existing binding for the diagnostic
         const original_region = switch (existing_binding) {
             .local_nominal, .local_alias, .associated_nominal => Region.zero(),
