@@ -80,10 +80,36 @@ const HostSignalEventRoute = struct {
     signal_ids: []u64,
 };
 
-const HostState = struct {
-    state_id: u64,
+const HostValueCell = struct {
     value: abi.NodeValue,
     eq: abi.RocErasedCallable,
+
+    fn initRetained(value: abi.NodeValue, eq: abi.RocErasedCallable, metrics: *RuntimeMetrics) HostValueCell {
+        abi.increfErasedCallable(eq, 1);
+        metrics.closure_retains += 1;
+        return .{ .value = value, .eq = eq };
+    }
+
+    fn deinit(self: *HostValueCell, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
+        abi.decrefNodeValue(self.value, roc_host);
+        abi.decrefErasedCallable(self.eq, roc_host);
+        metrics.closure_releases += 1;
+        self.* = undefined;
+    }
+
+    fn valueEquals(self: *const HostValueCell, roc_host: *abi.RocHost, value: abi.NodeValue) bool {
+        return callErasedNodeValueNodeValueToBool(roc_host, self.eq, self.value, value);
+    }
+
+    fn replaceValue(self: *HostValueCell, roc_host: *abi.RocHost, value: abi.NodeValue) void {
+        abi.decrefNodeValue(self.value, roc_host);
+        self.value = value;
+    }
+};
+
+const HostState = struct {
+    state_id: u64,
+    cell: HostValueCell,
     version: u64,
     active: bool,
 };
@@ -1646,12 +1672,8 @@ const HostEnv = struct {
     fn clearStates(self: *HostEnv) void {
         for (self.states.items) |*state| {
             if (!state.active) continue;
-            abi.decrefNodeValue(state.value, self.roc_host.?);
-            abi.decrefErasedCallable(state.eq, self.roc_host.?);
+            state.cell.deinit(self.roc_host.?, &self.pending_roc_metrics);
             state.active = false;
-            var metrics = self.pending_roc_metrics;
-            metrics.closure_releases += 1;
-            self.pending_roc_metrics = metrics;
         }
         self.states.items.len = 0;
     }
@@ -1665,28 +1687,23 @@ const HostEnv = struct {
 
     fn stateValueByNodeId(self: *HostEnv, node_id: u64) abi.NodeValue {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("signal referenced an unknown active state node");
-        return self.states.items[state_index].value;
+        return self.states.items[state_index].cell.value;
     }
 
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
         if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
         const initial = callValueInitThunk(roc_host, desc.initial);
-        abi.increfErasedCallable(desc.eq, 1);
+        var cell = HostValueCell.initRetained(initial, desc.eq, &self.pending_roc_metrics);
         self.states.append(self.gpa.allocator(), .{
             .state_id = desc.node_id,
-            .value = initial,
-            .eq = desc.eq,
+            .cell = cell,
             .version = 0,
             .active = true,
         }) catch {
-            abi.decrefErasedCallable(desc.eq, roc_host);
-            abi.decrefNodeValue(initial, roc_host);
+            cell.deinit(roc_host, &self.pending_roc_metrics);
             std.process.exit(1);
         };
-        var metrics = self.pending_roc_metrics;
-        metrics.closure_retains += 1;
-        self.pending_roc_metrics = metrics;
     }
 
     fn syncStatesFromNodeStream(self: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) void {
@@ -1698,13 +1715,12 @@ const HostEnv = struct {
     fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: abi.NodeValue) bool {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
         const state = &self.states.items[state_index];
-        if (callErasedNodeValueNodeValueToBool(roc_host, self.stateEqCallable(node_id), state.value, value)) {
+        if (state.cell.valueEquals(roc_host, value)) {
             abi.decrefNodeValue(value, roc_host);
             return false;
         }
 
-        abi.decrefNodeValue(state.value, roc_host);
-        state.value = value;
+        state.cell.replaceValue(roc_host, value);
         state.version += 1;
         return true;
     }
@@ -1712,17 +1728,13 @@ const HostEnv = struct {
     fn deactivateState(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64) void {
         const state_index = self.stateIndexByNodeId(node_id) orelse return;
         const state = &self.states.items[state_index];
-        abi.decrefNodeValue(state.value, roc_host);
-        abi.decrefErasedCallable(state.eq, roc_host);
+        state.cell.deinit(roc_host, &self.pending_roc_metrics);
         state.active = false;
-        var metrics = self.pending_roc_metrics;
-        metrics.closure_releases += 1;
-        self.pending_roc_metrics = metrics;
     }
 
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
-        return self.states.items[state_index].eq;
+        return self.states.items[state_index].cell.eq;
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
@@ -4995,8 +5007,8 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
-    host.states.items[state_index].value = nodeValueStr(&roc_host, "second");
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueStr(&roc_host, "second");
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5048,8 +5060,8 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
-    host.states.items[state_index].value = nodeValueI64(2);
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5118,8 +5130,8 @@ test "signals host marks dirty structural sources for structural patching" {
     try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
-    host.states.items[state_index].value = nodeValueBool(false);
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueBool(false);
     host.states.items[state_index].version += 1;
     const dirty_source_node_ids = [_]u64{state_id};
     try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
@@ -5172,8 +5184,8 @@ test "signals host prunes structural render when retained condition equality is 
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
-    host.states.items[state_index].value = nodeValueI64(2);
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5298,8 +5310,8 @@ test "signals host rebuilds unchanged row when nested structural source is dirty
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
-    host.states.items[state_index].value = nodeValueBool(false);
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueBool(false);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
