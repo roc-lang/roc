@@ -413,7 +413,7 @@ and dispatch directly to the field parser.
       cold allocation/error paths remain separate open work: in the refreshed
       HTTP dump, `_roc__proc_11b` still reserves `0x1640` bytes of stack.
 
-- [ ] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
+- [x] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
   - Tasks:
     - Users may still iterate field sets at runtime.
     - Runtime iteration must remain allocation-free.
@@ -423,8 +423,16 @@ and dispatch directly to the field parser.
     - Existing userspace format code using `Fields.for_size` keeps working.
     - Runtime-created parsers still work even if parser construction was not
       evaluated at compile time; they may be slower, but must be correct.
+    - Verified userspace `Fields.rename_fields` and `Fields.for_size` with
+      `zig build run-test-cli -- --suite subcommands --filter "supports userspace Fields.rename_fields"`.
+    - Verified `Fields.iter`, `Fields.for_size`, shortest/longest bounds, and
+      renamed field metadata with
+      `zig build run-test-cli -- --suite subcommands --filter "renamed Fields name bounds"` and
+      `zig build run-test-cli -- --suite subcommands --filter "renamed Fields metadata"`.
+    - Verified stored and runtime-prepared parser construction with
+      `zig build run-test-cli -- --suite subcommands --filter "runtime prepared"`.
 
-- [ ] Handle static and runtime parser-construction paths with one semantics.
+- [x] Handle static and runtime parser-construction paths with one semantics.
   - Tasks:
     - Avoid a different public compilation model depending on whether
       `parser_for` ran at compile time.
@@ -436,6 +444,10 @@ and dispatch directly to the field parser.
     - Both paths produce the same parse results.
     - Only the compile-time path is expected to have immediate static field
       compares in disassembly.
+    - Verified with
+      `zig build run-test-cli -- --suite subcommands --filter "runtime prepared"`,
+      which exercises stored parser construction, runtime-prepared fields, and
+      consistent parse results through the interpreter/dev CLI runner.
 
 ## Phase 5: Defer Full Roc `Str` Construction For Borrowed Header Values
 
@@ -828,7 +840,7 @@ The plan is not complete until every item below is true:
       for eligible small strings.
 - [ ] Generic iterator/string-helper dispatch is not used on the static SSO hot
       path.
-- [ ] Runtime-created parsers still work correctly, even if they are slower than
+- [x] Runtime-created parsers still work correctly, even if they are slower than
       compile-time-created parsers.
 - [ ] Full Roc `Str` construction for borrowed header field names/values is
       delayed until a user-visible Roc `Str` is actually needed.
