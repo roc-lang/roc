@@ -256,6 +256,7 @@ const HostRenderNode = struct {
 };
 
 const HostBinderToken = *u64;
+const HostSignalToken = *u64;
 
 const HostBinderBinding = struct {
     token: HostBinderToken,
@@ -263,12 +264,14 @@ const HostBinderBinding = struct {
 };
 
 const HostBoundConstSignalExpr = struct {
+    token: HostSignalToken,
     init: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostBoundMapSignalExpr = struct {
+    token: HostSignalToken,
     input: *HostBoundSignalExpr,
     transform: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
@@ -276,6 +279,7 @@ const HostBoundMapSignalExpr = struct {
 };
 
 const HostBoundMap2SignalExpr = struct {
+    token: HostSignalToken,
     left: *HostBoundSignalExpr,
     right: *HostBoundSignalExpr,
     transform: abi.RocErasedCallable,
@@ -284,6 +288,7 @@ const HostBoundMap2SignalExpr = struct {
 };
 
 const HostBoundCombineSignalExpr = struct {
+    token: HostSignalToken,
     children: []HostBoundSignalExpr,
     transform: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
@@ -303,10 +308,16 @@ const HostBoundSignalExpr = union(enum) {
         return callable;
     }
 
+    fn retainSignalToken(token: HostSignalToken) HostSignalToken {
+        abi.increfBox(@ptrCast(token), 1);
+        return token;
+    }
+
     fn cloneRetained(self: HostBoundSignalExpr, allocator: std.mem.Allocator, metrics: *RuntimeMetrics) HostBoundSignalExpr {
         return switch (self) {
             .ref => |node_id| .{ .ref = node_id },
             .const_value => |payload| .{ .const_value = .{
+                .token = HostBoundSignalExpr.retainSignalToken(payload.token),
                 .init = HostBoundSignalExpr.retainCallable(payload.init, metrics),
                 .eq = HostBoundSignalExpr.retainCallable(payload.eq, metrics),
                 .cached_value = payload.cached_value.cloneRetained(metrics),
@@ -315,6 +326,7 @@ const HostBoundSignalExpr = union(enum) {
                 const input = allocator.create(HostBoundSignalExpr) catch std.process.exit(1);
                 input.* = payload.input.*.cloneRetained(allocator, metrics);
                 break :blk .{ .map = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(payload.token),
                     .input = input,
                     .transform = HostBoundSignalExpr.retainCallable(payload.transform, metrics),
                     .eq = HostBoundSignalExpr.retainCallable(payload.eq, metrics),
@@ -327,6 +339,7 @@ const HostBoundSignalExpr = union(enum) {
                 const right = allocator.create(HostBoundSignalExpr) catch std.process.exit(1);
                 right.* = payload.right.*.cloneRetained(allocator, metrics);
                 break :blk .{ .map2 = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(payload.token),
                     .left = left,
                     .right = right,
                     .transform = HostBoundSignalExpr.retainCallable(payload.transform, metrics),
@@ -340,6 +353,7 @@ const HostBoundSignalExpr = union(enum) {
                     dest.* = child.cloneRetained(allocator, metrics);
                 }
                 break :blk .{ .combine = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(payload.token),
                     .children = children,
                     .transform = HostBoundSignalExpr.retainCallable(payload.transform, metrics),
                     .eq = HostBoundSignalExpr.retainCallable(payload.eq, metrics),
@@ -355,6 +369,7 @@ const HostBoundSignalExpr = union(enum) {
             .const_value => |payload| {
                 var cached_value = payload.cached_value;
                 cached_value.deinit(roc_host, metrics);
+                abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.init, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 metrics.closure_releases += 2;
@@ -364,6 +379,7 @@ const HostBoundSignalExpr = union(enum) {
                 allocator.destroy(payload.input);
                 var cached_value = payload.cached_value;
                 cached_value.deinit(roc_host, metrics);
+                abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 metrics.closure_releases += 2;
@@ -375,6 +391,7 @@ const HostBoundSignalExpr = union(enum) {
                 allocator.destroy(payload.right);
                 var cached_value = payload.cached_value;
                 cached_value.deinit(roc_host, metrics);
+                abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 metrics.closure_releases += 2;
@@ -386,6 +403,7 @@ const HostBoundSignalExpr = union(enum) {
                 allocator.free(payload.children);
                 var cached_value = payload.cached_value;
                 cached_value.deinit(roc_host, metrics);
+                abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 metrics.closure_releases += 2;
@@ -2267,40 +2285,44 @@ const HostEnv = struct {
                 break :blk .{ .ref = node_id };
             },
             .ConstValue => .{ .const_value = .{
-                .init = HostBoundSignalExpr.retainCallable(expr.payload.const_value._0, &self.pending_roc_metrics),
-                .eq = HostBoundSignalExpr.retainCallable(expr.payload.const_value._1, &self.pending_roc_metrics),
+                .token = HostBoundSignalExpr.retainSignalToken(expr.payload.const_value._0),
+                .init = HostBoundSignalExpr.retainCallable(expr.payload.const_value._1, &self.pending_roc_metrics),
+                .eq = HostBoundSignalExpr.retainCallable(expr.payload.const_value._2, &self.pending_roc_metrics),
             } },
             .Map => blk: {
                 const input = allocator.create(HostBoundSignalExpr) catch std.process.exit(1);
-                input.* = self.bindNodeSignalExpr(allocator, expr.payload.map._0.*, binder_stack, source_node_ids);
+                input.* = self.bindNodeSignalExpr(allocator, expr.payload.map._1.*, binder_stack, source_node_ids);
                 break :blk .{ .map = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(expr.payload.map._0),
                     .input = input,
-                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.map._1, &self.pending_roc_metrics),
-                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.map._2, &self.pending_roc_metrics),
+                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.map._2, &self.pending_roc_metrics),
+                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.map._3, &self.pending_roc_metrics),
                 } };
             },
             .Map2 => blk: {
                 const left = allocator.create(HostBoundSignalExpr) catch std.process.exit(1);
-                left.* = self.bindNodeSignalExpr(allocator, expr.payload.map2._0.*, binder_stack, source_node_ids);
+                left.* = self.bindNodeSignalExpr(allocator, expr.payload.map2._1.*, binder_stack, source_node_ids);
                 const right = allocator.create(HostBoundSignalExpr) catch std.process.exit(1);
-                right.* = self.bindNodeSignalExpr(allocator, expr.payload.map2._1.*, binder_stack, source_node_ids);
+                right.* = self.bindNodeSignalExpr(allocator, expr.payload.map2._2.*, binder_stack, source_node_ids);
                 break :blk .{ .map2 = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(expr.payload.map2._0),
                     .left = left,
                     .right = right,
-                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.map2._2, &self.pending_roc_metrics),
-                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.map2._3, &self.pending_roc_metrics),
+                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.map2._3, &self.pending_roc_metrics),
+                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.map2._4, &self.pending_roc_metrics),
                 } };
             },
             .Combine => blk: {
-                const source_children = expr.payload.combine._0.items();
+                const source_children = expr.payload.combine._1.items();
                 const children = allocator.alloc(HostBoundSignalExpr, source_children.len) catch std.process.exit(1);
                 for (source_children, children) |child, *dest| {
                     dest.* = self.bindNodeSignalExpr(allocator, child, binder_stack, source_node_ids);
                 }
                 break :blk .{ .combine = .{
+                    .token = HostBoundSignalExpr.retainSignalToken(expr.payload.combine._0),
                     .children = children,
-                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.combine._1, &self.pending_roc_metrics),
-                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.combine._2, &self.pending_roc_metrics),
+                    .transform = HostBoundSignalExpr.retainCallable(expr.payload.combine._2, &self.pending_roc_metrics),
+                    .eq = HostBoundSignalExpr.retainCallable(expr.payload.combine._3, &self.pending_roc_metrics),
                 } };
             },
         };
@@ -5950,6 +5972,12 @@ fn cloneTestBinderToken(token: HostBinderToken) HostBinderToken {
     return token;
 }
 
+fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
+    const token: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
+    token.* = 0;
+    return token;
+}
+
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: abi.NodeValue) abi.NodeSignalExpr {
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
@@ -5960,8 +5988,9 @@ fn testNodeConstExpr(roc_host: *abi.RocHost, value: abi.NodeValue) abi.NodeSigna
     );
     return .{
         .payload = .{ .const_value = .{
-            ._0 = testNodeValueInitialThunk(roc_host, value),
-            ._1 = eq,
+            ._0 = newTestSignalToken(roc_host),
+            ._1 = testNodeValueInitialThunk(roc_host, value),
+            ._2 = eq,
         } },
         .tag = .ConstValue,
     };
@@ -5992,9 +6021,10 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
     return .{
         .payload = .{
             .map = .{
-                ._0 = boxTestNodeSignalExpr(roc_host, input),
-                ._1 = transform,
-                ._2 = eq,
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = boxTestNodeSignalExpr(roc_host, input),
+                ._2 = transform,
+                ._3 = eq,
             },
         },
         .tag = .Map,
@@ -6019,9 +6049,10 @@ fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) a
     return .{
         .payload = .{
             .map = .{
-                ._0 = boxTestNodeSignalExpr(roc_host, input),
-                ._1 = transform,
-                ._2 = eq,
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = boxTestNodeSignalExpr(roc_host, input),
+                ._2 = transform,
+                ._3 = eq,
             },
         },
         .tag = .Map,
@@ -6046,9 +6077,10 @@ fn testNodeStableI64MapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr, v
     return .{
         .payload = .{
             .map = .{
-                ._0 = boxTestNodeSignalExpr(roc_host, input),
-                ._1 = transform,
-                ._2 = eq,
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = boxTestNodeSignalExpr(roc_host, input),
+                ._2 = transform,
+                ._3 = eq,
             },
         },
         .tag = .Map,
@@ -6073,9 +6105,10 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
     return .{
         .payload = .{
             .map = .{
-                ._0 = boxTestNodeSignalExpr(roc_host, input),
-                ._1 = transform,
-                ._2 = eq,
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = boxTestNodeSignalExpr(roc_host, input),
+                ._2 = transform,
+                ._3 = eq,
             },
         },
         .tag = .Map,
@@ -6100,9 +6133,10 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
     return .{
         .payload = .{
             .combine = .{
-                ._0 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
-                ._1 = transform,
-                ._2 = eq,
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
+                ._2 = transform,
+                ._3 = eq,
             },
         },
         .tag = .Combine,
@@ -6768,6 +6802,39 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_releases);
+}
+
+test "signals host preserves explicit signal tokens across cloned descriptors" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    var stream: HostNodeDescriptorStream = .{};
+    defer stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
+
+    const signal = testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, nodeValueI64(41)));
+    abi.increfNodeSignalExpr(signal, 1);
+    const root_children = [_]abi.Elem{
+        testNodeTextSignal(&roc_host, signal),
+        testNodeTextSignal(&roc_host, signal),
+    };
+    const root = testElement(&roc_host, &root_children);
+    defer abi.decrefElem(root, &roc_host);
+
+    host.collectElemRootDescriptors(&roc_host, &stream, root);
+
+    try std.testing.expectEqual(@as(usize, 2), stream.signal_text_nodes.items.len);
+    const first = stream.signal_text_nodes.items[0].signal.expr;
+    const second = stream.signal_text_nodes.items[1].signal.expr;
+    try std.testing.expectEqual(@as(std.meta.Tag(HostBoundSignalExpr), .map), std.meta.activeTag(first));
+    try std.testing.expectEqual(@as(std.meta.Tag(HostBoundSignalExpr), .map), std.meta.activeTag(second));
+    try std.testing.expect(first.map.token == second.map.token);
 }
 
 test "signals host retains state equality outside descriptor stream" {

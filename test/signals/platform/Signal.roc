@@ -23,6 +23,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 			a.is_eq : a, a -> Bool,
 		]
 	const = |value| {
+		token = Box.box(0)
 		init : NodeValue -> NodeValue
 		init = |_unit| {
 			match value.encode(NodeValue.format) {
@@ -52,6 +53,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 		}
 		{
 			expr: Box.box(Node.SignalExpr.ConstValue(
+				token,
 				Box.box(init),
 				Box.box(eq),
 			)),
@@ -69,6 +71,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				b.is_eq : b, b -> Bool,
 			]
 	map = |signal, f| {
+		token = Box.box(0)
 		wrapped : NodeValue -> NodeValue
 		wrapped = |input_nv| {
 			A : a
@@ -110,6 +113,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 
 		{
 			expr: Box.box(Node.SignalExpr.Map(
+				token,
 				Signal.clone_expr(signal.expr),
 				Box.box(wrapped),
 				Box.box(eq),
@@ -127,6 +131,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				c.is_eq : c, c -> Bool,
 			]
 	map2 = |left, right, f| {
+		token = Box.box(0)
 		wrapped : NodeValue, NodeValue -> NodeValue
 		wrapped = |left_nv, right_nv| {
 			A : a
@@ -177,6 +182,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 
 		{
 			expr: Box.box(Node.SignalExpr.Map2(
+				token,
 				Signal.clone_expr(left.expr),
 				Signal.clone_expr(right.expr),
 				Box.box(wrapped),
@@ -193,6 +199,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				a.is_eq : a, a -> Bool,
 			]
 	combine = |signals| {
+		token = Box.box(0)
 		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
 		transform : NodeValue -> NodeValue
 		transform = |items| items
@@ -223,6 +230,6 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				}
 			}
 		}
-		{ expr: Box.box(Node.SignalExpr.Combine(exprs, Box.box(transform), Box.box(eq))) }
+		{ expr: Box.box(Node.SignalExpr.Combine(token, exprs, Box.box(transform), Box.box(eq))) }
 	}
 }

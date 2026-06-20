@@ -23,6 +23,10 @@ green, not as areas to keep expanding.
   owns that edge.
 - Active descriptors bind `SignalExpr.Ref` to explicit host node ids and retain
   host-owned signal expression trees through `HostSignalBinding`.
+- Non-`Ref` `SignalExpr` variants now carry explicit copied signal tokens from
+  the typed construction site. Those tokens are retained by the host and are the
+  identity data to use for shared derived records; do not infer sharing from
+  pointer identity, callable identity, or expression shape.
 - Host-bound `ConstValue`/`Map`/`Map2`/`Combine` expressions retain their own
   output caches. Dirty evaluation stops before parent transforms when a child
   output is unchanged.
@@ -50,11 +54,11 @@ green, not as areas to keep expanding.
    values and call only the per-edge thunks generated for that typed edge.
 
 2. **Derived nodes are not yet final host-owned records.** The host retains
-   bound signal expression trees, source-id routes, and per-expression output
-   caches, but those caches are still per bound tree and still use the bridge
-   value representation. The target is a host node table that owns each retained
-   transform, equality thunk, current value cell, input edges, and dependent
-   edges.
+   explicit signal tokens, bound signal expression trees, source-id routes, and
+   per-expression output caches, but those caches are still per bound tree and
+   still use the bridge value representation. The target is a host node table
+   keyed by those explicit tokens that owns each retained transform, equality
+   thunk, current value cell, input edges, and dependent edges.
 
 3. **Structural no-rebuild is still blocked by typed retained data.** Current
    structural updates are no longer DOM resets, but changed `when`/`each` outputs
@@ -105,9 +109,10 @@ Take one slice at a time and commit each green result.
    once when the owning node/scope is disposed.
 
 2. **Derived node record.** Convert a host-bound derived expression into a real
-   shared host node record with input node ids, retained transform/equality
-   thunks, and a cached output value cell. Dirty evaluation should update that
-   record and prune dependents from the record's equality result.
+   shared host node record keyed by its explicit signal token, with input node
+   ids, retained transform/equality thunks, and a cached output value cell. Dirty
+   evaluation should update that record and prune dependents from the record's
+   equality result.
 
 3. **Typed keyed-row data.** Move `Ui.each` key and item storage off the bridge
    and onto typed value cells. Row reuse must continue to use the explicit key

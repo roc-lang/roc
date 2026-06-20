@@ -26,16 +26,18 @@ Node := [].{
 		transform : Box((NodeValue, NodeValue -> NodeValue)),
 	}
 
-	## Signal expression. `Ref` reads a binder's current value. `ConstValue`
+	## Signal expression. `Ref` reads a binder's current value. Other variants
+	## carry a copied token allocated at the typed signal construction site, so the
+	## host can identify shared derived nodes from explicit data. `ConstValue`
 	## carries a boxed value initializer plus output equality. `Map`/`Map2`/
 	## `Combine` are derived nodes carrying boxed typed transforms (confined
 	## erasure) and a boxed `is_eq` thunk for change pruning.
 	SignalExpr := [
 		Ref(BinderRef),
-		ConstValue(Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Map(Box(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Map2(Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Combine(List(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		ConstValue(Box(U64), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		Map(Box(U64), Box(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		Combine(Box(U64), List(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
 	]
 
 	## Text/attr sink fields, matching the host's render field discriminants.

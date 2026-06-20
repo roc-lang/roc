@@ -715,30 +715,34 @@ comptime {
 
 /// Payload struct for Combine variant.
 pub const NodeSignalExprCombinePayload = extern struct {
-    _0: RocList(NodeSignalExpr),
-    _1: RocErasedCallable,
+    _0: *u64,
+    _1: RocList(NodeSignalExpr),
     _2: RocErasedCallable,
+    _3: RocErasedCallable,
 };
 
 /// Payload struct for ConstValue variant.
 pub const NodeSignalExprConstValuePayload = extern struct {
-    _0: RocErasedCallable,
+    _0: *u64,
     _1: RocErasedCallable,
+    _2: RocErasedCallable,
 };
 
 /// Payload struct for Map variant.
 pub const NodeSignalExprMapPayload = extern struct {
-    _0: *NodeSignalExpr,
-    _1: RocErasedCallable,
+    _0: *u64,
+    _1: *NodeSignalExpr,
     _2: RocErasedCallable,
+    _3: RocErasedCallable,
 };
 
 /// Payload struct for Map2 variant.
 pub const NodeSignalExprMap2Payload = extern struct {
-    _0: *NodeSignalExpr,
+    _0: *u64,
     _1: *NodeSignalExpr,
-    _2: RocErasedCallable,
+    _2: *NodeSignalExpr,
     _3: RocErasedCallable,
+    _4: RocErasedCallable,
 };
 
 /// Tag discriminant for Node.SignalExpr.
@@ -764,7 +768,7 @@ pub const NodeSignalExpr = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(NodeSignalExpr) != 48) @compileError("NodeSignalExpr size mismatch");
+        if (@sizeOf(NodeSignalExpr) != 56) @compileError("NodeSignalExpr size mismatch");
         if (@alignOf(NodeSignalExpr) != 8) @compileError("NodeSignalExpr alignment mismatch");
     }
 }
@@ -916,7 +920,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         .Combine => {
             const payload = value.payload.combine;
             {
-                const list = payload._0;
+                const list = payload._1;
                 if (list.isUnique()) {
                     for (list.items()) |item| {
                         decrefNodeSignalExpr(item, roc_host);
@@ -924,26 +928,30 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
                 }
                 list.decref(roc_host);
             }
-            decrefErasedCallable(payload._1, roc_host);
+            decrefBox(@ptrCast(payload._0), roc_host);
             decrefErasedCallable(payload._2, roc_host);
+            decrefErasedCallable(payload._3, roc_host);
         },
         .ConstValue => {
             const payload = value.payload.const_value;
-            decrefErasedCallable(payload._0, roc_host);
+            decrefBox(@ptrCast(payload._0), roc_host);
             decrefErasedCallable(payload._1, roc_host);
+            decrefErasedCallable(payload._2, roc_host);
         },
         .Map => {
             const payload = value.payload.map;
-            decrefBoxWith(@ptrCast(payload._0), @alignOf(NodeSignalExpr), &decrefBoxPayloadType12, roc_host);
-            decrefErasedCallable(payload._1, roc_host);
-            decrefErasedCallable(payload._2, roc_host);
-        },
-        .Map2 => {
-            const payload = value.payload.map2;
-            decrefBoxWith(@ptrCast(payload._0), @alignOf(NodeSignalExpr), &decrefBoxPayloadType12, roc_host);
+            decrefBox(@ptrCast(payload._0), roc_host);
             decrefBoxWith(@ptrCast(payload._1), @alignOf(NodeSignalExpr), &decrefBoxPayloadType12, roc_host);
             decrefErasedCallable(payload._2, roc_host);
             decrefErasedCallable(payload._3, roc_host);
+        },
+        .Map2 => {
+            const payload = value.payload.map2;
+            decrefBoxWith(@ptrCast(payload._1), @alignOf(NodeSignalExpr), &decrefBoxPayloadType12, roc_host);
+            decrefBoxWith(@ptrCast(payload._2), @alignOf(NodeSignalExpr), &decrefBoxPayloadType12, roc_host);
+            decrefBox(@ptrCast(payload._0), roc_host);
+            decrefErasedCallable(payload._3, roc_host);
+            decrefErasedCallable(payload._4, roc_host);
         },
         .Ref => {
             decrefBox(@ptrCast(value.payload.ref), roc_host);
@@ -956,27 +964,31 @@ pub fn increfNodeSignalExpr(value: NodeSignalExpr, amount: isize) void {
     switch (value.tag) {
         .Combine => {
             const payload = value.payload.combine;
-            payload._0.incref(amount);
-            increfErasedCallable(payload._1, amount);
+            increfBox(@ptrCast(payload._0), amount);
+            payload._1.incref(amount);
             increfErasedCallable(payload._2, amount);
+            increfErasedCallable(payload._3, amount);
         },
         .ConstValue => {
             const payload = value.payload.const_value;
-            increfErasedCallable(payload._0, amount);
+            increfBox(@ptrCast(payload._0), amount);
             increfErasedCallable(payload._1, amount);
+            increfErasedCallable(payload._2, amount);
         },
         .Map => {
             const payload = value.payload.map;
             increfBox(@ptrCast(payload._0), amount);
-            increfErasedCallable(payload._1, amount);
+            increfBox(@ptrCast(payload._1), amount);
             increfErasedCallable(payload._2, amount);
+            increfErasedCallable(payload._3, amount);
         },
         .Map2 => {
             const payload = value.payload.map2;
             increfBox(@ptrCast(payload._0), amount);
             increfBox(@ptrCast(payload._1), amount);
-            increfErasedCallable(payload._2, amount);
+            increfBox(@ptrCast(payload._2), amount);
             increfErasedCallable(payload._3, amount);
+            increfErasedCallable(payload._4, amount);
         },
         .Ref => {
             increfBox(@ptrCast(value.payload.ref), amount);

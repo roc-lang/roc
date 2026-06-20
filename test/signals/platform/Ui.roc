@@ -241,9 +241,11 @@ Ui := [].{
 			}
 			row_item : NodeValue -> NodeValue
 			row_item = |_unit| item_nv
+			row_signal_token = Box.box(0)
 			row(
 				key,
 				Signal.from_expr(Node.SignalExpr.ConstValue(
+					row_signal_token,
 					Box.box(row_item),
 					Box.box(item_eq_nv),
 				)),
