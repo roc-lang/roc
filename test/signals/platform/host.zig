@@ -317,6 +317,8 @@ const HostSignalRecordPayload = union(enum) {
 const HostSignalRecord = struct {
     ref_count: usize,
     payload: HostSignalRecordPayload,
+    last_dirty_generation: u64 = 0,
+    last_dirty_changed: bool = false,
 
     fn init(allocator: std.mem.Allocator, payload: HostSignalRecordPayload) *HostSignalRecord {
         const record = allocator.create(HostSignalRecord) catch std.process.exit(1);
@@ -1347,12 +1349,21 @@ const HostEnv = struct {
     root_elem: ?abi.Elem = null,
     last_runtime_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
     pending_roc_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
+    dirty_signal_generation: u64 = 0,
 
     fn init() HostEnv {
         return .{
             .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
             .test_state = TestState.init(),
         };
+    }
+
+    fn nextDirtySignalGeneration(self: *HostEnv) u64 {
+        if (self.dirty_signal_generation == std.math.maxInt(u64)) {
+            failHost("host dirty signal generation overflowed");
+        }
+        self.dirty_signal_generation += 1;
+        return self.dirty_signal_generation;
     }
 
     fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
@@ -3641,6 +3652,36 @@ fn updateDirtySignalExprCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot
     }
 }
 
+fn cloneMemoizedDirtySignalResult(record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
+    if (record.last_dirty_generation != dirty_generation) return null;
+
+    return switch (record.payload) {
+        .ref => null,
+        .const_value => |*payload| .{
+            .value = cloneCachedSignalValue(&payload.cached_value),
+            .changed = record.last_dirty_changed,
+        },
+        .map => |*payload| .{
+            .value = cloneCachedSignalValue(&payload.cached_value),
+            .changed = record.last_dirty_changed,
+        },
+        .map2 => |*payload| .{
+            .value = cloneCachedSignalValue(&payload.cached_value),
+            .changed = record.last_dirty_changed,
+        },
+        .combine => |*payload| .{
+            .value = cloneCachedSignalValue(&payload.cached_value),
+            .changed = record.last_dirty_changed,
+        },
+    };
+}
+
+fn rememberDirtySignalResult(record: *HostSignalRecord, dirty_generation: u64, result: HostSignalEvalResult) HostSignalEvalResult {
+    record.last_dirty_generation = dirty_generation;
+    record.last_dirty_changed = result.changed;
+    return result;
+}
+
 fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord) abi.NodeValue {
     switch (record.payload) {
         .ref => |node_id| return cloneNodeValue(host.stateValueByNodeId(node_id)),
@@ -3686,39 +3727,42 @@ fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSig
     }
 }
 
-fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64) HostSignalEvalResult {
+fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+    if (dirty_generation == 0) failHost("dirty signal evaluation used generation 0");
+    if (cloneMemoizedDirtySignalResult(record, dirty_generation)) |result| return result;
+
     switch (record.payload) {
         .ref => |node_id| return .{
             .value = cloneNodeValue(host.stateValueByNodeId(node_id)),
             .changed = u64SliceContains(dirty_source_node_ids, node_id),
         },
-        .const_value => |*payload| return .{
+        .const_value => |*payload| return rememberDirtySignalResult(record, dirty_generation, .{
             .value = cloneCachedSignalValue(&payload.cached_value),
             .changed = false,
-        },
+        }),
         .map => |*payload| {
-            const input = evalDirtyHostSignalRecord(host, roc_host, payload.input, dirty_source_node_ids);
+            const input = evalDirtyHostSignalRecord(host, roc_host, payload.input, dirty_source_node_ids, dirty_generation);
             defer abi.decrefNodeValue(input.value, roc_host);
             if (!input.changed) {
-                return .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false };
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
             }
 
             recordDerivedCall(host);
             const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, input.value);
-            return updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value);
+            return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
         .map2 => |*payload| {
-            const left = evalDirtyHostSignalRecord(host, roc_host, payload.left, dirty_source_node_ids);
+            const left = evalDirtyHostSignalRecord(host, roc_host, payload.left, dirty_source_node_ids, dirty_generation);
             defer abi.decrefNodeValue(left.value, roc_host);
-            const right = evalDirtyHostSignalRecord(host, roc_host, payload.right, dirty_source_node_ids);
+            const right = evalDirtyHostSignalRecord(host, roc_host, payload.right, dirty_source_node_ids, dirty_generation);
             defer abi.decrefNodeValue(right.value, roc_host);
             if (!left.changed and !right.changed) {
-                return .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false };
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
             }
 
             recordDerivedCall(host);
             const value = callErasedNodeValueNodeValueToNodeValue(roc_host, payload.transform, left.value, right.value);
-            return updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value);
+            return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
         .combine => |*payload| {
             var values: std.ArrayListUnmanaged(abi.NodeValue) = .empty;
@@ -3731,7 +3775,7 @@ fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
 
             var any_changed = false;
             for (payload.children) |child| {
-                const child_result = evalDirtyHostSignalRecord(host, roc_host, child, dirty_source_node_ids);
+                const child_result = evalDirtyHostSignalRecord(host, roc_host, child, dirty_source_node_ids, dirty_generation);
                 any_changed = any_changed or child_result.changed;
                 values.append(host.gpa.allocator(), child_result.value) catch std.process.exit(1);
             }
@@ -3741,7 +3785,7 @@ fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
                     abi.decrefNodeValue(value, roc_host);
                 }
                 values.deinit(host.gpa.allocator());
-                return .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false };
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
             }
 
             const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
@@ -3750,7 +3794,7 @@ fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
             defer abi.decrefNodeValue(list_value, roc_host);
             recordDerivedCall(host);
             const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, list_value);
-            return updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value);
+            return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
     }
 }
@@ -3759,8 +3803,8 @@ fn evalHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSi
     return evalHostSignalRecord(host, roc_host, signal.record);
 }
 
-fn evalDirtyHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64) HostSignalEvalResult {
-    return evalDirtyHostSignalRecord(host, roc_host, signal.record, dirty_source_node_ids);
+fn evalDirtyHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+    return evalDirtyHostSignalRecord(host, roc_host, signal.record, dirty_source_node_ids, dirty_generation);
 }
 
 fn hostSignalRecordEqCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
@@ -3814,8 +3858,8 @@ fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
     return changed;
 }
 
-fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64) bool {
-    const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids);
+fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+    const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids, dirty_generation);
     if (!result.changed) {
         abi.decrefNodeValue(result.value, roc_host);
         return false;
@@ -3824,8 +3868,8 @@ fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
     return applyRenderTextField(host, elem_id, field, nodeValueText(&result.value));
 }
 
-fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64) bool {
-    const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids);
+fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+    const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids, dirty_generation);
     if (!result.changed) {
         abi.decrefNodeValue(result.value, roc_host);
         return false;
@@ -3843,7 +3887,7 @@ fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
     return false;
 }
 
-fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) bool {
+fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
     for (dirty_source_node_ids) |source_node_id| {
         const route_index: usize = @intCast(source_node_id);
         if (route_index >= host.active_structural_signal_routes.items.len) continue;
@@ -3852,7 +3896,7 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
             switch (route.kind) {
                 .when => {
                     const desc = &host.active_stream.whens.items[route.index];
-                    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.condition, dirty_source_node_ids);
+                    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.condition, dirty_source_node_ids, dirty_generation);
                     if (!result.changed) {
                         abi.decrefNodeValue(result.value, roc_host);
                         continue;
@@ -3861,7 +3905,7 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
                 },
                 .each => {
                     const desc = &host.active_stream.eaches.items[route.index];
-                    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.items, dirty_source_node_ids);
+                    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.items, dirty_source_node_ids, dirty_generation);
                     if (!result.changed) {
                         abi.decrefNodeValue(result.value, roc_host);
                         continue;
@@ -3874,7 +3918,7 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
     return false;
 }
 
-fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) CommandCounts {
+fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64) CommandCounts {
     var counts: CommandCounts = .{};
 
     for (dirty_source_node_ids) |source_node_id| {
@@ -3884,13 +3928,13 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
                 switch (route.kind) {
                     .text_node => {
                         const desc = &host.active_stream.signal_text_nodes.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value, dirty_source_node_ids)) {
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                             counts.addTextField(.text);
                         }
                     },
                     .text_attr => {
                         const desc = &host.active_stream.signal_text_attrs.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids)) {
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                             counts.addTextField(desc.field);
                         }
                     },
@@ -3901,7 +3945,7 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
         if (route_index < host.active_bool_signal_routes.items.len) {
             for (host.active_bool_signal_routes.items[route_index].items) |route| {
                 const desc = &host.active_stream.signal_bool_attrs.items[route.index];
-                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids)) {
+                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                     counts.addBoolField(desc.field);
                 }
             }
@@ -4368,11 +4412,12 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 
     if (stats) |s| {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
-        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
+        const dirty_generation = host.nextDirtySignalGeneration();
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, dirty_generation)) {
             renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, &s.dispatch_apply_ns, &s.commands);
         } else {
             const apply_start_ns = benchmarkNowNs();
-            const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
+            const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, dirty_generation);
             s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
             s.commands.addAll(counts);
             finishHostMetrics(host);
@@ -4380,10 +4425,11 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         s.actions += 1;
     } else {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
-        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
+        const dirty_generation = host.nextDirtySignalGeneration();
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, dirty_generation)) {
             renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, null, null);
         } else {
-            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
+            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, dirty_generation);
             finishHostMetrics(host);
         }
     }
@@ -5485,10 +5531,11 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
-    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+    const dirty_generation = host.nextDirtySignalGeneration();
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
 
     const patch_start = host.render_metrics.patches_emitted;
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
@@ -5498,7 +5545,8 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     try std.testing.expectEqual(@as(usize, 2), host.dom_elements.items.len);
     try std.testing.expectEqualStrings("second", host.dom_elements.items[1].text.?);
 
-    const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    const unchanged_generation = host.nextDirtySignalGeneration();
+    const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, unchanged_generation);
     try std.testing.expectEqual(@as(u64, 0), unchanged_counts.total);
 }
 
@@ -5539,11 +5587,65 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
 
     const dirty_source_node_ids = [_]u64{state_id};
     const prune_start = host.pending_roc_metrics.propagation_prunes;
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
     try std.testing.expectEqualStrings("stable", host.dom_elements.items[1].text.?);
+}
+
+test "signals host evaluates shared dirty record once per batch" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const shared_label = testNodeStableStrMapExpr(&roc_host, testNodeRefExpr(state_token));
+    abi.increfNodeSignalExpr(shared_label, 1);
+    const children = [_]abi.Elem{
+        testNodeTextSignal(&roc_host, shared_label),
+        testNodeTextSignal(&roc_host, shared_label),
+    };
+    const root = testNodeStateWithTokenAndInitial(
+        &roc_host,
+        state_token,
+        nodeValueI64(1),
+        testElement(&roc_host, &children),
+    );
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expectEqual(@as(u64, 2), initial_counts.set_text);
+    try std.testing.expectEqualStrings("stable", host.dom_elements.items[2].text.?);
+    try std.testing.expectEqualStrings("stable", host.dom_elements.items[3].text.?);
+    try std.testing.expect(host.active_stream.signal_text_nodes.items[0].signal.record == host.active_stream.signal_text_nodes.items[1].signal.record);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
+    host.states.items[state_index].cell.value = nodeValueI64(2);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const prune_start = host.pending_roc_metrics.propagation_prunes;
+    const derived_start = host.pending_roc_metrics.derived_calls_into_roc;
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
+
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
+    try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
+    try std.testing.expectEqual(derived_start + 1, host.pending_roc_metrics.derived_calls_into_roc);
 }
 
 test "signals host skips parent transform when dirty child output is unchanged" {
@@ -5585,7 +5687,8 @@ test "signals host skips parent transform when dirty child output is unchanged" 
     const dirty_source_node_ids = [_]u64{state_id};
     const prune_start = host.pending_roc_metrics.propagation_prunes;
     const derived_start = host.pending_roc_metrics.derived_calls_into_roc;
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
@@ -5658,7 +5761,8 @@ test "signals host marks dirty structural sources for structural patching" {
     host.states.items[state_index].cell.value = nodeValueBool(false);
     host.states.items[state_index].version += 1;
     const dirty_source_node_ids = [_]u64{state_id};
-    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+    const dirty_generation = host.nextDirtySignalGeneration();
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
 
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);
@@ -5715,7 +5819,8 @@ test "signals host prunes structural render when retained condition equality is 
     const dirty_source_node_ids = [_]u64{state_id};
     const prune_start = host.pending_roc_metrics.propagation_prunes;
 
-    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+    const dirty_generation = host.nextDirtySignalGeneration();
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
     try std.testing.expect(activeTextElementId(&host, "true branch") != null);
     try std.testing.expect(activeTextElementId(&host, "false branch") == null);
@@ -5839,7 +5944,8 @@ test "signals host rebuilds unchanged row when nested structural source is dirty
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
-    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+    const dirty_generation = host.nextDirtySignalGeneration();
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
 
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);

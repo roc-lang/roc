@@ -21,8 +21,8 @@ history.
   those tokens into shared retained `HostSignalRecord`s within the active
   descriptor stream.
 - Shared signal records retain their transform/equality thunks and cache their
-  current bridge output. Dirty evaluation prunes parent transforms when a child
-  output is unchanged.
+  current bridge output. Dirty evaluation memoizes each record once per dirty
+  batch and prunes parent transforms when a child output is unchanged.
 - Dirty leaf and structural checks route by source node id through
   `active_text_signal_routes`, `active_bool_signal_routes`, and
   `active_structural_signal_routes`.
@@ -40,10 +40,10 @@ history.
    in `Signal.roc` and `Ui.roc`. The design requires opaque typed value cells
    owned by the exact generated thunks for that typed edge.
 2. **Signal records are not yet the final graph node table.** The host now shares
-   derived records by explicit token, but dirty propagation is still route-driven
-   and recursively evaluates records from each sink/structural site. The design
-   requires explicit input ids, dependent edges, ranks, cached typed values, and
-   one recompute per dirty batch.
+   derived records by explicit token and memoizes dirty evaluation per batch, but
+   propagation is still route-driven and recursively entered from
+   sinks/structural sites. The design requires explicit input ids, dependent
+   edges, ranks, and cached typed values in a host graph table.
 3. **Structural no-rebuild is still incomplete.** Current structural updates are
    DOM patches rather than DOM resets, but changed structural outputs still
    rebuild descriptor streams. Structural sites need host-owned records so dirty
@@ -63,9 +63,9 @@ Take one slice at a time and commit each green result.
    `Ui.state` source value -> one `Signal.map`/`map2` -> one signal-backed sink.
    Replace the bridge `NodeValue` on that path with an opaque host-owned value
    plus the edge's retained equality thunk.
-2. **Dirty pass over shared signal records.** Add explicit dependent edges/ranks
-   for shared records so one source update recomputes each affected record once,
-   then fans out to sinks/structural sites from the record's equality result.
+2. **Dependency graph for shared signal records.** Add explicit dependent
+   edges/ranks so a dirty source walks affected records directly, then fans out
+   to sinks/structural sites from each record's equality result.
 3. **Typed keyed-row data.** Move `Ui.each` key and item storage off the bridge
    and onto typed value cells. Row reuse must keep using explicit key and item
    equality thunks.
