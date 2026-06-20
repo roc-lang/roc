@@ -268,6 +268,8 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
         \\Commands:
         \\  :help               Show this help
         \\  :quit, :q, :exit    Exit the REPL
+        \\  :defs               Print the currently known definitions
+        \\  :t <identifier>     Print the type of a given identifier
         \\
     );
 }
