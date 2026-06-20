@@ -759,16 +759,6 @@ const HostNodeDescriptorStream = struct {
     }
 };
 
-const HostRenderTextSink = struct {
-    elem_id: u64,
-    field: RenderTextField,
-};
-
-const HostRenderBoolSink = struct {
-    elem_id: u64,
-    field: RenderBoolField,
-};
-
 const HostActiveTextSignalSinkKind = enum {
     text_node,
     text_attr,
@@ -1277,9 +1267,6 @@ const HostEnv = struct {
     active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
     active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
     active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
-    render_text_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderTextSink)) = .empty,
-    render_bool_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderBoolSink)) = .empty,
-    render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
     next_elem_id: u64 = 0,
@@ -1630,80 +1617,6 @@ const HostEnv = struct {
                 }) catch std.process.exit(1);
             }
         }
-    }
-
-    fn clearRenderSinkRoutes(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        for (self.render_text_sink_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.render_text_sink_routes.items.len = 0;
-
-        for (self.render_bool_sink_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.render_bool_sink_routes.items.len = 0;
-
-        self.render_structural_signals.items.len = 0;
-    }
-
-    fn resetRenderSinkRoutes(self: *HostEnv) void {
-        self.clearRenderSinkRoutes();
-
-        const allocator = self.gpa.allocator();
-        const signal_count = self.signal_descriptors.items.len;
-        self.render_text_sink_routes.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
-        self.render_bool_sink_routes.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
-        self.render_structural_signals.ensureTotalCapacity(allocator, signal_count) catch std.process.exit(1);
-
-        var index: usize = 0;
-        while (index < signal_count) : (index += 1) {
-            self.render_text_sink_routes.appendAssumeCapacity(.empty);
-            self.render_bool_sink_routes.appendAssumeCapacity(.empty);
-            self.render_structural_signals.appendAssumeCapacity(false);
-        }
-    }
-
-    fn validateRenderSinkSignalId(self: *HostEnv, signal_id: u64) usize {
-        if (signal_id >= self.signal_descriptors.items.len) {
-            failHost("Roc render sink descriptor referenced an unknown signal id");
-        }
-        const signal_index: usize = @intCast(signal_id);
-        const signal = self.signal_descriptors.items[signal_index];
-        if (signal.signal_id != signal_id) {
-            failHost("host signal registry is not indexed by signal id");
-        }
-        return signal_index;
-    }
-
-    fn appendRenderTextSink(self: *HostEnv, signal_id: u64, elem_id: u64, field: RenderTextField) void {
-        const signal_index = self.validateRenderSinkSignalId(signal_id);
-        if (signal_index >= self.render_text_sink_routes.items.len) {
-            failHost("host render text sink routes are not indexed by signal id");
-        }
-        self.render_text_sink_routes.items[signal_index].append(self.gpa.allocator(), .{
-            .elem_id = elem_id,
-            .field = field,
-        }) catch std.process.exit(1);
-    }
-
-    fn appendRenderBoolSink(self: *HostEnv, signal_id: u64, elem_id: u64, field: RenderBoolField) void {
-        const signal_index = self.validateRenderSinkSignalId(signal_id);
-        if (signal_index >= self.render_bool_sink_routes.items.len) {
-            failHost("host render bool sink routes are not indexed by signal id");
-        }
-        self.render_bool_sink_routes.items[signal_index].append(self.gpa.allocator(), .{
-            .elem_id = elem_id,
-            .field = field,
-        }) catch std.process.exit(1);
-    }
-
-    fn markRenderStructuralSignal(self: *HostEnv, signal_id: u64) void {
-        const signal_index = self.validateRenderSinkSignalId(signal_id);
-        if (signal_index >= self.render_structural_signals.items.len) {
-            failHost("host render structural signal table is not indexed by signal id");
-        }
-        self.render_structural_signals.items[signal_index] = true;
     }
 
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
@@ -2893,10 +2806,6 @@ const HostEnv = struct {
         self.active_text_signal_routes.deinit(allocator);
         self.active_bool_signal_routes.deinit(allocator);
         self.active_structural_signal_routes.deinit(allocator);
-        self.clearRenderSinkRoutes();
-        self.render_text_sink_routes.deinit(allocator);
-        self.render_bool_sink_routes.deinit(allocator);
-        self.render_structural_signals.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -3805,7 +3714,6 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
     counts.addHostReset();
     traceHostDomReset();
     resetSimulatedDom(host);
-    host.resetRenderSinkRoutes();
 
     for (stream.render_nodes.items) |node| {
         switch (node.kind) {
