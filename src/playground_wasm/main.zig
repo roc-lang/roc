@@ -811,7 +811,7 @@ const ReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn resolveReplInputKind(line: []const u8) parse.Parser.Error!?ReplInputKind {
+fn resolveReplInputKind(line: []const u8) std.mem.Allocator.Error!?ReplInputKind {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -843,7 +843,7 @@ fn resolveReplInputKind(line: []const u8) parse.Parser.Error!?ReplInputKind {
     };
 }
 
-fn replDefinitionIdentity(line: []const u8) parse.Parser.Error!?ReplDefinitionIdentity {
+fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinitionIdentity {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;

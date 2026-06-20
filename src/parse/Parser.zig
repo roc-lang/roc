@@ -233,9 +233,6 @@ fn looksLikeAppliedTagDestructure(self: *Parser) bool {
     return self.peekN(lookahead) == .OpAssign;
 }
 
-/// The error set that methods of the Parser return
-pub const Error = std.mem.Allocator.Error;
-
 const ExprParentKind = enum(u16) {
     statement_expr_body = 0x012d,
     statement_decl_body = 0x7b91,
@@ -314,7 +311,7 @@ fn enterDeclScope(
     kind: DeclIndex.ScopeKind,
     owner: DeclIndex.ScopeOwner,
     region: AST.TokenizedRegion,
-) Error!DeclIndex.ScopeIdx {
+) std.mem.Allocator.Error!DeclIndex.ScopeIdx {
     const scope_idx = try self.decl_index.enterScope(kind, owner, .{
         .start = region.start,
         .end = region.end,
@@ -333,7 +330,7 @@ fn exitDeclScope(
     self: *Parser,
     scope_idx: DeclIndex.ScopeIdx,
     region: AST.TokenizedRegion,
-) Error!void {
+) std.mem.Allocator.Error!void {
     self.scope_pending_annos.items[@intFromEnum(scope_idx)] = null;
     try self.decl_index.exitScope(scope_idx, .{
         .start = region.start,
@@ -372,7 +369,7 @@ fn recordStatementDecl(
     statement: AST.Statement,
     type_dependencies: DeclIndex.Span,
     type_path: ?DeclIndex.TypePathIdx,
-) Error!void {
+) std.mem.Allocator.Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
     const owner_type_path = self.currentAssociatedOwnerPath();
 
@@ -507,7 +504,7 @@ fn recordStatementDecl(
     if (self.currentPendingAnno()) |pending| pending.* = null;
 }
 
-fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx {
+fn addStatement(self: *Parser, statement: AST.Statement) std.mem.Allocator.Error!AST.Statement.Idx {
     return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
 }
 
@@ -516,7 +513,7 @@ inline fn addDeclStatement(
     pattern: AST.Pattern.Idx,
     body: AST.Expr.Idx,
     region: AST.TokenizedRegion,
-) Error!AST.Statement.Idx {
+) std.mem.Allocator.Error!AST.Statement.Idx {
     const idx = try self.store.addStatement(.{ .decl = .{
         .pattern = pattern,
         .body = body,
@@ -532,7 +529,7 @@ fn recordValueDecl(
     pattern_idx: AST.Pattern.Idx,
     body_idx: AST.Expr.Idx,
     region: AST.TokenizedRegion,
-) Error!void {
+) std.mem.Allocator.Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
     const owner_type_path = self.currentAssociatedOwnerPath();
 
@@ -583,7 +580,7 @@ fn addStatementWithTypeDependencies(
     self: *Parser,
     statement: AST.Statement,
     type_dependencies: DeclIndex.Span,
-) Error!AST.Statement.Idx {
+) std.mem.Allocator.Error!AST.Statement.Idx {
     const idx = try self.store.addStatement(statement);
     try self.recordStatementDecl(idx, statement, type_dependencies, null);
     return idx;
@@ -594,7 +591,7 @@ fn addTypeDeclStatement(
     statement: AST.Statement,
     type_dependencies: DeclIndex.Span,
     type_path: ?DeclIndex.TypePathIdx,
-) Error!AST.Statement.Idx {
+) std.mem.Allocator.Error!AST.Statement.Idx {
     const idx = try self.store.addStatement(statement);
     try self.recordStatementDecl(idx, statement, type_dependencies, type_path);
     return idx;
@@ -605,7 +602,7 @@ fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
 }
 
-fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) Error!void {
+fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) std.mem.Allocator.Error!void {
     for (self.store.exposedItemSlice(exposes)) |exposed_idx| {
         const exposed = self.store.getExposedItem(exposed_idx);
         const name_token: Token.Idx, const region: AST.TokenizedRegion = switch (exposed) {
@@ -621,25 +618,25 @@ fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) Erro
     }
 }
 
-fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) Error!?base.Ident.Idx {
+fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) std.mem.Allocator.Error!?base.Ident.Idx {
     const type_name = suffix.newTypeName() orelse return null;
     return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name));
 }
 
-fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) Error!void {
+fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (suffix != .none) {
         try self.pushDiagnostic(.deprecated_number_suffix, region);
     }
 }
 
 /// add a diagnostic error
-pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) Error!void {
+pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
         try self.diagnostics.append(self.gpa, .{ .tag = tag, .region = region });
     }
 }
 /// add a malformed token
-pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, start: TokenIdx) Error!T {
+pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, start: TokenIdx) std.mem.Allocator.Error!T {
     const pos = self.pos;
 
     if (self.peek() != .EndOfFile) {
@@ -702,7 +699,7 @@ fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
-pub fn runFile(self: *Parser) Error!void {
+pub fn runFile(self: *Parser) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -735,14 +732,14 @@ pub fn runFile(self: *Parser) Error!void {
 }
 
 /// Parse a Roc file header.
-pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
+pub fn runHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return try self.parseHeaderTokens();
 }
 
-fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
+fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem.Idx {
     const start = self.pos;
     switch (self.peek()) {
         .LowerIdent => {
@@ -791,12 +788,12 @@ fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
-fn parseStringExprTokens(self: *Parser) Error!AST.Expr.Idx {
+fn parseStringExprTokens(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
     std.debug.assert(self.peek() == .StringStart);
     return try self.runExprRoot(0);
 }
 
-fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
+fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField.Idx {
     const start = self.pos;
     self.expect(.LowerIdent) catch {
         return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
@@ -814,7 +811,7 @@ fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
     });
 }
 
-fn parseTypeIdentToken(self: *Parser) Error!AST.TypeAnno.Idx {
+fn parseTypeIdentToken(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     switch (self.peek()) {
         .LowerIdent, .NamedUnderscore, .Underscore => {
             const tok = self.pos;
@@ -831,7 +828,7 @@ fn parseTypeIdentToken(self: *Parser) Error!AST.TypeAnno.Idx {
     }
 }
 
-fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
+fn parseTypeHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
     self.advance();
@@ -864,7 +861,7 @@ fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
     });
 }
 
-fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
+fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Statement.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwImport);
     self.advance();
@@ -1017,7 +1014,7 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
     return statement_idx;
 }
 
-fn parseHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parseHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     return switch (self.peek()) {
         .KwApp => self.parseAppHeaderTokens(),
         .KwModule => self.parseModuleHeaderTokens(),
@@ -1040,7 +1037,7 @@ fn parseExposedCollectionTokens(
     open_error: AST.Diagnostic.Tag,
     close_error: AST.Diagnostic.Tag,
     malformed_close_error: AST.Diagnostic.Tag,
-) Error!ExposedCollectionResult {
+) std.mem.Allocator.Error!ExposedCollectionResult {
     const exposes_start = self.pos;
     if (self.peek() != .OpenSquare) {
         return .{ .malformed = .{ .tag = open_error, .pos = self.pos } };
@@ -1097,7 +1094,7 @@ inline fn parseHeaderExposedCollectionTokens(
     close_error: AST.Diagnostic.Tag,
     malformed_close_error: AST.Diagnostic.Tag,
     missing_open_pos: Token.Idx,
-) Error!ExposedCollectionResult {
+) std.mem.Allocator.Error!ExposedCollectionResult {
     if (self.peek() != .OpenSquare) {
         return .{ .malformed = .{ .tag = open_error, .pos = missing_open_pos } };
     }
@@ -1110,7 +1107,7 @@ fn parseRecordFieldCollectionTokens(
     collection_tag: Node.Tag,
     open_error: AST.Diagnostic.Tag,
     close_error: AST.Diagnostic.Tag,
-) Error!AST.Collection.Idx {
+) std.mem.Allocator.Error!AST.Collection.Idx {
     const fields_start = self.pos;
     self.expect(.OpenCurly) catch {
         return try self.pushMalformed(AST.Collection.Idx, open_error, start);
@@ -1134,7 +1131,7 @@ fn parseRecordFieldCollectionTokens(
     });
 }
 
-fn parseModuleHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parseModuleHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwModule);
     self.advance();
@@ -1148,7 +1145,7 @@ fn parseModuleHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     } });
 }
 
-fn parseHostedHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parseHostedHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwHosted);
     self.advance();
@@ -1162,7 +1159,7 @@ fn parseHostedHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     } });
 }
 
-fn parsePackageHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPackage);
     self.advance();
@@ -1186,7 +1183,7 @@ fn parsePackageHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     } });
 }
 
-fn parseAppHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     var platform: ?AST.RecordField.Idx = null;
     const start = self.pos;
     std.debug.assert(self.peek() == .KwApp);
@@ -1277,7 +1274,7 @@ const RequiresEntriesResult = union(enum) {
     malformed: AST.Diagnostic.Tag,
 };
 
-fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
+fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEntriesResult {
     self.expect(.OpenCurly) catch {
         return .{ .malformed = .expected_requires_rigids_open_curly };
     };
@@ -1380,7 +1377,7 @@ fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
     return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
 }
 
-fn parsePatternString(self: *Parser) Error!AST.Pattern.Idx {
+fn parsePatternString(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .StringStart);
     self.advance();
@@ -1470,7 +1467,7 @@ fn parsePatternString(self: *Parser) Error!AST.Pattern.Idx {
     }
 }
 
-fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
+fn parseTargetFileTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetFile.Idx {
     const start = self.pos;
     switch (self.peek()) {
         .StringStart => {
@@ -1497,7 +1494,7 @@ fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
     }
 }
 
-fn parseTargetFileList(self: *Parser) (Error || error{ExpectedNotFound})!AST.TargetFile.Span {
+fn parseTargetFileList(self: *Parser) (std.mem.Allocator.Error || error{ExpectedNotFound})!AST.TargetFile.Span {
     self.expect(.OpenSquare) catch {
         return error.ExpectedNotFound;
     };
@@ -1517,7 +1514,7 @@ fn parseTargetFileList(self: *Parser) (Error || error{ExpectedNotFound})!AST.Tar
     return try self.store.targetFileSpanFrom(files_top);
 }
 
-fn parseTargetConfigValueTokens(self: *Parser) Error!AST.TargetConfigValue.Idx {
+fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
     const start = self.pos;
     switch (self.peek()) {
         .Int => {
@@ -1580,7 +1577,7 @@ fn parseTargetConfigValueTokens(self: *Parser) Error!AST.TargetConfigValue.Idx {
     }
 }
 
-fn parseTargetConfigEntryTokens(self: *Parser) Error!AST.TargetConfigEntry.Idx {
+fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
     const start = self.pos;
     if (self.peek() != .LowerIdent) {
         return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_name, start);
@@ -1615,7 +1612,7 @@ fn parseTargetConfigEntryTokens(self: *Parser) Error!AST.TargetConfigEntry.Idx {
     });
 }
 
-fn parseTargetConfigTokens(self: *Parser) Error!AST.TargetConfig.Idx {
+fn parseTargetConfigTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfig.Idx {
     const start = self.pos;
     self.expect(.OpenCurly) catch {
         return try self.pushMalformed(AST.TargetConfig.Idx, .expected_targets_open_curly, start);
@@ -1641,7 +1638,7 @@ fn parseTargetConfigTokens(self: *Parser) Error!AST.TargetConfig.Idx {
     });
 }
 
-fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
+fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const start = self.pos;
     self.expect(.OpColon) catch {
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
@@ -1709,7 +1706,7 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
     });
 }
 
-fn parseSymbolMapEntryTokens(self: *Parser) Error!AST.SymbolMapEntry.Idx {
+fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
     const start = self.pos;
     self.expect(.StringStart) catch {
         return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
@@ -1762,7 +1759,7 @@ fn parseSymbolMapCollectionTokens(
     self: *Parser,
     open_tag: AST.Diagnostic.Tag,
     close_tag: AST.Diagnostic.Tag,
-) Error!AST.SymbolMapEntry.Span {
+) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
     self.expect(.OpenCurly) catch {
         _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, open_tag, self.pos);
         return .{ .span = .{ .start = 0, .len = 0 } };
@@ -1782,7 +1779,7 @@ fn parseSymbolMapCollectionTokens(
     return try self.store.symbolMapEntrySpanFrom(top);
 }
 
-fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPlatform);
     self.advance();
@@ -1864,7 +1861,7 @@ const StatementType = enum { top_level, in_body, in_associated_block };
 /// Parse a top level roc statement
 ///
 /// e.g. `import Foo`
-pub fn runTopLevelStatement(self: *Parser) Error!AST.Statement.Idx {
+pub fn runTopLevelStatement(self: *Parser) std.mem.Allocator.Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1874,7 +1871,7 @@ pub fn runTopLevelStatement(self: *Parser) Error!AST.Statement.Idx {
 /// parse a in-body roc statement
 ///
 /// e.g. `foo = 2 + x`
-pub fn runStatement(self: *Parser) Error!AST.Statement.Idx {
+pub fn runStatement(self: *Parser) std.mem.Allocator.Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1884,14 +1881,14 @@ pub fn runStatement(self: *Parser) Error!AST.Statement.Idx {
 /// parse a roc statement
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
-fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Statement.Idx {
+fn runStatementByType(self: *Parser, statementType: StatementType) std.mem.Allocator.Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return try self.runStatementRoot(statementType);
 }
 
-fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
+fn addTopLevelUnexpectedStatement(self: *Parser) std.mem.Allocator.Error!AST.Statement.Idx {
     if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
         return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
     }
@@ -1905,14 +1902,14 @@ const Alternatives = enum {
 };
 
 /// Run the token parser kernel with a pattern goal and return the completed pattern.
-pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+pub fn runPattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return try self.runPatternRoot(alternatives);
 }
 
-fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
+fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1951,7 +1948,7 @@ fn CurrentStack(comptime State: type) type {
             self.stack.deinit(allocator);
         }
 
-        inline fn enter(self: *Self, allocator: std.mem.Allocator, state: State) Error!void {
+        inline fn enter(self: *Self, allocator: std.mem.Allocator, state: State) std.mem.Allocator.Error!void {
             if (self.current) |current| {
                 try self.stack.append(allocator, current);
             }
@@ -2400,42 +2397,42 @@ const OpenSyntaxStack = struct {
         return stack.items[stack.items.len - 1];
     }
 
-    inline fn pushWithKind(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushWithKind(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         const stack = self.payloadStack(Payload);
         try stack.append(allocator, payload);
         errdefer _ = stack.pop();
         try kind_stack.append(allocator, kind);
     }
 
-    inline fn pushExpr(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushExpr(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.expr_kinds, kind, Payload, payload);
     }
 
-    inline fn pushPattern(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushPattern(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.pattern_kinds, kind, Payload, payload);
     }
 
-    inline fn pushType(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushType(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.type_kinds, kind, Payload, payload);
     }
 
-    inline fn pushWhere(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushWhere(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.where_kinds, kind, Payload, payload);
     }
 
-    inline fn pushStatement(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushStatement(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.statement_kinds, kind, Payload, payload);
     }
 
-    inline fn pushAssociated(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushAssociated(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
         try self.pushWithKind(allocator, &self.associated_kinds, kind, Payload, payload);
     }
 
-    inline fn pushExprMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) Error!void {
+    inline fn pushExprMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) std.mem.Allocator.Error!void {
         try self.expr_kinds.append(allocator, kind);
     }
 
-    inline fn pushPatternMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) Error!void {
+    inline fn pushPatternMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) std.mem.Allocator.Error!void {
         try self.pattern_kinds.append(allocator, kind);
     }
 
@@ -2655,7 +2652,7 @@ const TypeFnAfterRetState = struct {
 
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
-fn readQualificationChain(self: *Parser) Error!QualificationResult {
+fn readQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
@@ -2699,7 +2696,7 @@ fn readQualificationChain(self: *Parser) Error!QualificationResult {
 }
 
 /// Parse a Roc expression with the lowest binding power.
-pub fn runExpr(self: *Parser) Error!AST.Expr.Idx {
+pub fn runExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2707,7 +2704,7 @@ pub fn runExpr(self: *Parser) Error!AST.Expr.Idx {
 }
 
 /// Parse a Roc expression with a caller-provided minimum binding power.
-pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+pub fn runExprBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2738,23 +2735,23 @@ fn ExprKernelReturn(comptime root: ExprKernelRoot) type {
     };
 }
 
-fn runExprRoot(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+fn runExprRoot(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Expr.Idx {
     return try self.runExprStatementKernel(.expr, min_bp, undefined, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runStatementRoot(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+fn runStatementRoot(self: *Parser, statement_type: StatementType) std.mem.Allocator.Error!AST.Statement.Idx {
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
     return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
 }
 
-fn runPatternRoot(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+fn runPatternRoot(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
     return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
 }
 
-fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
 }
 
@@ -2767,7 +2764,7 @@ fn runExprStatementKernel(
     owner_type_path: ?DeclIndex.TypePathIdx,
     root_pattern_alternatives: Alternatives,
     root_type_args: TyFnArgs,
-) Error!ExprKernelReturn(root) {
+) std.mem.Allocator.Error!ExprKernelReturn(root) {
     const open_allocator = self.gpa;
     const expr_scratch = &self.expr_kernel_scratch;
     std.debug.assert(expr_scratch.isEmpty());
@@ -6039,14 +6036,14 @@ fn runExprStatementKernel(
 }
 
 /// Run the token parser kernel with a type-annotation goal and return the completed type.
-pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return try self.runTypeAnnoRoot(looking_for_args);
 }
 
-fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
+fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
     try self.recordTypeDependenciesFromAnnoWorklist(anno_idx, .tag_payloads_only);
 }
 
@@ -6066,7 +6063,7 @@ inline fn appendTypeDependencyAnnoSlice(
     annos: []const AST.TypeAnno.Idx,
     first: usize,
     mode: TypeDependencyWalkMode,
-) Error!void {
+) std.mem.Allocator.Error!void {
     var i = annos.len;
     while (i > first) {
         i -= 1;
@@ -6078,7 +6075,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
     self: *Parser,
     root: AST.TypeAnno.Idx,
     mode: TypeDependencyWalkMode,
-) Error!void {
+) std.mem.Allocator.Error!void {
     var pending_allocator_state = std.heap.stackFallback(4096, self.gpa);
     const pending_allocator = pending_allocator_state.get();
     var pending: std.ArrayList(TypeDependencyWalkItem) = .empty;
@@ -6148,7 +6145,7 @@ fn recordTypeDependencyFromQualifiedTokens(
     self: *Parser,
     qualifiers: Token.Span,
     final_token: Token.Idx,
-) Error!void {
+) std.mem.Allocator.Error!void {
     const top = self.scratch_idents.top();
     defer self.scratch_idents.clearFrom(top);
 
@@ -6170,7 +6167,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     ...
 ///     <stmtN>
 /// }
-pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
     return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
@@ -6179,7 +6176,7 @@ fn finishRecordExpr(
     start: Token.Idx,
     fields: AST.RecordField.Span,
     ext: ?AST.Expr.Idx,
-) Error!AST.Expr.Idx {
+) std.mem.Allocator.Error!AST.Expr.Idx {
     if (ext == null and self.peek() == .NoSpaceDotUpperIdent) {
         const suffix_start = self.pos;
         var final_token = self.pos;

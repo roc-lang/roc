@@ -13,13 +13,10 @@ const LIR = core.LIR;
 const LirProgram = core.Program;
 const LirStore = core.LirStore;
 
-/// Errors that can occur while compacting reachable LIR procs.
-pub const Error = Allocator.Error;
-
 /// Remove proc specs unreachable from `root_procs` and explicit constant
 /// callable plans, then rewrite every retained proc reference to the compact
 /// id space.
-pub fn run(result: *LirProgram.Result) Error!void {
+pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     var pass = try Pass.init(result);
     defer pass.deinit();
     try pass.run();
@@ -38,7 +35,7 @@ const Pass = struct {
     proc_queue: std.ArrayList(LIR.LirProcSpecId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
 
-    fn init(result: *LirProgram.Result) Error!Pass {
+    fn init(result: *LirProgram.Result) Allocator.Error!Pass {
         const allocator = result.store.allocator;
         const proc_count = result.store.proc_specs.items.len;
         const stmt_count = result.store.cf_stmts.items.len;
@@ -94,7 +91,7 @@ const Pass = struct {
         self.allocator.free(self.reachable);
     }
 
-    fn run(self: *Pass) Error!void {
+    fn run(self: *Pass) Allocator.Error!void {
         for (self.result.root_procs.items) |proc| {
             try self.markProc(proc);
         }
@@ -121,7 +118,7 @@ const Pass = struct {
         self.verifyReachableProcRefs();
     }
 
-    fn markProc(self: *Pass, proc: LIR.LirProcSpecId) Error!void {
+    fn markProc(self: *Pass, proc: LIR.LirProcSpecId) Allocator.Error!void {
         const index = @intFromEnum(proc);
         if (index >= self.reachable.len) reachableProcInvariant("proc reference exceeds proc_specs len");
         if (self.reachable[index]) return;
@@ -129,13 +126,13 @@ const Pass = struct {
         try self.proc_queue.append(self.allocator, proc);
     }
 
-    fn drainProcQueue(self: *Pass) Error!void {
+    fn drainProcQueue(self: *Pass) Allocator.Error!void {
         while (self.proc_queue.pop()) |proc| {
             try self.markProcBodyEdges(proc);
         }
     }
 
-    fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Error!void {
+    fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.body) |body| try self.stmt_stack.append(self.allocator, body);
         for (self.store.getJoinPointSpan(proc.join_points)) |join_point| {
@@ -211,11 +208,11 @@ const Pass = struct {
         }
     }
 
-    fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Error!void {
+    fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
         try self.stmt_stack.append(self.allocator, stmt);
     }
 
-    fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Error!void {
+    fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Allocator.Error!void {
         const index = @intFromEnum(plan_id);
         if (index >= self.result.const_plans.items.len) reachableProcInvariant("const plan reference exceeds const_plans len");
         if (self.visited_plans[index]) return;
@@ -242,14 +239,14 @@ const Pass = struct {
         }
     }
 
-    fn markFnSet(self: *Pass, set_id: LirProgram.FnSetId) Error!void {
+    fn markFnSet(self: *Pass, set_id: LirProgram.FnSetId) Allocator.Error!void {
         const set = self.result.fn_sets.items[@intFromEnum(set_id)];
         for (set.variants) |variant| {
             for (variant.captures) |capture| try self.markConstPlan(capture.plan);
         }
     }
 
-    fn markErasedFns(self: *Pass, set_id: LirProgram.ErasedFnsId) Error!void {
+    fn markErasedFns(self: *Pass, set_id: LirProgram.ErasedFnsId) Allocator.Error!void {
         const set = self.result.erased_fns.items[@intFromEnum(set_id)];
         for (set.entries) |entry| {
             try self.markProc(entry.entry);
@@ -275,7 +272,7 @@ const Pass = struct {
         }
     }
 
-    fn remapReachableProcBodies(self: *Pass) Error!void {
+    fn remapReachableProcBodies(self: *Pass) Allocator.Error!void {
         @memset(self.visited_stmts, false);
         for (self.store.proc_specs.items, 0..) |proc, index| {
             if (!self.reachable[index]) continue;
@@ -284,7 +281,7 @@ const Pass = struct {
         }
     }
 
-    fn remapStmtProcRefs(self: *Pass, body: LIR.CFStmtId) Error!void {
+    fn remapStmtProcRefs(self: *Pass, body: LIR.CFStmtId) Allocator.Error!void {
         try self.stmt_stack.append(self.allocator, body);
         while (self.stmt_stack.pop()) |stmt_id| {
             const stmt_index = @intFromEnum(stmt_id);
@@ -405,7 +402,7 @@ const Pass = struct {
         }
     }
 
-    fn remapErasedFns(self: *Pass) Error!void {
+    fn remapErasedFns(self: *Pass) Allocator.Error!void {
         for (self.result.erased_fns.items) |*set| {
             var kept_count: usize = 0;
             for (set.entries) |entry| {
