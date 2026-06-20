@@ -273,8 +273,8 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
 }
 
 fn printDefs(self: *ReplSession) anyerror![]u8 {
-    var output = std.ArrayList(u8).empty;
-    errdefer output.deinit(self.allocator);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(self.allocator);
 
     var ret = try self.initParsedResources();
     defer ret.deinit(self.allocator);
@@ -290,7 +290,7 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
                 const def_idx = getDefOfName(env, name) orelse continue;
                 try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
 
-                try output.print(
+                try out.print(
                     self.allocator,
                     "\x1b[90m{s} : {s}\x1b[0m\n{s}\n",
                     .{ name, tw.get(), item.source },
@@ -298,15 +298,15 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
             },
             .annotation => {
                 // italics, usually succeeded by a .value let-binding
-                try output.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
             },
             .type_decl, .import => {
-                try output.print(self.allocator, "{s}\n", .{item.source});
+                try out.print(self.allocator, "{s}\n", .{item.source});
             },
         }
     }
 
-    return try output.toOwnedSlice(self.allocator);
+    return try out.toOwnedSlice(self.allocator);
 }
 
 fn printTypeOfVar(self: *ReplSession, name: []const u8) anyerror![]u8 {
