@@ -1744,7 +1744,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
-        if (args.opt == .dev) {
+        if (useDefaultAppSharedMemoryShim(args)) {
             return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
         }
         return rocRunDefaultApp(ctx, args, source);
@@ -3086,6 +3086,17 @@ fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
     return selected.toCpuArch() == native.toCpuArch() and
         selected.toOsTag() == native.toOsTag() and
         selected.ptrBitWidth() == native.ptrBitWidth();
+}
+
+fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
+    if (args.opt != .dev) return false;
+    if (args.target != null) return true;
+
+    const native_target = RocTarget.detectNative();
+    const default_target = defaultRunShimTarget(native_target);
+    return devShimTargetCompatible(default_target, native_target) and
+        default_target.toOsTag() == .linux and
+        DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
