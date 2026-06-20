@@ -551,8 +551,10 @@ retained initializer thunk, and the host calls that thunk only when a new state
 node is created. This matches the target `ValueInitThunk` ownership shape while
 the thunk body still returns the current internal `NodeValue` bridge value.
 `Signal.const` and row item signals now use the same retained initializer-thunk
-shape through `SignalExpr.ConstValue`, so constants no longer embed direct
-`NodeValue` payloads in signal descriptors.
+shape through `SignalExpr.ConstValue`, and `ConstValue` now carries its own
+retained output equality thunk, so constants no longer embed direct `NodeValue`
+payloads in signal descriptors and signal caches no longer need a nullable
+equality edge.
 `Signal.combine` now also carries a retained output thunk; the host still uses
 the temporary `NodeValue` list as the current bridge input, but the output edge
 is owned by the call-site thunk rather than by host-side output construction.

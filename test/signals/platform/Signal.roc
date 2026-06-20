@@ -16,7 +16,12 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	from_expr = |expr| { expr: Box.box(expr) }
 
 	## A constant signal.
-	const : a -> Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+	const : a -> Signal(a)
+		where [
+			a.encode : a, NodeValue -> Try(NodeValue, []),
+			a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+			a.is_eq : a, a -> Bool,
+		]
 	const = |value| {
 		init : NodeValue -> NodeValue
 		init = |_unit| {
@@ -24,7 +29,33 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				Ok(encoded) => encoded
 			}
 		}
-		{ expr: Box.box(Node.SignalExpr.ConstValue(Box.box(init))) }
+		eq : NodeValue, NodeValue -> Bool
+		eq = |left_nv, right_nv| {
+			A : a
+			left : a
+			left =
+				match A.decode(left_nv, NodeValue.format) {
+					(Ok(decoded), _) => decoded
+					(Err(_), _) => {
+						crash "Signal.const equality received a left value that does not match the output type"
+					}
+				}
+			right : a
+			right =
+				match A.decode(right_nv, NodeValue.format) {
+					(Ok(decoded), _) => decoded
+					(Err(_), _) => {
+						crash "Signal.const equality received a right value that does not match the output type"
+					}
+				}
+			left.is_eq(right)
+		}
+		{
+			expr: Box.box(Node.SignalExpr.ConstValue(
+				Box.box(init),
+				Box.box(eq),
+			)),
+		}
 	}
 
 	## Derived signal. The transform is a typed `a -> b`; we wrap it to decode the

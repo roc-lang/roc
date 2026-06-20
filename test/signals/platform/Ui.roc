@@ -241,7 +241,13 @@ Ui := [].{
 			}
 			row_item : NodeValue -> NodeValue
 			row_item = |_unit| item_nv
-			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(Box.box(row_item))))
+			row(
+				key,
+				Signal.from_expr(Node.SignalExpr.ConstValue(
+					Box.box(row_item),
+					Box.box(item_eq_nv),
+				)),
+			)
 		}
 		Elem.Each(
 			{

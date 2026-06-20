@@ -135,7 +135,7 @@ const HostSignalDependentsRoute = struct {
 
 const HostSignalCachedValue = struct {
     value: abi.NodeValue,
-    eq: ?abi.RocErasedCallable,
+    eq: abi.RocErasedCallable,
 };
 
 const HostSignalCacheSlot = union(enum) {
@@ -147,21 +147,17 @@ const HostSignalCacheSlot = union(enum) {
             .absent => {},
             .present => |cached| {
                 abi.decrefNodeValue(cached.value, roc_host);
-                if (cached.eq) |eq| {
-                    abi.decrefErasedCallable(eq, roc_host);
-                    metrics.closure_releases += 1;
-                }
+                abi.decrefErasedCallable(cached.eq, roc_host);
+                metrics.closure_releases += 1;
             },
         }
         self.* = .absent;
     }
 
-    fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: abi.NodeValue, eq: ?abi.RocErasedCallable) void {
+    fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: abi.NodeValue, eq: abi.RocErasedCallable) void {
         self.deinit(roc_host, metrics);
-        if (eq) |eq_callable| {
-            abi.increfErasedCallable(eq_callable, 1);
-            metrics.closure_retains += 1;
-        }
+        abi.increfErasedCallable(eq, 1);
+        metrics.closure_retains += 1;
         self.* = .{ .present = .{ .value = value, .eq = eq } };
     }
 
@@ -666,7 +662,7 @@ const HostNodeDescriptorStream = struct {
 fn nodeSignalExprCallableCount(expr: abi.NodeSignalExpr) u64 {
     return switch (expr.tag) {
         .Ref => 0,
-        .ConstValue => 1,
+        .ConstValue => 2,
         .Map => 2 + nodeSignalExprCallableCount(expr.payload.map._0.*),
         .Map2 => 2 + nodeSignalExprCallableCount(expr.payload.map2._0.*) + nodeSignalExprCallableCount(expr.payload.map2._1.*),
         .Combine => blk: {
@@ -2371,10 +2367,8 @@ const HostEnv = struct {
             .absent => .absent,
             .present => |cached| blk: {
                 abi.increfNodeValue(cached.value, 1);
-                if (cached.eq) |eq| {
-                    abi.increfErasedCallable(eq, 1);
-                    metrics.closure_retains += 1;
-                }
+                abi.increfErasedCallable(cached.eq, 1);
+                metrics.closure_retains += 1;
                 break :blk .{ .present = cached };
             },
         };
@@ -3306,7 +3300,7 @@ fn evalNodeSignalExprWithSources(host: *HostEnv, roc_host: *abi.RocHost, expr: a
             source_index.* += 1;
             return cloneNodeValue(host.stateValueByNodeId(node_id));
         },
-        .ConstValue => return callValueInitThunk(roc_host, expr.payload.const_value),
+        .ConstValue => return callValueInitThunk(roc_host, expr.payload.const_value._0),
         .Map => {
             const input = evalNodeSignalExprWithSources(host, roc_host, expr.payload.map._0.*, source_node_ids, source_index);
             defer abi.decrefNodeValue(input, roc_host);
@@ -3355,7 +3349,7 @@ fn evalNodeSignalExpr(host: *HostEnv, roc_host: *abi.RocHost, expr: abi.NodeSign
     return value;
 }
 
-fn signalExprCacheEqCallable(host: *HostEnv, expr: abi.NodeSignalExpr, source_node_ids: []const u64) ?abi.RocErasedCallable {
+fn signalExprCacheEqCallable(host: *HostEnv, expr: abi.NodeSignalExpr, source_node_ids: []const u64) abi.RocErasedCallable {
     return switch (expr.tag) {
         .Ref => {
             if (source_node_ids.len != 1) failHost("Ref signal equality requires exactly one source node id");
@@ -3364,7 +3358,7 @@ fn signalExprCacheEqCallable(host: *HostEnv, expr: abi.NodeSignalExpr, source_no
         .Map => expr.payload.map._2,
         .Map2 => expr.payload.map2._3,
         .Combine => expr.payload.combine._2,
-        .ConstValue => null,
+        .ConstValue => expr.payload.const_value._1,
     };
 }
 
@@ -3378,8 +3372,7 @@ fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *H
     switch (cache_slot.*) {
         .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
         .present => |cached| {
-            const eq = cached.eq orelse failHost("dirty signal cache has no equality callable");
-            const values_equal = callErasedNodeValueNodeValueToBool(roc_host, eq, cached.value, value);
+            const values_equal = callErasedNodeValueNodeValueToBool(roc_host, cached.eq, cached.value, value);
             if (values_equal) {
                 abi.decrefNodeValue(value, roc_host);
                 recordSignalPrune(host);
@@ -5542,8 +5535,18 @@ fn cloneTestBinderToken(token: HostBinderToken) HostBinderToken {
 }
 
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: abi.NodeValue) abi.NodeSignalExpr {
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
     return .{
-        .payload = .{ .const_value = testNodeValueInitialThunk(roc_host, value) },
+        .payload = .{ .const_value = .{
+            ._0 = testNodeValueInitialThunk(roc_host, value),
+            ._1 = eq,
+        } },
         .tag = .ConstValue,
     };
 }
@@ -6229,13 +6232,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host retains state equality outside descriptor stream" {
