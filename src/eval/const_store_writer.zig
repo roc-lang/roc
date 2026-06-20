@@ -216,7 +216,10 @@ pub const Writer = struct {
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
         const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, roc_list.len());
-        errdefer self.module.const_store.allocator.free(nodes);
+        // `nodes` is owned here for its whole lifetime: the store copies from it (it
+        // never frees inputs), so free on every path — build failure, append failure,
+        // and success alike.
+        defer self.module.const_store.allocator.free(nodes);
         if (layout_value.tag == .list_of_zst) {
             for (nodes) |*node| node.* = try self.storeValue(elem_plan, .zst, Value.zst);
         } else {
@@ -259,6 +262,7 @@ pub const Writer = struct {
         value: Value,
     ) Allocator.Error!checked.ConstNodeId {
         const nodes = try self.storeStructChildren(items, layout_idx, value);
+        defer self.module.const_store.allocator.free(nodes);
         return try self.module.const_store.append(.{ .tuple = nodes });
     }
 
@@ -269,6 +273,7 @@ pub const Writer = struct {
         value: Value,
     ) Allocator.Error!checked.ConstNodeId {
         const nodes = try self.storeStructChildren(fields, layout_idx, value);
+        defer self.module.const_store.allocator.free(nodes);
         return try self.module.const_store.append(.{ .record = nodes });
     }
 
@@ -309,9 +314,9 @@ pub const Writer = struct {
         const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
         const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
         const payload_nodes = try self.storeTagPayloads(selected.payloads, payload_layout, tag_base.value);
-        errdefer self.module.const_store.allocator.free(payload_nodes);
+        defer self.module.const_store.allocator.free(payload_nodes);
         const tag_name = try self.module.const_store.allocator.dupe(u8, selected.name);
-        errdefer self.module.const_store.allocator.free(tag_name);
+        defer self.module.const_store.allocator.free(tag_name);
         return try self.module.const_store.append(.{ .tag = .{
             .tag_name = tag_name,
             .payloads = payload_nodes,
@@ -358,7 +363,7 @@ pub const Writer = struct {
         const tag_base = self.resolveTagBase(layout_idx, value);
         const variant = self.selectFnVariant(set, tag_base.layout_idx, tag_base.value);
         const captures = try self.storeCaptures(variant.captures, variant.payload_layout, tag_base.value);
-        errdefer if (captures.len > 0) self.module.const_store.allocator.free(captures);
+        defer self.module.const_store.allocator.free(captures);
         return try self.module.const_store.appendFn(.{
             .fn_def = variant.template.fn_def,
             .source_fn_ty = variant.template.source_fn_ty,
@@ -379,7 +384,7 @@ pub const Writer = struct {
             if (entry.entry != proc) continue;
             const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
-            errdefer if (captures.len > 0) self.module.const_store.allocator.free(captures);
+            defer self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,
                 .source_fn_ty = entry.template.source_fn_ty,

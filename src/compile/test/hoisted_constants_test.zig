@@ -1261,14 +1261,15 @@ fn expectPatternExtractionSyntheticRegions(
         try std.testing.expect(!match_data.skip_exhaustiveness);
 
         const branch = match_data.branches[0];
-        try std.testing.expectEqual(@as(usize, 1), branch.patterns.len);
-        const checked_scrutinee_pattern = artifact.checked_bodies.patterns[@intFromEnum(branch.patterns[0].pattern)];
+        const branch_patterns = branch.patternsSlice(&artifact.checked_bodies);
+        try std.testing.expectEqual(@as(usize, 1), branch_patterns.len);
+        const checked_scrutinee_pattern = artifact.checked_bodies.pattern(branch_patterns[0].pattern);
         try expectRegionEqual(
             module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
             checked_scrutinee_pattern.source_region,
         );
-        try std.testing.expect(!branch.patterns[0].degenerate);
-        try std.testing.expectEqual(@as(usize, 0), branch.patterns[0].binder_remaps.len);
+        try std.testing.expect(!branch_patterns[0].degenerate);
+        try std.testing.expectEqual(@as(usize, 0), branch_patterns[0].binderRemapsSlice(&artifact.checked_bodies).len);
         try std.testing.expectEqual(@as(?check.CheckedArtifact.CheckedExprId, null), branch.guard);
 
         const synthetic_lookup = artifact.checked_bodies.expr(branch.value);

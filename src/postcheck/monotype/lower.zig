@@ -548,7 +548,7 @@ const Builder = struct {
                 .template = proc.template,
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
                 .dispatch_index = 0,
-                .order = proc.order_key,
+                .order = proc.orderKey(view.hosted_procs),
                 .def_idx = @intFromEnum(proc.def_idx),
             });
         }
@@ -1313,12 +1313,12 @@ const Builder = struct {
         if (self.type_cache.get(address)) |cached| return cached;
 
         const raw = @intFromEnum(checked_ty);
-        if (raw >= view.types.payloads.len) Common.invariant("checked type id outside checked type store");
+        if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
         const reserved = try self.program.types.add(.zst);
         try self.type_cache.put(address, reserved);
         try self.unsolved_monos.put(reserved, {});
-        const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
+        const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payload(checked_ty));
         self.program.types.types.items[@intFromEnum(reserved)] = lowered;
         return reserved;
     }
@@ -1500,10 +1500,10 @@ const Builder = struct {
             try ctx.constrainTypeToMono(checked_arg, mono_arg);
         }
         if (ctx.nominalInstantiationSource(nominal)) |source| {
-            if (source.declaration.formal_args.len != mono_args.len) {
+            if (source.declaration.formalArgs(ctx.view.types).len != mono_args.len) {
                 Common.invariant("checked nominal declaration arity differed from nominal type use");
             }
-            for (source.declaration.formal_args, mono_args) |formal, mono_arg| {
+            for (source.declaration.formalArgs(ctx.view.types), mono_args) |formal, mono_arg| {
                 try ctx.constrainTypeToMono(ctx.checkedTypeInCurrentView(source.view, formal), mono_arg);
             }
         }
@@ -1642,7 +1642,7 @@ const Builder = struct {
         tags: []const checked.CheckedTag,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            const payloads = try self.lowerTypeSlice(view, tag.args);
+            const payloads = try self.lowerTypeSlice(view, tag.argsSlice(view.types));
             defer self.allocator.free(payloads);
             try out.append(self.allocator, .{
                 .name = try self.tagName(view, tag.name),
@@ -2080,7 +2080,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.ExprId {
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
-        const fn_value = store_view.const_store.fns.items[raw];
+        const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
@@ -2100,7 +2100,7 @@ const Builder = struct {
         defer fn_ctx.deinit();
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
-        const lambda_expr = fn_view.bodies.exprs[@intFromEnum(lambda_expr_id)];
+        const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
 
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
@@ -2834,7 +2834,7 @@ const BodyContext = struct {
         owner_template: names.ProcTemplate,
         graph: *InstGraph,
     ) Allocator.Error!BodyContext {
-        const string_literals = try allocator.alloc(?Ast.StringLiteralId, view.bodies.string_literals.len);
+        const string_literals = try allocator.alloc(?Ast.StringLiteralId, view.bodies.stringLiteralCount());
         errdefer allocator.free(string_literals);
         @memset(string_literals, null);
         return .{
@@ -3086,7 +3086,7 @@ const BodyContext = struct {
             out[index] = .{
                 .name = try self.builder.tagName(self.view, tag.name),
                 .checked_name = tag.name,
-                .payloads = try self.instNodeSlice(tag.args),
+                .payloads = try self.instNodeSlice(tag.argsSlice(self.view.types)),
             };
         }
         return out;
@@ -3145,12 +3145,12 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const source = self.nominalInstantiationSource(nominal) orelse
             return try self.instNode(self.nominalBackingRoot(nominal));
-        if (source.declaration.formal_args.len != args.len) {
+        if (source.declaration.formalArgs(self.view.types).len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
         var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
         defer scope.deinit();
-        for (source.declaration.formal_args, args) |formal, arg| {
+        for (source.declaration.formalArgs(self.view.types), args) |formal, arg| {
             try scope.put(self.typeAddress(self.checkedTypeInCurrentView(source.view, formal)), arg);
         }
         try self.decl_scopes.append(self.allocator, &scope);
@@ -3224,15 +3224,15 @@ const BodyContext = struct {
 
         switch (template.body) {
             .checked_body => |body_id| {
-                const body = self.view.bodies.bodies[@intFromEnum(body_id)];
-                const root = self.view.bodies.exprs[@intFromEnum(body.root_expr)];
+                const body = self.view.bodies.body(body_id);
+                const root = self.view.bodies.expr(body.root_expr);
                 return switch (root.data) {
                     .lambda => |lambda| try self.lowerLambdaTemplate(lambda, fn_ty),
                     .closure => |closure| blk: {
                         if (closure.captures.len != 0) {
                             Common.invariant("checked procedure template root closure had captures");
                         }
-                        const lambda_expr = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+                        const lambda_expr = self.view.bodies.expr(closure.lambda);
                         break :blk switch (lambda_expr.data) {
                             .lambda => |lambda| try self.lowerLambdaTemplate(lambda, fn_ty),
                             else => Common.invariant("checked procedure template root closure did not point at a lambda"),
@@ -3252,7 +3252,7 @@ const BodyContext = struct {
                 const saved_source_region_override = self.source_region_override;
                 defer self.source_region_override = saved_source_region_override;
                 self.source_region_override = switch (root.kind) {
-                    .hoisted_constant => self.view.bodies.exprs[@intFromEnum(root.expr)].source_region,
+                    .hoisted_constant => self.view.bodies.expr(root.expr).source_region,
                     .constant,
                     .callable_binding,
                     .expect,
@@ -3331,10 +3331,13 @@ const BodyContext = struct {
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
         defer self.builder.program.current_region = saved_region;
-        const body_expr = self.view.bodies.exprs[@intFromEnum(checked_body)];
-        const body_region = body_expr.source_region;
+        const body_expr = self.view.bodies.expr(checked_body);
+        const body_region = self.sourceRegionForExpr(body_expr);
         self.builder.program.current_loc = try self.sourceLocFor(body_region);
         self.builder.program.current_region = body_region;
+
+        const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
+        defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
 
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
@@ -3399,11 +3402,11 @@ const BodyContext = struct {
     }
 
     fn lowerNestedFunction(self: *BodyContext, expr_id: checked.CheckedExprId, fn_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             .lambda => |lambda| try self.lowerNestedLambdaTemplate(lambda, fn_ty),
             .closure => |closure| blk: {
-                const lambda_expr = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+                const lambda_expr = self.view.bodies.expr(closure.lambda);
                 break :blk switch (lambda_expr.data) {
                     .lambda => |lambda| try self.lowerNestedLambdaTemplate(lambda, fn_ty),
                     else => Common.invariant("checked closure did not point at a lambda expression"),
@@ -3422,7 +3425,7 @@ const BodyContext = struct {
     }
 
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
@@ -3461,7 +3464,7 @@ const BodyContext = struct {
     }
 
     fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Ast.ExprId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -3497,6 +3500,16 @@ const BodyContext = struct {
         return self.comptime_exhaustiveness_depth != 0;
     }
 
+    fn resetComptimeExhaustivenessDepth(self: *BodyContext) u32 {
+        const saved = self.comptime_exhaustiveness_depth;
+        self.comptime_exhaustiveness_depth = 0;
+        return saved;
+    }
+
+    fn restoreComptimeExhaustivenessDepth(self: *BodyContext, saved: u32) void {
+        self.comptime_exhaustiveness_depth = saved;
+    }
+
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
         const wrapper = self.view.entry_wrappers.lookupByRoot(entry.root) orelse
             Common.invariant("hoisted const root had no checked entry wrapper");
@@ -3519,9 +3532,9 @@ const BodyContext = struct {
 
     fn hoistedConstSourceRegion(self: *const BodyContext, entry: checked.HoistedConstEntry) base.Region {
         if (entry.pattern) |pattern| {
-            return self.view.bodies.patterns[@intFromEnum(pattern)].source_region;
+            return self.view.bodies.pattern(pattern).source_region;
         }
-        return self.view.bodies.exprs[@intFromEnum(entry.expr)].source_region;
+        return self.view.bodies.expr(entry.expr).source_region;
     }
 
     fn restoredHoistedExprAtType(
@@ -3581,7 +3594,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -3699,10 +3712,10 @@ const BodyContext = struct {
         const rendered = try self.builder.inspectCall(value, value_ty, str_ty);
 
         const snippet_index = @intFromEnum(snippet);
-        if (snippet_index >= self.view.bodies.string_literals.len) {
+        if (snippet_index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
-        const snippet_text = self.view.bodies.string_literals[snippet_index];
+        const snippet_text = self.view.bodies.stringLiteral(@enumFromInt(snippet_index));
         const prefix_text = try std.fmt.allocPrint(
             self.builder.allocator,
             "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
@@ -3731,11 +3744,11 @@ const BodyContext = struct {
 
     fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!Ast.StringLiteralId {
         const index = @intFromEnum(id);
-        if (index >= self.view.bodies.string_literals.len) {
+        if (index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
         if (self.string_literals[index]) |existing| return existing;
-        const lowered = try self.builder.program.addStringLiteral(self.view.bodies.string_literals[index]);
+        const lowered = try self.builder.program.addStringLiteral(self.view.bodies.stringLiteral(@enumFromInt(index)));
         self.string_literals[index] = lowered;
         return lowered;
     }
@@ -3802,7 +3815,7 @@ const BodyContext = struct {
     }
 
     fn indirectCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        const expr = self.view.bodies.expr(checked_func);
         return switch (expr.data) {
             .lookup_local,
             .lookup_external,
@@ -3814,7 +3827,7 @@ const BodyContext = struct {
     }
 
     fn localCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) ?Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        const expr = self.view.bodies.expr(checked_func);
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external => |resolved| resolved,
@@ -3894,7 +3907,7 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         for (function.args, checked_args) |formal_ty, checked_arg| {
-            const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             const formal_node = try self.instNode(formal_ty);
             try self.graph.unify(formal_node, try caller.instNode(arg_ty));
             if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
@@ -3941,7 +3954,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         switch (operand) {
             .checked_expr => |checked_arg| {
-                const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+                const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                 const formal_node = try self.instNode(formal_ty);
                 try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                 if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
@@ -4024,7 +4037,7 @@ const BodyContext = struct {
         checked_arg: checked.CheckedExprId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(checked_arg)];
+        const expr = self.view.bodies.expr(checked_arg);
         switch (expr.data) {
             .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
@@ -4762,7 +4775,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         const interpolation = switch (expr.data) {
             .interpolation => |interpolation| interpolation,
             else => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
@@ -5013,7 +5026,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const expr = self.view.bodies.exprs[@intFromEnum(checked_expr)];
+        const expr = self.view.bodies.expr(checked_expr);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -5234,7 +5247,7 @@ const BodyContext = struct {
     }
 
     fn lowerClosure(self: *BodyContext, expr_id: checked.CheckedExprId, closure: anytype, closure_ty: Type.TypeId) Allocator.Error!Ast.ExprData {
-        const lambda = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+        const lambda = self.view.bodies.expr(closure.lambda);
         return switch (lambda.data) {
             .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
@@ -5245,7 +5258,7 @@ const BodyContext = struct {
     }
 
     fn closureFunctionType(self: *BodyContext, closure: anytype) Allocator.Error!Type.TypeId {
-        const lambda = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+        const lambda = self.view.bodies.expr(closure.lambda);
         return switch (lambda.data) {
             .lambda => |lambda_data| try self.lambdaFunctionType(lambda_data),
             else => Common.invariant("checked closure did not point at a lambda expression"),
@@ -5259,7 +5272,7 @@ const BodyContext = struct {
         defer saved.deinit(self.allocator);
 
         for (lambda.args, 0..) |pattern_id, i| {
-            args[i] = try self.lowerType(self.view.bodies.patterns[@intFromEnum(pattern_id)].ty);
+            args[i] = try self.lowerType(self.view.bodies.pattern(pattern_id).ty);
             try self.savePatternBinders(pattern_id, &saved);
             try self.preRegisterPatternBinders(pattern_id, args[i]);
         }
@@ -5299,13 +5312,14 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args, expected_ret_ty);
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
@@ -5322,7 +5336,7 @@ const BodyContext = struct {
                 .arg => |index| {
                     pre_lowered = .{
                         .index = index,
-                        .expr = try self.lowerDispatchOperandAtType(plan.args[index], plan_arg_tys[index]),
+                        .expr = try self.lowerDispatchOperandAtType(plan_args[index], plan_arg_tys[index]),
                     };
                 },
                 .type_only => {},
@@ -5389,13 +5403,14 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan.args);
+        const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked from_numeral plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
@@ -5424,7 +5439,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         try_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         const plan = switch (expr.data) {
             .num_from_numeral, .typed_num_from_numeral => |plan| plan,
             .str_from_quote => |quote| quote.plan,
@@ -5481,8 +5496,9 @@ const BodyContext = struct {
 
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (plan.args.len != 1) Common.invariant("from_numeral plan did not carry exactly one operand");
-        const literal = switch (plan.args[0]) {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 1) Common.invariant("from_numeral plan did not carry exactly one operand");
+        const literal = switch (plan_args[0]) {
             .generated_numeral => |lit| lit,
             else => Common.invariant("from_numeral plan operand was not a generated numeral"),
         };
@@ -5676,7 +5692,8 @@ const BodyContext = struct {
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args, expected_ret_ty);
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
@@ -5817,7 +5834,7 @@ const BodyContext = struct {
         pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprData {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
-        const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args), pre_lowered);
+        const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.argsSlice(self.view.static_dispatch_plans), self.builder.program.types.span(fn_data.args), pre_lowered);
         return .{ .call_proc = .{
             .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = args,
@@ -5834,7 +5851,8 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                if (plan.args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
+                const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+                if (plan_args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
                 const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural equality target had a non-function type");
                 const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
                 defer self.allocator.free(arg_tys);
@@ -5842,11 +5860,11 @@ const BodyContext = struct {
                 const lhs = if (pre_lowered != null and pre_lowered.?.index == 0)
                     pre_lowered.?.expr
                 else
-                    try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+                    try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
                 const rhs = if (pre_lowered != null and pre_lowered.?.index == 1)
                     pre_lowered.?.expr
                 else
-                    try arg_ctx.lowerDispatchOperandAtType(plan.args[1], arg_tys[1]);
+                    try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
                 var result = try self.lowerEqualityExpr(arg_tys[0], lhs, rhs, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
@@ -5882,8 +5900,8 @@ const BodyContext = struct {
     }
 
     fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!Type.TypeId {
-        const lhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.lhs)].ty;
-        const rhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.rhs)].ty;
+        const lhs_checked_ty = self.view.bodies.expr(eq.lhs).ty;
+        const rhs_checked_ty = self.view.bodies.expr(eq.rhs).ty;
         const conflict_message = "checked structural equality operand type conflicted with an existing Monotype constraint";
 
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty);
@@ -5909,7 +5927,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
@@ -6411,7 +6429,7 @@ const BodyContext = struct {
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .list => true,
             .record_destructure => |destructs| self.recordDestructsNeedExplicitRest(destructs),
@@ -6435,7 +6453,7 @@ const BodyContext = struct {
     }
 
     fn patternCanMiss(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .assign,
             .underscore,
@@ -6601,7 +6619,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         ty: Type.TypeId,
     ) Allocator.Error!void {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| {
                 if (self.binders.get(binder) == null) {
@@ -6689,7 +6707,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         checks_out: *std.ArrayList(CollectedListPattern),
     ) Allocator.Error!Ast.PatId {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         try self.constrainTypeToMono(pattern.ty, ty);
         const data: Ast.PatData = switch (pattern.data) {
             .pending,
@@ -6930,7 +6948,7 @@ const BodyContext = struct {
         continuation: BindingContinuation,
         miss: Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .list => |list| try self.lowerListPatternBindingThen(value, value_ty, list, result_ty, continuation, miss),
             .record_destructure => |destructs| if (self.recordDestructsNeedExplicitRest(destructs))
@@ -7098,7 +7116,7 @@ const BodyContext = struct {
                 },
                 .rest => |child| {
                     if (self.patternIsIgnored(child)) continue;
-                    const rest_ty = try self.lowerType(self.view.bodies.patterns[@intFromEnum(child)].ty);
+                    const rest_ty = try self.lowerType(self.view.bodies.pattern(child).ty);
                     const rest_value = try self.lowerRecordRestValue(value, rest_ty);
                     const pat = try self.lowerPatternAtType(child, rest_ty);
                     success = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
@@ -7181,7 +7199,7 @@ const BodyContext = struct {
         if (match.skip_exhaustiveness) return null;
         const branch_regions = try self.matchBranchRegions(match.branches);
         defer self.allocator.free(branch_regions);
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         const site_kind: Ast.ComptimeSiteKind = switch (match.comptime_site_kind) {
             .match => .match,
             .destructure => .destructure,
@@ -7189,8 +7207,10 @@ const BodyContext = struct {
         const checked_site = switch (match.comptime_site_kind) {
             .match => self.view.exhaustiveness_sites.lookupByMatchExpr(expr_id),
             .destructure => blk: {
-                if (match.branches.len != 1 or match.branches[0].patterns.len != 1) break :blk null;
-                break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(match.branches[0].patterns[0].pattern);
+                if (match.branches.len != 1) break :blk null;
+                const patterns = match.branches[0].patternsSlice(self.view.bodies);
+                if (patterns.len != 1) break :blk null;
+                break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(patterns[0].pattern);
             },
         };
         return try self.addComptimeSite(site_kind, expr.source_region, checked_site, branch_regions);
@@ -7200,8 +7220,8 @@ const BodyContext = struct {
         const regions = try self.allocator.alloc(base.Region, branchCount(branches));
         var index: usize = 0;
         for (branches) |branch| {
-            for (branch.patterns) |pattern| {
-                regions[index] = self.view.bodies.patterns[@intFromEnum(pattern.pattern)].source_region;
+            for (branch.patternsSlice(self.view.bodies)) |pattern| {
+                regions[index] = self.view.bodies.pattern(pattern.pattern).source_region;
                 index += 1;
             }
         }
@@ -7213,16 +7233,16 @@ const BodyContext = struct {
         if (!if_.warn_unused_branches) return null;
         const branch_regions = try self.ifBranchRegions(if_);
         defer self.allocator.free(branch_regions);
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         return try self.addComptimeSite(.if_, expr.source_region, null, branch_regions);
     }
 
     fn ifBranchRegions(self: *BodyContext, if_: anytype) Allocator.Error![]base.Region {
         const regions = try self.allocator.alloc(base.Region, if_.branches.len + 1);
         for (if_.branches, 0..) |branch, index| {
-            regions[index] = self.view.bodies.exprs[@intFromEnum(branch.cond)].source_region;
+            regions[index] = self.view.bodies.expr(branch.cond).source_region;
         }
-        regions[if_.branches.len] = self.view.bodies.exprs[@intFromEnum(if_.final_else)].source_region;
+        regions[if_.branches.len] = self.view.bodies.expr(if_.final_else).source_region;
         return regions;
     }
 
@@ -7233,7 +7253,7 @@ const BodyContext = struct {
         defer self.allocator.free(branches);
         var index: usize = 0;
         for (match.branches) |branch| {
-            for (branch.patterns) |pattern| {
+            for (branch.patternsSlice(self.view.bodies)) |pattern| {
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 defer branch_ctx.deinit();
                 var saved = std.ArrayList(BinderRestore).empty;
@@ -7242,7 +7262,7 @@ const BodyContext = struct {
                 defer branch_ctx.restoreBinders(saved.items);
 
                 const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
+                try branch_ctx.applyAlternativeBinderRemaps(pattern.binderRemapsSlice(self.view.bodies));
                 const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
                 const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
                 const body = try branch_ctx.wrapComptimeBranch(
@@ -7275,7 +7295,7 @@ const BodyContext = struct {
         saved: *std.ArrayList(BinderRestore),
     ) Allocator.Error!void {
         try self.savePatternBinders(pattern.pattern, saved);
-        for (pattern.binder_remaps) |remap| {
+        for (pattern.binderRemapsSlice(self.view.bodies)) |remap| {
             try self.saveBinder(remap.candidate_binder, saved);
             try self.saveBinder(remap.representative_binder, saved);
         }
@@ -7286,7 +7306,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         saved: *std.ArrayList(BinderRestore),
     ) Allocator.Error!void {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| try self.saveBinder(binder, saved),
             .as => |as| {
@@ -7545,7 +7565,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
-        const checked_body = self.view.bodies.exprs[@intFromEnum(body)];
+        const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
             .block => |block| {
                 const statements = try self.lowerBlockStatements(block.statements);
@@ -7576,7 +7596,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
-        const checked_body = self.view.bodies.exprs[@intFromEnum(body)];
+        const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
             .block => |block| {
                 var statements = try self.lowerBlockStatements(block.statements);
@@ -7735,7 +7755,7 @@ const BodyContext = struct {
         statement_id: checked.CheckedStatementId,
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
-        const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const statement = self.view.bodies.statement(statement_id);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -7752,7 +7772,7 @@ const BodyContext = struct {
             else => return false,
         };
 
-        const pattern_data = self.view.bodies.patterns[@intFromEnum(pattern)].data;
+        const pattern_data = self.view.bodies.pattern(pattern).data;
         const destructs = switch (pattern_data) {
             .record_destructure => |destructs| destructs,
             else => return false,
@@ -7804,7 +7824,7 @@ const BodyContext = struct {
                 },
                 .rest => |child| {
                     if (self.patternIsIgnored(child)) continue;
-                    const rest_ty = try self.lowerType(self.view.bodies.patterns[@intFromEnum(child)].ty);
+                    const rest_ty = try self.lowerType(self.view.bodies.pattern(child).ty);
                     const rest_value = try self.lowerRecordRestValue(value, rest_ty);
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, rest_ty),
@@ -7818,10 +7838,10 @@ const BodyContext = struct {
 
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
         const raw = @intFromEnum(statement_id);
-        if (raw >= self.view.bodies.statements.len) {
+        if (raw >= self.view.bodies.statementCount()) {
             Common.invariant("checked runtime statement filter referenced a missing statement");
         }
-        return switch (self.view.bodies.statements[raw].data) {
+        return switch (self.view.bodies.statement(@enumFromInt(raw)).data) {
             .decl => |decl| self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
             .var_,
             .var_uninitialized,
@@ -7865,9 +7885,10 @@ const BodyContext = struct {
         checked_expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprData {
-        const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
+        const checked_expr = self.view.bodies.expr(checked_expr_id);
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .if_ => |if_| try self.lowerIf(if_, ty, ty, &.{}, try self.ifComptimeSite(checked_expr_id, if_)),
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
@@ -7884,7 +7905,7 @@ const BodyContext = struct {
 
     fn checkedExprDiverges(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
         const raw = @intFromEnum(expr_id);
-        if (raw >= self.view.bodies.exprs.len) {
+        if (raw >= self.view.bodies.exprCount()) {
             Common.invariant("checked divergence referenced a missing expression");
         }
         return self.view.bodies.exprDiverges(expr_id);
@@ -7892,7 +7913,7 @@ const BodyContext = struct {
 
     fn checkedStatementDiverges(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
         const raw = @intFromEnum(statement_id);
-        if (raw >= self.view.bodies.statements.len) {
+        if (raw >= self.view.bodies.statementCount()) {
             Common.invariant("checked divergence referenced a missing statement");
         }
         return self.view.bodies.statementDiverges(statement_id);
@@ -8033,14 +8054,15 @@ const BodyContext = struct {
         loop_iterator: ?Ast.TypedLocal,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (plan.dispatcher_arg_index >= plan.args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateIteratorPlanCallTypeFromCaller(plan.callable_ty, self, plan.args, loop_iterator, expected_ret_ty);
+        const callable_mono_ty = try call_ctx.instantiateIteratorPlanCallTypeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked iterator dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
@@ -8052,7 +8074,7 @@ const BodyContext = struct {
 
         const dispatcher_ty = plan_arg_tys[plan.dispatcher_arg_index];
         try call_ctx.constrainTypeToMono(plan.dispatcher_ty, dispatcher_ty);
-        const actual_dispatcher_ty = (try self.iteratorOperandMonoType(plan.args[plan.dispatcher_arg_index], loop_iterator, dispatcher_ty)) orelse
+        const actual_dispatcher_ty = (try self.iteratorOperandMonoType(plan_args[plan.dispatcher_arg_index], loop_iterator, dispatcher_ty)) orelse
             Common.invariant("iterator dispatch plan dispatcher operand did not match the checked dispatcher type");
         if (!self.sameType(dispatcher_ty, actual_dispatcher_ty)) {
             Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
@@ -8074,10 +8096,10 @@ const BodyContext = struct {
                 Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");
             }
         }
-        const args = try self.allocator.alloc(Ast.ExprId, plan.args.len);
+        const args = try self.allocator.alloc(Ast.ExprId, plan_args.len);
         defer self.allocator.free(args);
         const arg_tys = self.builder.program.types.span(fn_data.args);
-        for (plan.args, 0..) |operand, i| {
+        for (plan_args, 0..) |operand, i| {
             args[i] = try self.lowerIteratorOperandAtType(operand, loop_iterator, arg_tys[i]);
         }
 
@@ -8107,7 +8129,7 @@ const BodyContext = struct {
             const formal_node = try self.instNode(formal_ty);
             switch (operand) {
                 .checked_expr => |checked_arg| {
-                    const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                     if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
                         try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
@@ -8216,7 +8238,7 @@ const BodyContext = struct {
         rest_expr: Ast.ExprId,
         carries: []const LoopCarry,
     ) Allocator.Error!Ast.ExprId {
-        const checked_body = self.view.bodies.exprs[@intFromEnum(body)];
+        const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
             .block => |block| {
                 var statement_diverges = false;
@@ -8257,7 +8279,7 @@ const BodyContext = struct {
         result_ty: Type.TypeId,
         carries: []const LoopCarry,
     ) Allocator.Error!Ast.ExprId {
-        const checked_body = self.view.bodies.exprs[@intFromEnum(body)];
+        const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
             .block => |block| {
                 var statement_diverges = false;
@@ -8493,7 +8515,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const expr = self.view.bodies.expr(expr_id);
         switch (expr.data) {
             .str => |segments| for (segments) |segment| try self.collectReassignedBindersInExpr(segment, out),
             .list => |items| for (items) |item| try self.collectReassignedBindersInExpr(item, out),
@@ -8587,7 +8609,7 @@ const BodyContext = struct {
         statement_id: checked.CheckedStatementId,
         out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
-        const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const statement = self.view.bodies.statement(statement_id);
         switch (statement.data) {
             .decl => |decl| try self.collectReassignedBindersInExpr(decl.expr, out),
             .var_ => |var_| try self.collectReassignedBindersInExpr(var_.expr, out),
@@ -8673,21 +8695,22 @@ const BodyContext = struct {
         var current: ?checked.CheckedTypeId = step_tag_union.ext;
         while (true) {
             for (tags) |tag| {
+                const tag_args = tag.argsSlice(self.view.types);
                 const tag_text = self.view.names.tagLabelText(tag.name);
                 if (Ident.textEql(tag_text, "Done")) {
-                    if (tag.args.len != 0) Common.invariant("iterator Done step carried payloads");
+                    if (tag_args.len != 0) Common.invariant("iterator Done step carried payloads");
                     if (done_tag != null) Common.invariant("iterator step type had duplicate Done tags");
                     done_tag = tag.name;
                 } else if (Ident.textEql(tag_text, "One")) {
-                    if (tag.args.len != 1) Common.invariant("iterator One step did not carry one payload");
+                    if (tag_args.len != 1) Common.invariant("iterator One step did not carry one payload");
                     if (one_tag != null) Common.invariant("iterator step type had duplicate One tags");
                     one_tag = tag.name;
-                    one_payload_ty = tag.args[0];
+                    one_payload_ty = tag_args[0];
                 } else if (Ident.textEql(tag_text, "Skip")) {
-                    if (tag.args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
+                    if (tag_args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
                     if (skip_tag != null) Common.invariant("iterator step type had duplicate Skip tags");
                     skip_tag = tag.name;
-                    skip_payload_ty = tag.args[0];
+                    skip_payload_ty = tag_args[0];
                 }
             }
 
@@ -8730,7 +8753,7 @@ const BodyContext = struct {
     }
 
     fn lowerStatement(self: *BodyContext, statement_id: checked.CheckedStatementId) Allocator.Error!Ast.StmtId {
-        const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const statement = self.view.bodies.statement(statement_id);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -8846,7 +8869,7 @@ const BodyContext = struct {
         self: *BodyContext,
         pattern: checked.CheckedPatternId,
     ) Allocator.Error!Ast.PatId {
-        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern)];
+        const checked_pattern = self.view.bodies.pattern(pattern);
         return try self.lowerPatternAtType(pattern, try self.lowerType(checked_pattern.ty));
     }
 
@@ -8899,7 +8922,7 @@ const BodyContext = struct {
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .assign => |binder| binder,
             else => Common.invariant("local procedure declaration pattern was not a binder"),
@@ -8912,7 +8935,7 @@ const BodyContext = struct {
         if (merge_binders.len == 0) return .{ .expr = try self.lowerExpr(expr_id) };
 
         const state_ty = try self.stateOnlyType(merge_binders);
-        const checked_expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const checked_expr = self.view.bodies.expr(expr_id);
         const state_expr = switch (checked_expr.data) {
             .if_ => |if_| try self.builder.program.addExpr(.{
                 .ty = state_ty,
@@ -8931,7 +8954,7 @@ const BodyContext = struct {
     }
 
     fn statementValueIsLocalProc(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
-        return switch (self.view.bodies.exprs[@intFromEnum(expr_id)].data) {
+        return switch (self.view.bodies.expr(expr_id).data) {
             .lambda,
             .closure,
             => true,
@@ -8940,7 +8963,7 @@ const BodyContext = struct {
     }
 
     fn lowerPatternAtType(self: *BodyContext, pattern_id: checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!Ast.PatId {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        const pattern = self.view.bodies.pattern(pattern_id);
         try self.constrainTypeToMono(pattern.ty, ty);
         const data: Ast.PatData = switch (pattern.data) {
             .pending,
@@ -9086,7 +9109,7 @@ const BodyContext = struct {
     }
 
     fn patternIsIgnored(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        return switch (self.view.bodies.patterns[@intFromEnum(pattern_id)].data) {
+        return switch (self.view.bodies.pattern(pattern_id).data) {
             .underscore => true,
             else => false,
         };
@@ -9262,8 +9285,8 @@ fn bindLocalName(
     local: Ast.LocalId,
     binder: checked.PatternBinderId,
 ) Allocator.Error!void {
-    const entry = view.bodies.pattern_binders[@intFromEnum(binder)];
-    const pattern = view.bodies.patterns[@intFromEnum(entry.pattern)];
+    const entry = view.bodies.patternBinder(binder);
+    const pattern = view.bodies.pattern(entry.pattern);
     if (pattern.data != .assign) return;
     const source = view.module_env.common.source;
     const start = pattern.source_region.start.offset;
@@ -9388,8 +9411,8 @@ fn generatedInterpolationStepKey(
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
     const raw = @intFromEnum(checked_ty);
-    if (raw >= view.types.payloads.len) Common.invariant("checked type id outside checked type store");
-    return view.types.payloads[raw];
+    if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
+    return view.types.payload(checked_ty);
 }
 
 fn schemeRoot(view: ModuleView, source_scheme: anytype, comptime missing_message: []const u8) checked.CheckedTypeId {
@@ -9402,7 +9425,7 @@ fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.Chec
         .nested => |nested| blk: {
             const site = checkedNestedSite(view, nested);
             const expr_id = site.checked_expr orelse Common.invariant("stored nested function had no checked expression site");
-            const expr = view.bodies.exprs[@intFromEnum(expr_id)];
+            const expr = view.bodies.expr(expr_id);
             break :blk switch (expr.data) {
                 .lambda => expr_id,
                 .closure => |closure| closure.lambda,
@@ -9431,11 +9454,11 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
 
 fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
     const raw = @intFromEnum(binder);
-    if (raw >= view.bodies.pattern_binders.len) Common.invariant("stored function capture binder is outside checked body store");
-    const pattern = view.bodies.pattern_binders[raw].pattern;
+    if (raw >= view.bodies.patternBinderCount()) Common.invariant("stored function capture binder is outside checked body store");
+    const pattern = view.bodies.patternBinder(@enumFromInt(raw)).pattern;
     const pattern_raw = @intFromEnum(pattern);
-    if (pattern_raw >= view.bodies.patterns.len) Common.invariant("stored function capture pattern is outside checked body store");
-    return view.bodies.patterns[pattern_raw].ty;
+    if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
+    return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
 }
 
 fn moduleIdFromDigest(ref: names.CheckedModuleDigest) checked.ModuleId {
@@ -9519,7 +9542,7 @@ const ResolvedPayload = struct {
 
 fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload {
     var current = ty;
-    var remaining = view.types.payloads.len;
+    var remaining = view.types.payloadCount();
     while (remaining > 0) : (remaining -= 1) {
         const payload = checkedPayload(view, current);
         switch (payload) {
@@ -9536,7 +9559,7 @@ fn checkedRecordFieldByName(
     field_name: []const u8,
 ) checked.CheckedRecordField {
     var current = checked_ty;
-    var remaining = view.types.payloads.len;
+    var remaining = view.types.payloadCount();
     while (remaining > 0) : (remaining -= 1) {
         switch (checkedPayload(view, current)) {
             .alias => |alias| current = alias.backing,
@@ -9585,7 +9608,7 @@ fn intValueToF64(value: can.CIR.IntValue) f64 {
 
 fn branchCount(branches: anytype) usize {
     var count: usize = 0;
-    for (branches) |branch| count += branch.patterns.len;
+    for (branches) |branch| count += branch.pt_len;
     return count;
 }
 

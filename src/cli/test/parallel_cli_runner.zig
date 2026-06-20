@@ -536,8 +536,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &invalid_llvm_debug_info_needles } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed --debug emits valid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--debug", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &invalid_llvm_debug_info_needles } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed --debug emits valid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--debug", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     // repro for https://github.com/roc-lang/roc/issues/9690: a self-recursive
     // closure that captures an enclosing value must compile through the LLVM
     // size/speed backend. The crash guard inside the program makes a wrong
@@ -593,12 +593,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build archive output lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build archive output lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build divergent if with all crash branches does not panic", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/fx/divergent_if_all_branches_crash_repro.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "NOT FOUND" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
@@ -1656,7 +1657,7 @@ fn customDefaultPlatformLinuxDisassembly(
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64musl", out_arg },
         .roc_file = app_path,
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
     })) |failure| return failure;
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
@@ -1892,7 +1893,7 @@ fn customDefaultPlatformBuild(
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--opt=speed", "--no-cache", target_arg, out_arg },
         .roc_file = app_path,
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
     })) |failure| return failure;
 
     if (target == .wasm32) {
@@ -1970,7 +1971,7 @@ fn customDefaultPlatformDebugBacktrace(
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--opt=speed", "--debug", "--no-cache", target_arg, out_arg },
         .roc_file = app_path,
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
     })) |failure| return failure;
 
     const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
@@ -2316,7 +2317,7 @@ fn customBuildIntCreatesOutput(io: std.Io, allocator: Allocator, env: *const Cas
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--opt=interpreter", out_arg },
         .roc_file = "test/int/app.roc",
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
         .stdout_min_len = 6,
     })) |failure| return failure;
     const size = fileExistsWithSize(io, output_path) catch |err|
@@ -2388,7 +2389,7 @@ fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const Case
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--no-cache", output_arg },
         .roc_file = "test/dylib/app.roc",
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
     })) |failure| return failure;
 
     const dll_bytes = std.Io.Dir.cwd().readFileAlloc(io, dll_path, allocator, .limited(256 * 1024 * 1024)) catch |err|
@@ -2496,7 +2497,7 @@ fn customBuildWarningInterpreter(io: std.Io, allocator: Allocator, env: *const C
         .args = &.{ "build", "--opt=interpreter", out_arg },
         .roc_file = "test/fx/run_warning_only.roc",
         .exit = .{ .code = 2 },
-        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
         .contains_any = &.{.{ .needles = &warning_needles }},
     })) |failure| return failure;
     const size = fileExistsWithSize(io, output_path) catch |err|
