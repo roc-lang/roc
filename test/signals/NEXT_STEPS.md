@@ -68,10 +68,12 @@ Ordered roughly by how much of the design they block.
    element/kind/event-id slots are left alone and only added, removed, or shifted
    bindings are patched. `Ui.each` now also retains an item equality thunk and
    row scopes cache their latest item value, so the host has explicit data to
-   distinguish reused unchanged rows from reused updated rows. Remaining work is
-   using that row cache to skip unchanged row body collection and eventually
-   eliminating the descriptor rebuild once retained typed closures replace the
-   internal `NodeValue` path.
+   distinguish reused unchanged rows from reused updated rows. The active
+   collector uses that data to copy the previous retained descriptor subtree for
+   reused unchanged rows instead of invoking the row thunk, unless a descendant
+   `when`/`each` descriptor depends on the current dirty source. Remaining work is
+   eliminating the broader descriptor rebuild once retained typed closures replace
+   the internal `NodeValue` path.
 
 3. **Metrics are partway through the design migration.** `RuntimeMetrics` now
    carries the design counter names (`nodes_recomputed`,
@@ -395,7 +397,11 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    branch/row DOM while moving/reusing surviving keyed row DOM through explicit
    host-owned DOM identities. Structural event application now compares the
    current DOM event slots with the next explicit event stream and patches only
-   added, removed, or shifted event-id bindings.
+   added, removed, or shifted event-id bindings. For reused keyed rows whose
+   cached item value is unchanged, active collection now copies the previous
+   retained row descriptor subtree instead of invoking the row thunk; rows with a
+   descendant structural descriptor fed by the dirty source still rebuild from
+   explicit dependency data.
 4. **Done — delete legacy surface.** `Reactive.roc`, the old string-keyed
    `Graph.roc`, and the old `UiRuntime.roc` evaluator have been removed. The
    active platform surface is the retained descriptor API in `Elem`/`Node` plus
@@ -582,7 +588,9 @@ active `When`/`Each` output cache with the retained equality thunk; changed
 structural outputs still rebuild the active descriptor stream, but the host now
 applies the result as a structural DOM patch using explicit DOM identities scoped
 by branch/row and compares event binding slots rather than rebinding every active
-event.
+event. Reused keyed rows with unchanged item values copy their previous retained
+descriptor subtrees during that rebuild, unless a descendant structural site has
+an explicit dependency on the dirty source that triggered the rebuild.
 
 Current priority: pause feature work here until Phase 4 gives structural sites
 retained typed data. Correctness fixes are still in scope, but the remaining
@@ -607,6 +615,11 @@ on the internal `NodeValue` path and Roc-side active descriptor evaluation.
   descriptor stream is rebuilt.
 - Done for structural event bindings: unchanged event-id slots stay bound; only
   added, removed, or shifted event-id bindings are patched.
+- Done for unchanged keyed-row bodies: when a reused row's retained item equality
+  thunk says the item is unchanged, the active collector copies the previous
+  retained descriptor subtree instead of invoking the row thunk. This shortcut is
+  disabled for row subtrees whose descendant `when`/`each` descriptor explicitly
+  depends on the dirty source being rendered.
 - Remaining structural patch work: remove the active descriptor-stream rebuild
   when retained typed closures make per-node structural plans explicit.
 

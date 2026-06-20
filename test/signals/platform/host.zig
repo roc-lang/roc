@@ -635,6 +635,7 @@ const RecomputeApplyOutcome = struct {
 
 const HostKeyedRowDiffResult = struct {
     scope_ids: []u64,
+    row_items_changed: []bool,
     rows_reused: u64,
     rows_created: u64,
     rows_removed: u64,
@@ -1924,6 +1925,8 @@ const HostEnv = struct {
 
         var next_scope_ids = allocator.alloc(u64, keys.len) catch std.process.exit(1);
         errdefer allocator.free(next_scope_ids);
+        var row_items_changed = allocator.alloc(bool, keys.len) catch std.process.exit(1);
+        errdefer allocator.free(row_items_changed);
 
         var rows_reused: u64 = 0;
         var rows_created: u64 = 0;
@@ -1951,13 +1954,16 @@ const HostEnv = struct {
                 rows_reused += 1;
                 const existing_item = self.eachRowScopeItem(scope_id);
                 if (callErasedNodeValueNodeValueToBool(roc_host, item_eq, existing_item, item)) {
+                    row_items_changed[key_index] = false;
                     row_items_unchanged += 1;
                 } else {
                     self.replaceEachRowScopeItem(roc_host, scope_id, item);
+                    row_items_changed[key_index] = true;
                     row_items_updated += 1;
                 }
             } else {
                 next_scope_ids[key_index] = self.createEachRowScope(roc_host, parent_scope_id, site_ordinal, key, item);
+                row_items_changed[key_index] = true;
                 rows_created += 1;
             }
         }
@@ -1977,6 +1983,7 @@ const HostEnv = struct {
 
         return .{
             .scope_ids = next_scope_ids,
+            .row_items_changed = row_items_changed,
             .rows_reused = rows_reused,
             .rows_created = rows_created,
             .rows_removed = rows_removed,
@@ -2265,7 +2272,132 @@ const HostEnv = struct {
         return diff;
     }
 
-    fn collectActiveElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
+    fn scopeIsDescendantOrSelf(self: *HostEnv, scope_id: u64, root_scope_id: u64) bool {
+        var current: ?u64 = scope_id;
+        while (current) |id| {
+            if (id == root_scope_id) return true;
+            if (id >= self.scopes.items.len) failHost("scope descriptor referenced an unknown parent scope");
+            current = self.scopes.items[@intCast(id)].parent_scope_id;
+        }
+        return false;
+    }
+
+    fn renderNodeScopeId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
+        return switch (node.kind) {
+            .element => (findElementDesc(stream, node.elem_id) orelse failHost("render node referenced missing element descriptor")).scope_id,
+            .text => (findTextNodeDesc(stream, node.elem_id) orelse failHost("render node referenced missing text descriptor")).scope_id,
+            .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse failHost("render node referenced missing signal text descriptor")).scope_id,
+        };
+    }
+
+    fn streamNodeIdInScopeSubtree(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
+        for (previous.scope_sites.items) |site| {
+            if (site.node_id == node_id and self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id)) return true;
+        }
+        return false;
+    }
+
+    fn scopeSubtreeHasDirtyStructuralSource(self: *HostEnv, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
+        if (dirty_source_node_ids.len == 0) return false;
+
+        for (previous.whens.items) |desc| {
+            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+            if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+        }
+        for (previous.eaches.items) |desc| {
+            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+            if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+        }
+        return false;
+    }
+
+    fn cloneHostSignalCacheSlot(slot: HostSignalCacheSlot) HostSignalCacheSlot {
+        return switch (slot) {
+            .absent => .absent,
+            .present => |value| blk: {
+                abi.increfNodeValue(value, 1);
+                break :blk .{ .present = value };
+            },
+        };
+    }
+
+    fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
+        const allocator = self.gpa.allocator();
+        const previous = &self.active_stream;
+        var copied_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer copied_elem_ids.deinit(allocator);
+
+        for (previous.render_nodes.items) |node| {
+            const node_scope_id = HostEnv.renderNodeScopeId(previous, node);
+            if (!self.scopeIsDescendantOrSelf(node_scope_id, root_scope_id)) continue;
+
+            copied_elem_ids.append(allocator, node.elem_id) catch std.process.exit(1);
+            switch (node.kind) {
+                .element => {
+                    const desc = findElementDesc(previous, node.elem_id) orelse failHost("render node referenced missing element descriptor");
+                    _ = stream.appendElement(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.tag);
+                },
+                .text => {
+                    const desc = findTextNodeDesc(previous, node.elem_id) orelse failHost("render node referenced missing text descriptor");
+                    stream.appendTextNode(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.value);
+                },
+                .signal_text => {
+                    const desc = findSignalTextNodeDesc(previous, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
+                    const source_node_ids = allocator.dupe(u64, desc.source_node_ids) catch std.process.exit(1);
+                    stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.signal, source_node_ids);
+                    stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value);
+                },
+            }
+        }
+
+        for (previous.static_text_attrs.items) |desc| {
+            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            stream.appendStaticTextAttr(allocator, desc.elem_id, desc.field, desc.value);
+        }
+        for (previous.signal_text_attrs.items) |desc| {
+            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            const source_node_ids = allocator.dupe(u64, desc.source_node_ids) catch std.process.exit(1);
+            stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, desc.signal, source_node_ids);
+            stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value);
+        }
+        for (previous.static_bool_attrs.items) |desc| {
+            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            stream.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
+        }
+        for (previous.signal_bool_attrs.items) |desc| {
+            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            const source_node_ids = allocator.dupe(u64, desc.source_node_ids) catch std.process.exit(1);
+            stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, desc.signal, source_node_ids);
+            stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value);
+        }
+        for (previous.events.items) |desc| {
+            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.transform);
+        }
+
+        for (previous.scope_sites.items) |desc| {
+            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
+            stream.appendScopeSite(allocator, desc.node_id, desc.scope_id, desc.ordinal, desc.parent_elem_id, desc.kind, desc.binder_bindings);
+        }
+        for (previous.states.items) |desc| {
+            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+            stream.appendState(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.initial, desc.eq);
+        }
+        for (previous.whens.items) |desc| {
+            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+            const source_node_ids = allocator.dupe(u64, desc.source_node_ids) catch std.process.exit(1);
+            stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.condition, source_node_ids);
+            stream.whens.items[stream.whens.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value);
+        }
+        for (previous.eaches.items) |desc| {
+            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+            const source_node_ids = allocator.dupe(u64, desc.source_node_ids) catch std.process.exit(1);
+            stream.appendEach(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.items, source_node_ids, desc.key_of, desc.key_eq, desc.item_eq, desc.row);
+            stream.eaches.items[stream.eaches.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value);
+        }
+    }
+
+    fn collectActiveElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
         self.validateScopeId(scope_id);
 
         const allocator = self.gpa.allocator();
@@ -2279,7 +2411,7 @@ const HostEnv = struct {
                     self.collectNodeAttrDescriptor(roc_host, stream, elem_id, attr, binder_stack.items);
                 }
                 for (payload.children.items()) |child| {
-                    self.collectActiveElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack);
+                    self.collectActiveElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
                 }
             },
             .Text => {
@@ -2301,7 +2433,7 @@ const HostEnv = struct {
                 stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq);
                 self.ensureStateFromDesc(roc_host, stream.states.items[stream.states.items.len - 1]);
                 binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
-                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack);
+                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
                 _ = binder_stack.pop() orelse unreachable;
             },
             .When => {
@@ -2326,7 +2458,7 @@ const HostEnv = struct {
                     .false_branch => elem.payload.when.when_false.*,
                 };
                 var branch_dom_ordinal: u64 = 0;
-                self.collectActiveElemDescriptors(roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack);
+                self.collectActiveElemDescriptors(roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack, dirty_source_node_ids);
             },
             .Each => {
                 const site_ordinal = ordinal.*;
@@ -2368,28 +2500,36 @@ const HostEnv = struct {
                 }
 
                 const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, items, each_desc.key_eq, each_desc.item_eq);
-                defer allocator.free(diff.scope_ids);
+                defer {
+                    allocator.free(diff.scope_ids);
+                    allocator.free(diff.row_items_changed);
+                }
 
-                for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
+                for (items, keys, diff.scope_ids, diff.row_items_changed) |item, key, row_scope_id, row_item_changed| {
+                    if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
+                        self.copyActiveScopeSubtreeDescriptors(roc_host, stream, row_scope_id);
+                        continue;
+                    }
+
                     const row_elem = callErasedNodeValueNodeValueToElem(roc_host, each_desc.row, key, item);
                     defer abi.decrefElem(row_elem, roc_host);
 
                     var row_ordinal: u64 = 0;
                     var row_dom_ordinal: u64 = 0;
-                    self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, &row_dom_ordinal, binder_stack);
+                    self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, &row_dom_ordinal, binder_stack, dirty_source_node_ids);
                 }
             },
         }
     }
 
-    fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem) void {
+    fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
         const root_scope_id = self.internRootScope();
         const allocator = self.gpa.allocator();
         var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
         var ordinal: u64 = 0;
         var dom_ordinal: u64 = 0;
-        self.collectActiveElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack);
+        self.collectActiveElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
     }
 
     fn clearScopes(self: *HostEnv) void {
@@ -3653,12 +3793,12 @@ fn finishHostMetrics(host: *HostEnv) void {
     host.pending_roc_metrics = zeroRuntimeMetrics();
 }
 
-fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const root = host.root_elem orelse failHost("host render requested before Roc root Elem was initialized");
 
     var next_stream: HostNodeDescriptorStream = .{};
     errdefer next_stream.deinit(host.gpa.allocator(), roc_host, &host.pending_roc_metrics);
-    host.collectActiveElemRootDescriptors(roc_host, &next_stream, root);
+    host.collectActiveElemRootDescriptors(roc_host, &next_stream, root, dirty_source_node_ids);
 
     const start_ns = benchmarkNowNs();
     const counts = if (host.dom_elements.items.len == 0)
@@ -3679,7 +3819,7 @@ fn acceptInitElemMeasured(host: *HostEnv, roc_host: *abi.RocHost, root_box: Elem
     const root = root_box.*;
     host.root_elem = root;
     abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), &dropMovedElemPayload, roc_host);
-    renderActiveRootMeasured(host, roc_host, apply_ns, command_counts);
+    renderActiveRootMeasured(host, roc_host, &.{}, apply_ns, command_counts);
 }
 
 fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) void {
@@ -3716,7 +3856,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     if (stats) |s| {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
         if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
-            renderActiveRootMeasured(host, roc_host, &s.dispatch_apply_ns, &s.commands);
+            renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, &s.dispatch_apply_ns, &s.commands);
         } else {
             const apply_start_ns = benchmarkNowNs();
             const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
@@ -3728,7 +3868,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     } else {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
         if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
-            renderActiveRootMeasured(host, roc_host, null, null);
+            renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, null, null);
         } else {
             _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
             finishHostMetrics(host);
@@ -4371,7 +4511,12 @@ const TestErasedI64Capture = extern struct {
     amount: i64,
 };
 
+const TestErasedBinderCapture = extern struct {
+    condition_binder: HostBinderToken,
+};
+
 var test_erased_callable_drop_count: u64 = 0;
+var test_row_elem_call_count: u64 = 0;
 
 fn testCapturePtrAs(comptime T: type, capture_ptr: ?[*]u8) *T {
     return @ptrCast(@alignCast(capture_ptr orelse unreachable));
@@ -4443,6 +4588,7 @@ fn testBinaryElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u
 }
 
 fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    test_row_elem_call_count += 1;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
     const key = switch (call_args.arg0.tag) {
@@ -4459,6 +4605,7 @@ fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]co
 }
 
 fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    test_row_elem_call_count += 1;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
     const key = switch (call_args.arg0.tag) {
@@ -4478,6 +4625,36 @@ fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: 
     };
     const button = testElementWith(roc_host, "button", &attrs, &.{});
     writeTestErasedResult(abi.Elem, ret, testNodeStateWithToken(roc_host, token, button));
+}
+
+fn testNestedWhenRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    test_row_elem_call_count += 1;
+    const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
+    const key = switch (call_args.arg0.tag) {
+        .NvI64 => call_args.arg0.payload.nv_i64,
+        else => @panic("test nested when row Elem callable expected key NvI64"),
+    };
+    const item = switch (call_args.arg1.tag) {
+        .NvI64 => call_args.arg1.payload.nv_i64,
+        else => @panic("test nested when row Elem callable expected item NvI64"),
+    };
+
+    var true_text_buffer: [64]u8 = undefined;
+    var false_text_buffer: [64]u8 = undefined;
+    const true_text = std.fmt.bufPrint(&true_text_buffer, "row-{d}-{d}-true", .{ key, item }) catch @panic("test nested row true text format failed");
+    const false_text = std.fmt.bufPrint(&false_text_buffer, "row-{d}-{d}-false", .{ key, item }) catch @panic("test nested row false text format failed");
+    const row = abi.Elem{
+        .payload = .{
+            .when = .{
+                .condition = boxTestNodeSignalExpr(roc_host, testNodeRefExpr(capture.condition_binder)),
+                .when_false = boxTestElem(roc_host, testNodeText(roc_host, false_text)),
+                .when_true = boxTestElem(roc_host, testNodeText(roc_host, true_text)),
+            },
+        },
+        .tag = .When,
+    };
+    writeTestErasedResult(abi.Elem, ret, row);
 }
 
 fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -4520,6 +4697,12 @@ fn testAlwaysEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]cons
 
 fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
+}
+
+fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
+    test_erased_callable_drop_count += 1;
+    const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
+    abi.decrefBox(@ptrCast(capture.condition_binder), roc_host);
 }
 
 fn expectNodeValueI64(value: abi.NodeValue, expected: i64) !void {
@@ -4721,7 +4904,7 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
     host.active_stream = stream;
 
@@ -4776,7 +4959,7 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
     host.active_stream = stream;
 
@@ -4849,7 +5032,7 @@ test "signals host marks dirty structural sources for structural patching" {
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
     host.active_stream = stream;
 
@@ -4863,7 +5046,7 @@ test "signals host marks dirty structural sources for structural patching" {
     try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
 
     var next_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);
     const patch_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &next_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = next_stream;
@@ -4902,7 +5085,7 @@ test "signals host prunes structural render when retained condition equality is 
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
     _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
     host.active_stream = stream;
 
@@ -4925,6 +5108,7 @@ test "signals host prunes structural render when retained condition equality is 
 
 test "signals host structural patch reorders keyed row DOM without recreating survivors" {
     test_erased_callable_drop_count = 0;
+    test_row_elem_call_count = 0;
 
     var host = HostEnv.init();
     var roc_host = makeSignalsRocHost(&host);
@@ -4942,10 +5126,11 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     defer abi.decrefElem(initial_root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
     host.active_stream = initial_stream;
 
+    try std.testing.expectEqual(@as(u64, 3), test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 4), initial_counts.create_element);
     try std.testing.expectEqual(@as(usize, 5), host.dom_elements.items.len);
@@ -4964,11 +5149,12 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     defer abi.decrefElem(reordered_root, &roc_host);
 
     var reordered_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root, &.{});
     const patch_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &reordered_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = reordered_stream;
 
+    try std.testing.expectEqual(@as(u64, 3), test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
     try std.testing.expect(patch_counts.append_child >= 2);
@@ -4986,11 +5172,12 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     defer abi.decrefElem(changed_root, &roc_host);
 
     var changed_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &changed_stream, changed_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &changed_stream, changed_root, &.{});
     const changed_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &changed_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = changed_stream;
 
+    try std.testing.expectEqual(@as(u64, 4), test_row_elem_call_count);
     const row_4_id = activeTextElementId(&host, "row-4-4") orelse unreachable;
     try std.testing.expectEqual(@as(u64, 0), changed_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 1), changed_counts.create_element);
@@ -4998,6 +5185,56 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     try std.testing.expect(activeTextElementId(&host, "row-1-1") == null);
     try std.testing.expect(activeTextElementId(&host, "row-3-3") == null);
     try std.testing.expectEqualSlices(u64, &.{ row_2_id, row_4_id }, host.dom_elements.items[@intCast(section_id)].children.items);
+}
+
+test "signals host rebuilds unchanged row when nested structural source is dirty" {
+    test_erased_callable_drop_count = 0;
+    test_row_elem_call_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const items = [_]abi.NodeValue{nodeValueI64(1)};
+    const children = [_]abi.Elem{
+        testNodeEachWithNestedWhenRows(&roc_host, &items, state_token),
+    };
+    const section = testElementWith(&roc_host, "section", &.{}, &children);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueBool(true), section);
+    defer abi.decrefElem(root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
+    host.active_stream = initial_stream;
+
+    try std.testing.expectEqual(@as(u64, 1), test_row_elem_call_count);
+    try std.testing.expect(activeTextElementId(&host, "row-1-1-true") != null);
+    try std.testing.expect(activeTextElementId(&host, "row-1-1-false") == null);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
+    host.states.items[state_index].value = nodeValueBool(false);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+
+    var next_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);
+    _ = applyStructuralNodeDescriptorStream(&host, &roc_host, &next_stream);
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
+    host.active_stream = next_stream;
+
+    try std.testing.expectEqual(@as(u64, 2), test_row_elem_call_count);
+    try std.testing.expect(activeTextElementId(&host, "row-1-1-true") == null);
+    try std.testing.expect(activeTextElementId(&host, "row-1-1-false") != null);
 }
 
 test "signals host structural patch clears fields absent from reused DOM node" {
@@ -5019,7 +5256,7 @@ test "signals host structural patch clears fields absent from reused DOM node" {
     defer abi.decrefElem(initial_root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root, &.{});
     _ = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
     host.active_stream = initial_stream;
 
@@ -5031,7 +5268,7 @@ test "signals host structural patch clears fields absent from reused DOM node" {
     defer abi.decrefElem(next_root, &roc_host);
 
     var next_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &next_stream, next_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &next_stream, next_root, &.{});
     const patch_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &next_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = next_stream;
@@ -5068,7 +5305,7 @@ test "signals host structural patch binds only changed event slots" {
     defer abi.decrefElem(initial_root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
     host.active_stream = initial_stream;
 
@@ -5088,7 +5325,7 @@ test "signals host structural patch binds only changed event slots" {
     defer abi.decrefElem(same_root, &roc_host);
 
     var same_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &same_stream, same_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &same_stream, same_root, &.{});
     const same_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = same_stream;
@@ -5107,7 +5344,7 @@ test "signals host structural patch binds only changed event slots" {
     defer abi.decrefElem(removed_root, &roc_host);
 
     var removed_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &removed_stream, removed_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &removed_stream, removed_root, &.{});
     const removed_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &removed_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = removed_stream;
@@ -5135,7 +5372,7 @@ test "signals host structural patch shifts moved row event ids only" {
     defer abi.decrefElem(initial_root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, initial_root, &.{});
     const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
     host.active_stream = initial_stream;
 
@@ -5153,7 +5390,7 @@ test "signals host structural patch shifts moved row event ids only" {
     defer abi.decrefElem(reordered_root, &roc_host);
 
     var reordered_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root, &.{});
     const reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &reordered_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = reordered_stream;
@@ -5172,7 +5409,7 @@ test "signals host structural patch shifts moved row event ids only" {
     defer abi.decrefElem(same_reordered_root, &roc_host);
 
     var same_reordered_stream: HostNodeDescriptorStream = .{};
-    host.collectActiveElemRootDescriptors(&roc_host, &same_reordered_stream, same_reordered_root);
+    host.collectActiveElemRootDescriptors(&roc_host, &same_reordered_stream, same_reordered_root, &.{});
     const same_reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_reordered_stream);
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = same_reordered_stream;
@@ -5185,6 +5422,7 @@ test "signals host structural patch shifts moved row event ids only" {
 
 fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
+    host.gpa.allocator().free(diff.row_items_changed);
 }
 
 fn boxTestElem(roc_host: *abi.RocHost, elem: abi.Elem) *abi.Elem {
@@ -5505,6 +5743,49 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
         row_fn,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .each = .{
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueList(roc_host, items))),
+                .key_eq = key_eq,
+                .key_of = key_of,
+                .item_eq = item_eq,
+                .row = row,
+            },
+        },
+        .tag = .Each,
+    };
+}
+
+fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const abi.NodeValue, condition_binder: HostBinderToken) abi.Elem {
+    const key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const key_of = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testUnaryNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const item_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const row = writeTestErasedCallable(
+        TestErasedBinderCapture,
+        roc_host,
+        &testNestedWhenRowElemCallable,
+        &testBinderCaptureOnDrop,
+        .{ .condition_binder = cloneTestBinderToken(condition_binder) },
     );
     return .{
         .payload = .{
