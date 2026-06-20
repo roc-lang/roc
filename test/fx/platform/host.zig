@@ -925,9 +925,12 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Builder as argument
+// Mirrors `Builder := { value : Str, count : U64 }`. Nominal records lay out in
+// declared field order, so the host struct lists `value` before `count` to match
+// the Roc declaration (not alphabetical order).
 const BuilderArgs = extern struct {
-    count: u64,
     value: RocStr,
+    count: u64,
 };
 
 fn hostedBuilderPrintValue(builder: BuilderArgs) callconv(.c) void {
