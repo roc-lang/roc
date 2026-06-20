@@ -25,15 +25,6 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 		{ expr: Box.box(Node.SignalExpr.ConstValue(nv)) }
 	}
 
-	const_i64 : I64 -> Signal(I64)
-	const_i64 = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvI64(value))) }
-
-	const_str : Str -> Signal(Str)
-	const_str = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvStr(value))) }
-
-	const_bool : Bool -> Signal(Bool)
-	const_bool = |value| { expr: Box.box(Node.SignalExpr.ConstValue(NvBool(value))) }
-
 	## Derived signal. The transform is a typed `a -> b`; we wrap it to decode the
 	## input payload and encode the output, pinning both to the call site's types.
 	map :

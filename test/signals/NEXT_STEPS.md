@@ -276,8 +276,8 @@ platform modules:
   those tokens to active state node ids during the descriptor walk. This replaced
   the earlier de-Bruijn prototype, which could not represent captured outer
   state refs inside nested state bodies.
-- `platform/Signal.roc` — opaque `Signal(a)`: `const`/`const_i64`/`const_str`/
-  `const_bool`, `map`, `map2`, `combine`. `Signal` now boxes/clones retained
+- `platform/Signal.roc` — opaque `Signal(a)`: `const`, `map`, `map2`,
+  `combine`. `Signal` now boxes/clones retained
   `SignalExpr` descriptors so multiple sinks can share a source without handing
   the host dangling descriptor pointers. `Map`/`Map2` use positional tag payloads
   because the record payload containing an erased callable and boxed recursive
@@ -528,10 +528,13 @@ Exit: apps import only `Elem`/`Signal`/`Html`/`Ui`; specs pass; `Reactive` and
 
 ### Phase 4 — Confined erasure; delete `NodeValue` from app code
 
-Status as of 2026-06-19: the representative apps and `identity_stress` no
+Status as of 2026-06-20: the representative apps and `identity_stress` no
 longer import `NodeValue` or define app-local encode/decode boilerplate for row
 fixtures. They use `List(Str)` row labels until the platform API removes
-`NodeValue` internally and captures typed per-edge thunks directly.
+`NodeValue` internally and captures typed per-edge thunks directly. The old
+typed-specialized `Signal.const_i64`/`const_str`/`const_bool` helpers have been
+removed; maintained apps use the generic `Signal.const` constructor so constants
+also go through the static-dispatch value path.
 
 Current priority: do this next. This is the largest remaining correctness gap
 against `DESIGN.md`, and it unlocks the retained-thunk node table, true

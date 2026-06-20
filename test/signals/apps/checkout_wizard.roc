@@ -166,7 +166,7 @@ main = |_| {
 																Html.text_s(address_review),
 																Html.text_s(review_label),
 																Html.action_button(
-																	Signal.const_str("Place order"),
+																	Signal.const("Place order"),
 																	submit_disabled,
 																	submit_count.on_unit(|current| current + 1),
 																),
