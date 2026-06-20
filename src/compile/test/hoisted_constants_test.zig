@@ -1004,7 +1004,7 @@ fn findHoistedArtifact(
 
 fn expectCompileTimeRootKindsPresent(
     artifact: check.CheckedArtifact.ImportedModuleView,
-) !void {
+) anyerror!void {
     var saw_top_level_constant = false;
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
@@ -1034,7 +1034,7 @@ fn expectCompileTimeRootKindsPresent(
 
 fn expectExportedRuntimeEntrypoint(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) !void {
+) anyerror!void {
     for (artifact.root_requests.runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
@@ -1051,7 +1051,7 @@ fn expectRootRequestBefore(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     before: check.CheckedArtifact.ComptimeRootId,
     after: check.CheckedArtifact.ComptimeRootId,
-) !void {
+) anyerror!void {
     const before_index = compileTimeRequestIndexForRoot(artifact, before) orelse return error.BeforeRootHadNoRequest;
     const after_index = compileTimeRequestIndexForRoot(artifact, after) orelse return error.AfterRootHadNoRequest;
     try std.testing.expect(before_index < after_index);
@@ -1105,7 +1105,7 @@ fn rootSourceMatches(
 
 fn expectPatternExtractionSyntheticRegions(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) !void {
+) anyerror!void {
     const ModuleEnv = can.ModuleEnv;
     const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
@@ -1270,12 +1270,12 @@ fn expectPatternExtractionSyntheticRegions(
     try std.testing.expect(extraction_count >= 4);
 }
 
-fn expectRegionEqual(expected: base.Region, actual: base.Region) !void {
+fn expectRegionEqual(expected: base.Region, actual: base.Region) anyerror!void {
     try std.testing.expectEqual(expected.start.offset, actual.start.offset);
     try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
-fn writeEchoPlatform(dir: anytype) !void {
+fn writeEchoPlatform(dir: anytype) anyerror!void {
     try dir.createDirPath(std.testing.io, ".roc_echo_platform");
     try dir.writeFile(std.testing.io, .{
         .sub_path = ".roc_echo_platform/main.roc",
@@ -1315,7 +1315,7 @@ fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
     needle: []const u8,
-) !void {
+) anyerror!void {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -1325,12 +1325,13 @@ fn expectReportDoesNotContain(
     var writer_alloc = std.Io.Writer.Allocating.fromArrayList(allocator, &unmanaged);
     defer unmanaged = writer_alloc.toArrayList();
 
-    report.render(&writer_alloc.writer, .markdown) catch |err| {
-        if (err == error.WriteFailed) return error.OutOfMemory;
-        return err;
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.OutOfMemory,
+        error.WriteFailed,
+        => return error.OutOfMemory,
     };
 
-    try std.testing.expect(std.mem.indexOf(u8, writer_alloc.written(), needle) == null);
+    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
 }
 
 fn findStoredCompileTimeRootI64(
@@ -1399,7 +1400,7 @@ fn countCompileTimeRootKind(
 fn storedI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     entry: check.CheckedArtifact.HoistedConstEntry,
-) !i64 {
+) anyerror!i64 {
     const root = artifact.compile_time_roots.root(entry.root);
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
@@ -1425,7 +1426,7 @@ fn storedI64(
 fn rootStoredI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     root: check.CheckedArtifact.CompileTimeRoot,
-) !i64 {
+) anyerror!i64 {
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
@@ -1439,7 +1440,7 @@ fn rootStoredI64(
 fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
-) !i64 {
+) anyerror!i64 {
     const value = artifact.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {

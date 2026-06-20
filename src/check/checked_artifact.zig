@@ -17955,13 +17955,6 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     };
 }
 
-fn constRefHoistedOwner(ref: ConstRef) ?ConstHoistedOwner {
-    return switch (ref.owner) {
-        .top_level_binding => null,
-        .hoisted_expr => |owner| owner,
-    };
-}
-
 /// Public `procedureBindingRefEql` function.
 pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;

@@ -4356,6 +4356,31 @@ const PatternExtractionRegionStats = struct {
     digest: [32]u8,
 };
 
+const PatternExtractionRegionStatsError = error{
+    PatternExtractionMissingSourcePattern,
+    PatternExtractionSourcePatternMismatch,
+    PatternExtractionMissingCheckedPattern,
+    PatternExtractionMissingSyntheticMatch,
+    PatternExtractionSyntheticMatchRegionMismatch,
+    PatternExtractionRootWasNotSyntheticMatch,
+    PatternExtractionSyntheticMatchBranchCountMismatch,
+    PatternExtractionSyntheticMatchWasTrySuffix,
+    PatternExtractionSyntheticMatchSkippedExhaustiveness,
+    PatternExtractionMissingBaseExpr,
+    PatternExtractionBaseRegionMismatch,
+    PatternExtractionSyntheticPatternCountMismatch,
+    PatternExtractionSyntheticPatternWasDegenerate,
+    PatternExtractionSyntheticPatternHadRemaps,
+    PatternExtractionSyntheticBranchHadGuard,
+    PatternExtractionMissingScrutineePattern,
+    PatternExtractionScrutineePatternRegionMismatch,
+    PatternExtractionMissingSyntheticLookup,
+    PatternExtractionSyntheticLookupRegionMismatch,
+    PatternExtractionValueWasNotSyntheticLookup,
+    PatternExtractionLookupPatternMismatch,
+    PatternExtractionLookupWasNotResolved,
+};
+
 fn compileAppWithCheckedModuleCache(
     allocator: Allocator,
     cache_dir: []const u8,
@@ -4412,7 +4437,7 @@ fn collectPatternExtractionRegionStats(
     root: *const check.CheckedArtifact.CheckedModuleArtifact,
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
-) !PatternExtractionRegionStats {
+) PatternExtractionRegionStatsError!PatternExtractionRegionStats {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     var count: usize = 0;
 
@@ -4436,7 +4461,7 @@ fn hashPatternExtractionRegionsForView(
     hasher: *std.crypto.hash.sha2.Sha256,
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
-) !void {
+) PatternExtractionRegionStatsError!void {
     for (view.compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
         const body = root.hoisted_body orelse continue;

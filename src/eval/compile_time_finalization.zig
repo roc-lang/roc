@@ -6,12 +6,10 @@
 
 const std = @import("std");
 const base = @import("base");
-const can = @import("can");
 const check = @import("check");
 const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
 const checked = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
