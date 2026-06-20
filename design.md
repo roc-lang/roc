@@ -1040,10 +1040,13 @@ renamed_fields = Fields.rename_fields(original_fields, |name| encoding.rename_fi
 parse_nested = Nested.parser_for(encoding)
 ```
 
-`encoding.rename_field` is a pure format method. Every encoding provides it;
-identity is the normal implementation. `Fields.rename_fields` applies that
-function to every requested record field, discards the original names from the
-returned `Fields`, and rebuilds the length buckets used by `Fields.for_size`,
+`encoding.rename_field(name)` is ordinary method-call syntax for a pure format
+method whose first argument is the encoding value. Every encoding provides it;
+identity is the normal implementation. Taking the encoding value as an argument
+lets one encoding type store parser-construction configuration such as JSON
+field naming style. `Fields.rename_fields` applies that function to every
+requested record field, discards the original names from the returned `Fields`,
+and rebuilds the length buckets used by `Fields.for_size`,
 `Fields.shortest_name`, and `Fields.longest_name`. If parser construction is
 compile-time evaluated, the renaming work is also compile-time work. For JSON
 camel-case decoding, the final runtime parser can contain only `camelCase`
@@ -1068,7 +1071,7 @@ encoding.parse_record_field : Fields(_shape), state -> Try(
 encoding.skip_record_field : state -> Try(state, err)
 encoding.missing_record_field : Str, state -> err
 encoding.missing_optional_field : Str, state -> optional_err
-encoding.rename_field : Str -> Str
+encoding.rename_field : encoding, Str -> Str
 ```
 
 For `Field`, `TryField`, and `TryFieldCaseless`, `rest` is the state positioned
@@ -1169,12 +1172,13 @@ transformed heap `Str`; it is not allowed to make the SSO path slower for the
 sake of generality.
 
 Nested records follow the same construction/runtime split. The outer derived
-`parser` eagerly calls every nested parser constructor before returning its
-runtime lambda. A nested record gets its own `Fields(_nested_shape)` value, then
-renames and rebuckets that field set through the same `encoding.rename_field`
-method. A custom nominal field calls that nominal type's explicit `parser`
-method during parser construction. At runtime the outer record parser dispatches
-to the already-constructed field parser for the matched field shape.
+`parser_for` method eagerly calls every nested parser constructor before
+returning its runtime lambda. A nested record gets its own
+`Fields(_nested_shape)` value, then renames and rebuckets that field set through
+the same `encoding.rename_field` method. A custom nominal field calls that
+nominal type's explicit `parser_for` method during parser construction. At
+runtime the outer record parser dispatches to the already-constructed field
+parser for the matched field shape.
 
 Tag-union parsing follows the same separation. The format's tag-union method
 receives the complete tag spec, identifies the input tag according to that
@@ -1235,8 +1239,9 @@ The JSON `Str` format receives valid UTF-8 text. The JSON `Utf8` format receives
 bytes and validates UTF-8 before producing any `Str`. JSON record parsing scans
 an object one field event at a time through the compiler-generated record loop,
 so object key order does not affect performance beyond normal key matching. A
-plain JSON encoding can use identity `rename_field`. A camel-case JSON
-encoding can rename Roc fields at parser construction time:
+plain JSON encoding value can use identity `rename_field`. The same JSON
+encoding type can carry a camel-case configuration value that renames Roc fields
+at parser construction time:
 
 ```roc
 user_id -> userId

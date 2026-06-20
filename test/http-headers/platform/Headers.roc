@@ -29,8 +29,8 @@ Headers := { raw : Str }.{
 }
 
 HeaderEncoding := [Caseless].{
-	rename_field : Str -> Str
-	rename_field = |name| underscores_to_dashes(name)
+	rename_field : HeaderEncoding, Str -> Str
+	rename_field = |_, name| underscores_to_dashes(name)
 
 	parse_str : Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
 	parse_str = |state| {

@@ -4,7 +4,7 @@ This plan implements the method-based structural parsing design described in
 `design.md`, section `Structural Serialization Methods`. That section is the
 source of truth for:
 
-- `a.parser : encoding -> (state -> Try({ value : a, rest : state }, err))`
+- `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`
 - direct state construction such as `Headers.{ raw }`
 - `Fields(_shape)` and `Field(_shape)` opaque values
 - compile-time field renaming with `Fields.rename_fields`
@@ -23,7 +23,7 @@ maintain both systems side by side.
 - [x] Treat the public API examples in that section as normative:
   - [x] convenience APIs such as `Headers.parse(raw)`;
   - [x] structural method shape
-    `a.parser : encoding -> (state -> Try({ value : a, rest : state }, err))`;
+    `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`;
   - [x] direct state construction such as `Headers.{ raw }`;
   - [x] opaque `Fields(_shape)` / `Field(_shape)` metadata;
   - [x] record events carrying `rest` at the value-start position;
@@ -45,7 +45,7 @@ maintain both systems side by side.
 - [x] The old `parse_from` structural derivation path is gone from the compiler
   and tests, except for any deliberately retained migration note that is not
   compiler source or Roc fixture source.
-- [x] The new `parser` derivation is implemented through ordinary static
+- [x] The new `parser_for` derivation is implemented through ordinary static
   dispatch and direct generated code, not callback tables or a runtime shape
   interpreter.
 - [x] The HTTP header regression demonstrates zero runtime allocation in both
@@ -163,30 +163,30 @@ maintain both systems side by side.
 
 - [x] Replace the old structural parse method name:
   - [x] Remove special handling for `parse_from`.
-  - [x] Add special handling for `parser`.
-  - [x] Update identifier initialization so `parser` is interned wherever
+  - [x] Add special handling for `parser_for`.
+  - [x] Update identifier initialization so `parser_for` is interned wherever
     builtin method names are initialized.
 - [x] Update `src/check/static_dispatch_registry.zig`:
-  - [x] Replace the old `.parse_from` result mode with `.parser`.
-  - [x] Track that `parser` returns a function.
+  - [x] Replace the old `.parse_from` result mode with `.parser_for`.
+  - [x] Track that `parser_for` returns a function.
   - [x] Track the `encoding` argument type separately from the returned runtime
     state argument type.
-  - [x] Preserve ordinary static dispatch for custom nominal `parser` methods.
+  - [x] Preserve ordinary static dispatch for custom nominal `parser_for` methods.
 - [x] Update static-dispatch problem reporting:
-  - [x] Missing `parser` on a custom nominal type should mention `parser`.
+  - [x] Missing `parser_for` on a custom nominal type should mention `parser_for`.
   - [x] Missing format methods should mention the exact missing method, such as
     `parse_str`, `parse_record_field`, `skip_record_field`, or `rename_field`.
   - [x] Remove references to `parse_from` from user-facing errors.
 - [x] Update any tests that snapshot static-dispatch output.
-- [x] Ensure `parser` remains a normal method users can call directly:
-  - [x] `Shape.parser(encoding)` should work.
+- [x] Ensure `parser_for` remains a normal method users can call directly:
+  - [x] `Shape.parser_for(encoding)` should work.
   - [x] `({ foo: "x" }).encode_to(encoding)` should work once structural
     `encode_to` derivation is implemented.
 
 ## Parser Type Shape In Checking
 
 - [x] Validate the derived method shape:
-  - [x] `a.parser : encoding -> (state -> Try({ value : a, rest : state }, err))`
+  - [x] `a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))`
   - [x] The returned function must take exactly one runtime state argument.
   - [x] The returned `Try` `Ok` payload must be a record with `value` and `rest`.
   - [x] The `value` field must match the parsed shape.
@@ -198,14 +198,14 @@ maintain both systems side by side.
   - [x] `a.encode_to : a, encoding -> (state -> Try(state, err))`
   - [x] Do not change encoding implementation unless needed for shared method
     infrastructure.
-- [x] Ensure checking derives `parser` for supported structural types:
+- [x] Ensure checking derives `parser_for` for supported structural types:
   - [x] `Str`
   - [x] records
   - [x] tag unions currently supported by the branch
   - [x] `Try(Str, [Missing])`
-  - [x] `Try(value, [Missing])` where `value` has a parser, if this falls out
-    naturally from the field-type machinery
-  - [x] custom nominal types with explicit `parser`
+  - [x] `Try(value, [Missing])` where `value` has a `parser_for` method, if
+    this falls out naturally from the field-type machinery
+  - [x] custom nominal types with explicit `parser_for`
   - [x] `U64`, at minimum for the new header `content_length` test
 - [x] Decide which numeric primitives are implemented now:
   - [x] If only `U64` is implemented, unsupported numeric primitives must report
@@ -226,7 +226,7 @@ maintain both systems side by side.
   - [x] If method naming follows a different existing numeric naming pattern,
     update this plan and tests before implementation.
 - [x] Required methods for records:
-  - [x] `encoding.rename_field : Str -> Str`
+  - [x] `encoding.rename_field : encoding, Str -> Str`
   - [x] `encoding.parse_record_field : Fields(_shape), state -> Try(event, err)`
   - [x] `encoding.skip_record_field : state -> Try(state, err)`
   - [x] `encoding.missing_record_field : Str, state -> err` only when the target
@@ -238,11 +238,11 @@ maintain both systems side by side.
     missing.
   - [x] Keep the existing optional-only regression intent.
 - [x] Required methods for tag unions:
-  - [x] Keep the current opaque tag spec operations, updated to use `parser`
+  - [x] Keep the current opaque tag spec operations, updated to use `parser_for`
     instead of `parse_from`.
   - [x] Do not add tag-name renaming in this change.
 - [x] Custom nominal parser requirements:
-  - [x] Use the custom nominal's explicit `parser`.
+  - [x] Use the custom nominal's explicit `parser_for`.
   - [x] Eagerly call that parser constructor before the enclosing parser returns
     its runtime lambda.
   - [x] Use the returned runtime parser at the matched value position.
@@ -302,8 +302,8 @@ maintain both systems side by side.
 
 ## Derived Parser Construction
 
-- [x] Change derived parser lowering so a structural `parser` method returns a
-  function.
+- [x] Change derived parser lowering so a structural `parser_for` method returns
+  a function.
 - [x] Decide which compiler stage owns each piece of derivation data, and make
   the ownership explicit:
   - [x] checking owns user-facing static-dispatch requirements and shape
@@ -327,12 +327,13 @@ maintain both systems side by side.
   repeat the same rename/rebucket construction.
 - [x] Ensure recursive nominal/tag-union parsers still terminate through the
   existing recursive function handling rather than trying to build an infinite
-  parser value. Recursive nominal tag unions without an explicit `parser`
+  parser value. Recursive nominal tag unions without an explicit `parser_for`
   produce a checking error; recursive nominal tag unions with an explicit
-  method use the ordinary custom nominal parser path.
+  method use the ordinary custom nominal `parser_for` path.
 - [x] Ensure type aliases expand to the same structural parser as their backing
   structure.
-- [x] Ensure generalized parser methods specialize normally when monomorphic
+- [x] Ensure generalized `parser_for` methods specialize normally when
+  monomorphic
   types are requested.
 
 ## Runtime Record Loop
@@ -399,7 +400,7 @@ maintain both systems side by side.
 ## Tag Union Integration
 
 - [x] Keep tag-union specs opaque and compiler-generated.
-- [x] Update tag-union derived parsing to use `parser` methods.
+- [x] Update tag-union derived parsing to use `parser_for` methods.
 - [x] Ensure tag-union payload parsing uses value-start state and returned
   `rest`, same as record fields.
 - [x] Keep externally tagged JSON examples working:
@@ -433,7 +434,7 @@ maintain both systems side by side.
 
 ## HTTP Header Platform Changes
 
-- [x] Replace `output.parse_from` constraints with `output.parser`.
+- [x] Replace `output.parse_from` constraints with `output.parser_for`.
 - [x] Replace the old `HeaderFormat` value/rest event API.
 - [x] Define the runtime state as the header value itself, for example:
   - [x] `Headers := { raw : Str }.{ ... }`
@@ -486,7 +487,7 @@ maintain both systems side by side.
 
 ## JSON Platform Changes
 
-- [x] Replace `a.parse_from` constraints with `a.parser`.
+- [x] Replace `a.parse_from` constraints with `a.parser_for`.
 - [x] Replace old `JsonFormat` value/rest event shape.
 - [x] Define JSON runtime state as ordinary Roc data:
   - [x] input cursor over `Str`
@@ -517,7 +518,8 @@ maintain both systems side by side.
 - [x] Delete any temporary compatibility wrappers introduced during the
   migration. The final tree must not contain helper paths that silently emulate
   the old API.
-- [x] Delete or rename `ParseFrom*` CLI tests so the test names match `parser`.
+- [x] Delete or rename `ParseFrom*` CLI tests so the test names match
+  `parser_for`.
 - [x] Delete old record-field event validation for:
   - [x] `Field({ name : Str, value : state, rest : state })`
   - [x] `longest_field_len`
@@ -542,7 +544,7 @@ maintain both systems side by side.
 ## Checking Tests To Add Or Update
 
 - [x] Add/rename CLI test: old `parse_from` method is not accepted.
-- [x] Add CLI test: missing `parser` on custom nominal type reports a clear
+- [x] Add CLI test: missing `parser_for` on custom nominal type reports a clear
   static-dispatch error.
 - [x] Add CLI test: record parser missing `rename_field` reports missing
   `rename_field`.
@@ -565,13 +567,13 @@ maintain both systems side by side.
   field handle.
 - [x] Add CLI test: unsupported structural field shape reports a checking error,
   not a post-check invariant.
-- [x] Add CLI test: custom nominal `parser` is used inside a derived record.
-- [x] Add CLI test: structural record `parser` is callable directly.
+- [x] Add CLI test: custom nominal `parser_for` is used inside a derived record.
+- [x] Add CLI test: structural record `parser_for` is callable directly.
 
 ## HTTP Header Regression Tests
 
 - [x] Update the main platform regression to build the Roc app with the new
-  `parser` API.
+  `parser_for` API.
 - [x] Add required typed field test:
   - [x] request contains `Content-Length: 123`
   - [x] Roc record field is `content_length : U64`
@@ -634,7 +636,7 @@ maintain both systems side by side.
 
 ## JSON Regression Tests
 
-- [x] Update JSON proof-of-concept platform to the new `parser` API.
+- [x] Update JSON proof-of-concept platform to the new `parser_for` API.
 - [x] Add identity rename record test:
   - [x] Roc field `foo`
   - [x] JSON key `"foo"`
@@ -702,7 +704,8 @@ maintain both systems side by side.
 - [x] Keep Roc parser responsible for header decoding.
 - [x] Ensure host does not build a header map.
 - [x] Ensure host does not allocate.
-- [x] Ensure Roc app response proves values were parsed by Roc parser methods.
+- [x] Ensure Roc app response proves values were parsed by Roc `parser_for`
+  methods.
 
 ## Source And Symbol Audits
 

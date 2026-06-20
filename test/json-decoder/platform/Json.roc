@@ -1,8 +1,12 @@
 JsonState := [Input(Str)]
 
-JsonEncoding := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| name
+JsonEncoding := [Default, CamelCase].{
+	rename_field : JsonEncoding, Str -> Str
+	rename_field = |encoding, name|
+		match encoding {
+			Default => name
+			CamelCase => snake_to_camel(name)
+		}
 
 	parse_str : JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
 	parse_str = |state|
@@ -50,44 +54,6 @@ JsonEncoding := [Default].{
 	}
 }
 
-JsonCamelEncoding := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| snake_to_camel(name)
-
-	parse_str : JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
-	parse_str = |state| JsonEncoding.parse_str(state)
-
-	parse_record_field : Fields(_shape), JsonState -> Try(
-		[
-			Field({ field : Field(_shape), rest : JsonState }),
-			TryField({ name : Str, rest : JsonState }),
-			TryFieldCaseless({ name : Str, rest : JsonState }),
-			Continue({ rest : JsonState }),
-			Done({ rest : JsonState }),
-		],
-		Json.DecodeErr,
-	)
-	parse_record_field = |fields, state|
-		match state {
-			Input(raw) => parse_record_field_from_object(fields, raw)
-		}
-
-	skip_record_field : JsonState -> Try(JsonState, Json.DecodeErr)
-	skip_record_field = |state| skip_json_value(state)
-
-	missing_record_field : Str, JsonState -> Json.DecodeErr
-	missing_record_field = |_, _| Json.DecodeErr.MissingRequired
-
-	missing_optional_field : Str, JsonState -> [Missing]
-	missing_optional_field = |_, _| Missing
-
-	parse_tag_union : ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
-	parse_tag_union = |spec, state|
-		match state {
-			Input(value) => parse_tag_union_from_json(value, spec)
-		}
-}
-
 Json :: [].{
 	DecodeErr := [MissingRequired, InvalidJson].{}
 
@@ -123,11 +89,11 @@ Json :: [].{
 
 	parser_camel : () -> (Str -> Try(a, Json.DecodeErr))
 		where [
-			a.parser_for : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parser_camel = || {
 		Shape : a
-		parse_shape = Shape.parser_for(JsonCamelEncoding.Default)
+		parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
 
 		|json| {
 			parsed = parse_shape(JsonState.Input(json))?
@@ -139,25 +105,6 @@ Json :: [].{
 					} else {
 						Err(invalid_json)
 					}
-			}
-		}
-	}
-
-	parse_camel : Str -> Try(a, Json.DecodeErr)
-		where [
-			a.parser_for : JsonCamelEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
-		]
-	parse_camel = |json| {
-		Shape : a
-		parse_shape = Shape.parser_for(JsonCamelEncoding.Default)
-		parsed = parse_shape(JsonState.Input(json))?
-
-		match parsed.rest {
-			Input(rest) =>
-				if Str.is_empty(Str.trim_start(rest)) {
-					Ok(parsed.value)
-				} else {
-					Err(invalid_json)
 				}
 		}
 	}

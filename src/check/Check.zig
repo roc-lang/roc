@@ -13795,7 +13795,7 @@ fn validateRenameFieldMethod(
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
     const str_var = try self.freshStr(env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{str_var}, str_var), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var }, str_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,

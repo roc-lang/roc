@@ -1,8 +1,8 @@
 ParserStoredTryFieldCaseless :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| underscores_to_dashes(name)
+	rename_field : Format, Str -> Str
+	rename_field = |_, name| underscores_to_dashes(name)
 
 	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
 	parse_str = |state|

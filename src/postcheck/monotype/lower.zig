@@ -5682,17 +5682,18 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
         shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
         if (self.tryOptionalInfo(shape_ty)) |info| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.customParserLookup(shape_ty) != null) return;
         if (self.typeHasBuiltinOwner(shape_ty, .str) or self.typeHasBuiltinOwner(shape_ty, .u64)) return;
 
         switch (self.builder.shapeContent(shape_ty)) {
-            .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_ty, str_ty),
+            .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
             .tag_union => {},
             else => {},
         }
@@ -5702,6 +5703,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
         shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -5710,9 +5712,9 @@ const BodyContext = struct {
 
         switch (self.builder.shapeContent(shape_ty)) {
             .record, .zst => {
-                try self.buildEncodeConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_ty, str_ty);
+                try self.buildEncodeConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty);
                 for (self.recordFieldsForShape(shape_ty)) |field| {
-                    try self.buildEncodeConstructionPrecomputedPlan(plan, field.ty, encoding_ty, str_ty);
+                    try self.buildEncodeConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
                 }
             },
             else => {},
@@ -5746,6 +5748,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
         shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -5770,7 +5773,7 @@ const BodyContext = struct {
                 locals[index],
                 self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
             );
-            values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+            values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
         }
 
         try plan.records.put(shape_ty, .{
@@ -5830,6 +5833,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
         shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -5854,7 +5858,7 @@ const BodyContext = struct {
                 locals[index],
                 self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
             );
-            values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+            values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
         }
 
         try plan.records.put(shape_ty, .{
@@ -5867,7 +5871,7 @@ const BodyContext = struct {
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
 
         for (fields) |field| {
-            try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_ty, str_ty);
+            try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
         }
     }
 
@@ -6083,7 +6087,7 @@ const BodyContext = struct {
 
             for (record_fields, 0..) |field, index| {
                 locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+                values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
             }
 
             break :blk locals;
@@ -7467,6 +7471,7 @@ const BodyContext = struct {
 
     fn renamedRecordFieldNameExpr(
         self: *BodyContext,
+        encoding_expr: Ast.ExprId,
         encoding_ty: Type.TypeId,
         field: Type.Field,
         str_ty: Type.TypeId,
@@ -7474,17 +7479,18 @@ const BodyContext = struct {
         const field_text = self.builder.program.names.recordFieldLabelText(field.name);
         const field_expr = try self.builder.stringExpr(field_text, str_ty);
         const lookup = self.methodLookupForTypeName(encoding_ty, "rename_field");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{str_ty}, str_ty);
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, str_ty }, str_ty);
         const rename_fn = self.builder.functionShape(callable_mono_ty, "rename_field target method was not a function");
         const arg_tys = self.builder.program.types.span(rename_fn.args);
-        if (arg_tys.len != 1) Common.invariant("rename_field target method had an unexpected arity");
-        if (!self.sameType(arg_tys[0], str_ty)) Common.invariant("rename_field argument type differed from Str");
+        if (arg_tys.len != 2) Common.invariant("rename_field target method had an unexpected arity");
+        if (!self.sameType(arg_tys[0], encoding_ty)) Common.invariant("rename_field encoding argument differed from parser encoding type");
+        if (!self.sameType(arg_tys[1], str_ty)) Common.invariant("rename_field name argument differed from Str");
         if (!self.sameType(rename_fn.ret, str_ty)) Common.invariant("rename_field return type differed from Str");
         return try self.builder.program.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{field_expr}),
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ encoding_expr, field_expr }),
             } },
         });
     }
@@ -9114,7 +9120,7 @@ const BodyContext = struct {
         if (lookup == null) {
             return switch (plan.result_mode) {
                 .equality => try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
-                .parser => try self.lowerStructuralParser(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
+                .parser_for => try self.lowerStructuralParser(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
                 .encode_to => try self.lowerStructuralEncodeTo(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
                 .value => Common.invariant("value dispatch plan had no resolved dispatch target"),
             };
@@ -9145,7 +9151,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (mode) {
             .value => expr,
-            .parser => expr,
+            .parser_for => expr,
             .encode_to => expr,
             .equality => |eq| if (eq.negated) blk: {
                 if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
@@ -9518,14 +9524,14 @@ const BodyContext = struct {
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .parser and plan.result_mode.parser.structural_allowed) return null;
+            if (plan.result_mode == .parser_for and plan.result_mode.parser_for.structural_allowed) return null;
             if (plan.result_mode == .encode_to and plan.result_mode.encode_to.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .parser and plan.result_mode.parser.structural_allowed) return null;
+            if (plan.result_mode == .parser_for and plan.result_mode.parser_for.structural_allowed) return null;
             if (plan.result_mode == .encode_to and plan.result_mode.encode_to.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
@@ -9706,7 +9712,7 @@ const BodyContext = struct {
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
-            .parser => Common.invariant("parser dispatch plan reached structural equality lowering"),
+            .parser_for => Common.invariant("parser_for dispatch plan reached structural equality lowering"),
             .encode_to => Common.invariant("encode_to dispatch plan reached structural equality lowering"),
         };
     }
@@ -9720,8 +9726,8 @@ const BodyContext = struct {
         pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprId {
         const parser = switch (plan.result_mode) {
-            .parser => |parser| parser,
-            else => Common.invariant("non-parser dispatch plan reached structural parse lowering"),
+            .parser_for => |parser_for| parser_for,
+            else => Common.invariant("non-parser_for dispatch plan reached structural parse lowering"),
         };
         if (!parser.structural_allowed) Common.invariant("structural parser dispatch plan did not permit structural parser lowering");
 
@@ -9771,7 +9777,13 @@ const BodyContext = struct {
         const str_ty = try self.builder.primitiveType(.str);
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
-        try self.buildParserConstructionPrecomputedPlan(&precomputed_plan, shape_ty, arg_tys[0], str_ty);
+        try self.buildParserConstructionPrecomputedPlan(
+            &precomputed_plan,
+            shape_ty,
+            try self.builder.localExpr(encoding_local, arg_tys[0]),
+            arg_tys[0],
+            str_ty,
+        );
 
         const parsed = try self.lowerParseShapeFromState(
             shape_ty,
@@ -9854,7 +9866,13 @@ const BodyContext = struct {
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
         precomputed_plan.next_capture_id = encodeToFirstFieldCaptureId();
-        try self.buildEncodeConstructionPrecomputedPlan(&precomputed_plan, shape_ty, arg_tys[1], str_ty);
+        try self.buildEncodeConstructionPrecomputedPlan(
+            &precomputed_plan,
+            shape_ty,
+            try self.builder.localExpr(encoding_local, arg_tys[1]),
+            arg_tys[1],
+            str_ty,
+        );
 
         const encoded = try self.lowerEncodeShapeToState(
             shape_ty,
@@ -9956,7 +9974,7 @@ const BodyContext = struct {
             owned_renamed_field_values = values;
             for (record_fields, 0..) |field, index| {
                 locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.renamedRecordFieldNameExpr(encoding_ty, field, str_ty);
+                values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
             }
             break :blk locals;
         };

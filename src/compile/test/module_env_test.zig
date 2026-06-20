@@ -109,7 +109,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Count reflects the current merged builtin set, including Str.find_first,
-    // parser, encode_to, and structural parser field metadata identifiers.
+    // parser_for, encode_to, and structural parser field metadata identifiers.
     // Ranges desugar to the generic Iter.exclusive_range / inclusive_range
     // constructors, so no per-type range method identifiers are interned.
     try testing.expectEqual(@as(u32, 97), original.common.idents.interner.entry_count);

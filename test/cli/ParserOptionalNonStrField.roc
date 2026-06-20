@@ -1,8 +1,8 @@
 ParserOptionalNonStrField :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| name
+	rename_field : Format, Str -> Str
+	rename_field = |_, name| name
 
 	parse_u64 : State -> Try({ value : U64, rest : State }, [MissingRequired])
 	parse_u64 = |state|

@@ -1,8 +1,8 @@
 ParserRenamedFieldBounds :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name|
+	rename_field : Format, Str -> Str
+	rename_field = |_, name|
 		if Str.is_eq(name, "long_name") {
 			"x"
 		} else {

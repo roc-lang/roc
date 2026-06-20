@@ -1,8 +1,8 @@
 ParserMissingStrMethod :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| name
+	rename_field : Format, Str -> Str
+	rename_field = |_, name| name
 
 	parse_record_field : Fields(_shape), State -> Try(
 		[

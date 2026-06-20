@@ -1,8 +1,8 @@
 EncodeToMissingStrMethod :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| name
+	rename_field : Format, Str -> Str
+	rename_field = |_, name| name
 
 	begin_record : U64 -> Try(U64, [])
 	begin_record = |state| Ok(state)

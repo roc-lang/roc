@@ -1,8 +1,8 @@
 ParserCustomNominalField :: [].{}
 
 Format := [Default].{
-	rename_field : Str -> Str
-	rename_field = |name| name
+	rename_field : Format, Str -> Str
+	rename_field = |_, name| name
 
 	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
 	parse_str = |state|
