@@ -1873,6 +1873,13 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
     const self_len = self.len();
     if (self_len != other.len()) return false;
 
+    if (self_len > 0 and self_len < @sizeOf(u64) and self.isSmallStr() and other.isSmallStr()) {
+        const left_word = std.mem.readInt(u64, self.asU8ptr()[0..@sizeOf(u64)], .little);
+        const right_word = std.mem.readInt(u64, other.asU8ptr()[0..@sizeOf(u64)], .little);
+        const active = (@as(u64, 1) << @intCast(self_len * 8)) - 1;
+        return wordCaselessAsciiEqualMasked(left_word, right_word, active);
+    }
+
     return bytesCaselessAsciiEqualFast(self.asU8ptr(), other.asU8ptr(), self_len);
 }
 
@@ -1889,8 +1896,8 @@ inline fn bytesCaselessAsciiEqualFast(left: [*]const u8, right: [*]const u8, len
     const tail_len = len - index;
     if (tail_len != 0) {
         const active = (@as(u64, 1) << @intCast(tail_len * 8)) - 1;
-        const left_word = readTailU64ZeroPadded(left, index, tail_len);
-        const right_word = readTailU64ZeroPadded(right, index, tail_len);
+        const left_word = readTailU64(left, len, index, tail_len);
+        const right_word = readTailU64(right, len, index, tail_len);
         return wordCaselessAsciiEqualMasked(left_word, right_word, active);
     }
 
@@ -1963,6 +1970,17 @@ inline fn wordCaselessAsciiEqualSlowMasked(left: u64, right: u64, active: u64) b
         }
     }
     return true;
+}
+
+inline fn readTailU64(bytes: [*]const u8, len: usize, index: usize, tail_len: usize) u64 {
+    if (len >= @sizeOf(u64)) {
+        const load_index = len - @sizeOf(u64);
+        const shift = (index - load_index) * 8;
+        const word = std.mem.readInt(u64, bytes[load_index..][0..@sizeOf(u64)], .little);
+        return word >> @intCast(shift);
+    }
+
+    return readTailU64ZeroPadded(bytes, index, tail_len);
 }
 
 inline fn readTailU64ZeroPadded(bytes: [*]const u8, index: usize, tail_len: usize) u64 {
@@ -3582,6 +3600,24 @@ test "caselessAsciiEquals: seamless slice" {
     try std.testing.expect(str1.isSeamlessSlice());
 
     const str2 = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try std.testing.expect(are_equal);
+}
+
+test "caselessAsciiEquals: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("012345678901234567890123456789aBc", test_env.getOps());
+    const str1 = substringUnsafeC(source, source.len() - 3, 3, test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    try std.testing.expect(str1.isSeamlessSlice());
+
+    const str2 = RocStr.fromSlice("AbC", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
     const are_equal = strCaselessAsciiEquals(str1, str2);
