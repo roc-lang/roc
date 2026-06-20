@@ -1,6 +1,6 @@
 platform ""
 	requires {} { main : {} -> Elem }
-	exposes [Elem, NodeValue, Node, Signal, Html, Ui]
+	exposes [Elem, Node, Signal, Html, Ui]
 	packages {}
 	provides {
 		"roc_ui_init": ui_init,
@@ -11,7 +11,6 @@ platform ""
 		arm64mac: { inputs: ["libhost.a", app] },
 	}
 
-import NodeValue exposing [NodeValue]
 import Elem exposing [Elem]
 import Node
 import Signal
