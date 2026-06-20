@@ -717,6 +717,7 @@ comptime {
 pub const NodeSignalExprCombinePayload = extern struct {
     _0: RocList(NodeSignalExpr),
     _1: RocErasedCallable,
+    _2: RocErasedCallable,
 };
 
 /// Payload struct for Map variant.
@@ -757,7 +758,7 @@ pub const NodeSignalExpr = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(NodeSignalExpr) != 40) @compileError("NodeSignalExpr size mismatch");
+        if (@sizeOf(NodeSignalExpr) != 48) @compileError("NodeSignalExpr size mismatch");
         if (@alignOf(NodeSignalExpr) != 8) @compileError("NodeSignalExpr alignment mismatch");
     }
 }
@@ -918,6 +919,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
                 list.decref(roc_host);
             }
             decrefErasedCallable(payload._1, roc_host);
+            decrefErasedCallable(payload._2, roc_host);
         },
         .ConstValue => {
             decrefErasedCallable(value.payload.const_value, roc_host);
@@ -948,6 +950,7 @@ pub fn increfNodeSignalExpr(value: NodeSignalExpr, amount: isize) void {
             const payload = value.payload.combine;
             payload._0.incref(amount);
             increfErasedCallable(payload._1, amount);
+            increfErasedCallable(payload._2, amount);
         },
         .ConstValue => {
             increfErasedCallable(value.payload.const_value, amount);

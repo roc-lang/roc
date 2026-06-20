@@ -35,7 +35,7 @@ Node := [].{
 		ConstValue(Box((NodeValue -> NodeValue))),
 		Map(Box(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
 		Map2(Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Combine(List(SignalExpr), Box((NodeValue, NodeValue -> Bool))),
+		Combine(List(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
 	]
 
 	## Text/attr sink fields, matching the host's render field discriminants.

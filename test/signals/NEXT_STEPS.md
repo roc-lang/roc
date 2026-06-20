@@ -553,6 +553,9 @@ the thunk body still returns the current internal `NodeValue` bridge value.
 `Signal.const` and row item signals now use the same retained initializer-thunk
 shape through `SignalExpr.ConstValue`, so constants no longer embed direct
 `NodeValue` payloads in signal descriptors.
+`Signal.combine` now also carries a retained output thunk; the host still uses
+the temporary `NodeValue` list as the current bridge input, but the output edge
+is owned by the call-site thunk rather than by host-side output construction.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned

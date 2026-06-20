@@ -618,7 +618,7 @@ fn nodeSignalExprCallableCount(expr: abi.NodeSignalExpr) u64 {
         .Map => 2 + nodeSignalExprCallableCount(expr.payload.map._0.*),
         .Map2 => 2 + nodeSignalExprCallableCount(expr.payload.map2._0.*) + nodeSignalExprCallableCount(expr.payload.map2._1.*),
         .Combine => blk: {
-            var count: u64 = 1;
+            var count: u64 = 2;
             for (expr.payload.combine._0.items()) |child| {
                 count += nodeSignalExprCallableCount(child);
             }
@@ -3287,7 +3287,12 @@ fn evalNodeSignalExprWithSources(host: *HostEnv, roc_host: *abi.RocHost, expr: a
             }
             const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
             values.deinit(host.gpa.allocator());
-            return .{ .payload = .{ .nv_list = list }, .tag = .NvList };
+            const list_value: abi.NodeValue = .{ .payload = .{ .nv_list = list }, .tag = .NvList };
+            defer abi.decrefNodeValue(list_value, roc_host);
+            var metrics = host.pending_roc_metrics;
+            metrics.derived_calls_into_roc += 1;
+            host.pending_roc_metrics = metrics;
+            return callErasedNodeValueToNodeValue(roc_host, expr.payload.combine._1, list_value);
         },
     }
 }
@@ -3307,7 +3312,7 @@ fn signalExprOutputEqCallable(host: *HostEnv, expr: abi.NodeSignalExpr, source_n
         },
         .Map => expr.payload.map._2,
         .Map2 => expr.payload.map2._3,
-        .Combine => expr.payload.combine._1,
+        .Combine => expr.payload.combine._2,
         .ConstValue => failHost("constant signal has no dirty equality edge"),
     };
 }
@@ -4573,6 +4578,13 @@ fn testUnaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, 
     writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(input + capture.amount));
 }
 
+fn testUnaryIdentityNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedNodeValueUnaryArgs, args);
+    abi.increfNodeValue(call_args.arg0, 1);
+    writeTestErasedResult(abi.NodeValue, ret, call_args.arg0);
+}
+
 fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
@@ -5574,6 +5586,13 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
 }
 
 fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalExpr) abi.NodeSignalExpr {
+    const transform = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testUnaryIdentityNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5585,7 +5604,8 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
         .payload = .{
             .combine = .{
                 ._0 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
-                ._1 = eq,
+                ._1 = transform,
+                ._2 = eq,
             },
         },
         .tag = .Combine,

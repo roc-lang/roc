@@ -163,6 +163,8 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 			]
 	combine = |signals| {
 		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
+		transform : NodeValue -> NodeValue
+		transform = |items| items
 		eq : NodeValue, NodeValue -> Bool
 		eq = |left_nv, right_nv| {
 			A : a
@@ -190,6 +192,6 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				}
 			}
 		}
-		{ expr: Box.box(Node.SignalExpr.Combine(exprs, Box.box(eq))) }
+		{ expr: Box.box(Node.SignalExpr.Combine(exprs, Box.box(transform), Box.box(eq))) }
 	}
 }
