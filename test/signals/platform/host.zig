@@ -192,6 +192,8 @@ const HostEachRowScopeStep = struct {
     site_ordinal: u64,
     key: abi.NodeValue,
     item: abi.NodeValue,
+    key_eq: abi.RocErasedCallable,
+    item_eq: abi.RocErasedCallable,
 };
 
 const HostScopeStep = union(enum) {
@@ -199,11 +201,14 @@ const HostScopeStep = union(enum) {
     when_branch: HostWhenBranchScopeStep,
     each_row: HostEachRowScopeStep,
 
-    fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost) void {
+    fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
         switch (self.*) {
             .each_row => |row| {
                 abi.decrefNodeValue(row.key, roc_host);
                 abi.decrefNodeValue(row.item, roc_host);
+                abi.decrefErasedCallable(row.key_eq, roc_host);
+                abi.decrefErasedCallable(row.item_eq, roc_host);
+                metrics.closure_releases += 2;
             },
             .root, .when_branch => {},
         }
@@ -1823,23 +1828,28 @@ const HostEnv = struct {
         return scope_id;
     }
 
-    fn createEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue) u64 {
+    fn createEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
         self.validateScopeId(parent_scope_id);
 
         abi.increfNodeValue(key, 1);
         errdefer abi.decrefNodeValue(key, roc_host);
         abi.increfNodeValue(item, 1);
         errdefer abi.decrefNodeValue(item, roc_host);
+        abi.increfErasedCallable(key_eq, 1);
+        errdefer abi.decrefErasedCallable(key_eq, roc_host);
+        abi.increfErasedCallable(item_eq, 1);
+        errdefer abi.decrefErasedCallable(item_eq, roc_host);
 
         const scope_id: u64 = @intCast(self.scopes.items.len);
         self.scopes.append(self.gpa.allocator(), .{
             .scope_id = scope_id,
             .parent_scope_id = parent_scope_id,
-            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key, .item = item } },
+            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key, .item = item, .key_eq = key_eq, .item_eq = item_eq } },
             .active = true,
         }) catch std.process.exit(1);
         var metrics = self.pending_roc_metrics;
         metrics.scopes_created += 1;
+        metrics.closure_retains += 2;
         self.pending_roc_metrics = metrics;
         return scope_id;
     }
@@ -1920,7 +1930,7 @@ const HostEnv = struct {
         }
 
         const scope = &self.scopes.items[@intCast(scope_id)];
-        scope.step.deinit(roc_host);
+        scope.step.deinit(roc_host, &self.pending_roc_metrics);
         scope.active = false;
         var metrics = self.pending_roc_metrics;
         metrics.scopes_disposed += 1;
@@ -1961,6 +1971,24 @@ const HostEnv = struct {
         const scope = self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
             .each_row => |row| row.item,
+            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+        };
+    }
+
+    fn eachRowScopeKeyEq(self: *HostEnv, scope_id: u64) abi.RocErasedCallable {
+        self.validateScopeId(scope_id);
+        const scope = self.scopes.items[@intCast(scope_id)];
+        return switch (scope.step) {
+            .each_row => |row| row.key_eq,
+            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+        };
+    }
+
+    fn eachRowScopeItemEq(self: *HostEnv, scope_id: u64) abi.RocErasedCallable {
+        self.validateScopeId(scope_id);
+        const scope = self.scopes.items[@intCast(scope_id)];
+        return switch (scope.step) {
+            .each_row => |row| row.item_eq,
             .root, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
@@ -2019,7 +2047,7 @@ const HostEnv = struct {
             for (existing_scope_ids, 0..) |scope_id, existing_index| {
                 if (matched_existing[existing_index]) continue;
                 const existing_key = self.eachRowScopeKey(scope_id);
-                if (callErasedNodeValueNodeValueToBool(roc_host, key_eq, existing_key, key)) {
+                if (callErasedNodeValueNodeValueToBool(roc_host, self.eachRowScopeKeyEq(scope_id), existing_key, key)) {
                     matched_existing[existing_index] = true;
                     matched_scope_id = scope_id;
                     break;
@@ -2030,7 +2058,7 @@ const HostEnv = struct {
                 next_scope_ids[key_index] = scope_id;
                 rows_reused += 1;
                 const existing_item = self.eachRowScopeItem(scope_id);
-                if (callErasedNodeValueNodeValueToBool(roc_host, item_eq, existing_item, item)) {
+                if (callErasedNodeValueNodeValueToBool(roc_host, self.eachRowScopeItemEq(scope_id), existing_item, item)) {
                     row_items_changed[key_index] = false;
                     row_items_unchanged += 1;
                 } else {
@@ -2039,7 +2067,7 @@ const HostEnv = struct {
                     row_items_updated += 1;
                 }
             } else {
-                next_scope_ids[key_index] = self.createEachRowScope(roc_host, parent_scope_id, site_ordinal, key, item);
+                next_scope_ids[key_index] = self.createEachRowScope(roc_host, parent_scope_id, site_ordinal, key, item, key_eq, item_eq);
                 row_items_changed[key_index] = true;
                 rows_created += 1;
             }
@@ -2616,7 +2644,7 @@ const HostEnv = struct {
         if (self.roc_host) |roc_host| {
             for (self.scopes.items) |*scope| {
                 if (!scope.active) continue;
-                scope.step.deinit(roc_host);
+                scope.step.deinit(roc_host, &self.pending_roc_metrics);
             }
         } else if (self.scopes.items.len != 0) {
             failHost("host scope table cannot release keys without a Roc host");
@@ -4820,6 +4848,12 @@ fn testAlwaysEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]cons
     writeTestErasedResult(bool, ret, true);
 }
 
+fn testNeverEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = args;
+    _ = capture_ptr;
+    writeTestErasedResult(bool, ret, false);
+}
+
 fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
 }
@@ -4995,7 +5029,7 @@ test "signals host disposal retires scope subtree identities" {
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
     const root = host.internRootScope();
-    const row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10));
+    const row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
     const branch = host.internWhenBranchScope(row, 4, .true_branch);
     const row_state = host.internNodeIdentity(row, 0);
     const branch_state = host.internNodeIdentity(branch, 0);
@@ -5007,7 +5041,7 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(!host.node_identities.items[@intCast(row_state)].active);
     try std.testing.expect(!host.node_identities.items[@intCast(branch_state)].active);
 
-    const recreated_row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10));
+    const recreated_row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
     try std.testing.expect(recreated_row != row);
 
     const recreated_state = host.internNodeIdentity(recreated_row, 0);
@@ -6074,6 +6108,69 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expectEqual(@as(u64, 6), host.pending_roc_metrics.rows_reused);
     try std.testing.expectEqual(@as(u64, 5), host.pending_roc_metrics.rows_created);
     try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.rows_removed);
+}
+
+test "signals host row scopes retain key and item equality thunks" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        deinitTestHostIdentity(&host);
+        _ = host.gpa.deinit();
+    }
+
+    const key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const item_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+
+    const root = host.internRootScope();
+    const initial_keys = [_]abi.NodeValue{nodeValueI64(1)};
+    const initial_items = [_]abi.NodeValue{nodeValueI64(10)};
+    const initial = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_items, key_eq, item_eq);
+    defer freeKeyedRowDiff(&host, initial);
+    try std.testing.expectEqual(@as(u64, 1), initial.rows_created);
+    const row_scope_id = initial.scope_ids[0];
+
+    abi.decrefErasedCallable(key_eq, &roc_host);
+    abi.decrefErasedCallable(item_eq, &roc_host);
+    try std.testing.expectEqual(@as(u64, 0), test_erased_callable_drop_count);
+
+    const incoming_key_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNeverEqualNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    defer abi.decrefErasedCallable(incoming_key_eq, &roc_host);
+    const incoming_item_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        &roc_host,
+        &testNeverEqualNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    defer abi.decrefErasedCallable(incoming_item_eq, &roc_host);
+
+    const next = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_items, incoming_key_eq, incoming_item_eq);
+    defer freeKeyedRowDiff(&host, next);
+    try std.testing.expectEqual(@as(u64, 1), next.rows_reused);
+    try std.testing.expectEqual(@as(u64, 0), next.rows_created);
+    try std.testing.expectEqual(@as(u64, 1), next.row_items_unchanged);
+    try std.testing.expectEqual(row_scope_id, next.scope_ids[0]);
 }
 
 test "signals host walks Elem identity-bearing sites only" {

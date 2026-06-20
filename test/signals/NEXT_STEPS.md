@@ -66,9 +66,10 @@ Ordered roughly by how much of the design they block.
    row DOM is moved/reused, and the simulated DOM is not reset. Event bindings are
    compared against the next explicit event descriptor stream, so unchanged
    element/kind/event-id slots are left alone and only added, removed, or shifted
-   bindings are patched. `Ui.each` now also retains an item equality thunk and
-   row scopes cache their latest item value, so the host has explicit data to
-   distinguish reused unchanged rows from reused updated rows. The active
+   bindings are patched. `Ui.each` now also retains an item equality thunk, and
+   active row scopes retain their key/item equality thunks and cache their latest
+   item value, so the host has explicit data to distinguish reused unchanged
+   rows from reused updated rows. The active
    collector uses that data to copy the previous retained descriptor subtree for
    reused unchanged rows instead of invoking the row thunk, unless a descendant
    `when`/`each` descriptor depends on the current dirty source. Remaining work is
@@ -81,9 +82,10 @@ Ordered roughly by how much of the design they block.
    and closure counters). Scope and keyed-row counters are real for active
    branch/row churn, and closure counters now track descriptor-stream ownership
    of retained event transforms, state equality thunks, each key/item/row thunks,
-   and direct map/map2 signal thunks. Leaf sink patch counts now track changed
-   fields on non-structural updates, while structural updates count actual creates,
-   child moves, changed fields, and event bindings rather than a full
+   active row-scope equality thunks, and direct map/map2 signal thunks. Leaf sink
+   patch counts now track changed fields on non-structural updates, while
+   structural updates count actual creates, child moves, changed fields, and
+   event bindings rather than a full
    reset/recreate. Source-level equal-output pruning suppresses downstream work,
    and retained `Map`/`Map2`/`Combine` output equality thunks now prune unchanged
    dirty sink and structural-site outputs in the current `NodeValue` bridge.
@@ -143,12 +145,12 @@ retained typed value cells owned by the host.
 
 - **G1 — Retained closures across FFI.** The design's end state stores boxed Roc
   transform/reducer/equality closures in the host node table and re-invokes only
-  the changed ones. The active host now invokes retained reducer, row, key
-  equality, item equality, `Map`/`Map2` transform, and `Map`/`Map2`/`Combine`
-  output equality thunks through the generated ABI. This answers the FFI
-  ownership/call-shape question for the current bridge, but the host still
-  evaluates retained `SignalExpr` trees over internal `NodeValue` and still
-  rebuilds descriptor streams for structural changes. Next action: replace
+  the changed ones. The active host now invokes retained reducer, row,
+  row-owned key equality, row-owned item equality, `Map`/`Map2` transform, and
+  `Map`/`Map2`/`Combine` output equality thunks through the generated ABI. This
+  answers the FFI ownership/call-shape question for the current bridge, but the
+  host still evaluates retained `SignalExpr` trees over internal `NodeValue` and
+  still rebuilds descriptor streams for structural changes. Next action: replace
   those `NodeValue` payloads with opaque typed value cells owned by explicit
   retained edge thunks. If
   per-call FFI becomes too costly at that point, keep a **batched** recompute
@@ -381,9 +383,10 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    flag.
 
    Progress: `platform/host.zig` now has recursive scope disposal that retires
-   subtree node identities, drops keyed-row keys exactly once, and prevents a
-   later matching key from reusing disposed local state. It is wired into the app
-   init/render lifecycle and structural DOM patching. The host also has a typed-key
+   subtree node identities, drops keyed-row keys and row-owned equality thunks
+   exactly once, and prevents a later matching key from reusing disposed local
+   state. It is wired into the app init/render lifecycle and structural DOM
+   patching. The host also has a typed-key
    row diff helper that reuses, creates, and disposes row scopes by the boxed key
    equality thunk and records `rows_reused`/`rows_created`/`rows_removed`. The
    `NodeElem` descriptor collector can now consume explicit
@@ -632,8 +635,8 @@ on the internal `NodeValue` path and Roc-side active descriptor evaluation.
 - Keep the host scope forest explicit: each conditional branch and list row is a
   scope owning its minted ids and retained closures.
 - Keep `Ui.each` keyed-row reuse/removal real: surviving row scopes retain local
-  state, new keys mint scopes, and removed keys dispose scopes and count
-  `rows_removed`.
+  state and key/item equality thunks, new keys mint scopes, and removed keys
+  dispose scopes and count `rows_removed`.
 - Keep `Ui.when` branch disposal real: the losing branch scope is disposed on
   flip; keep-alive only via an explicit flag.
 - Done for leaf sinks: non-structural dirty source nodes emit only matching
