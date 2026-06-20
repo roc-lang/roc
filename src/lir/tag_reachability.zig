@@ -13,6 +13,7 @@ const LirProgram = core.Program;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
 
+/// Errors that can occur while computing tag reachability facts.
 pub const Error = Allocator.Error;
 
 /// Analyze possible tag values and bypass switches that cannot take some of
