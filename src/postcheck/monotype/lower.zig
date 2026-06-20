@@ -1700,23 +1700,23 @@ const Builder = struct {
         return switch (nominal.representation) {
             .local_declaration => |id| blk: {
                 const decl = view.types.nominalDeclarationById(id);
-                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = decl.padding_field_types };
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(view.types) };
             },
             .imported_declaration => |imported| blk: {
                 const sv = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
                 const decl = sv.types.nominalDeclarationById(imported.declaration);
-                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.padding_field_types };
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(sv.types) };
             },
             .local_box_payload_capability => |cap| blk: {
                 const capability = view.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.padding_field_tys };
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(view.interface_capabilities) };
             },
             .imported_box_payload_capability => |cap| blk: {
                 const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
                 const capability = sv.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.padding_field_tys };
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
             .builtin, .opaque_without_backing => null,
         };
