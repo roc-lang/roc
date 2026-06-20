@@ -38,6 +38,13 @@ still rebuild the active descriptor stream, but apply it as a DOM patch instead
 of resetting/recreating the simulated DOM. The old `Reactive`/`Graph`/
 `UiRuntime` Roc surface has been removed from the active platform.
 
+From here, avoid widening the test harness or adding new representative apps
+unless the work directly retires one of the remaining design blockers. The
+existing four apps, their specs, focused Zig unit coverage, and the benchmark
+gate are enough regression surface for the next phase. New infrastructure must
+be justified by a specific risk in confined erasure, retained thunk ownership,
+or structural no-rebuild patching.
+
 ## Gap Analysis (current vs. `DESIGN.md`)
 
 Ordered roughly by how much of the design they block.
@@ -87,34 +94,66 @@ Ordered roughly by how much of the design they block.
    silently downgrade it to dev mode; rerun the full benchmark when the compiler
    bug is fixed.
 
+## Priority Reset (2026-06-20)
+
+The next work should be risk-first, not infrastructure-first. The active test
+host is already broad enough to expose regressions in the maintained scenarios.
+The highest value work is now changing the platform boundary so the
+implementation actually matches `DESIGN.md`.
+
+1. **Confined erasure is the current top priority.** Replace internal
+   `NodeValue` traffic with boxed opaque values plus per-edge `is_eq` thunks
+   captured by static dispatch. The host must store values without choosing a
+   decoder, and crash-on-decode-mismatch wrappers must disappear because the
+   mismatch is no longer representable.
+2. **Retained thunk ownership is the next gate.** Move from "dirty ids sent back
+   to Roc for a render/eval walk" toward host-owned node records that retain
+   transform/reducer/equality thunks exactly once and invoke only the dirty
+   thunks, batched if that remains the right FFI shape.
+3. **Structural no-rebuild follows retained typed thunks.** Once `when`/`each`
+   sites carry the explicit retained data needed to rebuild only affected
+   branch/row scopes, remove the active descriptor-stream rebuild from
+   structural updates. Do not spend more effort polishing the current rebuild
+   path beyond correctness fixes.
+4. **Effects/subscriptions remain deferred.** They reuse the same source update
+   path once the typed core is right; implementing them before confined erasure
+   would expand surface area around the wrong value protocol.
+
+Do not prioritize more simulated DOM commands, broader fixture catalogs,
+additional metric counters, or new app specs unless they are the smallest way to
+prove one of the risks above. The next green slice should retire a design
+blocker, not merely measure the current compromise more precisely.
+
 ## De-Risk First (gating experiments)
 
-`DESIGN.md` names three experiments that gate the architecture. Two of them are
-now partially answered by the existing host, but should be confirmed *before*
-building the new API on top, because if they fail the API shape changes:
+`DESIGN.md` names three experiments that gate the architecture. G2 and G3 are
+now answered well enough by the active host and app suite to stop expanding test
+coverage around them. G1 is the unresolved architecture gate because the final
+design depends on retained typed thunks owned by the host.
 
 - **G1 — Retained closures across FFI.** The design's end state stores boxed Roc
   transform/reducer closures in the host node table and re-invokes only the
   changed ones. The current code does **not** do this yet — it re-sends dirty
   signal *ids* and Roc re-walks those signals' boxed transforms each recompute.
-  Before committing to per-node retained closures, run the 10k-closure /
-  100k-event retain-and-invoke benchmark from `DESIGN.md` and confirm
-  refcount-flat RSS and acceptable ns/call. If per-call FFI is too costly, keep
-  the **batched** `ui_recompute` (it already passes a plan list) as the
+  Next action: implement the smallest real retained-thunk path needed by the
+  active platform boundary, then measure it. A small synthetic retain/invoke
+  probe is allowed only if it directly answers refcount safety or FFI cost; do
+  not build a broad benchmark harness before the boundary shape is proven. If
+  per-call FFI is too costly, keep the **batched** `ui_recompute` shape as the
   permanent protocol rather than one-call-per-node.
 - **G2 — Construction-site identity under dynamic shape.** This is the riskiest
-  open item because the codebase has *not* started it (still string-keyed). A
-  first `identity_stress` fixture now runs in `zig build run-test-signals` and
-  proves row-local state survives reorder through `when -> each -> when`.
-  Broader branch disposal/filter assertions still need to be added as
-  scope-relative minted ids replace the string tables.
+  solved item: the active host now mints scope-relative ids without strings, and
+  `identity_stress` proves row-local state survives reorder, filtering/removal,
+  re-add, and enclosing branch disposal. Keep it green, but do not add more
+  identity fixture surface unless a scoped-id bug appears.
 - **G3 — `is_eq`-pruned glitch-free propagation.** The rank scheduler exists and
   the Zig host has the diamond test (`a->b`, `a->c`, `(b,c)->d`) asserting the
   join appears once in the dirty plan. The ops dashboard now includes a
   high-fan-out no-op source whose unchanged output prunes all downstream labels
   (`nodes_recomputed +1`, `propagation_prunes +1`, `patches_emitted +0` for the
-  scripted click). Full per-edge `is_eq` pruning is deferred to the confined
-  erasure phase, where typed edge thunks exist.
+  scripted click). Full per-edge `is_eq` pruning should be implemented as part
+  of confined erasure, where typed edge thunks exist; do not add more pruning
+  harnesses before that machinery exists.
 
 Also confirm the two maturity unknowns: that static dispatch on
 `is_eq`/`encode`/`decode` methods resolves and monomorphizes across the platform
@@ -348,12 +387,23 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    currently blocked by roc-lang/roc#9717 in the LLVM optimized ops-dashboard
    build; keep the failure visible rather than skipping or downgrading the case.
 
-## Recommended Sequence
+## Recommended Sequence (Risk-First Reset)
 
 Each phase ends green: `roc check` on the apps plus `zig build run-test-signals`
 passing. Do not advance until the current phase's section passes (per the
 `minici` discipline in `AGENTS.md`). Keep the three representative apps and their
 `.txt` specs as the regression oracle throughout.
+
+As of 2026-06-20, Phases 1, 2, 3, 5, and most of 6 are no longer where the main
+risk lives. Treat them as invariants to preserve, not as places to keep adding
+coverage. The execution order from here is:
+
+1. Finish Phase 4's confined-erasure boundary.
+2. Use the typed retained thunks from Phase 4 to complete the final Phase 6
+   no-descriptor-rebuild structural path.
+3. Add Phase 7 effects/subscriptions after the typed source/update path exists.
+4. Do Phase 8 docs/cleanup continuously, but only to keep landed behavior
+   accurate.
 
 ### Phase 1 — Lock in the host engine and metrics (low risk, high leverage)
 
@@ -442,11 +492,24 @@ longer import `NodeValue` or define app-local encode/decode boilerplate for row
 fixtures. They use `List(Str)` row labels until the platform API removes
 `NodeValue` internally and captures typed per-edge thunks directly.
 
+Current priority: do this next. This is the largest remaining correctness gap
+against `DESIGN.md`, and it unlocks the retained-thunk node table, true
+per-edge equality pruning, and the final structural no-rebuild path. Avoid
+parallel work that only improves the current `NodeValue` compromise.
+
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
   at the call site and specialized by monomorphization at the platform-glue
   layer. The host stores boxed opaque values and calls only that edge's thunk; it
   never selects a decoder.
+- Introduce the host value-cell representation needed for boxed opaque values,
+  including explicit retain/release ownership and a single associated equality
+  thunk per edge. This replaces ad hoc decode/re-encode paths rather than
+  wrapping them.
+- Convert one vertical path first: `Ui.state` source value, a `Signal.map` or
+  `map2`, one signal-backed sink, and one `Ui.each` keyed diff using typed key
+  equality. That slice should run through the real app boundary, not a detached
+  catalog fixture.
 - Remove the `NodeValue` `encode`/`decode` boilerplate from app types; instead
   the value type defines `is_eq` (and a key type also defines `hash`) in its
   method block.
@@ -483,6 +546,11 @@ descriptor stream, but the host now applies the result as a structural DOM patch
 using explicit DOM identities scoped by branch/row and compares event binding
 slots rather than rebinding every active event.
 
+Current priority: pause feature work here until Phase 4 gives structural sites
+retained typed data. Correctness fixes are still in scope, but the remaining
+descriptor-stream rebuild cannot be removed cleanly while the host still depends
+on the internal `NodeValue` path and Roc-side active descriptor evaluation.
+
 - Keep the host scope forest explicit: each conditional branch and list row is a
   scope owning its minted ids and retained closures.
 - Keep `Ui.each` keyed-row reuse/removal real: surviving row scopes retain local
@@ -506,6 +574,9 @@ preserves per-row state; non-structural `patches_emitted` tracks changed sinks,
 and structural updates no longer reset/recreate the whole DOM.
 
 ### Phase 7 — Effects and subscriptions
+
+Current priority: explicitly deferred until confined erasure and the typed
+source/update path are in place.
 
 - Add `Signal.from_task` (yielding `[Loading, Done a, Failed err]`),
   `Signal.interval`, `Ui.on_change`, `Ui.on_cleanup`.
@@ -546,15 +617,22 @@ The migration is complete when, measured against the Phase 1 baseline:
 
 ## Risks and Watch-Items
 
-- **Phase 2 is the highest-risk step.** Swapping string identity for
-  construction-site/scope identity can silently move state between rows/branches.
-  Gate it on G2 and tag every state node with its minted id + scope path in the
-  stress harness.
-- **Phases 4–5 depend on Roc static-dispatch and monomorphization maturity**
-  across the platform boundary. If method resolution/monomorphization for the
-  per-edge `is_eq`/`encode`/`decode` thunks is not ready, the batched
-  opaque-value protocol can carry the migration further than per-node typed
-  closures while that matures; keep that protocol as an explicit design option.
+- **Phase 4 is now the highest-risk step.** Confined erasure changes the real
+  host boundary and must make type-mismatch crashes structurally impossible.
+  Any proposed work that leaves `NodeValue` on the hot path should be treated as
+  transitional and should not grow new surface area.
+- **Retained thunk ownership is the key technical risk inside Phase 4.** The
+  host must retain exactly one refcount per live closure/value edge, release it
+  on scope disposal, and avoid both double-retains and borrowed-value use after
+  free. Add only the smallest focused coverage needed to prove that ownership.
+- **Phase 2 identity remains a keep-green invariant, not the active frontier.**
+  If a scoped-id regression appears, fix it immediately, but do not keep adding
+  identity stress cases while confined erasure is still unresolved.
+- **Static dispatch and monomorphization maturity remain watch-items.** If
+  method resolution/monomorphization for per-edge `is_eq`/`encode`/`decode`
+  thunks is not ready, keep the batched opaque-value protocol as the explicit
+  design option and document the blocker. Do not paper over the gap with
+  decode-choice logic in the host.
 - **Keep apps + specs green every phase.** They are the only end-to-end oracle;
   a phase that breaks a spec is not done.
 - **Watch `roc_platform_abi.zig` struct-size asserts** after any boundary type
