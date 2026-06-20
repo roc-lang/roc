@@ -152,9 +152,11 @@ pub const BuildArgs = struct {
     exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
+    require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
+    source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
 };
 
 /// Arguments for `roc test`
@@ -275,7 +277,7 @@ const main_help =
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
-    \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
+    \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\

@@ -223,8 +223,9 @@ const Builder = struct {
 
     /// INVARIANT: a still-open flex may be keyed as the canonical literal
     /// default (Dec for numerals, Str for quotes) ONLY when every constraint
-    /// on it is `from_literal` — a pure, otherwise-unconstrained literal is
-    /// exactly what the checker's defaulting commits to the kind's default.
+    /// on it came directly from literal conversion — a pure,
+    /// otherwise-unconstrained literal is exactly what the checker's defaulting
+    /// commits to the kind's default.
     /// Any OTHER constraint origin (binop/method/where-clause usage) feeds the
     /// checker's candidate probing, which may commit a non-default candidate
     /// (e.g. an integer-only method commits I64); such a var must already be
@@ -232,7 +233,7 @@ const Builder = struct {
     /// here means an upstream defaulting step was skipped — keying it as the
     /// default would be a guess, so we raise an invariant violation instead.
     ///
-    /// A mixed-kind set (both numeral and quote `from_literal` constraints,
+    /// A mixed-kind set (both numeral and quote literal-origin constraints,
     /// reachable only via a flex/flex merge the checker reports as a type
     /// error, so it never survives to key generation) deterministically picks
     /// `numeral`. This MUST agree with the mono layer's scan in

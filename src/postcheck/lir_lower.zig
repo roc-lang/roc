@@ -1510,6 +1510,19 @@ const Lowerer = struct {
                 }
                 break :blk current;
             },
+            .list => |list| blk: {
+                var current = next;
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| current = try self.initUninitializedPattern(rest_pattern, current);
+                }
+                const pats = self.program.patSpan(list.patterns);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
             .tag => |tag| blk: {
                 var current = next;
                 const payloads = self.program.patSpan(tag.payloads);
@@ -1749,6 +1762,9 @@ const Lowerer = struct {
                 }
                 break :blk false;
             },
+            // Only `[.. as rest]` / `[..]` imposes no length constraint and is
+            // irrefutable; any fixed elements or an exact length can fail.
+            .list => |list| list.patterns.len > 0 or list.rest == null,
             .nominal => |inner| self.patternCanMiss(inner),
             .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
@@ -1764,6 +1780,7 @@ const Lowerer = struct {
             },
             .record => |fields| try self.lowerRecordPatternThen(pat_data.ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
+            .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, continuation),
             .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_data.ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .callable => |callable| try self.lowerCallablePatternThen(pat_data.ty, callable.variant, callable.payload, source, on_match, miss, continuation),
@@ -1936,6 +1953,101 @@ const Lowerer = struct {
         return current;
     }
 
+    /// Lower a list pattern as a length test plus extracted-and-matched
+    /// elements (and an optional captured rest), all sharing one `miss` target
+    /// so the result is linear in the pattern's size. See the equivalent in
+    /// `solved_lir_lower.zig` for the detailed rationale.
+    fn lowerListPatternThen(
+        self: *Lowerer,
+        list: LambdaMono.ListPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        continuation: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const elems = self.program.patSpan(list.patterns);
+        const fixed_count: i64 = @intCast(elems.len);
+        const len_local = try self.addLocalForLayout(.u64);
+
+        var current = on_match;
+
+        if (list.rest) |rest| {
+            if (rest.pattern) |rest_pattern| {
+                if (elems.len == 0) {
+                    current = try self.bindPattern(rest_pattern, source, current);
+                } else {
+                    const source_layout = self.result.store.getLocal(source).layout_idx;
+                    const rest_local = try self.addLocalForLayout(source_layout);
+                    current = try self.bindPattern(rest_pattern, rest_local, current);
+                    const front_dropped = try self.addLocalForLayout(source_layout);
+                    const keep_len = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(rest_local, .list_take_first, front_dropped, keep_len, current);
+                    current = try self.lenMinusConst(keep_len, len_local, fixed_count, current);
+                    const keep_after_front = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(front_dropped, .list_take_last, source, keep_after_front, current);
+                    current = try self.lenMinusConst(keep_after_front, len_local, @intCast(rest.index), current);
+                }
+            }
+        }
+
+        const rest_index: ?u32 = if (list.rest) |rest| rest.index else null;
+        var i = elems.len;
+        while (i > 0) {
+            i -= 1;
+            const elem_local = try self.addTemp(self.pat(elems[i]).ty);
+            current = try self.lowerPatternThen(elems[i], elem_local, current, miss, continuation);
+            const index_local = try self.addLocalForLayout(.u64);
+            current = try self.assignBinaryLowLevel(elem_local, .list_get_unsafe, source, index_local, current);
+            const matches_from_back = if (rest_index) |ri| i >= ri else false;
+            if (matches_from_back) {
+                current = try self.lenMinusConst(index_local, len_local, fixed_count - @as(i64, @intCast(i)), current);
+            } else {
+                current = try self.assignU64Literal(index_local, @intCast(i), current);
+            }
+        }
+
+        const required = try self.addLocalForLayout(.u64);
+        const cond = try self.addLocalForLayout(.bool);
+        const cmp_op: LIR.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
+        const length_check = try self.boolSwitchNoContinuation(cond, current, try self.patternMissJump(miss));
+        var head = try self.assignBinaryLowLevel(cond, cmp_op, len_local, required, length_check);
+        head = try self.assignU64Literal(required, fixed_count, head);
+        head = try self.assignUnaryLowLevel(len_local, .list_len, source, head);
+        return head;
+    }
+
+    fn assignU64Literal(self: *Lowerer, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = next,
+        } });
+    }
+
+    fn assignBinaryLowLevel(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const args = [_]LIR.LocalId{ lhs, rhs };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
+    }
+
+    fn lenMinusConst(self: *Lowerer, target: LIR.LocalId, len_local: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const operand = try self.addLocalForLayout(.u64);
+        const subtract = try self.assignBinaryLowLevel(target, .num_minus, len_local, operand, next);
+        return try self.assignU64Literal(operand, value, subtract);
+    }
+
     fn bindPattern(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const pat_data = self.pat(pat_id);
         return switch (pat_data.data) {
@@ -1947,6 +2059,12 @@ const Lowerer = struct {
             },
             .record => |fields| try self.bindRecordPattern(pat_data.ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
+            // Only an irrefutable list pattern reaches binding: `[.. as rest]`
+            // binds the whole list (aliasing the source); `[..]` binds nothing.
+            .list => |list| if (list.rest) |rest| (if (rest.pattern) |rest_pattern|
+                try self.bindPattern(rest_pattern, source, next)
+            else
+                next) else next,
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_data.ty, tag.name), tag.payloads, source, next),
             .callable => |callable| if (callable.payload) |payload_pat| blk: {
                 const variant_index = self.callableVariantIndex(pat_data.ty, callable.variant);

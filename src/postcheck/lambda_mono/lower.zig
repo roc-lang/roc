@@ -772,6 +772,13 @@ const Lowerer = struct {
             } },
             .record => |fields| .{ .record = try self.lowerRecordDestructSpan(fields) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
+            .list => |list| .{ .list = .{
+                .patterns = try self.lowerPatSpan(list.patterns),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPat(rest_pattern) else null,
+                } else null,
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.lowerPatSpan(tag.payloads),

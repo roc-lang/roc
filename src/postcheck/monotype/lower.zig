@@ -3600,9 +3600,9 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
-            .frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
-            .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
-            .dec => |dec| .{ .dec_lit = dec.value },
+            .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
+            .frac_f64 => |frac| self.lowerFracLiteral(.{ .f64 = frac.value }, ty),
+            .dec => |dec| self.lowerFracLiteral(.{ .dec = dec.value }, ty),
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -6492,7 +6492,22 @@ const BodyContext = struct {
         return switch (pattern.data) {
             .list => true,
             .record_destructure => |destructs| self.recordDestructsNeedExplicitRest(destructs),
-            else => false,
+            .assign,
+            .as,
+            .applied_tag,
+            .nominal,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .pending,
+            .runtime_error,
+            => false,
         };
     }
 
@@ -7086,44 +7101,6 @@ const BodyContext = struct {
         } } });
     }
 
-    fn listPatternItemIndex(
-        self: *BodyContext,
-        index: usize,
-        pattern_count: usize,
-        rest: ?checked.CheckedListRestPattern,
-        len: ?Ast.ExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (rest) |rest_info| {
-            if (index >= rest_info.index) {
-                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
-                const trailing_count = try self.builder.intLiteralExpr(pattern_count - index, u64_ty);
-                return try self.builder.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
-            }
-        }
-        return try self.builder.intLiteralExpr(index, u64_ty);
-    }
-
-    fn sublistRangeExpr(
-        self: *BodyContext,
-        start: Ast.ExprId,
-        len: Ast.ExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const len_name = try self.builder.program.names.internRecordFieldLabel("len");
-        const start_name = try self.builder.program.names.internRecordFieldLabel("start");
-        const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = start_name, .ty = u64_ty },
-        };
-        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
-        const exprs = [_]Ast.FieldExpr{
-            .{ .name = len_name, .value = len },
-            .{ .name = start_name, .value = start },
-        };
-        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .record = try self.builder.program.addFieldExprSpan(&exprs) } });
-    }
-
     fn lowerBindingContinuation(
         self: *BodyContext,
         continuation: BindingContinuation,
@@ -7203,7 +7180,22 @@ const BodyContext = struct {
                 try self.lowerRecordRestPatternBindingThen(value, value_ty, destructs, result_ty, continuation)
             else
                 try self.lowerMaterializedPatternValueThen(pattern_id, value, value_ty, result_ty, continuation, miss),
-            else => try self.lowerMaterializedPatternValueThen(pattern_id, value, value_ty, result_ty, continuation, miss),
+            .assign,
+            .as,
+            .applied_tag,
+            .nominal,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .pending,
+            .runtime_error,
+            => try self.lowerMaterializedPatternValueThen(pattern_id, value, value_ty, result_ty, continuation, miss),
         };
     }
 
@@ -7219,6 +7211,44 @@ const BodyContext = struct {
         const success = try self.lowerListPatternBindingSuccess(value, value_ty, list, result_ty, continuation, miss);
         const cond = try self.listPatternCondition(value, list);
         return try self.builder.ifExpr(cond, success, miss, result_ty);
+    }
+
+    fn listPatternItemIndex(
+        self: *BodyContext,
+        index: usize,
+        pattern_count: usize,
+        rest: ?checked.CheckedListRestPattern,
+        len: ?Ast.ExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (rest) |rest_info| {
+            if (index >= rest_info.index) {
+                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
+                const trailing_count = try self.builder.intLiteralExpr(pattern_count - index, u64_ty);
+                return try self.builder.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
+            }
+        }
+        return try self.builder.intLiteralExpr(index, u64_ty);
+    }
+
+    fn sublistRangeExpr(
+        self: *BodyContext,
+        start: Ast.ExprId,
+        len: Ast.ExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const len_name = try self.builder.program.names.internRecordFieldLabel("len");
+        const start_name = try self.builder.program.names.internRecordFieldLabel("start");
+        const fields = [_]Type.Field{
+            .{ .name = len_name, .ty = u64_ty },
+            .{ .name = start_name, .ty = u64_ty },
+        };
+        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
+        const exprs = [_]Ast.FieldExpr{
+            .{ .name = len_name, .value = len },
+            .{ .name = start_name, .value = start },
+        };
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .record = try self.builder.program.addFieldExprSpan(&exprs) } });
     }
 
     fn lowerListPatternBindingSuccess(
@@ -9177,7 +9207,7 @@ const BodyContext = struct {
             .applied_tag => |tag| try self.lowerTagPattern(tag, ty),
             .nominal => |nominal| .{ .nominal = try self.lowerPatternAtType(nominal.backing_pattern, self.builder.namedBackingType(ty) orelse ty) },
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
-            .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
+            .list => |list| try self.lowerListPattern(list, ty),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
             .num_literal => |num| if (num.conversion) |conversion|
                 try self.bindLiteralGuardPattern(conversion, ty)
@@ -9244,6 +9274,25 @@ const BodyContext = struct {
 
     fn lowerTuplePattern(self: *BodyContext, items: []const checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!Ast.Span(Ast.PatId) {
         return try self.lowerPatternSpanAtTypes(items, self.builder.tupleItemTypes(ty));
+    }
+
+    fn lowerListPattern(self: *BodyContext, list: anytype, ty: Type.TypeId) Allocator.Error!Ast.PatData {
+        const elem_ty = self.constListElemType(ty);
+        const lowered = try self.allocator.alloc(Ast.PatId, list.patterns.len);
+        defer self.allocator.free(lowered);
+        for (list.patterns, 0..) |child, i| {
+            lowered[i] = try self.lowerPatternAtType(child, elem_ty);
+        }
+        const rest: ?Ast.ListRestPattern = if (list.rest) |r| .{
+            .index = r.index,
+            // A captured rest binds the remaining slice, which has the same
+            // list type as the scrutinee.
+            .pattern = if (r.pattern) |rest_pattern| try self.lowerPatternAtType(rest_pattern, ty) else null,
+        } else null;
+        return .{ .list = .{
+            .patterns = try self.builder.program.addPatSpan(lowered),
+            .rest = rest,
+        } };
     }
 
     fn lowerTagPattern(self: *BodyContext, tag: anytype, ty: Type.TypeId) Allocator.Error!Ast.PatData {
@@ -9388,6 +9437,60 @@ const BodyContext = struct {
                 else => .{ .int_lit = value },
             },
             else => .{ .int_lit = value },
+        };
+    }
+
+    /// Lower a fractional literal to the constant form its instantiated
+    /// monotype demands. The checked stage finalizes a fractional literal's
+    /// value to one numeric representation, but a generalized literal can be
+    /// instantiated at a different fractional primitive than its finalized
+    /// default (for example, a literal finalized to `Dec` that this
+    /// specialization unifies to `F64`). The constant kind must follow the
+    /// instantiated type so backends store bits the destination layout
+    /// expects, mirroring `lowerIntLiteral`.
+    fn lowerFracLiteral(self: *BodyContext, value: FracLiteralValue, ty: Type.TypeId) Ast.ExprData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .f32 => .{ .frac_f32_lit = value.asF32() },
+                .f64 => .{ .frac_f64_lit = value.asF64() },
+                .dec => .{ .dec_lit = value.asDec() },
+                else => Common.invariant("fractional literal instantiated to a non-fractional Monotype primitive"),
+            },
+            else => Common.invariant("fractional literal instantiated to a non-primitive Monotype type"),
+        };
+    }
+};
+
+/// A fractional literal value in its checked-stage representation, used to
+/// re-derive the constant kind the instantiated Monotype primitive requires.
+const FracLiteralValue = union(enum) {
+    f32: f32,
+    f64: f64,
+    dec: builtins.dec.RocDec,
+
+    fn asF64(self: FracLiteralValue) f64 {
+        return switch (self) {
+            .f32 => |v| @floatCast(v),
+            .f64 => |v| v,
+            .dec => |v| v.toF64(),
+        };
+    }
+
+    fn asF32(self: FracLiteralValue) f32 {
+        return switch (self) {
+            .f32 => |v| v,
+            .f64 => |v| @floatCast(v),
+            .dec => |v| @floatCast(v.toF64()),
+        };
+    }
+
+    fn asDec(self: FracLiteralValue) builtins.dec.RocDec {
+        return switch (self) {
+            .f32 => |v| builtins.dec.RocDec.fromF64(@floatCast(v)) orelse
+                Common.invariant("f32 fractional literal could not be represented as Dec at its instantiated type"),
+            .f64 => |v| builtins.dec.RocDec.fromF64(v) orelse
+                Common.invariant("f64 fractional literal could not be represented as Dec at its instantiated type"),
+            .dec => |v| v,
         };
     }
 };

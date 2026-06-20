@@ -905,6 +905,22 @@ pub fn Emit(comptime target: RocTarget) type {
 
         // Memory instructions
 
+        fn addressScratchReg(base: GeneralReg, preserved: ?GeneralReg) GeneralReg {
+            if (base != .IP0 and preserved != .IP0) return .IP0;
+            if (base != .IP1 and preserved != .IP1) return .IP1;
+
+            std.debug.panic(
+                "aarch64 memory emitter needs an address scratch register, but base {s} and preserved register {s} occupy both IP0 and IP1",
+                .{ base.name64(), preserved.?.name64() },
+            );
+        }
+
+        fn emitAddressOffset(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            std.debug.assert(dst != base);
+            try self.movRegImm64(dst, @bitCast(@as(i64, offset)));
+            try self.addRegRegReg(.w64, dst, base, dst);
+        }
+
         /// LDR (load register) with unsigned offset
         pub fn ldrRegMemUoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDR <Xt>, [<Xn|SP>, #<pimm>]
@@ -1049,7 +1065,7 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Handles arbitrary signed offsets by choosing appropriate encoding:
         /// - Small offsets (-256 to 255): use LDUR (unscaled)
         /// - Positive aligned offsets (0 to 32760 for 64-bit): use LDR with unsigned offset
-        /// - Other offsets: compute address in IP0 then load with zero offset
+        /// - Other offsets: compute address in an IP scratch register, then load with zero offset
         pub fn ldrRegMemSoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
             // Try LDUR for small signed offsets
             if (offset >= -256 and offset <= 255) {
@@ -1070,11 +1086,9 @@ pub fn Emit(comptime target: RocTarget) type {
                 }
             }
 
-            // Handle offsets outside LDUR range [-256,255] and not suitable for unsigned encoding
-            // Use movRegImm64 for correct sign extension of negative offsets
-            try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-            try self.addRegRegReg(.w64, .IP0, base, .IP0);
-            try self.ldurRegMem(width, dst, .IP0, 0);
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurRegMem(width, dst, scratch, 0);
         }
 
         /// STR with signed offset (i32)
@@ -1099,11 +1113,9 @@ pub fn Emit(comptime target: RocTarget) type {
                 }
             }
 
-            // Handle offsets outside STUR range [-256,255] and not suitable for unsigned encoding
-            // Use movRegImm64 for correct sign extension of negative offsets
-            try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-            try self.addRegRegReg(.w64, .IP0, base, .IP0);
-            try self.sturRegMem(width, src, .IP0, 0);
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturRegMem(width, src, scratch, 0);
         }
 
         /// LDRB (load register byte, zero-extend)
@@ -1144,6 +1156,90 @@ pub fn Emit(comptime target: RocTarget) type {
                 (@as(u32, base.enc()) << 5) |
                 src.enc();
             try self.emit32(inst);
+        }
+
+        /// LDRB with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrbRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldurbRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0 and offset <= 4095) {
+                try self.ldrbRegMem(dst, base, @intCast(@as(u32, @intCast(offset))));
+                return;
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurbRegMem(dst, scratch, 0);
+        }
+
+        /// STRB with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn strbRegMemSoff(self: *Self, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.sturbRegMem(src, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0 and offset <= 4095) {
+                try self.strbRegMem(src, base, @intCast(@as(u32, @intCast(offset))));
+                return;
+            }
+
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturbRegMem(src, scratch, 0);
+        }
+
+        /// LDRH with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrhRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldurhRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 1) == 0) {
+                    const scaled = uoff >> 1;
+                    if (scaled <= 4095) {
+                        try self.ldrhRegMem(dst, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurhRegMem(dst, scratch, 0);
+        }
+
+        /// STRH with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn strhRegMemSoff(self: *Self, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.sturhRegMem(src, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 1) == 0) {
+                    const scaled = uoff >> 1;
+                    if (scaled <= 4095) {
+                        try self.strhRegMem(src, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturhRegMem(src, scratch, 0);
         }
 
         // Stack instructions
@@ -1572,6 +1668,46 @@ pub fn Emit(comptime target: RocTarget) type {
                 src.enc();
             try self.emit32(inst);
         }
+
+        /// LDR floating-point register with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn fldrRegMemSoff(self: *Self, ftype: FloatType, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const scale: u5 = if (ftype == .double) 3 else 2;
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) {
+                    const scaled = uoff >> scale;
+                    if (scaled <= 4095) {
+                        try self.fldrRegMemUoff(ftype, dst, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.fldrRegMemUoff(ftype, dst, scratch, 0);
+        }
+
+        /// STR floating-point register with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn fstrRegMemSoff(self: *Self, ftype: FloatType, src: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const scale: u5 = if (ftype == .double) 3 else 2;
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) {
+                    const scaled = uoff >> scale;
+                    if (scaled <= 4095) {
+                        try self.fstrRegMemUoff(ftype, src, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.fstrRegMemUoff(ftype, src, scratch, 0);
+        }
     }; // end of struct returned by Emit
 }
 
@@ -1579,6 +1715,18 @@ pub fn Emit(comptime target: RocTarget) type {
 const LinuxEmit = Emit(.arm64linux);
 const WinEmit = Emit(.arm64win);
 const MacEmit = Emit(.arm64mac);
+
+fn testReadInst(buf: []const u8, inst_index: usize) u32 {
+    const byte_index = inst_index * 4;
+    return @as(u32, buf[byte_index]) |
+        (@as(u32, buf[byte_index + 1]) << 8) |
+        (@as(u32, buf[byte_index + 2]) << 16) |
+        (@as(u32, buf[byte_index + 3]) << 24);
+}
+
+fn testInstBaseReg(inst: u32) u32 {
+    return (inst >> 5) & 0x1F;
+}
 
 // Tests
 
@@ -1648,6 +1796,30 @@ test "fadd" {
     // fadd d0, d1, d2 (0x1E622820)
     try asm_buf.faddRegRegReg(.double, .V0, .V1, .V2);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x20, 0x28, 0x62, 0x1E }, asm_buf.buf.items);
+}
+
+test "signed-offset memory helpers use exact byte offsets" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    try asm_buf.ldrRegMemSoff(.w64, .X0, .FP, 260);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.fldrRegMemSoff(.double, .V0, .FP, 260);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.strhRegMemSoff(.IP0, .FP, 257);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.ldrbRegMemSoff(.X0, .IP0, 5000);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 }
 
 test "condition invert" {

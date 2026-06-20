@@ -885,6 +885,10 @@ fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, 
         },
         .record => |fields| for (input.recordDestructSpan(fields)) |field| try bindPat(allocator, input, field.pattern, bound, added),
         .tuple => |items| for (input.patSpan(items)) |child| try bindPat(allocator, input, child, bound, added),
+        .list => |list| {
+            for (input.patSpan(list.patterns)) |child| try bindPat(allocator, input, child, bound, added);
+            if (list.rest) |rest| if (rest.pattern) |rest_pattern| try bindPat(allocator, input, rest_pattern, bound, added);
+        },
         .tag => |tag| for (input.patSpan(tag.payloads)) |child| try bindPat(allocator, input, child, bound, added),
         .nominal => |backing| try bindPat(allocator, input, backing, bound, added),
     }

@@ -1889,3 +1889,40 @@ test "LIR locals carry source-level names" {
     try std.testing.expect(found_first);
     try std.testing.expect(found_second);
 }
+
+test "shared callees are lifted once and never gain spurious captures" {
+    // A small diamond call graph: every function calls the one below it twice.
+    // Capture collection reuses each callee's solved free set instead of
+    // re-walking shared callee bodies, so the closed chain lifts cleanly and no
+    // function gains a closure capture. The depth here keeps the surrounding
+    // monomorphization cheap while still exercising shared-callee reuse.
+    const allocator = std.testing.allocator;
+    const depth = 6;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "module [main]\n\nf0 : U64 -> U64\nf0 = |n| n + 1\n\n");
+    var level: usize = 1;
+    while (level <= depth) : (level += 1) {
+        const chunk = try std.fmt.allocPrint(
+            allocator,
+            "f{d} : U64 -> U64\nf{d} = |n| {{\n    a = f{d}(n)\n    b = f{d}(n)\n    a + b\n}}\n\n",
+            .{ level, level, level - 1, level - 1 },
+        );
+        defer allocator.free(chunk);
+        try source.appendSlice(allocator, chunk);
+    }
+    const tail = try std.fmt.allocPrint(allocator, "main : U64\nmain = f{d}(0)\n", .{depth});
+    defer allocator.free(tail);
+    try source.appendSlice(allocator, tail);
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source.items);
+    defer lifted.deinit(allocator);
+
+    // The whole chain survives lifting as distinct closed functions: the diamond
+    // is not collapsed, and no function gains spurious closure captures.
+    try std.testing.expect(lifted.lifted.fns.items.len >= depth);
+    for (lifted.lifted.fns.items) |func| {
+        try std.testing.expectEqual(@as(u32, 0), func.captures.len);
+    }
+}

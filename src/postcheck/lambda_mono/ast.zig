@@ -71,6 +71,18 @@ pub const RecordDestruct = struct {
     pattern: PatId,
 };
 
+/// List destructuring pattern: fixed element patterns plus an optional rest.
+pub const ListPattern = struct {
+    patterns: Span(PatId),
+    rest: ?ListRestPattern,
+};
+
+/// `..`/`.. as name` portion of a list pattern.
+pub const ListRestPattern = struct {
+    index: u32,
+    pattern: ?PatId,
+};
+
 /// Read of one capture from a capture record.
 pub const CaptureSlot = struct {
     record: ExprId,
@@ -230,6 +242,7 @@ pub const PatData = union(enum) {
     },
     record: Span(RecordDestruct),
     tuple: Span(PatId),
+    list: ListPattern,
     tag: struct {
         name: Type.names.TagNameId,
         payloads: Span(PatId),

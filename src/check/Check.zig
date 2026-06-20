@@ -269,14 +269,15 @@ has_can_diagnostics: bool,
 /// Per-instantiation static-dispatch receivers, recorded so the end-of-check
 /// ambiguity sweep can revisit dispatches hidden inside polymorphic helpers — the
 /// expression-keyed def-site sweep never sees these instantiated receiver vars.
-/// Every time a generalized scheme carrying a non-`from_literal` static-dispatch
+/// Every time a generalized scheme carrying a non-literal static-dispatch
 /// constraint is instantiated, the freshly created receiver var is recorded here.
 /// After all solving, a recorded receiver that is still flex/rigid, carries a real
-/// (non-`from_literal`, non-`is_eq`) dispatch constraint, and does not resolve into
-/// the pinnable set can never be pinned, so its dispatch is reported as ambiguous.
+/// non-literal/non-`is_eq` dispatch constraint, and does not resolve into the
+/// pinnable set can never be pinned, so its dispatch is reported as ambiguous.
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
-/// Worklist of flex vars created carrying a `from_literal` constraint — open
-/// literals that may still need defaulting. Checker bookkeeping, not type data:
+/// Worklist of flex vars created by literal conversions (`from_numeral`,
+/// `from_quote`, or `from_interpolation`) — open literals that may still need
+/// defaulting. Checker bookkeeping, not type data:
 /// every registration site lives in this file (literal creation,
 /// `instantiateVarHelp`, `copyVar`), and the defaulting passes iterate it
 /// (re-resolving each entry, skipping resolved ones) instead of scanning the
@@ -326,9 +327,9 @@ const DefProcessed = struct {
 
 /// A static-dispatch receiver var created by instantiating a constrained scheme.
 /// The end-of-check ambiguity sweep revisits each such receiver: if it is still a
-/// flex/rigid var carrying a real (non-`from_literal`, non-`is_eq`) dispatch
-/// constraint and does not resolve into the pinnable set, no caller can ever pin
-/// it, so its dispatch is ambiguous.
+/// flex/rigid var carrying a real non-literal/non-`is_eq` dispatch constraint and
+/// does not resolve into the pinnable set, no caller can ever pin it, so its
+/// dispatch is ambiguous.
 const InstantiationDispatcher = struct {
     /// The freshly instantiated receiver (dispatcher) var.
     dispatcher_var: Var,
@@ -338,7 +339,7 @@ const InstantiationDispatcher = struct {
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
-        // `from_literal` covers every literal kind (numeral, quote, interpolation).
+        // This internal origin tag covers every literal conversion kind.
         .from_literal => true,
         .desugared_binop,
         .desugared_unaryop,
@@ -2723,7 +2724,7 @@ fn instantiateVarHelp(
 
             // Register newly instantiated open-literal flex vars on the worklist
             // so the defaulting passes see them. Separately, a fresh flex
-            // receiver carrying a non-`from_literal` static-dispatch constraint is
+            // receiver carrying a non-literal static-dispatch constraint is
             // a per-instantiation dispatcher: record it so the end-of-check sweep
             // can decide its ambiguity per-instantiation. This hook closes the
             // holes where a polymorphic helper hides an ambiguous dispatch that
@@ -5061,11 +5062,11 @@ fn findStaticDispatchUseForConstraint(
 }
 
 /// Detect ambiguous static dispatch on a per-INSTANTIATION basis. Every time a
-/// generalized scheme carrying a non-`from_literal` static-dispatch constraint
+/// generalized scheme carrying a non-literal static-dispatch constraint
 /// is instantiated, `instantiateVarHelp` recorded the freshly created receiver
 /// var here. After all solving, a recorded receiver that is still flex/rigid,
-/// carries a real (non-`from_literal`, non-`is_eq`) dispatch constraint, and does
-/// not resolve into the `pinnable` set can never be pinned by any caller — its
+/// carries a real non-literal/non-`is_eq` dispatch constraint, and does not
+/// resolve into the `pinnable` set can never be pinned by any caller — its
 /// dispatch is genuinely ambiguous and would reach the lowering `dispatchTarget`
 /// invariant. We report it (`MISSING METHOD`) and mark the offending call
 /// expression a runtime error so lowering never reaches that invariant.
@@ -5102,12 +5103,13 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // pin the owner or leave it externally pinnable. Literal-only constraints
         // are skipped as before because numeric/string defaulting owns them.
         //
-        //  - `from_literal`: an open literal. Checker defaulting owns it (at
-        //    finalize and at generalization boundaries); a generalized literal
-        //    resolves per instantiation. A receiver carrying ANY `from_literal`
-        //    constraint is skipped entirely, matching the def-site sweep —
-        //    essential for numeric helpers like `|x| x + y` whose receiver
-        //    carries `desugared_binop` (`+`) plus `from_literal`.
+        //  - literal conversion (`from_numeral`, `from_quote`, or
+        //    `from_interpolation`): checker defaulting owns it (at finalize and at
+        //    generalization boundaries); a generalized literal resolves per
+        //    instantiation. A receiver carrying any literal-origin constraint is
+        //    skipped entirely, matching the def-site sweep — essential for numeric
+        //    helpers like `|x| x + y` whose receiver carries `desugared_binop` (`+`)
+        //    plus `from_numeral`.
         //  - `is_eq`: structural equality. Lowering compares records/tuples/tag
         //    unions/lists structurally with no owner needed, so a flex `is_eq`
         //    receiver placeholder (left at check time by valid code such as
@@ -5324,7 +5326,7 @@ fn reportAmbiguousStaticDispatch(
     // parameter pattern (local/nested lambdas included).
     //
     // Sweep every expression. Flag any whose own type var is a flex/rigid var with
-    // a non-`from_literal` static-dispatch constraint and whose resolved id is not
+    // a non-literal static-dispatch constraint and whose resolved id is not
     // pinnable. Dedup by resolved var id (using the set shared with the
     // per-instantiation sweep) so a value flowing through multiple expressions — or
     // already reported per-instantiation — is reported once, preferring the first
@@ -5350,11 +5352,12 @@ fn reportAmbiguousStaticDispatch(
 
         // Decide whether to flag based on the constraint origins.
         //
-        // - `from_literal`: the var is an open literal. Defaulting resolves it
-        //   (first satisfier of its constraints; `Dec` when otherwise
+        // - Literal conversion (`from_numeral`, `from_quote`, or
+        //   `from_interpolation`): the var is an open literal. Defaulting resolves
+        //   it (first satisfier of its constraints; `Dec` when otherwise
         //   unconstrained) and reports any unsatisfiable conversion separately, so
         //   it is never flagged here — even when it also carries other constraints
-        //   (e.g. a literal operand of `+` also has a `desugared_binop`).
+        //   (e.g. a numeric literal operand of `+` also has a `desugared_binop`).
         // - `where_clause`: the dispatch is part of an explicit polymorphic
         //   signature (`f : a -> a where [a.method : ...]`). That is a declared
         //   contract pinned when callers instantiate the signature, so it is
@@ -8265,8 +8268,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
     // Consume the checking_call_arg flag: it applies only to this immediate
-    // checkExpr call and must not propagate to recursive calls (e.g. e_closure
-    // delegating to its inner e_lambda, or nested call arguments).
+    // checkExpr call and must not propagate to recursive calls (e.g. nested call
+    // arguments). The one exception is `e_closure`, which is only the capture
+    // wrapper around its inner `e_lambda`: the lambda is the actual argument
+    // value, so the closure re-asserts this flag before delegating to it (see the
+    // `.e_closure` case) to keep an argument lambda from being generalized.
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
@@ -9310,7 +9316,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_closure => |closure| {
             // Here, we must forward the expected valued to the inner lambda, so
-            // the annotation type is created at the same rank as the expr
+            // the annotation type is created at the same rank as the expr.
+            // A closure is only the capture wrapper around its inner lambda, so
+            // the lambda inherits this closure's call-arg status: an argument
+            // lambda must NOT be generalized, or its body's static-dispatch chain
+            // would be quantified before the caller pins the parameter types,
+            // leaving the original (un-instantiated) dispatch nodes unresolved.
+            self.checking_call_arg = is_call_arg;
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
@@ -13070,11 +13082,11 @@ fn finalizeLiteralDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void 
 const LiteralDefaultUniverse = union(enum) {
     /// `finalizeLiteralDefaults`: the first `literal_count` entries of the
     /// open-literal worklist; a candidate is still flex, not generalized
-    /// (let-polymorphism preserved), with `from_literal` provenance.
+    /// (let-polymorphism preserved), with literal-conversion provenance.
     finalize: struct { literal_count: usize },
     /// `defaultLiteralsAtGeneralizationBoundary`: the first `pool_len` entries of
     /// the var-pool rank the boundary's generalize call will promote; a candidate
-    /// is still flex AT that rank with `from_literal` provenance AND not
+    /// is still flex AT that rank with literal-conversion provenance AND not
     /// signature-reachable (`boundary_reachable_vars`, populated by the caller for
     /// the current boundary before the rounds run) — signature-reachable literals
     /// must stay open so generalization quantifies them. The pool slice is
@@ -13102,11 +13114,11 @@ const LiteralDefaultUniverse = union(enum) {
 ///      filters documented on `LiteralDefaultUniverse`); deduped by union-find
 ///      root.
 ///   2. PARTITION them into interference components. A literal with
-///      non-`from_literal` constraints (a DRIVER) owns a footprint: every
+///      non-literal constraints (a DRIVER) owns a footprint: every
 ///      still-flex root reachable from those constraints' fn signatures
 ///      (`collectReachableVars`, which recurses through nested constraint
 ///      signatures, so the footprint is transitively closed). A literal with only
-///      `from_literal` provenance (a PASSIVE) has footprint {itself}. Two
+///      literal-conversion provenance (a PASSIVE) has footprint {itself}. Two
 ///      literals share a component iff their footprints intersect. Only
 ///      still-flex roots interfere: a commit pins exactly the flex vars its
 ///      unifications reach, all inside the committing literal's footprint — so
@@ -13313,10 +13325,10 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 }
             }
             // Within a round, every gathered root is still flex with its
-            // `from_literal` provenance when its component commits: commits of
-            // OTHER components only touch their own (disjoint) footprints, and this
-            // component commits exactly once. So the kind lookups below cannot
-            // fail — gather guaranteed them non-null.
+            // literal-conversion provenance when its component commits: commits
+            // of OTHER components only touch their own (disjoint) footprints, and
+            // this component commits exactly once. So the kind lookups below
+            // cannot fail — gather guaranteed them non-null.
             if (group_drivers.items.len == 0) {
                 // A component without drivers is a lone passive (a passive's
                 // footprint is just itself, so only a driver can merge it).
@@ -13340,7 +13352,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // DEFAULTED warning post-commit, exactly as if it had committed
                 // alone. Non-leaking members default silently (def-local), and the
                 // component's passives are never committed here, matching the
-                // single-commit paths: a passive carries only `from_literal`
+                // single-commit paths: a passive carries only literal-conversion
                 // constraints, so its leak set is empty and it could never warn.
                 group_warnings.clearRetainingCapacity();
                 if (universe == .boundary) {
@@ -13429,7 +13441,7 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 ///     nothing else in this component) with its own fresh candidate var. All
 ///     assignments happen before any constraint is consulted, so no driver's
 ///     verification can observe a not-yet-assigned peer.
-///   phase 2 — verify: check every driver's every non-`from_literal` constraint
+///   phase 2 — verify: check every driver's every non-literal constraint
 ///     against the candidate (`staticDispatchConstraintAcceptsCandidate`, the
 ///     same check the single-literal probe uses). Passives and other in-footprint
 ///     vars are pinned here by the resolved method signatures — with every driver
@@ -13488,7 +13500,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     candidate: for (candidate_scan) |candidate_kind| {
         // Digit-fit precheck for every numeral driver's literal payload — pure
         // arithmetic on the constraint payloads, before any speculation. Quote
-        // drivers are assigned Str, which their own `from_literal` provenance
+        // drivers are assigned Str, which their own literal-conversion provenance
         // accepts by definition, so they have nothing to precheck.
         for (constraint_ranges.items, kinds.items) |range, kind| {
             if (kind != .numeral) continue;
@@ -13527,7 +13539,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
             if (!unify_result.isOk()) continue :candidate;
         }
 
-        // Phase 2: verify every driver's every non-`from_literal` constraint.
+        // Phase 2: verify every driver's every non-literal constraint.
         // Store-backed iterator, not a held slice: the verification appends to
         // the constraint store, which can reallocate and dangle a slice.
         for (drivers, 0..) |_, driver_idx| {
@@ -13616,7 +13628,7 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
 
 /// Per-literal boundary-warning state, computed BEFORE the literal's commit
 /// resolves the flex away: the leak check walks the still-open constraint
-/// signatures, and for numerals the warning region comes from the `from_literal`
+/// signatures, and for numerals the warning region comes from the `from_numeral`
 /// payload (exact even when the root is an instantiated copy), reachable only
 /// while the var is flex. Quote constraints carry no payload, so they fall back to
 /// the var's own region — right for direct literals, possibly imprecise for
@@ -13634,7 +13646,7 @@ fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator
     return .{
         .leaks_into_signature = try self.boundaryDefaultLeaksIntoSignature(literal_root),
         .region = self.literalSourceRegion(literal_root) orelse self.getRegionAt(literal_root),
-        // Every commit path only reaches here for a var with `from_literal`
+        // Every commit path only reaches here for a var with literal-conversion
         // provenance, and the var is still flex pre-commit, so the kind is
         // always derivable.
         .kind = self.varLiteralKind(literal_root) orelse unreachable,
@@ -13675,7 +13687,7 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
     // checked mid-flight runs in its own env at the same numeric rank, so rank
     // alone cannot tell this def's literals from an enclosing def's.) A candidate
-    // is still flex at this rank with `from_literal` provenance.
+    // is still flex at this rank with literal-conversion provenance.
     const pool_vars = env.var_pool.getVarsForRank(rank);
 
     // Fast path: no open literal at this boundary, nothing to do.
@@ -13786,11 +13798,11 @@ fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) bool {
     return false;
 }
 
-/// The source region of the numeral literal that put a `from_literal` constraint
+/// The source region of the numeral literal that put a `from_numeral` constraint
 /// on this var, straight from the numeral payload — explicit upstream data, exact
-/// even after the literal var was unified with other vars. Quote constraints carry
-/// no payload, so this returns null for them and the caller falls back to the
-/// var's own region.
+/// even after the literal var was unified with other vars. Quote constraints
+/// carry no payload, so this returns null for them and the caller falls back to
+/// the var's own region.
 fn literalSourceRegion(self: *Self, var_: Var) ?Region {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
@@ -13801,7 +13813,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 }
 
 /// The literal kind this var is an open literal of — derived from its constraint
-/// set, never stored. Returns null if the var carries no `from_literal`
+/// set, never stored. Returns null if the var carries no literal-conversion
 /// constraint.
 ///
 /// DUAL-KIND TIE-BREAK: a var can carry BOTH kinds (a flex/flex merge like
@@ -13810,7 +13822,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 /// attempted (Dec vs Str) and hence which literal-kind diagnostic fires — so it
 /// must not depend on constraint storage order (which unify side each literal
 /// arrived on), or mirror-image programs would get different diagnostics. We scan
-/// ALL `from_literal` constraints and prefer `.numeral` over `.quote`, agreeing
+/// all literal-origin constraints and prefer `.numeral` over `.quote`, agreeing
 /// with the two other sites that encode this choice:
 /// `numericDefaultPhaseForConstraints` in src/check/checked_artifact.zig (any
 /// numeral selects the Dec mono phase before quote is considered) and
@@ -13835,7 +13847,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
 }
 
-/// Whether this flex var carries any interpolation `from_literal` constraint.
+/// Whether this flex var carries any interpolation literal-origin constraint.
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
 //
 // Adding a `LiteralKind` variant turns each switch below into a compile error
@@ -13858,7 +13870,7 @@ pub var bench_probe_refuted: usize = 0;
 /// Haskell-style: commit the FIRST candidate in the kind's canonical order that
 /// satisfies every dispatch constraint the var accumulated — and the successful
 /// probe IS the commit (no rollback-and-redo; see `tryCommitNumeralCandidate`). A
-/// literal whose only obligation is its own `from_literal` takes the list head
+/// literal whose only obligation is its own literal conversion takes the list head
 /// directly (the common case, no probing). If no candidate satisfies, the head is
 /// committed via the normal unify path anyway, so the post-finalize dispatch pass
 /// reports the conflict against the documented default type.
@@ -13955,7 +13967,7 @@ fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.
 /// candidate.
 const numeral_default_candidates = [_]CIR.NumKind{ .dec, .i64, .u64, .i128, .u128, .i32, .u32, .i16, .u16, .i8, .u8, .f64, .f32 };
 
-/// Whether the constraint range carries any obligation besides `from_literal`
+/// Whether the constraint range carries any obligation besides literal-conversion
 /// provenance — i.e. whether defaulting must consult the candidate probe at all.
 fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
@@ -13971,7 +13983,7 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// NEVER mutates them. Anything uncertain returns false (fall through to the
 /// probe) — refutation is exact logic, probing is the default.
 ///
-/// Two refutation facts, per non-`from_literal` constraint (the `from_literal`
+/// Two refutation facts, per non-literal constraint (the literal-conversion
 /// ones are pre-filtered by digit-fit inside `tryCommitNumeralCandidate` via
 /// `literalInfoAcceptsBuiltinNumKind`):
 ///
@@ -15523,12 +15535,16 @@ fn varSupportsIsEqInternal(
 
 /// Check if a flex var has incompatible constraints and report errors.
 /// This is called after type-checking to catch cases like `!3` where a flex var
-/// has both `from_literal` (numeric) and `not` (Bool only) constraints. If the
-/// flex var carries a `from_literal` constraint, validate that the canonical
-/// default (`Dec`) has a method for each of its other constraints.
+/// has both `from_numeral` and `not` (Bool only) constraints. If the
+/// non-generalized flex var carries a literal-conversion constraint, validate
+/// that the default type (`Dec` for numerals, `Str` for quotes/interpolations)
+/// has a method for each of its other constraints. Generalized flex vars are
+/// polymorphic signature constraints; each instantiated copy is defaulted and
+/// validated at its own use site.
 fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_numeric_default_pass: bool) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return;
+    if (resolved.desc.rank == .generalized) return;
 
     const flex = resolved.desc.content.flex;
     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);

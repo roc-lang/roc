@@ -244,14 +244,34 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
     return thread_stack_bounds;
 }
 
+/// Distance from the stack pointer within which a fault counts as a stack
+/// overflow. A genuine overflow faults inside the frame being set up — the
+/// stack-probe/push that ran past the guard — so the fault address is close to
+/// the stack pointer. A null or wild write faults far from it. This proximity
+/// test is the primary, bounds-independent signal, because the reported stack
+/// bounds are not always trustworthy: `pthread_getattr_np` on a static-musl
+/// main thread reports a region that does not contain the real stack pointer,
+/// which previously made any low-address (e.g. null) write look like an
+/// overflow. The window is far larger than any real frame yet far smaller than
+/// the gap between a high stack and a null/low pointer.
+const stack_overflow_proximity: usize = 16 * 1024 * 1024;
+
 /// Classify a fault from its address and stack range.
 pub fn classifyFault(fault_addr: usize, stack_pointer: ?usize, bounds: ?StackBounds) FaultKind {
+    // Primary signal (bounds-independent): a fault adjacent to the stack
+    // pointer is the overflowing access itself.
+    if (stack_pointer) |sp| {
+        const distance = if (fault_addr >= sp) fault_addr - sp else sp - fault_addr;
+        if (distance <= stack_overflow_proximity) return .stack_overflow;
+    }
+
+    // Secondary signals, used only when we trust the reported bounds: the stack
+    // pointer or the fault sits in the guard page / just below the stack.
     const stack_bounds = bounds orelse return .access_violation;
 
     if (stack_pointer) |sp| {
         if (stack_bounds.containsGuardAddress(sp)) return .stack_overflow;
         if (stack_bounds.containsLowerBoundaryAddress(sp)) return .stack_overflow;
-        if (sp < stack_bounds.low) return .stack_overflow;
     }
 
     if (stack_bounds.containsGuardAddress(fault_addr)) return .stack_overflow;
@@ -517,14 +537,39 @@ test "classifyFault treats a lower stack boundary fault as overflow" {
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1000_1000, 0x8000, bounds));
 }
 
-test "classifyFault treats interrupted stack pointer below stack as overflow" {
+test "classifyFault reports a null/wild write as access violation, not overflow" {
+    // Regression: a JIT'd eval object that stores through an unrelocated GOT
+    // slot writes to address 0 while the stack pointer is healthy and deep
+    // inside the stack. That must be reported as an access violation, not
+    // misclassified as a stack overflow (which previously sent a one-line
+    // relocation bug down a multi-day stack-overflow investigation).
+    const bounds = StackBounds.init(0x7000_0000, 0x7080_0000, 0x1000, 0x6fff_f000, 0x7000_0000).?;
+    const healthy_sp: usize = 0x7040_0000;
+
+    // Null write.
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0, healthy_sp, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0, null, bounds));
+    // Arbitrary wild write far from the stack.
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0xdead_0000, healthy_sp, bounds));
+    // A genuine overflow (fault just below the stack) still classifies as overflow.
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6fff_f800, healthy_sp, bounds));
+}
+
+test "classifyFault: a stack pointer below reported bounds is not overflow on its own" {
+    // When the reported bounds are unreliable (a real hazard: pthread_getattr_np
+    // on a static-musl main thread reports a stack the real sp isn't in), a
+    // "stack pointer below low" must not be treated as overflow by itself — the
+    // fault has to corroborate by being near the stack pointer.
     const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, null, null).?;
 
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x5000_0000, 0x5000, bounds));
+    // Fault far from the (below-bounds) sp: a null/wild write, not an overflow.
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000_0000, 0x5000, bounds));
     if (comptime @bitSizeOf(usize) >= 64) {
-        try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0xffff_fd1f_fea0, 0x5000, bounds));
+        try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0xffff_fd1f_fea0, 0x5000, bounds));
     }
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000_0000, 0x9000, bounds));
+    // Fault adjacent to the sp: a genuine overflow, even with untrustworthy bounds.
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x4040, 0x5000, bounds));
 }
 
 test "installForCurrentThread records current stack bounds" {
