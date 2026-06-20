@@ -1750,6 +1750,10 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         return rocRunDefaultApp(ctx, args, source);
     }
 
+    if (args.opt == .dev and args.no_cache) {
+        return rocRunBuildAndExec(ctx, args);
+    }
+
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
