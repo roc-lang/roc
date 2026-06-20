@@ -2794,6 +2794,10 @@ const BodyContext = struct {
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated equality helper instead of recursively expanding AST.
     equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    /// Source region to use while inlining a compile-time const eval template.
+    /// The template body can be lowered from a lookup site, but diagnostics
+    /// must point at the original const root.
+    source_region_override: ?base.Region = null,
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -3250,13 +3254,28 @@ const BodyContext = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.compile_time_roots.root(wrapper.root);
+                const saved_source_region_override = self.source_region_override;
+                defer self.source_region_override = saved_source_region_override;
+                self.source_region_override = switch (root.kind) {
+                    .hoisted_constant => self.view.bodies.exprs[@intFromEnum(root.expr)].source_region,
+                    .constant,
+                    .callable_binding,
+                    .expect,
+                    .numeral_conversion,
+                    .quote_conversion,
+                    => saved_source_region_override,
+                };
                 switch (root.kind) {
                     .numeral_conversion, .quote_conversion => return .{
                         .args = .empty(),
                         .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
                         .ret = ret_ty,
                     },
-                    else => {},
+                    .constant,
+                    .hoisted_constant,
+                    .callable_binding,
+                    .expect,
+                    => {},
                 }
                 return .{
                     .args = .empty(),
@@ -3315,8 +3334,12 @@ const BodyContext = struct {
         if (arg_tys.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
         const body_expr = self.view.bodies.exprs[@intFromEnum(checked_body)];
-        self.builder.program.current_loc = try self.sourceLocFor(body_expr.source_region);
+        const body_region = body_expr.source_region;
+        self.builder.program.current_loc = try self.sourceLocFor(body_region);
+        self.builder.program.current_region = body_region;
 
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
@@ -3356,9 +3379,13 @@ const BodyContext = struct {
             .body = checked_body,
         } }, ret_ty);
         const body_loc = self.builder.program.exprLoc(body);
+        const body_region_after_lowering = self.builder.program.exprRegion(body);
         const saved_body_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_body_loc;
+        const saved_body_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_body_region;
         self.builder.program.current_loc = body_loc;
+        self.builder.program.current_region = body_region_after_lowering;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {
             remaining -= 1;
@@ -3420,6 +3447,7 @@ const BodyContext = struct {
     /// Resolve a checked node's source region to a `SourceLoc` in this body's
     /// module.
     fn sourceLocFor(self: *BodyContext, region: base.Region) Allocator.Error!base.SourceLoc {
+        if (region.isEmpty()) return base.SourceLoc.none;
         const line_starts = self.view.module_env.common.getLineStartsAll();
         if (line_starts.len == 0) return base.SourceLoc.none;
         const offset = region.start.offset;
@@ -3433,11 +3461,19 @@ const BodyContext = struct {
         };
     }
 
+    fn sourceRegionForExpr(self: *const BodyContext, expr: checked.CheckedExpr) base.Region {
+        return self.source_region_override orelse expr.source_region;
+    }
+
     fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
-        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        const region = self.sourceRegionForExpr(expr);
+        self.builder.program.current_loc = try self.sourceLocFor(region);
+        self.builder.program.current_region = region;
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
         switch (expr.data) {
@@ -3481,9 +3517,16 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty),
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
+    }
+
+    fn hoistedConstSourceRegion(self: *const BodyContext, entry: checked.HoistedConstEntry) base.Region {
+        if (entry.pattern) |pattern| {
+            return self.view.bodies.patterns[@intFromEnum(pattern)].source_region;
+        }
+        return self.view.bodies.exprs[@intFromEnum(entry.expr)].source_region;
     }
 
     fn restoredHoistedExprAtType(
@@ -3496,16 +3539,45 @@ const BodyContext = struct {
         return try self.restoredHoistedConstAtType(entry, ty);
     }
 
-    fn selectedHoistedLocalConst(
+    fn selectedHoistedConstEntry(
         self: *BodyContext,
-        local: checked.LocalBindingRef,
-    ) ?checked.HoistedConstEntry {
-        const raw = @intFromEnum(local.binder);
-        if (raw >= self.view.bodies.pattern_binders.len) {
-            Common.invariant("hoisted local lookup referenced a missing pattern binder");
+        selected: checked.SelectedHoistedConstResolvedRef,
+    ) checked.HoistedConstEntry {
+        const const_ref = selected.const_use.const_ref;
+        if (!std.meta.eql(const_ref.artifact.bytes, self.view.key.bytes)) {
+            Common.invariant("selected hoisted local const ref referenced a different checked module");
         }
-        const pattern = self.view.bodies.pattern_binders[raw].pattern;
-        return self.view.hoisted_constants.lookupByPattern(pattern);
+        const hoisted = switch (const_ref.owner) {
+            .hoisted_expr => |owner| owner,
+            .top_level_binding => Common.invariant("selected hoisted local const ref did not reference a hoisted const"),
+        };
+        if (hoisted.module_idx != self.view.module_identity.module_idx) {
+            Common.invariant("selected hoisted local const ref had mismatched module index");
+        }
+        return self.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+            Common.invariant("selected hoisted local const ref had no hoisted const table entry");
+    }
+
+    fn selectedHoistedConstMonoType(
+        self: *BodyContext,
+        selected: checked.SelectedHoistedConstResolvedRef,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!?Type.TypeId {
+        const entry = self.selectedHoistedConstEntry(selected);
+        if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        const hoisted_ty = try self.lowerType(entry.checked_type);
+        try self.constrainTypeToMono(checked_ty, hoisted_ty);
+        return hoisted_ty;
+    }
+
+    fn restoreSelectedHoistedConstAtType(
+        self: *BodyContext,
+        selected: checked.SelectedHoistedConstResolvedRef,
+        ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const entry = self.selectedHoistedConstEntry(selected);
+        if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        return try self.restoredHoistedConstAtType(entry, ty);
     }
 
     fn lowerExprWithType(
@@ -3516,7 +3588,11 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
-        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        const region = self.sourceRegionForExpr(expr);
+        self.builder.program.current_loc = try self.sourceLocFor(region);
+        self.builder.program.current_region = region;
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
             .anno_only,
@@ -3982,14 +4058,9 @@ const BodyContext = struct {
         switch (record.ref) {
             .local_value,
             .pattern_binder,
-            => |local| {
-                if (self.selectedHoistedLocalConst(local)) |entry| {
-                    if (!self.loweringOwnHoistedConstRoot(entry)) {
-                        const hoisted_ty = try self.lowerType(entry.checked_type);
-                        try self.constrainTypeToMono(checked_ty, hoisted_ty);
-                        return hoisted_ty;
-                    }
-                }
+            => {},
+            .selected_hoisted_const => |selected| {
+                if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
             },
             .local_param,
             .local_mutable_version,
@@ -4014,7 +4085,19 @@ const BodyContext = struct {
             .top_level_const => |const_use| try self.constUseMonoType(const_use),
             .imported_const => |const_use| try self.constUseMonoType(const_use),
             .platform_required_const => |required| try self.constUseMonoType(required.const_use),
-            else => try self.lowerType(checked_ty),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => try self.lowerType(checked_ty),
         };
     }
 
@@ -4092,6 +4175,7 @@ const BodyContext = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
+            .selected_hoisted_const,
             .top_level_const,
             .imported_const,
             .platform_required_declaration,
@@ -4180,7 +4264,22 @@ const BodyContext = struct {
                 .local = self.binders.get(local.binder) orelse
                     Common.invariant("local lookup referenced an unbound pattern binder"),
             },
-            else => null,
+            .selected_hoisted_const => |selected| .{
+                .binder = selected.local.binder,
+                .local = self.binders.get(selected.local.binder) orelse
+                    Common.invariant("selected hoisted local lookup referenced an unbound pattern binder"),
+            },
+            .local_proc,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => null,
         };
     }
 
@@ -4199,12 +4298,9 @@ const BodyContext = struct {
         switch (record.ref) {
             .local_value,
             .pattern_binder,
-            => |local| {
-                if (self.selectedHoistedLocalConst(local)) |entry| {
-                    if (!self.loweringOwnHoistedConstRoot(entry)) {
-                        return try self.restoredHoistedConstAtType(entry, ty);
-                    }
-                }
+            => {},
+            .selected_hoisted_const => |selected| {
+                if (try self.restoreSelectedHoistedConstAtType(selected, ty)) |restored| return restored;
             },
             .local_param,
             .local_mutable_version,
@@ -4242,7 +4338,19 @@ const BodyContext = struct {
             .top_level_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
             .imported_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
             .platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty),
-            else => {},
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => {},
         }
 
         try self.constrainTypeToMono(checked_ty, ty);
@@ -4251,6 +4359,7 @@ const BodyContext = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
+            .selected_hoisted_const,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
             .top_level_proc,
@@ -4337,7 +4446,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty),
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),
         };
     }
 
@@ -4346,6 +4455,7 @@ const BodyContext = struct {
         store_view: ModuleView,
         eval: checked.ConstEvalTemplate,
         ty: Type.TypeId,
+        source_region_override: ?base.Region,
     ) Allocator.Error!Ast.ExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
@@ -4370,6 +4480,7 @@ const BodyContext = struct {
         defer self.builder.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, graph);
         defer body_ctx.deinit();
+        body_ctx.source_region_override = source_region_override;
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -4909,7 +5020,11 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(checked_expr)];
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
-        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        const region = self.sourceRegionForExpr(expr);
+        self.builder.program.current_loc = try self.sourceLocFor(region);
+        self.builder.program.current_region = region;
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return restored;
         switch (expr.data) {
             .call => |call| {
@@ -7836,7 +7951,10 @@ const BodyContext = struct {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
         self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.program.current_region = statement.source_region;
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementValueIsLocalProc(decl.expr)) return false;
@@ -8828,7 +8946,10 @@ const BodyContext = struct {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
         self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.program.current_region = statement.source_region;
         const stmt: Ast.Stmt = switch (statement.data) {
             .pending,
             .import_,

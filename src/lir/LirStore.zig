@@ -57,6 +57,9 @@ source_file_ends: std.ArrayList(u32),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: std.ArrayList(base.SourceLoc),
+/// Checked source region per statement, parallel to `cf_stmts`. Reference-count
+/// statements always record `Region.zero`; they have no source counterpart.
+cf_stmt_regions: std.ArrayList(base.Region),
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: std.ArrayList(base.SourceLoc),
 /// Source-level debug names for procs that have source names.
@@ -67,6 +70,8 @@ local_names: std.ArrayList(u32),
 /// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
 /// this on entry to each source node it lowers.
 current_loc: base.SourceLoc,
+/// Ambient checked source region recorded by `addCFStmt`.
+current_region: base.Region,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -87,10 +92,12 @@ pub fn init(allocator: Allocator) Self {
         .source_file_bytes = std.ArrayList(u8).empty,
         .source_file_ends = std.ArrayList(u32).empty,
         .cf_stmt_locs = std.ArrayList(base.SourceLoc).empty,
+        .cf_stmt_regions = std.ArrayList(base.Region).empty,
         .proc_locs = std.ArrayList(base.SourceLoc).empty,
         .proc_debug_names = std.ArrayList(ProcDebugName).empty,
         .local_names = std.ArrayList(u32).empty,
         .current_loc = base.SourceLoc.none,
+        .current_region = base.Region.zero(),
     };
 }
 
@@ -110,6 +117,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
+    self.cf_stmt_regions.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
     self.proc_debug_names.deinit(self.allocator);
     self.local_names.deinit(self.allocator);
@@ -195,6 +203,11 @@ pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     return self.cf_stmt_locs.items[@intFromEnum(id)];
+}
+
+/// Checked source region of a statement.
+pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
+    return self.cf_stmt_regions.items[@intFromEnum(id)];
 }
 
 /// Source location of a proc.
@@ -332,11 +345,44 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
-    const loc = switch (stmt) {
-        .incref, .decref, .free => base.SourceLoc.none,
-        else => self.current_loc,
+    const has_source = switch (stmt) {
+        .incref,
+        .decref,
+        .free,
+        => false,
+
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .switch_stmt,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => true,
     };
+    const loc = if (has_source) self.current_loc else base.SourceLoc.none;
+    const region = if (has_source) self.current_region else base.Region.zero();
     try self.cf_stmt_locs.append(self.allocator, loc);
+    try self.cf_stmt_regions.append(self.allocator, region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 

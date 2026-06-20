@@ -1693,6 +1693,7 @@ pub const Coordinator = struct {
                 .top_level_const,
                 .imported_const,
                 => |const_use| try self.appendConstRef(const_use.const_ref),
+                .selected_hoisted_const => |selected| try self.appendConstRef(selected.const_use.const_ref),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,

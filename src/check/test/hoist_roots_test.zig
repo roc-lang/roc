@@ -40,6 +40,26 @@ test "hoist roots selected for closed ordinary call binding RHS" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
+test "hoist roots selected for closed local block with internal locals" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    z = {
+        \\        x = 41.I64
+        \\        y = x + 1.I64
+        \\        y
+        \\    }
+        \\    z + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].pattern != null);
+    try expectExprTag(&test_env, roots[0].expr, .e_block);
+}
+
 test "hoist roots selected for direct closed ordinary call function body" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -611,6 +631,81 @@ test "hoist roots with non-concrete compile-time types are pruned" {
         \\main = |arg| {
         \\    x = []
         \\    _y = x
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    _ = [
+        \\        {
+        \\            x = []
+        \\            List.len(x).to_i64_wrap()
+        \\        },
+        \\        arg,
+        \\    ]
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist exact non-concrete internal local repro roots are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    _ = [
+        \\        {
+        \\            x = []
+        \\            List.len(x).to_i64_wrap()
+        \\        },
+        \\        arg,
+        \\    ]
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist nested block roots with non-concrete destructured internal binders are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    _ = [
+        \\        {
+        \\            { xs } = { xs: [] }
+        \\            List.len(xs).to_i64_wrap()
+        \\        },
+        \\        arg,
+        \\    ]
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist match roots with non-concrete contextual binders are pruned" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    _ = [
+        \\        match [] {
+        \\            xs => List.len(xs).to_i64_wrap()
+        \\        },
+        \\        arg,
+        \\    ]
         \\    arg
         \\}
     );

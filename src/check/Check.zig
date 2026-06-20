@@ -688,9 +688,15 @@ const HoistSelectionTransaction = struct {
         final_expr: CIR.Expr.Idx,
         context: *HoistedDependencyContext,
     ) Allocator.Error!void {
+        const mark = context.mark();
+        defer context.pop(mark);
+
         for (self.checker.cir.store.sliceStatements(statements)) |statement| {
             switch (self.checker.cir.store.getStatement(statement)) {
-                .s_decl => |decl| try self.stageExprDependenciesInternal(decl.expr, context),
+                .s_decl => |decl| {
+                    try self.stageExprDependenciesInternal(decl.expr, context);
+                    try self.checker.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
+                },
                 .s_expr => |expr_stmt| try self.stageExprDependenciesInternal(expr_stmt.expr, context),
                 .s_import,
                 .s_alias_decl,
@@ -728,7 +734,7 @@ const HoistSelectionTransaction = struct {
             defer context.pop(mark);
             for (self.checker.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
                 const branch_pattern = self.checker.cir.store.getMatchBranchPattern(branch_pattern_idx);
-                try self.checker.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context);
+                try self.checker.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
             }
             if (branch.guard) |guard| {
                 try self.stageExprDependenciesInternal(guard, context);
@@ -4300,26 +4306,48 @@ fn flatTypeIsConcreteHoistedConst(
     };
 }
 
+const HoistedDependencyBindingKind = enum {
+    internal,
+    contextual,
+};
+
+const HoistedDependencyBinding = struct {
+    pattern: CIR.Pattern.Idx,
+    kind: HoistedDependencyBindingKind,
+};
+
 const HoistedDependencyContext = struct {
-    patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+    bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
-        self.patterns.deinit(allocator);
+        self.bindings.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
-        return self.patterns.items.len;
+        return self.bindings.items.len;
     }
 
     fn pop(self: *@This(), start: usize) void {
-        self.patterns.shrinkRetainingCapacity(start);
+        self.bindings.shrinkRetainingCapacity(start);
     }
 
     fn contains(self: *const @This(), pattern: CIR.Pattern.Idx) bool {
-        for (self.patterns.items) |allowed| {
-            if (allowed == pattern) return true;
+        for (self.bindings.items) |binding| {
+            if (binding.pattern == pattern) return true;
         }
         return false;
+    }
+
+    fn append(
+        self: *@This(),
+        allocator: Allocator,
+        pattern: CIR.Pattern.Idx,
+        kind: HoistedDependencyBindingKind,
+    ) Allocator.Error!void {
+        try self.bindings.append(allocator, .{
+            .pattern = pattern,
+            .kind = kind,
+        });
     }
 };
 
@@ -4544,6 +4572,9 @@ fn hoistedRootBlockDependenciesAreKept(
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
+    const mark = context.mark();
+    defer context.pop(mark);
+
     for (self.cir.store.sliceStatements(statements)) |statement| {
         if (!try self.hoistedRootStatementDependenciesAreKept(statement, context, keep_oracle)) return false;
     }
@@ -4557,7 +4588,13 @@ fn hoistedRootStatementDependenciesAreKept(
     keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
     return switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle),
+        .s_decl => |decl| blk: {
+            if (!try self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle)) break :blk false;
+            if (!try self.hoistedRootPatternSelectedDependenciesAreKept(decl.pattern, keep_oracle)) break :blk false;
+            if (!try self.hoistedRootPatternBindersAreConcrete(decl.pattern)) break :blk false;
+            try self.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
+            break :blk true;
+        },
         .s_expr => |expr| self.hoistedRootDependenciesAreKeptInternal(expr.expr, context, keep_oracle),
         .s_import,
         .s_alias_decl,
@@ -4595,7 +4632,8 @@ fn hoistedRootMatchDependenciesAreKept(
         defer context.pop(mark);
         for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
             const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-            try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context);
+            if (!try self.hoistedRootPatternBindersAreConcrete(branch_pattern.pattern)) return false;
+            try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
         }
         if (branch.guard) |guard| {
             if (!try self.hoistedRootDependenciesAreKeptInternal(guard, context, keep_oracle)) return false;
@@ -4605,48 +4643,177 @@ fn hoistedRootMatchDependenciesAreKept(
     return true;
 }
 
+fn hoistedRootPatternSelectedDependenciesAreKept(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    keep_oracle: *const HoistedRootKeepOracle,
+) Allocator.Error!bool {
+    if (keep_oracle.selectedPatternIsKept(pattern)) |kept| {
+        if (!kept) return false;
+    }
+
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign,
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => true,
+        .as => |as_pattern| try self.hoistedRootPatternSelectedDependenciesAreKept(as_pattern.pattern, keep_oracle),
+        .tuple => |tuple| blk: {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_destructure => |destructure| blk: {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(destruct.kind.toPatternIdx(), keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .applied_tag => |tag| blk: {
+            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(arg_pattern, keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
+        .nominal_external => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
+        .list => |list| blk: {
+            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
+            }
+            if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern| {
+                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(rest_pattern, keep_oracle)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .str_interpolation => |str| blk: {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture| {
+                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(capture, keep_oracle)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn hoistedRootPatternBindersAreConcrete(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+) Allocator.Error!bool {
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
+        .as => |as_pattern| (try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) and
+            try self.hoistedRootPatternBindersAreConcrete(as_pattern.pattern),
+        .tuple => |tuple| blk: {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_destructure => |destructure| blk: {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (!try self.hoistedRootPatternBindersAreConcrete(destruct.kind.toPatternIdx())) break :blk false;
+            }
+            break :blk true;
+        },
+        .applied_tag => |tag| blk: {
+            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(arg_pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
+        .nominal_external => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
+        .list => |list| blk: {
+            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
+            }
+            if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern| {
+                    if (!try self.hoistedRootPatternBindersAreConcrete(rest_pattern)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .str_interpolation => |str| blk: {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture| {
+                    if (!try self.hoistedRootPatternBindersAreConcrete(capture)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => true,
+    };
+}
+
 fn appendHoistedDependencyPatternBinders(
     self: *Self,
     pattern: CIR.Pattern.Idx,
     context: *HoistedDependencyContext,
+    kind: HoistedDependencyBindingKind,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
         .assign => {
-            try context.patterns.append(self.gpa, pattern);
+            try context.append(self.gpa, pattern, kind);
         },
         .as => |as_pattern| {
-            try context.patterns.append(self.gpa, pattern);
-            try self.appendHoistedDependencyPatternBinders(as_pattern.pattern, context);
+            try context.append(self.gpa, pattern, kind);
+            try self.appendHoistedDependencyPatternBinders(as_pattern.pattern, context, kind);
         },
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context);
+                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
             }
         },
         .record_destructure => |destructure| {
             for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                try self.appendHoistedDependencyPatternBinders(destruct.kind.toPatternIdx(), context);
+                try self.appendHoistedDependencyPatternBinders(destruct.kind.toPatternIdx(), context, kind);
             }
         },
         .applied_tag => |tag| {
             for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                try self.appendHoistedDependencyPatternBinders(arg_pattern, context);
+                try self.appendHoistedDependencyPatternBinders(arg_pattern, context, kind);
             }
         },
         .nominal => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context);
+            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
         },
         .nominal_external => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context);
+            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
         },
         .list => |list| {
             for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context);
+                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
             }
             if (list.rest_info) |rest_info| {
                 if (rest_info.pattern) |rest_pattern| {
-                    try self.appendHoistedDependencyPatternBinders(rest_pattern, context);
+                    try self.appendHoistedDependencyPatternBinders(rest_pattern, context, kind);
                 }
             }
         },
@@ -4655,7 +4822,7 @@ fn appendHoistedDependencyPatternBinders(
             while (step_offset < str.steps.span.len) : (step_offset += 1) {
                 const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
                 if (step.capture) |capture| {
-                    try self.appendHoistedDependencyPatternBinders(capture, context);
+                    try self.appendHoistedDependencyPatternBinders(capture, context, kind);
                 }
             }
         },

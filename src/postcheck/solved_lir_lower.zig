@@ -672,9 +672,15 @@ const Lowerer = struct {
 
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = switch (source_fn.body) {
             .roc => |body_id| self.solved.lifted.exprLoc(body_id),
             .hosted => base.SourceLoc.none,
+        };
+        self.result.store.current_region = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprRegion(body_id),
+            .hosted => base.Region.zero(),
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
@@ -1481,7 +1487,10 @@ const Lowerer = struct {
         const expr_ty = try self.lowerExprTy(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -2546,7 +2555,10 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.result.store.current_region = self.solved.lifted.stmtRegion(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
@@ -4196,7 +4208,9 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .comptime_sites = try cloneComptimeSites(allocator, &program.comptime_sites),
         .source_files = source_files,
         .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .expr_regions = try cloneArrayList(base.Region, allocator, &program.expr_regions),
         .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .stmt_regions = try cloneArrayList(base.Region, allocator, &program.stmt_regions),
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -4212,6 +4226,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
             break :blk names;
         },
         .current_loc = program.current_loc,
+        .current_region = program.current_region,
     };
 }
 

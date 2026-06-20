@@ -717,6 +717,17 @@ debug information, crash locations, and source maps must report the expression's
 original source location. Synthetic root wrappers and ordering metadata are
 compiler-internal only.
 
+Compile-time crash diagnostics use checked source regions carried forward by
+post-check lowering, not source text reconstruction. Monotype expressions and
+statements carry checked regions beside resolved `SourceLoc` values; LIR stores
+the checked region for each source-bearing statement; and the interpreter
+captures the failed checked region directly. Compiler-owned or builtin frames
+whose checked region is `Region.zero()` are explicit transparent implementation
+frames and lower to `SourceLoc.none`, so a callee failure crossing such a frame
+reports the checked caller site. Finalization must not recover a checked region
+from module display names, source filenames, line/column offsets, or broadest
+matching checked nodes.
+
 Hoistability is computed while checking expressions, as part of the existing
 recursive checking work that already determines types, resolved references, and
 effect information. Checking may return temporary hoistability facts from
@@ -741,25 +752,22 @@ allowed by whitelist, name, or backend knowledge.
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
 so nested hoisted roots would add metadata and scheduling work without removing
-runtime work. With that rule, same-module compile-time constant scheduling has
-two groups:
+runtime work. However, ordinary top-level constants can still depend on selected
+hoisted constants indirectly by calling pure checked functions whose bodies
+restore selected hoisted locals. Therefore same-module compile-time roots are
+published as one dependency-sorted request stream, not as permanently separated
+top-level and hoisted groups.
 
-```text
-top-level constants in canonical dependency order
-hoisted constants in checker-produced dependency order
-```
-
-Top-level constants may depend on other top-level constants, but they cannot
-depend on hoisted constants. Hoisted constants may depend on top-level constants
-and on earlier hoisted constants. Checking should prefer to emit selected
-hoisted roots in dependency-first order as it proves and selects them. For local
-bindings, this naturally follows from checking the right-hand side before later
-uses select the binding root; for arbitrary expressions, maximal eligible child
-roots bubble to the nearest ineligible parent and are selected in the recursive
-checking order. If a future checked construct cannot produce dependency-first
-order online, the compiler may use temporary dependency edges between selected
-hoisted roots only long enough to topologically sort them, then discard those
-edges before publishing the checked artifact.
+Canonicalization's top-level dependency order remains an input for ordinary
+top-level constants, and checking should prefer to emit selected hoisted roots
+in dependency-first order as it proves and selects them. The published order is
+then computed from explicit checked references across all same-module
+compile-time roots: ordinary top-level constants, selected hoisted constants,
+callable eval roots, and literal conversion roots. Publication may build
+temporary dependency edges while sorting, but it must discard those edges before
+the checked artifact is finalized. The durable artifact stores only the roots,
+the sorted request stream, stored `ConstStore` payloads, and sparse lookup
+indexes.
 
 A checked module must not permanently store a hoisted-root dependency graph or
 per-expression dependency metadata. The durable checked data is the compile-time
@@ -781,11 +789,10 @@ constants, and platform-required values. It is not a scheduling graph for
 hoisted constants, and it must not require storing dependency edges in the
 checked artifact.
 
-Canonicalization's top-level dependency order remains the source for ordinary
-top-level constant order. Hoisted-root ordering is computed after checking has
-selected the sparse hoisted roots, because only checked data can distinguish
-runtime captures, effects, mutable locals, static dispatch behavior, platform
-availability, and concrete compile-time types.
+Hoisted-root scheduling is computed after checking has selected the sparse
+hoisted roots, because only checked data can distinguish runtime captures,
+effects, mutable locals, static dispatch behavior, platform availability,
+same-module selected-hoisted const uses, and concrete compile-time types.
 
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must

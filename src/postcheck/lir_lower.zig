@@ -225,6 +225,10 @@ const Lowerer = struct {
                 .roc => |body_id| self.program.exprLoc(body_id),
                 .hosted => base.SourceLoc.none,
             };
+            self.result.store.current_region = switch (fn_.body) {
+                .roc => |body_id| self.program.exprRegion(body_id),
+                .hosted => base.Region.zero(),
+            };
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
                 .args = try self.result.store.addLocalSpan(arg_locals),
@@ -237,6 +241,7 @@ const Lowerer = struct {
                 try self.result.store.setProcDebugName(proc_id, self.program.names.exportNameText(name));
             }
             self.result.store.current_loc = base.SourceLoc.none;
+            self.result.store.current_region = base.Region.zero();
             self.fn_map[index] = proc_id;
         }
     }
@@ -702,7 +707,10 @@ const Lowerer = struct {
         const expr_data = self.expr(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.program.exprLoc(expr_id);
+        self.result.store.current_region = self.program.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
@@ -1423,7 +1431,10 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: LambdaMono.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.program.stmtLoc(stmt_id);
+        self.result.store.current_region = self.program.stmtRegion(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {

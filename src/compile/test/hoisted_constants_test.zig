@@ -38,6 +38,13 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\
         \\top_add_five = |n| n + 5.I64
         \\
+        \\indirect_top_helper = |n| {
+        \\    indirect_local = 123.I64
+        \\    indirect_local + n
+        \\}
+        \\
+        \\indirect_top_value = indirect_top_helper(333.I64)
+        \\
         \\DispatchBox := [Val(I64)].{
         \\    add = |DispatchBox.Val(n), delta| DispatchBox.Val(n + delta)
         \\    unwrap = |DispatchBox.Val(n)| n
@@ -49,6 +56,11 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    called = top_callable(41.I64)
         \\    called_unique = top_add_five(72.I64)
         \\    dispatched = DispatchBox.Val(89.I64).add(2.I64).unwrap()
+        \\    block_value = {
+        \\        block_x = 52.I64
+        \\        block_y = block_x + 1.I64
+        \\        block_y
+        \\    }
         \\    { z } = { z: 44.I64 }
         \\    pair = (40.I64, 6.I64)
         \\    (left, right) = pair
@@ -73,6 +85,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    _ = called + List.len(args).to_i64_wrap()
         \\    _ = called_unique + List.len(args).to_i64_wrap()
         \\    _ = dispatched + List.len(args).to_i64_wrap()
+        \\    _ = indirect_top_value + List.len(args).to_i64_wrap()
+        \\    _ = block_value + List.len(args).to_i64_wrap()
         \\    _ = z + tuple_total + List.len(args).to_i64_wrap()
         \\    _ = tag_value + List.len(args).to_i64_wrap()
         \\    _ = match_tuple_total
@@ -166,12 +180,13 @@ test "hoisted local constants are finalized and restored during runtime lowering
             findHoistedArtifact(relations, 2) orelse
             return error.AppHoistedConstantsNotFound;
 
-    try expectTopLevelCompileTimeRootsBeforeHoisted(app);
-    try expectTopLevelCompileTimeRootsBeforeHoisted(app_view);
+    try expectCompileTimeRootKindsPresent(app);
+    try expectCompileTimeRootKindsPresent(app_view);
     try expectExportedRuntimeEntrypoint(app_artifact);
 
     const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
     const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
+    const indirect_top = findStoredCompileTimeRootI64(app_view, .constant, 456) orelse return error.IndirectTopLevelConstNotFound;
     const tuple_left = findStoredI64(app_view, 40) orelse return error.HoistedTupleLeftExtractionNotFound;
     const tuple_right = findStoredI64(app_view, 6) orelse return error.HoistedTupleRightExtractionNotFound;
     const record_extraction = findStoredI64(app_view, 44) orelse return error.HoistedRecordExtractionNotFound;
@@ -180,6 +195,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const match_tuple_right = findStoredI64(app_view, 8) orelse return error.HoistedMatchTupleRightExtractionNotFound;
     const match_alias = findStoredI64(app_view, 46) orelse return error.HoistedMatchAliasExtractionNotFound;
     const ordinary_call = findStoredI64(app_view, 77) orelse return error.HoistedOrdinaryCallNotFound;
+    const block_value = findStoredI64(app_view, 53) orelse return error.HoistedBlockValueNotFound;
+    const indirect_local = findStoredI64(app_view, 123) orelse return error.IndirectHoistedLocalNotFound;
     _ = findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
     try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
@@ -194,6 +211,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_right.root);
     try expectRootRequestBefore(app_artifact, top_b.id, match_alias.root);
     try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
+    try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
+    try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
     try expectPatternExtractionSyntheticRegions(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
@@ -435,6 +454,108 @@ test "hoisted constant crash reports original source region" {
         const region = entry.report.getRegionInfo() orelse return error.ComptimeCrashReportHadNoRegion;
         try std.testing.expectEqual(@as(u32, 6), region.start_line_idx);
         try std.testing.expectEqual(@as(u32, 6), region.end_line_idx);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "inlined hoisted constant crash reports hoisted source region" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\helper : I64 -> I64
+        \\helper = |n| {
+        \\    x = 1.I64 // 0.I64
+        \\    n + x
+        \\}
+        \\
+        \\value = helper(41.I64)
+        \\
+        \\main! = |args| {
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME CRASH")) continue;
+        found = true;
+        const region = entry.report.getRegionInfo() orelse return error.ComptimeCrashReportHadNoRegion;
+        try std.testing.expectEqual(@as(u32, 7), region.start_line_idx);
+        try std.testing.expectEqual(@as(u32, 7), region.end_line_idx);
         try std.testing.expectEqualStrings("main", entry.module_name);
     }
     try std.testing.expect(found);
@@ -881,26 +1002,22 @@ fn findHoistedArtifact(
     return null;
 }
 
-fn expectTopLevelCompileTimeRootsBeforeHoisted(
+fn expectCompileTimeRootKindsPresent(
     artifact: check.CheckedArtifact.ImportedModuleView,
 ) !void {
     var saw_top_level_constant = false;
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
-    var seen_hoisted_root = false;
 
     for (artifact.compile_time_roots.roots) |root| {
         switch (root.kind) {
             .constant => {
-                if (seen_hoisted_root) return error.TopLevelConstantScheduledAfterHoisted;
                 saw_top_level_constant = true;
             },
             .callable_binding => {
-                if (seen_hoisted_root) return error.TopLevelCallableScheduledAfterHoisted;
                 saw_top_level_callable = true;
             },
             .hoisted_constant => {
-                seen_hoisted_root = true;
                 saw_hoisted_constant = true;
             },
             .expect,

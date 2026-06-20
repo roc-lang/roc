@@ -6,10 +6,12 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
+const ModuleEnv = can.ModuleEnv;
 const checked = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
@@ -199,6 +201,7 @@ const RootCompletionState = struct {
     request_root_ids: []checked.ComptimeRootId,
     visited_templates: []u32,
     visit: u32,
+    current_root_id: ?checked.ComptimeRootId = null,
 
     fn init(
         allocator: Allocator,
@@ -267,6 +270,10 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         request: checked.RootRequest,
     ) bool {
+        const saved_current_root_id = self.current_root_id;
+        defer self.current_root_id = saved_current_root_id;
+        self.current_root_id = compileTimeRootForRequest(self.module, request);
+
         self.visit +%= 1;
         if (self.visit == 0) {
             @memset(self.visited_templates, 0);
@@ -320,6 +327,7 @@ const RootCompletionState = struct {
     ) bool {
         return switch (ref) {
             .top_level_const => |const_use| self.constUseComplete(const_use),
+            .selected_hoisted_const => |selected| self.constUseComplete(selected.const_use),
             .top_level_proc,
             .promoted_top_level_proc,
             => |proc_use| self.procedureUseDependenciesComplete(proc_use),
@@ -343,6 +351,11 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
+        const own_hoisted_root = switch (const_use.const_ref.owner) {
+            .hoisted_expr => true,
+            .top_level_binding => false,
+        };
+        if (self.current_root_id != null and root_id == self.current_root_id.? and own_hoisted_root) return true;
         return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
     }
 
@@ -658,8 +671,8 @@ fn evalCompileTimeRoot(
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
         error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, lir_result, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, lir_result, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
 }
@@ -786,18 +799,30 @@ fn reportCompileTimeCrash(
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
+    interpreter: *const Interpreter,
     message: []const u8,
 ) anyerror!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try problem_store.putExtraString(message);
-    const region = module.checked_bodies.expr(root.expr).source_region;
+    _ = lir_result;
+    const region = compileTimeCrashRegion(module, root, interpreter);
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
         .region = region,
     } });
     return error.CompileTimeProblem;
+}
+
+fn compileTimeCrashRegion(
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    interpreter: *const Interpreter,
+) base.Region {
+    if (interpreter.getFailedCheckedRegion()) |region| return region;
+    return module.checked_bodies.expr(root.expr).source_region;
 }
 
 fn finalizationImports(
