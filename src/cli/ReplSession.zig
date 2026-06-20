@@ -110,6 +110,10 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
 
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
     if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs() };
+    if (std.mem.startsWith(u8, line, ":t ")) {
+        const rest = std.mem.trim(u8, line[3..], " \t");
+        return .{ .output = try self.printTypeOfVar(rest) };
+    }
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or
@@ -303,6 +307,27 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
     }
 
     return try output.toOwnedSlice(self.allocator);
+}
+
+fn printTypeOfVar(self: *ReplSession, name: []const u8) anyerror![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(self.allocator);
+
+    var ret = try self.initParsedResources();
+    defer ret.deinit(self.allocator);
+    var env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+
+    if (getDefOfName(env, name)) |def_idx| {
+        try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+        try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+    } else {
+        try out.print(self.allocator, "Did not find a definition for `{s}`\n", .{name});
+    }
+
+    return out.toOwnedSlice(self.allocator);
 }
 
 fn initParsedResources(self: *ReplSession) anyerror!eval.test_helpers.ParsedResources {
