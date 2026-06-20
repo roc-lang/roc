@@ -4664,7 +4664,6 @@ fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, cap
         false
     else switch (call_args.arg0.tag) {
         .NvBool => call_args.arg0.payload.nv_bool == call_args.arg1.payload.nv_bool,
-        .NvF64 => call_args.arg0.payload.nv_f64 == call_args.arg1.payload.nv_f64,
         .NvI64 => call_args.arg0.payload.nv_i64 == call_args.arg1.payload.nv_i64,
         .NvStr => blk: {
             const left = call_args.arg0.payload.nv_str;

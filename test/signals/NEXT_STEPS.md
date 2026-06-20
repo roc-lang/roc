@@ -536,7 +536,9 @@ typed-specialized `Signal.const_i64`/`const_str`/`const_bool` helpers have been
 removed; maintained apps use the generic `Signal.const` constructor so constants
 also go through the static-dispatch value path. Unused `NodeValue` helper
 constructors and crash extractors have been removed; `NodeValue` remains only as
-the internal encode/decode bridge used by the current retained thunk wrappers.
+the internal encode/decode bridge used by the current retained thunk wrappers,
+with its tag set narrowed to the value forms those wrappers can actually encode
+and decode.
 
 Current priority: do this next. This is the largest remaining correctness gap
 against `DESIGN.md`, and it unlocks the retained-thunk node table, true

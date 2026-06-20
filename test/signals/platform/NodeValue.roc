@@ -5,7 +5,6 @@ NodeValue := [
 	NvStr(Str),
 	NvBool(Bool),
 	NvUnit,
-	NvF64(F64),
 	NvList(List(NodeValue)),
 ].{
 
