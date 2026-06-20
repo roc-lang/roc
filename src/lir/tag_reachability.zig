@@ -530,7 +530,12 @@ const Pass = struct {
                 .discriminant => {},
                 else => continue,
             }
-            if (self.useCount(assign.target) > 1) continue;
+            const switch_stmt = switch (self.store.getCFStmt(assign.next)) {
+                .switch_stmt => |s| s,
+                else => continue,
+            };
+            if (switch_stmt.cond != assign.target) continue;
+            if (self.useCount(assign.target) != 1) continue;
             const next = self.resolveRedirect(assign.next);
             if (next != assign.next) try self.redirects.put(stmt_id, next);
         }
@@ -915,4 +920,202 @@ test "tag reachability removes impossible explicit branches from multi-value set
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 1), branches.len);
     try testing.expectEqual(@as(u64, 0), branches[0].value);
+}
+
+test "tag reachability keeps unrelated live discriminant reads" {
+    var f = try TestProgram.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.result.store;
+
+    const source = try f.local(f.outer_layout);
+    const other = try f.local(f.outer_layout);
+    const disc = try f.local(.u16);
+    const other_disc = try f.local(.u16);
+
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = disc } });
+    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const other_switch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = other_disc,
+        .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = ret_stmt }}),
+        .default_branch = bad,
+    } });
+    const disc_read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = source } },
+        .next = other_switch,
+    } });
+    const other_disc_read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = other_disc,
+        .op = .{ .discriminant = .{ .source = other } },
+        .next = disc_read,
+    } });
+    const assign_other = try store.addCFStmt(.{ .assign_tag = .{
+        .target = other,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = other_disc_read,
+    } });
+    const body = try store.addCFStmt(.{ .assign_tag = .{
+        .target = source,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = assign_other,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(6),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .u16,
+    });
+    try f.result.root_procs.append(testing.allocator, proc);
+
+    try run(&f.result);
+
+    const other_disc_stmt = store.getCFStmt(other_disc_read).assign_ref;
+    try testing.expectEqual(disc_read, other_disc_stmt.next);
+
+    const disc_stmt = store.getCFStmt(disc_read).assign_ref;
+    try testing.expectEqual(ret_stmt, disc_stmt.next);
+}
+
+test "tag reachability retains branches for arg-derived tags" {
+    var f = try TestProgram.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.result.store;
+
+    const arg = try f.local(f.outer_layout);
+    const disc = try f.local(.u16);
+
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = arg } });
+    const branch_zero = try store.addCFStmt(.{ .runtime_error = {} });
+    const branch_one = try store.addCFStmt(.{ .runtime_error = {} });
+    const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = 0, .body = branch_zero },
+            .{ .value = 1, .body = branch_one },
+        }),
+        .default_branch = ret_stmt,
+    } });
+    const body = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = arg } },
+        .next = switch_stmt,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(7),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{arg}),
+        .body = body,
+        .ret_layout = f.outer_layout,
+    });
+    try f.result.root_procs.append(testing.allocator, proc);
+
+    try run(&f.result);
+
+    const read_stmt = store.getCFStmt(body).assign_ref;
+    try testing.expectEqual(switch_stmt, read_stmt.next);
+
+    const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
+    const branches = store.getCFSwitchBranches(rewritten.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+}
+
+test "tag reachability retains branches for hosted call results" {
+    var f = try TestProgram.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.result.store;
+
+    const hosted = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(8),
+        .args = LIR.LocalSpan.empty(),
+        .body = null,
+        .ret_layout = f.outer_layout,
+        .hosted = .{
+            .symbol = try store.insertString("roc_test_hosted"),
+            .dispatch_index = 0,
+        },
+    });
+
+    const result = try f.local(f.outer_layout);
+    const disc = try f.local(.u16);
+
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad }}),
+        .default_branch = ret_stmt,
+    } });
+    const disc_read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = result } },
+        .next = switch_stmt,
+    } });
+    const body = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = hosted,
+        .args = LIR.LocalSpan.empty(),
+        .next = disc_read,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(9),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = f.outer_layout,
+    });
+    try f.result.root_procs.append(testing.allocator, proc);
+
+    try run(&f.result);
+
+    const call_stmt = store.getCFStmt(body).assign_call;
+    try testing.expectEqual(disc_read, call_stmt.next);
+
+    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    try testing.expectEqual(switch_stmt, read_stmt.next);
+}
+
+test "tag reachability retains branches for erased call results" {
+    var f = try TestProgram.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.result.store;
+
+    const closure = try f.local(f.outer_layout);
+    const result = try f.local(f.outer_layout);
+    const disc = try f.local(.u16);
+
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad }}),
+        .default_branch = ret_stmt,
+    } });
+    const disc_read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = result } },
+        .next = switch_stmt,
+    } });
+    const body = try store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = LIR.LocalSpan.empty(),
+        .next = disc_read,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(10),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{closure}),
+        .body = body,
+        .ret_layout = f.outer_layout,
+    });
+    try f.result.root_procs.append(testing.allocator, proc);
+
+    try run(&f.result);
+
+    const call_stmt = store.getCFStmt(body).assign_call_erased;
+    try testing.expectEqual(disc_read, call_stmt.next);
+
+    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    try testing.expectEqual(switch_stmt, read_stmt.next);
 }
