@@ -240,6 +240,7 @@ pub const MonoLlvmCodeGen = struct {
         layout_idx: layout.Idx,
         size: u32,
         alignment: LlvmBuilder.Alignment,
+        allocated: bool,
     };
 
     const JoinInfo = struct {
@@ -1204,7 +1205,7 @@ pub const MonoLlvmCodeGen = struct {
 
         self.local_slots = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
         defer self.allocator.free(self.local_slots);
-        try self.allocLocalSlots();
+        try self.allocProcLocalSlots(proc);
         try self.unpackProcArgs(proc);
         if (!builder.strip and self.emit_local_debug_info) {
             try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
@@ -1563,21 +1564,45 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
-    fn allocLocalSlots(self: *MonoLlvmCodeGen) Error!void {
+    fn allocProcLocalSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
+        const unallocated = LocalSlot{
+            .ptr = undefined,
+            .layout_idx = .zst,
+            .size = 0,
+            .alignment = LlvmBuilder.Alignment.fromByteUnits(1),
+            .allocated = false,
+        };
+        for (self.local_slots) |*local_slot| {
+            local_slot.* = unallocated;
+        }
+
+        for (self.store.getLocalSpan(proc.args)) |local_id| {
+            try self.allocProcLocalSlot(local_id);
+        }
+        for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
+            try self.allocProcLocalSlot(local_id);
+        }
+    }
+
+    fn allocProcLocalSlot(self: *MonoLlvmCodeGen, local_id: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        for (self.store.locals.items, self.local_slots) |local, *local_slot| {
-            const sa = self.sizeAlignOf(local.layout_idx);
-            const len = builder.intValue(.i32, @max(sa.size, 1)) catch return error.OutOfMemory;
-            const ptr = wip.alloca(.normal, .i8, len, self.llvmAlignment(sa.alignment), .default, "local") catch return error.OutOfMemory;
-            local_slot.* = .{
-                .ptr = ptr,
-                .layout_idx = local.layout_idx,
-                .size = sa.size,
-                .alignment = self.llvmAlignment(sa.alignment),
-            };
-            if (sa.size > 0) try self.zeroBytes(ptr, sa.size);
-        }
+        const local_slot = &self.local_slots[@intFromEnum(local_id)];
+        if (local_slot.allocated) return;
+
+        const local = self.store.getLocal(local_id);
+        const sa = self.sizeAlignOf(local.layout_idx);
+        const len = builder.intValue(.i32, @max(sa.size, 1)) catch return error.OutOfMemory;
+        const alignment = self.llvmAlignment(sa.alignment);
+        const ptr = wip.alloca(.normal, .i8, len, alignment, .default, "local") catch return error.OutOfMemory;
+        local_slot.* = .{
+            .ptr = ptr,
+            .layout_idx = local.layout_idx,
+            .size = sa.size,
+            .alignment = alignment,
+            .allocated = true,
+        };
+        if (sa.size > 0) try self.zeroBytes(ptr, sa.size);
     }
 
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
@@ -4912,7 +4937,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn slot(self: *MonoLlvmCodeGen, local: LocalId) LocalSlot {
-        return self.local_slots[@intFromEnum(local)];
+        const local_slot = self.local_slots[@intFromEnum(local)];
+        if (!local_slot.allocated) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@intFromEnum(local)});
+            }
+            unreachable;
+        }
+        return local_slot;
     }
 
     fn sizeAlignOf(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) layout.SizeAlign {

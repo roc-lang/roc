@@ -763,6 +763,15 @@ Roc API.
   - Success criteria:
     - Every large stack object in `_roc__proc_e3` has a known reason.
     - Unnecessary stack objects have follow-up patches or are removed.
+    - Intermediate evidence after the LLVM proc-frame slot cleanup:
+      `allocProcLocalSlots` now allocates only the current proc's explicit
+      `args` and `frame_locals` instead of every local in the whole LIR store.
+      This cut unrelated procs in fresh IR from roughly 3000 allocas each to
+      their real frame-local counts, for example `_roc__proc_117` dropped to
+      133 allocas. The main generated HTTP parser proc still has 2434 allocas
+      in `/tmp/roc_http_after_frame_slots.ll`, so its stack traffic is produced
+      by its own generated parser/app body and remains open work rather than a
+      global LLVM backend slot-allocation issue.
 
 - [ ] Keep nested parser construction eager and runtime parser loops small.
   - Tasks:
@@ -801,6 +810,9 @@ Roc API.
       `zig build run-test-zig-json-decoder-platform`.
     - Passed after the static ASCII-caseless dispatch operation and lowering
       changes: `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Passed after the LLVM proc-frame slot allocation cleanup:
+      `zig build run-test-zig-http-header-decoder-platform` and
       `zig build run-test-zig-json-decoder-platform`.
 
 - [x] Run focused string equality tests after the `Str.is_eq` phase.
@@ -859,6 +871,11 @@ Roc API.
       `roc_builtins_str_caseless_ascii_equals`. Broad parser stack zeroing and
       large parser frames remain visible, so the presence-bit/LIR scalarization
       and cold-path outlining phases remain open.
+    - Current proc-frame cleanup evidence:
+      `/tmp/roc_http_after_frame_slots.ll` shows backend-local allocation is no
+      longer global across all procs, but `_roc__proc_11b` still has 2434 own
+      frame allocas and broad parser-entry zeroing. This keeps this checklist
+      item open.
 
 ## Completion Checklist
 
