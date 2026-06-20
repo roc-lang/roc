@@ -352,7 +352,7 @@ ingested node records its kind and input ids:
 
 ```roc
 NodeDesc := [
-    Source({ initial : Box(OpaqueValue), eq : EqThunk }),
+    Source({ initial : ValueInitThunk, eq : EqThunk }),
     Map({ input : U64, transform : MapThunk, eq : EqThunk }),
     Map2({ left : U64, right : U64, transform : Map2Thunk, eq : EqThunk }),
     Combine({ inputs : List(U64), eq : EqThunk }),
@@ -369,6 +369,12 @@ GraphDesc := {
 `MapThunk`/`Map2Thunk`/`EqThunk` are boxed monomorphized closures (the confined
 erasure). They are produced from `Signal.map`/`map2`/`Ui.state` at the call site,
 so their input and output types are pinned to the surrounding `Signal(a)`.
+`ValueInitThunk` is the same kind of typed-edge artifact for a source's initial
+value. It is not a literal `Box(OpaqueValue)` field in the heterogeneous
+descriptor tree; Roc cannot erase `Box(a)` that way. The implementation must
+either generate an erased host value cell at the monomorphized source edge or
+reshape the descriptor so the stored value is owned by the one typed thunk that
+can read it.
 
 The platform does **not** evaluate the graph. It only describes it. There is no
 `eval_signal`, no dirty propagation, no cache in Roc.
@@ -385,6 +391,11 @@ ui_event    : Box(HostState), U64, Box(OpaqueValue) -> Box(EventResult)
 ui_recompute : Box(HostState), RecomputeBatch -> Box(RecomputeResult)
 ui_drop     : Box(HostState) -> {}
 ```
+
+`OpaqueValue` in these entrypoint sketches means an opaque host/Roc protocol
+handle for a value already produced at a monomorphized typed edge. It is not a
+generic value field that Roc code can place directly inside `Elem` or
+`GraphDesc`.
 
 - `ui_init` runs `build({})` once, produces a `GraphDesc`, and returns it plus
   the initial render patch list. The host ingests the `GraphDesc`, mints ids, and
