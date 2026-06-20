@@ -11641,11 +11641,23 @@ const PlatformAppRelationMergeContext = enum {
     tag_tail,
 };
 
+const PlatformAppRelationFinalizeKey = struct {
+    root: u32,
+    context: PlatformAppRelationMergeContext,
+};
+
+const PlatformAppRelationMergeKey = struct {
+    platform_root: u32,
+    app_root: u32,
+    context: PlatformAppRelationMergeContext,
+};
+
 const PlatformAppRelationTypeResolver = struct {
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
-    finalizing: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    finalizing: std.AutoHashMap(PlatformAppRelationFinalizeKey, CheckedTypeId),
+    merging: std.AutoHashMap(PlatformAppRelationMergeKey, CheckedTypeId),
 
     fn init(
         allocator: Allocator,
@@ -11656,11 +11668,13 @@ const PlatformAppRelationTypeResolver = struct {
             .allocator = allocator,
             .names = names,
             .store = store,
-            .finalizing = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .finalizing = std.AutoHashMap(PlatformAppRelationFinalizeKey, CheckedTypeId).init(allocator),
+            .merging = std.AutoHashMap(PlatformAppRelationMergeKey, CheckedTypeId).init(allocator),
         };
     }
 
     fn deinit(self: *PlatformAppRelationTypeResolver) void {
+        self.merging.deinit();
         self.finalizing.deinit();
     }
 
@@ -11691,6 +11705,15 @@ const PlatformAppRelationTypeResolver = struct {
                 else => {},
             },
         }
+
+        const merge_key = PlatformAppRelationMergeKey{
+            .platform_root = @intFromEnum(platform_root),
+            .app_root = @intFromEnum(app_root),
+            .context = context,
+        };
+        if (self.merging.get(merge_key)) |existing| return existing;
+        try self.merging.put(merge_key, app_root);
+        defer _ = self.merging.remove(merge_key);
 
         return switch (platform_payload) {
             .pending => checkedArtifactInvariant("platform/app relation merge reached pending platform payload", .{}),
@@ -11773,9 +11796,13 @@ const PlatformAppRelationTypeResolver = struct {
                 .value => root,
             };
         }
-        if (self.finalizing.get(root)) |existing| return existing;
-        try self.finalizing.put(root, root);
-        defer _ = self.finalizing.remove(root);
+        const finalize_key = PlatformAppRelationFinalizeKey{
+            .root = @intFromEnum(root),
+            .context = context,
+        };
+        if (self.finalizing.get(finalize_key)) |existing| return existing;
+        try self.finalizing.put(finalize_key, root);
+        defer _ = self.finalizing.remove(finalize_key);
 
         return switch (root_payload) {
             .pending => checkedArtifactInvariant("platform/app relation finalization reached pending payload", .{}),
@@ -12893,6 +12920,74 @@ fn testCanonicalTypeKey(byte: u8) canonical.CanonicalTypeKey {
     var key = canonical.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
+}
+
+const RecursiveNominalTestType = struct {
+    nominal: CheckedTypeId,
+    backing: CheckedTypeId,
+};
+
+fn appendRecursiveNominalTestType(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    module_name: canonical.ModuleNameId,
+    type_name: canonical.TypeNameId,
+    tag_name: canonical.TagLabelId,
+    arg: ?CheckedTypeId,
+    key_seed: u8,
+) Allocator.Error!RecursiveNominalTestType {
+    if (!builtin.is_test) unreachable;
+
+    const nominal_root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(key_seed));
+    const backing_root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(key_seed + 1));
+    const empty_root = try store.appendSyntheticPayloadRoot(allocator, names, .empty_tag_union);
+
+    const tag_args = try allocator.alloc(CheckedTypeId, 1);
+    tag_args[0] = nominal_root;
+    const tags = try allocator.alloc(CheckedTag, 1);
+    tags[0] = .{ .name = tag_name, .args = tag_args };
+
+    const nominal_args = if (arg) |arg_root| blk: {
+        const args = try allocator.alloc(CheckedTypeId, 1);
+        args[0] = arg_root;
+        break :blk args;
+    } else &.{};
+
+    store.payloads.items[@intFromEnum(backing_root)] = .{ .tag_union = .{
+        .tags = tags,
+        .ext = empty_root,
+    } };
+    store.payloads.items[@intFromEnum(nominal_root)] = .{ .nominal = .{
+        .name = type_name,
+        .origin_module = module_name,
+        .source_decl = 0,
+        .builtin = null,
+        .is_opaque = false,
+        .backing = backing_root,
+        .representation = .{ .local_declaration = @enumFromInt(0) },
+        .args = nominal_args,
+    } };
+
+    const backing_key = try checkedTypePayloadKey(
+        allocator,
+        names,
+        store.payloads.items,
+        store.payloads.items[@intFromEnum(backing_root)],
+    );
+    store.roots.items[@intFromEnum(backing_root)].key = backing_key;
+    try store.ensureSyntheticSchemeForRoot(allocator, backing_root, backing_key);
+
+    const nominal_key = try checkedTypePayloadKey(
+        allocator,
+        names,
+        store.payloads.items,
+        store.payloads.items[@intFromEnum(nominal_root)],
+    );
+    store.roots.items[@intFromEnum(nominal_root)].key = nominal_key;
+    try store.ensureSyntheticSchemeForRoot(allocator, nominal_root, nominal_key);
+
+    return .{ .nominal = nominal_root, .backing = backing_root };
 }
 
 fn checkedTypeKeyForId(
@@ -18550,7 +18645,7 @@ test "provided recursive nominal constant is a data export, not a runtime root" 
     });
 }
 
-test "platform app relation resolver handles recursive checked roots" {
+test "platform app relation resolver handles same recursive checked root" {
     const allocator = std.testing.allocator;
 
     var names = canonical.CanonicalNameStore.init(allocator);
@@ -18563,47 +18658,65 @@ test "platform app relation resolver handles recursive checked roots" {
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
 
-    const nominal_root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(1));
-    const backing_root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(2));
-    const empty_root = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_tag_union);
-
-    const tag_args = try allocator.alloc(CheckedTypeId, 1);
-    tag_args[0] = nominal_root;
-    const tags = try allocator.alloc(CheckedTag, 1);
-    tags[0] = .{ .name = tag_name, .args = tag_args };
-
-    try store.fillSyntheticTypeRoot(allocator, backing_root, .{ .tag_union = .{
-        .tags = tags,
-        .ext = empty_root,
-    } });
-    try store.fillSyntheticTypeRoot(allocator, nominal_root, .{ .nominal = .{
-        .name = type_name,
-        .origin_module = module_name,
-        .source_decl = 0,
-        .builtin = null,
-        .is_opaque = false,
-        .backing = backing_root,
-        .representation = .{ .local_declaration = @enumFromInt(0) },
-        .args = &.{},
-    } });
-
-    store.roots.items[@intFromEnum(nominal_root)].key = try checkedTypePayloadKey(
+    const tree = try appendRecursiveNominalTestType(
         allocator,
         &names,
-        store.payloads.items,
-        store.payloads.items[@intFromEnum(nominal_root)],
-    );
-    store.roots.items[@intFromEnum(backing_root)].key = try checkedTypePayloadKey(
-        allocator,
-        &names,
-        store.payloads.items,
-        store.payloads.items[@intFromEnum(backing_root)],
+        &store,
+        module_name,
+        type_name,
+        tag_name,
+        null,
+        1,
     );
 
     var resolver = PlatformAppRelationTypeResolver.init(allocator, &names, &store);
     defer resolver.deinit();
 
-    try std.testing.expectEqual(nominal_root, try resolver.merge(nominal_root, nominal_root, .value));
+    try std.testing.expectEqual(tree.nominal, try resolver.merge(tree.nominal, tree.nominal, .value));
+}
+
+test "platform app relation resolver handles distinct recursive checked roots" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    const module_name = try names.internModuleName("Test");
+    const type_name = try names.internTypeName("Tree");
+    const tag_name = try names.internTagLabel("Node");
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const platform_arg = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(30));
+    store.payloads.items[@intFromEnum(platform_arg)] = .{ .flex = .{} };
+    const app_arg = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+
+    const platform_tree = try appendRecursiveNominalTestType(
+        allocator,
+        &names,
+        &store,
+        module_name,
+        type_name,
+        tag_name,
+        platform_arg,
+        10,
+    );
+    const app_tree = try appendRecursiveNominalTestType(
+        allocator,
+        &names,
+        &store,
+        module_name,
+        type_name,
+        tag_name,
+        app_arg,
+        20,
+    );
+
+    var resolver = PlatformAppRelationTypeResolver.init(allocator, &names, &store);
+    defer resolver.deinit();
+
+    try std.testing.expectEqual(app_tree.nominal, try resolver.merge(platform_tree.nominal, app_tree.nominal, .value));
 }
 
 test "provided callable-containing record constant is a data export, not a runtime root" {

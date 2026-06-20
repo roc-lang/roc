@@ -1260,7 +1260,8 @@ const Cloner = struct {
 
     fn buildArgs(self: *Cloner) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const source_fn = self.pass.program.fns.items[@intFromEnum(self.source_fn)];
-        const source_args = self.pass.program.typedLocalSpan(source_fn.args);
+        const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
+        defer self.pass.allocator.free(source_args);
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
@@ -1369,7 +1370,8 @@ const Cloner = struct {
             },
             .fn_ref => |fn_id| return try self.callableValue(expr.ty, fn_id),
             .tag => |tag| {
-                const payload_exprs = self.pass.program.exprSpan(tag.payloads);
+                const payload_exprs = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
+                defer self.pass.allocator.free(payload_exprs);
                 const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
                     payloads[index] = try self.cloneExprValue(payload);
@@ -1381,7 +1383,8 @@ const Cloner = struct {
                 } };
             },
             .record => |fields_span| {
-                const source_fields = self.pass.program.fieldExprSpan(fields_span);
+                const source_fields = try self.pass.allocator.dupe(Ast.FieldExpr, self.pass.program.fieldExprSpan(fields_span));
+                defer self.pass.allocator.free(source_fields);
                 const fields = try self.pass.arena.allocator().alloc(FieldValue, source_fields.len);
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
@@ -1395,7 +1398,8 @@ const Cloner = struct {
                 } };
             },
             .tuple => |items_span| {
-                const source_items = self.pass.program.exprSpan(items_span);
+                const source_items = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(items_span));
+                defer self.pass.allocator.free(source_items);
                 const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
                     items[index] = try self.cloneExprValue(item);
@@ -1776,8 +1780,10 @@ const Cloner = struct {
     }
 
     fn cloneLoop(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Ast.ExprId {
-        const params = self.pass.program.typedLocalSpan(loop.params);
-        const initial_values = self.pass.program.exprSpan(loop.initial_values);
+        const params = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
+        defer self.pass.allocator.free(params);
+        const initial_values = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(loop.initial_values));
+        defer self.pass.allocator.free(initial_values);
         if (params.len != initial_values.len) Common.invariant("loop parameter count differed from initial value count");
 
         const values = try self.pass.allocator.alloc(Value, initial_values.len);
@@ -1852,12 +1858,14 @@ const Cloner = struct {
             .values = try self.cloneExprSpan(continue_.values),
         } };
         const values = self.pass.program.exprSpan(continue_.values);
-        if (values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
+        const source_values = try self.pass.allocator.dupe(Ast.ExprId, values);
+        defer self.pass.allocator.free(source_values);
+        if (source_values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
 
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
 
-        for (loop.values, values) |shape, value_expr| {
+        for (loop.values, source_values) |shape, value_expr| {
             const value = try self.cloneExprValue(value_expr);
             if (!shapeMatchesValue(self.pass.program, shape, value)) {
                 if (!try self.appendFieldReadExprsFromValue(shape, value, &new_values)) {
