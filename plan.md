@@ -829,6 +829,10 @@ Roc API.
       `zig build run-test-zig-http-header-decoder-platform`,
       `zig build run-test-zig-json-decoder-platform`, and
       `zig build run-test-cli -Dcli-test-llvm=true -- --suite subcommands --filter "Str.is_eq edge"`.
+    - Passed after adding LLVM static-byte deduplication:
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`, and
+      `zig build run-test-zig-module-backend`.
 
 - [x] Run focused string equality tests after the `Str.is_eq` phase.
   - Tasks:
@@ -897,6 +901,12 @@ Roc API.
       optimized HTTP parser still has 2434 own-frame allocas and 255 explicit
       parser-construction memsets, so the scalarization, direct-control-flow,
       deferred-string, and cold-outlining phases remain open.
+    - Current static-byte evidence:
+      `/tmp/roc_http_after_static_bytes_cache.ll` has 13 `.roc.bytes` global
+      definitions and exactly one `hit a runtime error` constant. This removes
+      duplicate cold runtime-error data from the module. It does not change
+      `_roc__proc_11b`'s parser-state alloca/memset counts, so hot parser
+      scalarization and cold control-flow outlining remain open.
 
 ## Completion Checklist
 

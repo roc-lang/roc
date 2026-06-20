@@ -161,6 +161,7 @@ pub const MonoLlvmCodeGen = struct {
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+    static_bytes: std.StringHashMap(LlvmBuilder.Value),
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
@@ -295,6 +296,7 @@ pub const MonoLlvmCodeGen = struct {
             .store = store,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
+            .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
@@ -331,6 +333,8 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_types.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
+        self.clearStaticBytes();
+        self.static_bytes.deinit();
         self.rc_helpers.deinit();
         self.join_points.deinit();
         self.compiled_joins.deinit();
@@ -344,6 +348,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
+        self.clearStaticBytes();
         self.rc_helpers.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
@@ -359,6 +364,14 @@ pub const MonoLlvmCodeGen = struct {
         self.current_debug_file = SourceLoc.no_file;
         self.debug_types.clearRetainingCapacity();
         self.expect_err_region_global = null;
+    }
+
+    fn clearStaticBytes(self: *MonoLlvmCodeGen) void {
+        var it = self.static_bytes.keyIterator();
+        while (it.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.static_bytes.clearRetainingCapacity();
     }
 
     /// Generates a single eval-style module for `root_proc`.
@@ -2961,6 +2974,11 @@ pub const MonoLlvmCodeGen = struct {
     fn staticBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const actual = if (bytes.len == 0) "\x00" else bytes;
+        if (self.static_bytes.get(actual)) |existing| return existing;
+
+        const key = self.allocator.dupe(u8, actual) catch return error.OutOfMemory;
+        errdefer self.allocator.free(key);
+
         const arr_ty = builder.arrayType(actual.len, .i8) catch return error.OutOfMemory;
         const name = builder.strtabStringFmt(".roc.bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
         self.string_counter += 1;
@@ -2968,7 +2986,9 @@ pub const MonoLlvmCodeGen = struct {
         variable.ptrConst(builder).global.setLinkage(.internal, builder);
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
-        return variable.toValue(builder);
+        const value = variable.toValue(builder);
+        try self.static_bytes.put(key, value);
+        return value;
     }
 
     fn emitStrBoolBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId) Error!void {
