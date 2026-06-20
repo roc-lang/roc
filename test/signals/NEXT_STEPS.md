@@ -237,6 +237,22 @@ The sound model:
 - DESIGN.md/GUIDE.md must be corrected: `state` is a closure binder, not a plain
   let value.
 
+### Opaque value carrier probe (2026-06-20)
+
+A temporary compile probe confirmed that `Box(a)` cannot be hidden inside a
+non-generic descriptor payload such as `Opaque := [Opaque(Box({}))]`. Roc keeps
+the payload typed as `Box(a)` and rejects the coercion to `Box({})`. The generic
+form `Opaque(a) := [Opaque(Box(a))]` compiles, which means the type parameter
+remains part of the descriptor shape and cannot directly inhabit the current
+heterogeneous `Elem` tree.
+
+Consequence: confined erasure cannot be implemented as a mechanical
+`NodeValue -> Box({})` field replacement. The next real boundary change needs an
+explicit descriptor-shape change that creates an erasure boundary at each
+identity/sink edge, or a host-owned value-cell protocol generated at the typed
+call site. Do not add a fake `Box({})` carrier or any host-side cast that asks
+the host to guess the hidden type.
+
 ## Implementation Status (2026-06-19)
 
 ### Done — new Roc app-facing API (compiles, additive, legacy untouched)
