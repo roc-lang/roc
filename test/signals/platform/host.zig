@@ -332,7 +332,7 @@ const HostNodeDescriptorStream = struct {
 
         for (self.signal_text_nodes.items) |*desc| {
             desc.cached_value.deinit(roc_host);
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
         }
@@ -345,7 +345,7 @@ const HostNodeDescriptorStream = struct {
 
         for (self.signal_text_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host);
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
         }
@@ -355,7 +355,7 @@ const HostNodeDescriptorStream = struct {
 
         for (self.signal_bool_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host);
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
         }
@@ -381,7 +381,7 @@ const HostNodeDescriptorStream = struct {
 
         for (self.whens.items) |*desc| {
             desc.cached_value.deinit(roc_host);
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.condition);
+            metrics.closure_releases += nodeSignalExprCallableCount(desc.condition);
             abi.decrefNodeSignalExpr(desc.condition, roc_host);
             allocator.free(desc.source_node_ids);
         }
@@ -389,7 +389,7 @@ const HostNodeDescriptorStream = struct {
 
         for (self.eaches.items) |*desc| {
             desc.cached_value.deinit(roc_host);
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.items);
+            metrics.closure_releases += nodeSignalExprCallableCount(desc.items);
             abi.decrefNodeSignalExpr(desc.items, roc_host);
             allocator.free(desc.source_node_ids);
             metrics.closure_releases += 4;
@@ -446,9 +446,9 @@ const HostNodeDescriptorStream = struct {
         self.next_elem_id += 1;
 
         abi.increfNodeSignalExpr(signal, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(signal);
+        metrics.closure_retains += nodeSignalExprCallableCount(signal);
         self.render_nodes.append(allocator, .{ .elem_id = elem_id, .kind = .signal_text }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(signal);
             abi.decrefNodeSignalExpr(signal, roc_host);
             allocator.free(source_node_ids);
             std.process.exit(1);
@@ -460,7 +460,7 @@ const HostNodeDescriptorStream = struct {
             .signal = signal,
             .source_node_ids = source_node_ids,
         }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(signal);
             abi.decrefNodeSignalExpr(signal, roc_host);
             allocator.free(source_node_ids);
             std.process.exit(1);
@@ -481,14 +481,14 @@ const HostNodeDescriptorStream = struct {
 
     fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderTextField, signal: abi.NodeSignalExpr, source_node_ids: []u64) void {
         abi.increfNodeSignalExpr(signal, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(signal);
+        metrics.closure_retains += nodeSignalExprCallableCount(signal);
         self.signal_text_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
             .source_node_ids = source_node_ids,
         }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(signal);
             abi.decrefNodeSignalExpr(signal, roc_host);
             allocator.free(source_node_ids);
             std.process.exit(1);
@@ -505,14 +505,14 @@ const HostNodeDescriptorStream = struct {
 
     fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderBoolField, signal: abi.NodeSignalExpr, source_node_ids: []u64) void {
         abi.increfNodeSignalExpr(signal, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(signal);
+        metrics.closure_retains += nodeSignalExprCallableCount(signal);
         self.signal_bool_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
             .source_node_ids = source_node_ids,
         }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(signal);
+            metrics.closure_releases += nodeSignalExprCallableCount(signal);
             abi.decrefNodeSignalExpr(signal, roc_host);
             allocator.free(source_node_ids);
             std.process.exit(1);
@@ -569,13 +569,13 @@ const HostNodeDescriptorStream = struct {
 
     fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, condition: abi.NodeSignalExpr, source_node_ids: []u64) void {
         abi.increfNodeSignalExpr(condition, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(condition);
+        metrics.closure_retains += nodeSignalExprCallableCount(condition);
         self.whens.append(allocator, .{
             .node_id = node_id,
             .condition = condition,
             .source_node_ids = source_node_ids,
         }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(condition);
+            metrics.closure_releases += nodeSignalExprCallableCount(condition);
             abi.decrefNodeSignalExpr(condition, roc_host);
             allocator.free(source_node_ids);
             std.process.exit(1);
@@ -588,7 +588,7 @@ const HostNodeDescriptorStream = struct {
         abi.increfErasedCallable(key_eq, 1);
         abi.increfErasedCallable(item_eq, 1);
         abi.increfErasedCallable(row, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(items) + 4;
+        metrics.closure_retains += nodeSignalExprCallableCount(items) + 4;
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
@@ -598,7 +598,7 @@ const HostNodeDescriptorStream = struct {
             .item_eq = item_eq,
             .row = row,
         }) catch {
-            metrics.closure_releases += nodeSignalExprDirectCallableCount(items);
+            metrics.closure_releases += nodeSignalExprCallableCount(items);
             abi.decrefNodeSignalExpr(items, roc_host);
             allocator.free(source_node_ids);
             metrics.closure_releases += 4;
@@ -611,11 +611,19 @@ const HostNodeDescriptorStream = struct {
     }
 };
 
-fn nodeSignalExprDirectCallableCount(expr: abi.NodeSignalExpr) u64 {
+fn nodeSignalExprCallableCount(expr: abi.NodeSignalExpr) u64 {
     return switch (expr.tag) {
-        .Map, .Map2 => 2,
-        .Combine => 1,
-        .ConstValue, .Ref => 0,
+        .Ref => 0,
+        .ConstValue => 1,
+        .Map => 2 + nodeSignalExprCallableCount(expr.payload.map._0.*),
+        .Map2 => 2 + nodeSignalExprCallableCount(expr.payload.map2._0.*) + nodeSignalExprCallableCount(expr.payload.map2._1.*),
+        .Combine => blk: {
+            var count: u64 = 1;
+            for (expr.payload.combine._0.items()) |child| {
+                count += nodeSignalExprCallableCount(child);
+            }
+            break :blk count;
+        },
     };
 }
 
@@ -1636,7 +1644,7 @@ const HostEnv = struct {
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
         if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
-        const initial = callStateInitialThunk(roc_host, desc.initial);
+        const initial = callValueInitThunk(roc_host, desc.initial);
         self.states.append(self.gpa.allocator(), .{
             .state_id = desc.node_id,
             .value = initial,
@@ -3247,7 +3255,7 @@ fn evalNodeSignalExprWithSources(host: *HostEnv, roc_host: *abi.RocHost, expr: a
             source_index.* += 1;
             return cloneNodeValue(host.stateValueByNodeId(node_id));
         },
-        .ConstValue => return cloneNodeValue(expr.payload.const_value),
+        .ConstValue => return callValueInitThunk(roc_host, expr.payload.const_value),
         .Map => {
             const input = evalNodeSignalExprWithSources(host, roc_host, expr.payload.map._0.*, source_node_ids, source_index);
             defer abi.decrefNodeValue(input, roc_host);
@@ -3724,7 +3732,7 @@ fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErase
     return result;
 }
 
-fn callStateInitialThunk(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) abi.NodeValue {
+fn callValueInitThunk(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) abi.NodeValue {
     return callErasedNodeValueToNodeValue(roc_host, callable, nodeValueUnit());
 }
 
@@ -5470,9 +5478,9 @@ fn cloneTestBinderToken(token: HostBinderToken) HostBinderToken {
     return token;
 }
 
-fn testNodeConstExpr(value: abi.NodeValue) abi.NodeSignalExpr {
+fn testNodeConstExpr(roc_host: *abi.RocHost, value: abi.NodeValue) abi.NodeSignalExpr {
     return .{
-        .payload = .{ .const_value = value },
+        .payload = .{ .const_value = testNodeValueInitialThunk(roc_host, value) },
         .tag = .ConstValue,
     };
 }
@@ -5730,7 +5738,7 @@ fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.Elem, when_false: abi.Ele
     return .{
         .payload = .{
             .when = .{
-                .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueBool(true))),
+                .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueBool(true))),
                 .when_false = boxTestElem(roc_host, when_false),
                 .when_true = boxTestElem(roc_host, when_true),
             },
@@ -5778,7 +5786,7 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
     return .{
         .payload = .{
             .each = .{
-                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueList(roc_host, items))),
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueList(roc_host, items))),
                 .key_eq = key_eq,
                 .key_of = key_of,
                 .item_eq = item_eq,
@@ -5821,7 +5829,7 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const abi.Nod
     return .{
         .payload = .{
             .each = .{
-                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueList(roc_host, items))),
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueList(roc_host, items))),
                 .key_eq = key_eq,
                 .key_of = key_of,
                 .item_eq = item_eq,
@@ -6000,9 +6008,9 @@ test "signals host collects Elem descriptor stream" {
     const root_attrs = [_]abi.NodeAttr{
         testNodeStaticTextAttr(&roc_host, .role, "region"),
         testNodeStaticTextAttr(&roc_host, .label, "Dashboard"),
-        testNodeSignalTextAttr(&roc_host, .value, testNodeConstExpr(nodeValueStr(&roc_host, "search"))),
+        testNodeSignalTextAttr(&roc_host, .value, testNodeConstExpr(&roc_host, nodeValueStr(&roc_host, "search"))),
         testNodeStaticBoolAttr(.disabled, true),
-        testNodeSignalBoolAttr(&roc_host, .checked, testNodeConstExpr(nodeValueBool(false))),
+        testNodeSignalBoolAttr(&roc_host, .checked, testNodeConstExpr(&roc_host, nodeValueBool(false))),
     };
     const state_token = newTestBinderToken(&roc_host);
     const state_child_attrs = [_]abi.NodeAttr{
@@ -6020,7 +6028,7 @@ test "signals host collects Elem descriptor stream" {
     const each_elem = testNodeEach(&roc_host);
     const root_children = [_]abi.Elem{
         testNodeText(&roc_host, "intro"),
-        testNodeTextSignal(&roc_host, testNodeConstExpr(nodeValueStr(&roc_host, "dynamic text"))),
+        testNodeTextSignal(&roc_host, testNodeConstExpr(&roc_host, nodeValueStr(&roc_host, "dynamic text"))),
         state,
         when_elem,
         each_elem,
@@ -6135,7 +6143,7 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     const state_token = newTestBinderToken(&roc_host);
     const root_attrs = [_]abi.NodeAttr{
-        testNodeSignalTextAttr(&roc_host, .value, testNodeMapExpr(&roc_host, testNodeConstExpr(nodeValueI64(41)))),
+        testNodeSignalTextAttr(&roc_host, .value, testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, nodeValueI64(41)))),
     };
     const state_child_attrs = [_]abi.NodeAttr{
         testNodeEventAttr(&roc_host, .click, state_token, .unit),
@@ -6150,13 +6158,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 9), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host carries binder context into Elem when branch collection" {

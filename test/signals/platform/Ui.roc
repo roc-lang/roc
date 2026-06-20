@@ -239,7 +239,9 @@ Ui := [].{
 						crash "Ui.each received a key value that does not match the key type"
 					}
 			}
-			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(item_nv)))
+			row_item : NodeValue -> NodeValue
+			row_item = |_unit| item_nv
+			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(Box.box(row_item))))
 		}
 		Elem.Each(
 			{

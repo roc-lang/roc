@@ -747,7 +747,7 @@ pub const NodeSignalExprTag = enum(u8) {
 pub const NodeSignalExpr = extern struct {
     payload: extern union {
         combine: NodeSignalExprCombinePayload,
-        const_value: NodeValue,
+        const_value: RocErasedCallable,
         map: NodeSignalExprMapPayload,
         map2: NodeSignalExprMap2Payload,
         ref: *u64,
@@ -920,7 +920,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
             decrefErasedCallable(payload._1, roc_host);
         },
         .ConstValue => {
-            decrefNodeValue(value.payload.const_value, roc_host);
+            decrefErasedCallable(value.payload.const_value, roc_host);
         },
         .Map => {
             const payload = value.payload.map;
@@ -950,7 +950,7 @@ pub fn increfNodeSignalExpr(value: NodeSignalExpr, amount: isize) void {
             increfErasedCallable(payload._1, amount);
         },
         .ConstValue => {
-            increfNodeValue(value.payload.const_value, amount);
+            increfErasedCallable(value.payload.const_value, amount);
         },
         .Map => {
             const payload = value.payload.map;

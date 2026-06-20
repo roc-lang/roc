@@ -18,11 +18,13 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	## A constant signal.
 	const : a -> Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
 	const = |value| {
-		nv =
+		init : NodeValue -> NodeValue
+		init = |_unit| {
 			match value.encode(NodeValue.format) {
 				Ok(encoded) => encoded
 			}
-		{ expr: Box.box(Node.SignalExpr.ConstValue(nv)) }
+		}
+		{ expr: Box.box(Node.SignalExpr.ConstValue(Box.box(init))) }
 	}
 
 	## Derived signal. The transform is a typed `a -> b`; we wrap it to decode the

@@ -550,6 +550,9 @@ heterogeneous `NodeValue` field in `Elem.State`. The descriptor now carries a
 retained initializer thunk, and the host calls that thunk only when a new state
 node is created. This matches the target `ValueInitThunk` ownership shape while
 the thunk body still returns the current internal `NodeValue` bridge value.
+`Signal.const` and row item signals now use the same retained initializer-thunk
+shape through `SignalExpr.ConstValue`, so constants no longer embed direct
+`NodeValue` payloads in signal descriptors.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
