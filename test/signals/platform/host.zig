@@ -83,6 +83,7 @@ const HostSignalEventRoute = struct {
 const HostState = struct {
     state_id: u64,
     value: abi.NodeValue,
+    eq: abi.RocErasedCallable,
     version: u64,
     active: bool,
 };
@@ -1624,7 +1625,11 @@ const HostEnv = struct {
         for (self.states.items) |*state| {
             if (!state.active) continue;
             abi.decrefNodeValue(state.value, self.roc_host.?);
+            abi.decrefErasedCallable(state.eq, self.roc_host.?);
             state.active = false;
+            var metrics = self.pending_roc_metrics;
+            metrics.closure_releases += 1;
+            self.pending_roc_metrics = metrics;
         }
         self.states.items.len = 0;
     }
@@ -1645,15 +1650,21 @@ const HostEnv = struct {
         if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
         const initial = callValueInitThunk(roc_host, desc.initial);
+        abi.increfErasedCallable(desc.eq, 1);
         self.states.append(self.gpa.allocator(), .{
             .state_id = desc.node_id,
             .value = initial,
+            .eq = desc.eq,
             .version = 0,
             .active = true,
         }) catch {
+            abi.decrefErasedCallable(desc.eq, roc_host);
             abi.decrefNodeValue(initial, roc_host);
             std.process.exit(1);
         };
+        var metrics = self.pending_roc_metrics;
+        metrics.closure_retains += 1;
+        self.pending_roc_metrics = metrics;
     }
 
     fn syncStatesFromNodeStream(self: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) void {
@@ -1680,14 +1691,16 @@ const HostEnv = struct {
         const state_index = self.stateIndexByNodeId(node_id) orelse return;
         const state = &self.states.items[state_index];
         abi.decrefNodeValue(state.value, roc_host);
+        abi.decrefErasedCallable(state.eq, roc_host);
         state.active = false;
+        var metrics = self.pending_roc_metrics;
+        metrics.closure_releases += 1;
+        self.pending_roc_metrics = metrics;
     }
 
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        for (self.active_stream.states.items) |desc| {
-            if (desc.node_id == node_id) return desc.eq;
-        }
-        failHost("active state has no equality callable");
+        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
+        return self.states.items[state_index].eq;
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
@@ -6185,6 +6198,33 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 11), host.pending_roc_metrics.closure_releases);
+}
+
+test "signals host retains state equality outside descriptor stream" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(0), testNodeText(&roc_host, "state"));
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    host.active_stream = stream;
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
+    host.active_stream = .{};
+
+    try std.testing.expect(!host.updateStateValue(&roc_host, state_id, nodeValueI64(0)));
+    try std.testing.expect(host.updateStateValue(&roc_host, state_id, nodeValueI64(1)));
 }
 
 test "signals host carries binder context into Elem when branch collection" {
