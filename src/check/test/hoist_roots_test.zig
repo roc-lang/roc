@@ -692,6 +692,21 @@ test "hoist roots are not selected for observable debug expressions" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected after observable effects in blocks" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    before = 1.I64 + 2.I64
+        \\    dbg 0.I64
+        \\    after = 3.I64 + 4.I64
+        \\    before + after
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+}
+
 test "hoist roots with non-concrete compile-time types are pruned" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

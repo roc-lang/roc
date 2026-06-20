@@ -401,6 +401,7 @@ const CompletedHoistResult = struct {
     expr: CIR.Expr.Idx,
     eligible: bool,
     top_level_equivalent: bool,
+    has_observable_effect: bool,
 };
 
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
@@ -1309,6 +1310,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         .expr = expr,
         .eligible = semantically_eligible,
         .top_level_equivalent = top_level_equivalent,
+        .has_observable_effect = frame.has_observable_effect,
     };
     self.last_hoist_result = completed;
 
@@ -1339,6 +1341,13 @@ fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *
     self.hoist_selection_suppressed_depth += 1;
     defer self.hoist_selection_suppressed_depth -= 1;
     return try self.checkExpr(expr, env, expected);
+}
+
+fn checkedExprBlocksLaterHoists(self: *const Self, expr: CIR.Expr.Idx, does_fx: bool) bool {
+    if (does_fx) return true;
+    const completed = self.last_hoist_result orelse return false;
+    if (completed.expr != expr) return false;
+    return completed.has_observable_effect;
 }
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -9563,7 +9572,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
-            does_fx = try self.checkExpr(block.final_expr, env, expected) or does_fx;
+            const final_expr_does_fx = if (stmt_result.blocks_later_hoists)
+                try self.checkExprWithHoistSelectionSuppressed(block.final_expr, env, expected)
+            else
+                try self.checkExpr(block.final_expr, env, expected);
+            does_fx = final_expr_does_fx or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
             // since the final expression is unreachable
@@ -11260,6 +11273,7 @@ fn checkDestructureExhaustiveness(
 const BlockStatementsResult = struct {
     does_fx: bool,
     diverges: bool,
+    blocks_later_hoists: bool,
 };
 
 /// Given a slice of stmts, type check each one
@@ -11270,6 +11284,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
     var does_fx = false;
     var diverges = false;
+    var blocks_later_hoists = false;
     var warn_unreachable = false;
     for (0..statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(statements, stmt_offset);
@@ -11285,6 +11300,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
         try self.setVarRank(stmt_var, env);
 
+        const suppress_statement_hoists = blocks_later_hoists;
+        if (suppress_statement_hoists) self.hoist_selection_suppressed_depth += 1;
+        defer {
+            if (suppress_statement_hoists) self.hoist_selection_suppressed_depth -= 1;
+        }
+
+        var statement_blocks_later_hoists = false;
         switch (stmt) {
             .s_decl => |decl_stmt| {
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -11327,7 +11349,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
+                const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
+                does_fx = decl_expr_does_fx or does_fx;
+                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, decl_expr_does_fx);
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -11380,7 +11404,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
-                does_fx = try self.checkExpr(var_stmt.expr, env, expectation) or does_fx;
+                const var_expr_does_fx = try self.checkExpr(var_stmt.expr, env, expectation);
+                does_fx = var_expr_does_fx or does_fx;
+                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(var_stmt.expr, var_expr_does_fx);
                 self.discardHoistBindingCandidate(var_stmt.pattern_idx);
                 if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
@@ -11432,7 +11458,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
-                does_fx = try self.checkExpr(reassign.expr, env, Expected.none()) or does_fx;
+                const reassign_expr_does_fx = try self.checkExpr(reassign.expr, env, Expected.none());
+                does_fx = reassign_expr_does_fx or does_fx;
+                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(reassign.expr, reassign_expr_does_fx);
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
                 try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
@@ -11450,6 +11478,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_for => |for_stmt| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
                 does_fx = try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
@@ -11464,6 +11493,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_while => |while_stmt| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
@@ -11486,6 +11516,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_breakable_loop => |while_stmt| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
@@ -11499,6 +11530,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_infinite_loop => |while_stmt| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
@@ -11511,7 +11543,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 diverges = true;
             },
             .s_expr => |expr| {
-                does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
+                const expr_does_fx = try self.checkExpr(expr.expr, env, Expected.none());
+                does_fx = expr_does_fx or does_fx;
+                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, expr_does_fx);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 // Statements must evaluate to {}. Add a constraint to unify with empty record.
@@ -11528,6 +11562,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_dbg => |expr| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
@@ -11535,6 +11570,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_expect => |expr_stmt| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
                 if (expect_does_fx) {
                     _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
@@ -11550,11 +11586,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
             .s_crash => {
+                statement_blocks_later_hoists = true;
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_return => |ret| {
                 self.markCurrentHoistObservableEffect();
+                statement_blocks_later_hoists = true;
                 // Type check the return expression
                 does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
                 const ret_var = ModuleEnv.varFrom(ret.expr);
@@ -11597,8 +11635,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
         }
+        blocks_later_hoists = statement_blocks_later_hoists or blocks_later_hoists;
     }
-    return .{ .does_fx = does_fx, .diverges = diverges };
+    return .{
+        .does_fx = does_fx,
+        .diverges = diverges,
+        .blocks_later_hoists = blocks_later_hoists,
+    };
 }
 
 fn enforceRecordBuilderMap2Return(
