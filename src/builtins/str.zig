@@ -1877,30 +1877,101 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
 }
 
 inline fn bytesCaselessAsciiEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
-    const word_size = @sizeOf(usize);
+    const word_size = @sizeOf(u64);
 
     var index: usize = 0;
     while (index + word_size <= len) : (index += word_size) {
-        const left_word = std.mem.readInt(usize, left[index..][0..word_size], .native);
-        const right_word = std.mem.readInt(usize, right[index..][0..word_size], .native);
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
         if (left_word != right_word and !wordCaselessAsciiEqual(left_word, right_word)) return false;
     }
 
-    while (index < len) : (index += 1) {
-        if (!byteCaselessAsciiEqual(left[index], right[index])) return false;
+    const tail_len = len - index;
+    if (tail_len != 0) {
+        const active = (@as(u64, 1) << @intCast(tail_len * 8)) - 1;
+        const left_word = readTailU64ZeroPadded(left, index, tail_len);
+        const right_word = readTailU64ZeroPadded(right, index, tail_len);
+        return wordCaselessAsciiEqualMasked(left_word, right_word, active);
     }
 
     return true;
 }
 
-inline fn wordCaselessAsciiEqual(left: usize, right: usize) bool {
-    inline for (0..@sizeOf(usize)) |byte_index| {
+inline fn wordCaselessAsciiEqual(left: u64, right: u64) bool {
+    return wordCaselessAsciiEqualMasked(left, right, std.math.maxInt(u64));
+}
+
+const SWAR_ONES: u64 = 0x0101010101010101;
+const SWAR_LOW7: u64 = 0x7f7f7f7f7f7f7f7f;
+const SWAR_HIGHS: u64 = 0x8080808080808080;
+const SWAR_ASCII_CASE: u64 = 0x2020202020202020;
+
+inline fn swarSplat(byte: u8) u64 {
+    return @as(u64, byte) * SWAR_ONES;
+}
+
+inline fn swarZeroHigh(word: u64) u64 {
+    return ~(((word & SWAR_LOW7) + SWAR_LOW7) | word) & SWAR_HIGHS;
+}
+
+inline fn swarByteEq(word: u64, byte: u8) u64 {
+    return swarZeroHigh(word ^ swarSplat(byte));
+}
+
+inline fn swarByteGeAscii(word: u64, lo: u8) u64 {
+    return ((word & SWAR_LOW7) + swarSplat(0x80 - lo)) & ~word & SWAR_HIGHS;
+}
+
+inline fn swarByteLeAscii(word: u64, hi: u8) u64 {
+    return ~(((word & SWAR_LOW7) + swarSplat(0x7f - hi)) | word) & SWAR_HIGHS;
+}
+
+inline fn swarByteInAsciiRange(word: u64, lo: u8, hi: u8) u64 {
+    return swarByteGeAscii(word, lo) & swarByteLeAscii(word, hi);
+}
+
+inline fn swarAsciiAlnumDashHighs(word: u64) u64 {
+    const upper = swarByteInAsciiRange(word, 'A', 'Z');
+    const lower = swarByteInAsciiRange(word, 'a', 'z');
+    const digit = swarByteInAsciiRange(word, '0', '9');
+    const dash = swarByteEq(word, '-');
+    return upper | lower | digit | dash;
+}
+
+inline fn wordCaselessAsciiEqualMasked(left: u64, right: u64, active: u64) bool {
+    if (((left ^ right) & active) == 0) return true;
+
+    const active_highs = active & SWAR_HIGHS;
+    const left_eligible = swarAsciiAlnumDashHighs(left) & active_highs;
+    const right_eligible = swarAsciiAlnumDashHighs(right) & active_highs;
+
+    if (left_eligible == active_highs and right_eligible == active_highs) {
+        return ((left | SWAR_ASCII_CASE) & active) == ((right | SWAR_ASCII_CASE) & active);
+    }
+
+    return wordCaselessAsciiEqualSlowMasked(left, right, active);
+}
+
+inline fn wordCaselessAsciiEqualSlowMasked(left: u64, right: u64, active: u64) bool {
+    inline for (0..@sizeOf(u64)) |byte_index| {
         const shift = byte_index * 8;
-        const left_byte: u8 = @truncate(left >> shift);
-        const right_byte: u8 = @truncate(right >> shift);
-        if (!byteCaselessAsciiEqual(left_byte, right_byte)) return false;
+        const mask = @as(u64, 0xff) << shift;
+        if ((active & mask) != 0) {
+            const left_byte: u8 = @truncate(left >> shift);
+            const right_byte: u8 = @truncate(right >> shift);
+            if (!byteCaselessAsciiEqual(left_byte, right_byte)) return false;
+        }
     }
     return true;
+}
+
+inline fn readTailU64ZeroPadded(bytes: [*]const u8, index: usize, tail_len: usize) u64 {
+    var word: u64 = 0;
+    var i: usize = 0;
+    while (i < tail_len) : (i += 1) {
+        word |= @as(u64, bytes[index + i]) << @intCast(i * 8);
+    }
+    return word;
 }
 
 inline fn byteCaselessAsciiEqual(left: u8, right: u8) bool {
@@ -3531,6 +3602,114 @@ test "caselessAsciiEquals: punctuation with ascii case bit is not equal" {
     const are_equal = strCaselessAsciiEquals(str1, str2);
 
     try std.testing.expect(!are_equal);
+}
+
+test "caselessAsciiEquals: exact u64 chunk with alnum dash" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("AbCd-123", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("aBcD-123", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: masked tail with alnum dash" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("content-length", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 14), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: different lengths are not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("content-lengths", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: underscore falls back but still matches itself" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("x_auth_token", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("X_AUTH_TOKEN", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: underscore with ascii case-bit pair is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("_abc", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("\x7FABC", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: trailing underscore with ascii case-bit pair is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("abc_", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("ABC\x7F", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: unicode fallback inside u64 chunk" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("café-AB", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("CAFé-ab", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: unicode capitalization still differs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("café-AB", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("CAFÉ-ab", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
 }
 
 test "strTrim: empty" {
