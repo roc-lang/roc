@@ -25,6 +25,10 @@ pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// Generic comptime layout fingerprint for a `Serialized` type (recurses into nested
+/// aggregates and `SerializedElement`s). Shared so both the checked-artifact cache and
+/// the ModuleEnv cache invalidate on any layout change, not just a top-level one.
+pub const layoutVersionHash = @import("artifact_serialize.zig").layoutVersionHash;
 /// Checked module data exported under the post-check-facing name.
 pub const CheckedModule = CheckedArtifact;
 
@@ -46,6 +50,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
+    std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
     std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
