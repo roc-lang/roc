@@ -2126,9 +2126,9 @@ canonicalization.
 
 Declared field order is explicit data. Record rows are sorted lexicographically
 by name at several stages (checking, Monotype row lowering, and Monotype
-instantiation) because field-name resolution and digests depend on a canonical
-order, so the declared order is not recoverable from the lowered record itself.
-Canonicalization preserves it — a nominal declaration's canonical record
+instantiation) because field-name resolution and digests depend on a single
+fixed order, so the declared order is not recoverable from the lowered record
+itself. Canonicalization preserves it — a nominal declaration's record
 annotation keeps its fields in source order — and it is carried forward as a
 datum on the nominal type, distinct from the (lexicographic) backing row, so
 later stages consume it without rescanning declarations. The struct commit

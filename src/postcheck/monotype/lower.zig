@@ -1694,8 +1694,8 @@ const Builder = struct {
 
     /// Resolves a nominal's source declaration across every representation that
     /// has one, for reading declared field order. The box-payload representation
-    /// is the common case for record nominals (assigned during checked-artifact
-    /// publication), so it must be handled, not just `*_declaration`.
+    /// is the common case for record nominals (assigned while the checked module
+    /// data is built), so it must be handled, not just `*_declaration`.
     fn nominalDeclarationFor(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclLookup {
         return switch (nominal.representation) {
             .local_declaration => |id| blk: {
@@ -1730,10 +1730,10 @@ const Builder = struct {
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
         const lookup = self.nominalDeclarationFor(view, nominal) orelse return Type.Span.empty();
         const source_decl = lookup.declaration.nominal.source_decl orelse return Type.Span.empty();
-        // Read declared field order from the declaration's canonical record
-        // annotation, which preserves source order (the checked row and every
-        // lowered row sort lexicographically). `lookup.view` is the declaring
-        // module, so this is correct across module boundaries.
+        // Read declared field order from the declaration's record annotation,
+        // which preserves source order (the checked row and every lowered row
+        // sort lexicographically). `lookup.view` is the declaring module, so this
+        // is correct across module boundaries.
         const module_env = lookup.view.module_env;
         const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
             .s_nominal_decl => |decl| decl.anno,
@@ -1767,7 +1767,7 @@ const Builder = struct {
             const field = module_env.store.getAnnoRecordField(field_idx);
             if (field.is_unnamed) {
                 if (padding_cursor >= padding_types.len) {
-                    Common.invariant("nominal declaration had more unnamed fields than published padding types");
+                    Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
                 }
                 const checked_ty = padding_types[padding_cursor];
                 padding_cursor += 1;
