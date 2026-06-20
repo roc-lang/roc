@@ -1908,6 +1908,27 @@ inline fn wordCaselessAsciiEqual(left: u64, right: u64) bool {
     return wordCaselessAsciiEqualMasked(left, right, std.math.maxInt(u64));
 }
 
+// SWAR = SIMD Within A Register. These routines compare eight independent byte
+// lanes inside one u64. This is deliberately written in terms of fixed u64
+// masks and shifts, not slice loops or higher-level ASCII helpers, because this
+// is on a hot path for record-field dispatch in parsers such as HTTP headers.
+//
+// The machine shape we want is:
+//   1. one unaligned 8-byte load from each string,
+//   2. one xor to find differing bytes,
+//   3. a small fixed sequence of integer mask operations,
+//   4. no per-byte branch unless we are in the rare short non-small tail path.
+//
+// ASCII case-insensitive equality per byte is:
+//   - equal bytes are always equal, even for punctuation, underscores, UTF-8
+//     continuation bytes, or bytes with the high bit set;
+//   - differing bytes must differ by exactly 0x20;
+//   - bytes that differ by 0x20 are equal only when they are ASCII letters.
+//
+// This is intentionally narrower than "can I lowercase both whole words with
+// bit 0x20?" We do not need to prove that exact-equal bytes are lowercase-safe.
+// That matters for field names such as "x_auth_token" and for UTF-8 bytes that
+// are identical on both sides.
 const SWAR_ONES: u64 = 0x0101010101010101;
 const SWAR_LOW7: u64 = 0x7f7f7f7f7f7f7f7f;
 const SWAR_HIGHS: u64 = 0x8080808080808080;
@@ -1917,18 +1938,30 @@ inline fn swarSplat(byte: u8) u64 {
     return @as(u64, byte) * SWAR_ONES;
 }
 
+// Return 0x80 in each byte lane where that lane is zero, else 0x00.
+//
+// This is the classic has-zero-byte trick, expressed so the optimizer sees a
+// fixed u64 dataflow. Masking with SWAR_LOW7 keeps carries inside each 7-bit
+// lane from depending on the input high bit; OR-ing the original word back in
+// makes non-ASCII bytes non-zero for this predicate.
 inline fn swarZeroHigh(word: u64) u64 {
     return ~(((word & SWAR_LOW7) + SWAR_LOW7) | word) & SWAR_HIGHS;
 }
 
+// Return 0x80 in each byte lane equal to `byte`, else 0x00.
 inline fn swarByteEq(word: u64, byte: u8) u64 {
     return swarZeroHigh(word ^ swarSplat(byte));
 }
 
+// Return 0x80 in each ASCII byte lane >= `lo`, else 0x00. High-bit bytes are
+// always rejected. This is used only after the xor has proved that a lane differs
+// by 0x20, so the only remaining question is whether that lane is a letter.
 inline fn swarByteGeAscii(word: u64, lo: u8) u64 {
     return ((word & SWAR_LOW7) + swarSplat(0x80 - lo)) & ~word & SWAR_HIGHS;
 }
 
+// Return 0x80 in each ASCII byte lane <= `hi`, else 0x00. High-bit bytes are
+// always rejected.
 inline fn swarByteLeAscii(word: u64, hi: u8) u64 {
     return ~(((word & SWAR_LOW7) + swarSplat(0x7f - hi)) | word) & SWAR_HIGHS;
 }
@@ -1937,42 +1970,42 @@ inline fn swarByteInAsciiRange(word: u64, lo: u8, hi: u8) u64 {
     return swarByteGeAscii(word, lo) & swarByteLeAscii(word, hi);
 }
 
-inline fn swarAsciiAlnumDashHighs(word: u64) u64 {
-    const upper = swarByteInAsciiRange(word, 'A', 'Z');
-    const lower = swarByteInAsciiRange(word, 'a', 'z');
-    const digit = swarByteInAsciiRange(word, '0', '9');
-    const dash = swarByteEq(word, '-');
-    return upper | lower | digit | dash;
-}
-
 inline fn wordCaselessAsciiEqualMasked(left: u64, right: u64, active: u64) bool {
-    if (((left ^ right) & active) == 0) return true;
+    // `active` has 0xff in the byte lanes that belong to the logical string and
+    // 0x00 in ignored lanes. Full 8-byte chunks pass all ones; tails pass a low
+    // byte mask. Masking the xor here means inactive tail bytes behave exactly
+    // like equal bytes and disappear from all later predicates.
+    const diff = (left ^ right) & active;
+    if (diff == 0) return true;
 
+    // Convert the active byte mask into one high bit per active lane. All SWAR
+    // predicates below produce the same shape: 0x80 for "this lane passed."
     const active_highs = active & SWAR_HIGHS;
-    const left_eligible = swarAsciiAlnumDashHighs(left) & active_highs;
-    const right_eligible = swarAsciiAlnumDashHighs(right) & active_highs;
 
-    if (left_eligible == active_highs and right_eligible == active_highs) {
-        return ((left | SWAR_ASCII_CASE) & active) == ((right | SWAR_ASCII_CASE) & active);
-    }
+    // First prove that every active byte lane is either identical or differs by
+    // exactly the ASCII case bit. If any lane differs by another amount, the
+    // words cannot be caseless-ASCII-equal. This rejects cases such as "_" vs
+    // "\x7f" before any alphabetic range test can accidentally accept them.
+    const exact_bytes = swarZeroHigh(diff) & active_highs;
+    const case_diff_bytes = swarByteEq(diff, 0x20) & active_highs;
+    if ((exact_bytes | case_diff_bytes) != active_highs) return false;
 
-    return wordCaselessAsciiEqualSlowMasked(left, right, active);
-}
-
-inline fn wordCaselessAsciiEqualSlowMasked(left: u64, right: u64, active: u64) bool {
-    inline for (0..@sizeOf(u64)) |byte_index| {
-        const shift = byte_index * 8;
-        const mask = @as(u64, 0xff) << shift;
-        if ((active & mask) != 0) {
-            const left_byte: u8 = @truncate(left >> shift);
-            const right_byte: u8 = @truncate(right >> shift);
-            if (!byteCaselessAsciiEqual(left_byte, right_byte)) return false;
-        }
-    }
-    return true;
+    // Only lanes that differ by 0x20 need to be letters. Exact-equal lanes can
+    // be anything at all, including underscores, dashes, digits, punctuation, or
+    // non-ASCII UTF-8 bytes.
+    //
+    // It is enough to test `left | 0x20` because a byte pair whose xor is 0x20
+    // has the same lowercase value on either side if it is an ASCII letter.
+    const left_lower = left | SWAR_ASCII_CASE;
+    const left_alpha = swarByteInAsciiRange(left_lower, 'a', 'z') & active_highs;
+    return (case_diff_bytes & ~left_alpha) == 0;
 }
 
 inline fn readTailU64(bytes: [*]const u8, len: usize, index: usize, tail_len: usize) u64 {
+    // For any string with at least one full u64, load the final u64 ending at
+    // `len` and shift the requested tail down to byte lane 0. This avoids a
+    // byte-building loop without reading past the logical end of an owned string
+    // or seamless slice.
     if (len >= @sizeOf(u64)) {
         const load_index = len - @sizeOf(u64);
         const shift = (index - load_index) * 8;
@@ -1980,6 +2013,10 @@ inline fn readTailU64(bytes: [*]const u8, len: usize, index: usize, tail_len: us
         return word >> @intCast(shift);
     }
 
+    // The only remaining case is a non-small string/slice shorter than 8 bytes.
+    // A short seamless slice may sit at the end of its allocation, and RocStr
+    // does not store the original allocation capacity for string slices, so do
+    // not over-read here.
     return readTailU64ZeroPadded(bytes, index, tail_len);
 }
 
@@ -1990,14 +2027,6 @@ inline fn readTailU64ZeroPadded(bytes: [*]const u8, index: usize, tail_len: usiz
         word |= @as(u64, bytes[index + i]) << @intCast(i * 8);
     }
     return word;
-}
-
-inline fn byteCaselessAsciiEqual(left: u8, right: u8) bool {
-    if (left == right) return true;
-    if ((left ^ right) != 0x20) return false;
-
-    const lower = left | 0x20;
-    return lower >= 'a' and lower <= 'z';
 }
 
 /// A backwards version of Utf8View from std.unicode
@@ -3681,7 +3710,7 @@ test "caselessAsciiEquals: different lengths are not equal" {
     try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
 }
 
-test "caselessAsciiEquals: underscore falls back but still matches itself" {
+test "caselessAsciiEquals: underscore exact byte still matches with ascii case folding" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
@@ -3691,6 +3720,20 @@ test "caselessAsciiEquals: underscore falls back but still matches itself" {
     const str2 = RocStr.fromSlice("X_AUTH_TOKEN", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: exact ineligible bytes do not block ascii case folding" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("A_\x7Fé-Z9", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("a_\x7Fé-z9", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
     try std.testing.expect(strCaselessAsciiEquals(str1, str2));
 }
 
