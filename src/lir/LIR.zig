@@ -381,6 +381,17 @@ pub const CFStmt = union(enum) {
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
     },
+    /// Branch on a condition that is compiler-proven to describe whether
+    /// `payload` has been initialized. The initialized branch may read
+    /// `payload`; the uninitialized branch may not. ARC insertion and
+    /// certification consume this explicit relationship instead of inferring it
+    /// from field names, tag shapes, or backend codegen.
+    switch_initialized_payload: struct {
+        cond: LocalId,
+        payload: LocalId,
+        initialized_branch: CFStmtId,
+        uninitialized_branch: CFStmtId,
+    },
     loop_continue: void,
     loop_break: void,
     join: struct {

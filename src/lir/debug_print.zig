@@ -202,6 +202,20 @@ const Printer = struct {
                     }
                     return;
                 },
+                .switch_initialized_payload => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("switch_initialized_payload cond=l{d} payload=l{d}\n", .{
+                        @intFromEnum(s.cond),
+                        @intFromEnum(s.payload),
+                    });
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("initialized:\n");
+                    try self.writeChainInner(gpa, s.initialized_branch, indent + 2, writer);
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("uninitialized:\n");
+                    try self.writeChainInner(gpa, s.uninitialized_branch, indent + 2, writer);
+                    return;
+                },
                 .join => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("join j{d} params=[", .{@intFromEnum(s.id)});

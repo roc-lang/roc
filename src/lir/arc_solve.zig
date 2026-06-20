@@ -582,6 +582,10 @@ fn retLenders(
                     try solver.stack.append(allocator, continuation);
                 }
             },
+            .switch_initialized_payload => |s| {
+                try solver.stack.append(allocator, s.initialized_branch);
+                try solver.stack.append(allocator, s.uninitialized_branch);
+            },
             .join => |j| {
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
@@ -632,6 +636,10 @@ fn retAllUnique(
                 if (s.continuation) |continuation| {
                     try solver.stack.append(allocator, continuation);
                 }
+            },
+            .switch_initialized_payload => |s| {
+                try solver.stack.append(allocator, s.initialized_branch);
+                try solver.stack.append(allocator, s.uninitialized_branch);
             },
             .join => |j| {
                 try solver.stack.append(allocator, j.body);
@@ -865,6 +873,10 @@ fn collectStmt(
                 try solver.stack.append(allocator, continuation);
             }
         },
+        .switch_initialized_payload => |switch_stmt| {
+            try solver.stack.append(allocator, switch_stmt.initialized_branch);
+            try solver.stack.append(allocator, switch_stmt.uninitialized_branch);
+        },
         .join => |join_stmt| {
             // Join parameters are written at every jump; they stay owned.
             for (store.getLocalSpan(join_stmt.params)) |param| {
@@ -1021,6 +1033,10 @@ pub fn computeVisibility(
                     if (stmt.continuation) |continuation| {
                         try stack.append(allocator, continuation);
                     }
+                },
+                .switch_initialized_payload => |stmt| {
+                    try stack.append(allocator, stmt.initialized_branch);
+                    try stack.append(allocator, stmt.uninitialized_branch);
                 },
                 .join => |stmt| {
                     try stack.append(allocator, stmt.body);
@@ -1542,6 +1558,7 @@ pub fn computeUniqueness(
             .expect => |expect_stmt| marks.noteUse(&borrow_used, expect_stmt.condition),
             .comptime_branch_taken => {},
             .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
+            .switch_initialized_payload => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
             .decref, .free, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
@@ -1633,6 +1650,10 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     if (s.continuation) |continuation| {
                         try solver.stack.append(allocator, continuation);
                     }
+                },
+                .switch_initialized_payload => |s| {
+                    try solver.stack.append(allocator, s.initialized_branch);
+                    try solver.stack.append(allocator, s.uninitialized_branch);
                 },
                 .join => |j| {
                     try solver.stack.append(allocator, j.body);

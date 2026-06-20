@@ -209,6 +209,10 @@ fn certifyUniqueArgs(
                         try stack.append(allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |s| {
+                    try stack.append(allocator, s.initialized_branch);
+                    try stack.append(allocator, s.uninitialized_branch);
+                },
                 .join => |j| {
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
@@ -321,6 +325,10 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                     }
                     walk.append(store.allocator, s.default_branch) catch return;
                 },
+                .switch_initialized_payload => |s| {
+                    walk.append(store.allocator, s.initialized_branch) catch return;
+                    walk.append(store.allocator, s.uninitialized_branch) catch return;
+                },
                 .join => |j| {
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
@@ -393,6 +401,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .decref => |rc| rc.value == needle,
         .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
+        .switch_initialized_payload => |s| s.cond == needle or s.payload == needle,
         .ret => |r| r.value == needle,
         .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
@@ -1007,6 +1016,12 @@ const Certifier = struct {
                         try stack.append(self.allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |switch_stmt| {
+                    try self.noteProcLocal(switch_stmt.cond);
+                    try self.noteProcLocal(switch_stmt.payload);
+                    try stack.append(self.allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.allocator, switch_stmt.uninitialized_branch);
+                },
                 .join => |join_stmt| {
                     try self.noteProcLocalSpan(join_stmt.params);
                     try self.join_bodies.put(join_stmt.id, join_stmt.body);
@@ -1229,6 +1244,11 @@ const Certifier = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, branch.body);
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
@@ -1642,6 +1662,27 @@ const Certifier = struct {
                     var default_state = try state.clone();
                     errdefer default_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    _ = try self.requireLive(&state, switch_stmt.cond);
+                    if (self.isRc(switch_stmt.payload)) {
+                        const payload_is_initialized = state.valueOf(switch_stmt.payload) != no_value;
+                        const target = if (payload_is_initialized)
+                            switch_stmt.initialized_branch
+                        else
+                            switch_stmt.uninitialized_branch;
+                        var branch_state = try state.clone();
+                        errdefer branch_state.deinit();
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = target, .state = branch_state, .origin_join = segment.origin_join } });
+                        return;
+                    }
+                    var initialized_state = try state.clone();
+                    errdefer initialized_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.initialized_branch, .state = initialized_state, .origin_join = segment.origin_join } });
+                    var uninitialized_state = try state.clone();
+                    errdefer uninitialized_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .join => |join_stmt| {
@@ -2306,6 +2347,86 @@ test "certify flags an owned parameter that is never released" {
     _ = try f.addProc(&.{param}, body, .i64);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
+}
+
+test "certify follows initialized payload switch branch when rc payload is live" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const initialized_release = try f.decrefStmt(payload, .str, ret);
+    const initialized_branch = try f.assignI64(result, initialized_release);
+    const uninitialized_branch = try f.assignI64(result, ret);
+
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_initialized_payload = .{
+        .cond = cond,
+        .payload = payload,
+        .initialized_branch = initialized_branch,
+        .uninitialized_branch = uninitialized_branch,
+    } });
+    const cond_assign = try f.assignI64(cond, switch_stmt);
+    const body = try f.assignStr(payload, cond_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    // The uninitialized branch would leak the live payload if the certifier
+    // explored both branches. This proves the switch is an explicit
+    // initialized-cell test, not an ordinary runtime value switch.
+    try f.certify();
+}
+
+test "certify follows uninitialized payload switch branch when rc payload is unbound" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const bad_initialized_release = try f.decrefStmt(payload, .str, ret);
+    const initialized_branch = try f.assignI64(result, bad_initialized_release);
+    const uninitialized_branch = try f.assignI64(result, ret);
+
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_initialized_payload = .{
+        .cond = cond,
+        .payload = payload,
+        .initialized_branch = initialized_branch,
+        .uninitialized_branch = uninitialized_branch,
+    } });
+    const body = try f.assignI64(cond, switch_stmt);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    // The initialized branch reads an unbound RC local, so this only passes if
+    // the certifier follows the uninitialized branch selected by ownership
+    // state.
+    try f.certify();
+}
+
+test "certify flags uninitialized payload switch branch that reads unbound payload" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const initialized_branch = try f.assignI64(result, ret);
+    const bad_uninitialized_release = try f.decrefStmt(payload, .str, ret);
+    const uninitialized_branch = try f.assignI64(result, bad_uninitialized_release);
+
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_initialized_payload = .{
+        .cond = cond,
+        .payload = payload,
+        .initialized_branch = initialized_branch,
+        .uninitialized_branch = uninitialized_branch,
+    } });
+    const body = try f.assignI64(cond, switch_stmt);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
 }
 
 test "certify flags branches that disagree at a join" {

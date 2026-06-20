@@ -345,6 +345,7 @@ const Inserter = struct {
         switch_no_continuation: *RewriteSwitchNoContinuationTask,
         switch_after_continuation: *RewriteSwitchContinuationTask,
         switch_finish_continuation: *RewriteSwitchContinuationTask,
+        initialized_payload_switch: *RewriteInitializedPayloadSwitchTask,
     };
 
     const RewritePathTask = struct {
@@ -396,6 +397,15 @@ const Inserter = struct {
         result: *LIR.CFStmtId,
     };
 
+    const RewriteInitializedPayloadSwitchTask = struct {
+        cond: LIR.LocalId,
+        payload: LIR.LocalId,
+        initialized_branch: LIR.CFStmtId = undefined,
+        uninitialized_branch: LIR.CFStmtId = undefined,
+        frames: std.ArrayList(LinearRewriteFrame),
+        result: *LIR.CFStmtId,
+    };
+
     const AnalysisTask = union(enum) {
         path: *AnalysisPathTask,
         resume_switch_continuation: *AnalysisSwitchContinuationTask,
@@ -433,6 +443,7 @@ const Inserter = struct {
                 .switch_no_continuation => |switch_| try self.finishRewriteSwitchNoContinuation(switch_),
                 .switch_after_continuation => |switch_| try self.processRewriteSwitchAfterContinuation(&tasks, switch_),
                 .switch_finish_continuation => |switch_| try self.finishRewriteSwitchContinuation(switch_),
+                .initialized_payload_switch => |switch_| try self.finishRewriteInitializedPayloadSwitch(switch_),
             }
         }
         return result;
@@ -785,6 +796,11 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
+                .switch_initialized_payload => |switch_stmt| {
+                    try self.scheduleRewriteInitializedPayloadSwitch(tasks, path, switch_stmt);
+                    self.destroyRewritePath(path);
+                    return;
+                },
                 .join => |join_stmt| {
                     try self.scheduleRewriteJoin(tasks, path, path.cursor, join_stmt);
                     self.destroyRewritePath(path);
@@ -1023,6 +1039,7 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
+            .switch_initialized_payload => arcInvariant("ARC linear rewrite frame contained initialized-payload switch"),
             .comptime_branch_taken => |marker| {
                 cloned = try self.store.addCFStmt(.{ .comptime_branch_taken = .{
                     .site = marker.site,
@@ -1211,6 +1228,29 @@ const Inserter = struct {
         try self.scheduleRewriteSwitchNoContinuation(tasks, path, start, switch_stmt.cond, switch_stmt.branches, switch_stmt.default_branch, null);
     }
 
+    fn scheduleRewriteInitializedPayloadSwitch(
+        self: *Inserter,
+        tasks: *std.ArrayList(RewriteTask),
+        path: *RewritePathTask,
+        switch_stmt: anytype,
+    ) ResourceError!void {
+        const state = try self.store.allocator.create(RewriteInitializedPayloadSwitchTask);
+        var queued = false;
+        errdefer if (!queued) self.store.allocator.destroy(state);
+        state.* = .{
+            .cond = switch_stmt.cond,
+            .payload = switch_stmt.payload,
+            .frames = takeRewriteFrames(path),
+            .result = path.result,
+        };
+        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+
+        try tasks.append(self.store.allocator, .{ .initialized_payload_switch = state });
+        queued = true;
+        try self.pushRewritePath(tasks, switch_stmt.initialized_branch, &path.owned, path.options, &state.initialized_branch);
+        try self.pushRewritePath(tasks, switch_stmt.uninitialized_branch, &path.owned, path.options, &state.uninitialized_branch);
+    }
+
     fn scheduleRewriteSwitchNoContinuation(
         self: *Inserter,
         tasks: *std.ArrayList(RewriteTask),
@@ -1266,6 +1306,18 @@ const Inserter = struct {
         } });
         state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
         self.destroyRewriteSwitchNoContinuation(state);
+    }
+
+    fn finishRewriteInitializedPayloadSwitch(self: *Inserter, state: *RewriteInitializedPayloadSwitchTask) ResourceError!void {
+        errdefer self.destroyRewriteInitializedPayloadSwitch(state);
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_initialized_payload = .{
+            .cond = state.cond,
+            .payload = state.payload,
+            .initialized_branch = state.initialized_branch,
+            .uninitialized_branch = state.uninitialized_branch,
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
+        self.destroyRewriteInitializedPayloadSwitch(state);
     }
 
     fn scheduleRewriteSwitchContinuation(
@@ -1576,6 +1628,12 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
+                .switch_initialized_payload => |switch_stmt| {
+                    try self.pushAnalysisPath(tasks, switch_stmt.initialized_branch, path.stop, &path.owned, path.exits, path.loop_keep);
+                    try self.pushAnalysisPath(tasks, switch_stmt.uninitialized_branch, path.stop, &path.owned, path.exits, path.loop_keep);
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
                 .join => {
                     // A join starts a separate loop/recursive ownership frame.
                     // Switch continuation analysis must not fold that frame into
@@ -1620,6 +1678,7 @@ const Inserter = struct {
             .switch_no_continuation => |switch_| self.destroyRewriteSwitchNoContinuation(switch_),
             .switch_after_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
             .switch_finish_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
+            .initialized_payload_switch => |switch_| self.destroyRewriteInitializedPayloadSwitch(switch_),
         }
     }
 
@@ -1659,6 +1718,11 @@ const Inserter = struct {
         state.common.deinit();
         if (state.nested_boundaries.len != 0) self.store.allocator.free(state.nested_boundaries);
         self.store.allocator.free(state.branch_results);
+        self.store.allocator.destroy(state);
+    }
+
+    fn destroyRewriteInitializedPayloadSwitch(self: *Inserter, state: *RewriteInitializedPayloadSwitchTask) void {
+        self.destroyFrames(&state.frames);
         self.store.allocator.destroy(state);
     }
 
@@ -2134,6 +2198,10 @@ const Inserter = struct {
                         try stack.append(self.store.allocator, branch.body);
                     }
                 },
+                .switch_initialized_payload => |switch_stmt| {
+                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
+                },
                 .join => |join_stmt| {
                     const previous = try join_bodies.getOrPut(join_stmt.id);
                     if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
@@ -2218,6 +2286,10 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try stack.append(self.store.allocator, branch.body);
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
@@ -2333,6 +2405,11 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try stack.append(self.store.allocator, branch.body);
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    if (switch_stmt.cond == needle) return true;
+                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     // A join body runs only via jumps to it, and the `.jump`
@@ -2478,6 +2555,11 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try stack.append(self.store.allocator, branch.body);
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    if (needles.contains(switch_stmt.cond)) return true;
+                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     // Bodies enter via the `.jump` case only, exactly as in
@@ -3049,6 +3131,10 @@ const ArcTest = struct {
                         try stack.append(self.allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |s| {
+                    try stack.append(self.allocator, s.initialized_branch);
+                    try stack.append(self.allocator, s.uninitialized_branch);
+                },
                 .join => |j| {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
@@ -3118,7 +3204,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;

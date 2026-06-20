@@ -163,6 +163,7 @@ const Edge = union(enum) {
     switch_branch: struct { stmt: CFStmtId, index: u16 },
     switch_default: CFStmtId,
     switch_continuation: CFStmtId,
+    initialized_payload_branch: struct { stmt: CFStmtId, initialized: bool },
 };
 
 const CandidateState = enum {
@@ -421,6 +422,10 @@ const Detection = struct {
                         try work.append(gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
+                .switch_initialized_payload => |s| {
+                    try work.append(gpa, .{ .stmt = s.uninitialized_branch, .edge = .{ .initialized_payload_branch = .{ .stmt = item.stmt, .initialized = false } } });
+                    try work.append(gpa, .{ .stmt = s.initialized_branch, .edge = .{ .initialized_payload_branch = .{ .stmt = item.stmt, .initialized = true } } });
+                },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
@@ -474,6 +479,10 @@ const Detection = struct {
                 for (branches) |branch| {
                     try self.appendSharedSuccessor(work, branch.body);
                 }
+            },
+            .switch_initialized_payload => |s| {
+                try self.appendSharedSuccessor(work, s.initialized_branch);
+                try self.appendSharedSuccessor(work, s.uninitialized_branch);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
@@ -680,6 +689,7 @@ const Detection = struct {
             .decref => |s| c.chainContains(s.value),
             .free => |s| c.chainContains(s.value),
             .switch_stmt => |s| c.chainContains(s.cond),
+            .switch_initialized_payload => |s| c.chainContains(s.cond),
             .ret => |s| c.chainContains(s.value),
             .expect_err => |s| c.chainContains(s.message),
             .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
@@ -733,6 +743,7 @@ const Detection = struct {
             .switch_branch => |info| self.isSharedPath(info.stmt),
             .switch_default => |stmt| self.isSharedPath(stmt),
             .switch_continuation => |stmt| self.isSharedPath(stmt),
+            .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
         };
     }
 
@@ -1143,6 +1154,14 @@ const Transform = struct {
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,
             .switch_continuation => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.continuation = replacement,
+            .initialized_payload_branch => |info| {
+                const switch_stmt = &self.store.getCFStmtPtr(info.stmt).switch_initialized_payload;
+                if (info.initialized) {
+                    switch_stmt.initialized_branch = replacement;
+                } else {
+                    switch_stmt.uninitialized_branch = replacement;
+                }
+            },
         }
     }
 };

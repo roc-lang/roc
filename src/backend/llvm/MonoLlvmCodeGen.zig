@@ -1721,6 +1721,13 @@ pub const MonoLlvmCodeGen = struct {
         default_branch: CFStmtId,
     };
 
+    const InitializedPayloadSwitchState = struct {
+        initialized_block: LlvmBuilder.Function.Block.Index,
+        uninitialized_block: LlvmBuilder.Function.Block.Index,
+        initialized_branch: CFStmtId,
+        uninitialized_branch: CFStmtId,
+    };
+
     /// Heap-backed glue carried across the children of one `join` statement: the
     /// remainder subtree and (the first time the join is seen) the join body.
     const JoinState = struct {
@@ -1741,6 +1748,8 @@ pub const MonoLlvmCodeGen = struct {
         switch_branch: struct { state: *SwitchState, index: u32 },
         switch_default: *SwitchState,
         switch_free: *SwitchState,
+        initialized_payload_branch: struct { state: *InitializedPayloadSwitchState, initialized: bool },
+        initialized_payload_free: *InitializedPayloadSwitchState,
         join_after_remainder: *JoinState,
         join_after_body: *JoinState,
     };
@@ -1772,6 +1781,21 @@ pub const MonoLlvmCodeGen = struct {
                 },
                 .switch_free => |state| {
                     self.allocator.free(state.branch_blocks);
+                    self.allocator.destroy(state);
+                },
+                .initialized_payload_branch => |branch| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    if (branch.initialized) {
+                        wip.cursor = .{ .block = branch.state.initialized_block };
+                        try work.append(wa, .{ .initialized_payload_branch = .{ .state = branch.state, .initialized = false } });
+                        try work.append(wa, .{ .node = branch.state.initialized_branch });
+                    } else {
+                        wip.cursor = .{ .block = branch.state.uninitialized_block };
+                        try work.append(wa, .{ .initialized_payload_free = branch.state });
+                        try work.append(wa, .{ .node = branch.state.uninitialized_branch });
+                    }
+                },
+                .initialized_payload_free => |state| {
                     self.allocator.destroy(state);
                 },
                 .join_after_remainder => |state| {
@@ -1839,6 +1863,10 @@ pub const MonoLlvmCodeGen = struct {
                     if (switch_stmt.continuation) |continuation| {
                         try self.noteStmtIncoming(&stack, continuation);
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    try self.noteStmtIncoming(&stack, switch_stmt.initialized_branch);
+                    try self.noteStmtIncoming(&stack, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     try self.noteStmtIncoming(&stack, join_stmt.remainder);
@@ -2025,6 +2053,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
+            .switch_initialized_payload => |sw| try self.emitInitializedPayloadSwitch(sw, wa, work),
             .loop_continue => try self.emitLoopContinue(),
             .loop_break => try self.emitLoopBreak(),
             .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
@@ -2869,6 +2898,26 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             try work.append(wa, .{ .switch_branch = .{ .state = state, .index = 0 } });
         }
+    }
+
+    fn emitInitializedPayloadSwitch(self: *MonoLlvmCodeGen, sw: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const initialized_block = wip.block(0, "payload_initialized") catch return error.OutOfMemory;
+        const uninitialized_block = wip.block(0, "payload_uninitialized") catch return error.OutOfMemory;
+        const cond_value = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
+        const one = builder.intValue(cond_value.typeOfWip(wip), 1) catch return error.OutOfMemory;
+        const is_initialized = wip.icmp(.eq, cond_value, one, "") catch return error.OutOfMemory;
+        _ = wip.brCond(is_initialized, initialized_block, uninitialized_block, .then_likely) catch return error.OutOfMemory;
+
+        const state = try self.allocator.create(InitializedPayloadSwitchState);
+        state.* = .{
+            .initialized_block = initialized_block,
+            .uninitialized_block = uninitialized_block,
+            .initialized_branch = sw.initialized_branch,
+            .uninitialized_branch = sw.uninitialized_branch,
+        };
+        try work.append(wa, .{ .initialized_payload_branch = .{ .state = state, .initialized = true } });
     }
 
     /// Registers the join point, queues the remainder subtree, and lets

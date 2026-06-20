@@ -5638,6 +5638,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         try stack.append(sa, sw.default_branch);
                     },
+                    .switch_initialized_payload => |sw| {
+                        try locals.put(localKey(sw.cond), sw.cond);
+                        try locals.put(localKey(sw.payload), sw.payload);
+                        try stack.append(sa, sw.initialized_branch);
+                        try stack.append(sa, sw.uninitialized_branch);
+                    },
                     .join => |join| {
                         try stack.append(sa, join.body);
                         try stack.append(sa, join.remainder);
@@ -5759,6 +5765,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try stack.append(sa, branch.body);
                         }
                         try stack.append(sa, sw.default_branch);
+                    },
+                    .switch_initialized_payload => |sw| {
+                        try locals.put(localKey(sw.cond), sw.cond);
+                        try locals.put(localKey(sw.payload), sw.payload);
+                        try stack.append(sa, sw.initialized_branch);
+                        try stack.append(sa, sw.uninitialized_branch);
                     },
                     .join => |join| {
                         for (self.store.getLocalSpan(join.params)) |param| {
@@ -14305,6 +14317,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 };
                                 try work.append(wa, .{ .switch_branch = state });
                             }
+                        },
+
+                        .switch_initialized_payload => |sw| {
+                            const cond_loc = try self.emitValueLocal(sw.cond);
+                            const cond_reg = try self.ensureInGeneralReg(cond_loc);
+                            const switch_env = try self.captureStmtEnv();
+
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.cmpRegImm12(.w64, cond_reg, 1);
+                            } else {
+                                try self.codegen.emit.cmpRegImm32(.w64, cond_reg, 1);
+                            }
+                            const else_patch = try self.emitJumpIfNotEqual();
+                            self.codegen.freeGeneral(cond_reg);
+                            try self.restoreStmtEnv(&switch_env);
+
+                            const state = try self.allocator.create(SwitchState1);
+                            state.* = .{
+                                .owner = stmt_id,
+                                .switch_env = switch_env,
+                                .else_patch = else_patch,
+                                .default_branch = sw.uninitialized_branch,
+                                .end_patch = 0,
+                            };
+                            try work.append(wa, .{ .switch1_after_branch = state });
+                            try work.append(wa, .{ .node = sw.initialized_branch });
                         },
 
                         .incref => |inc| {

@@ -1455,6 +1455,7 @@ pub const Interpreter = struct {
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
+                .switch_initialized_payload,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 .jump,
@@ -1945,6 +1946,28 @@ pub const Interpreter = struct {
                     }
                     current = target;
                 },
+                .switch_initialized_payload => |switch_stmt| {
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, switch_stmt.cond),
+                        self.store.getLocal(switch_stmt.cond).layout_idx,
+                    );
+                    if (trace.enabled) {
+                        trace.log(
+                            "switch_initialized_payload: cond_local={d} payload_local={d} value={d} initialized={d} uninitialized={d}",
+                            .{
+                                @intFromEnum(switch_stmt.cond),
+                                @intFromEnum(switch_stmt.payload),
+                                cond_value,
+                                @intFromEnum(switch_stmt.initialized_branch),
+                                @intFromEnum(switch_stmt.uninitialized_branch),
+                            },
+                        );
+                    }
+                    current = if (cond_value == 1)
+                        switch_stmt.initialized_branch
+                    else
+                        switch_stmt.uninitialized_branch;
+                },
                 .loop_continue => return .loop_continue,
                 .loop_break => return .loop_break,
                 .join => |join_stmt| {
@@ -2200,6 +2223,17 @@ pub const Interpreter = struct {
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    debugPrint("    {d}: switch_initialized_payload cond={d} payload={d} initialized={d} uninitialized={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(switch_stmt.cond),
+                        @intFromEnum(switch_stmt.payload),
+                        @intFromEnum(switch_stmt.initialized_branch),
+                        @intFromEnum(switch_stmt.uninitialized_branch),
+                    });
+                    stack.append(self.evalAllocator(), switch_stmt.initialized_branch) catch return;
+                    stack.append(self.evalAllocator(), switch_stmt.uninitialized_branch) catch return;
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});

@@ -3137,6 +3137,12 @@ fn collectProcLocals(
                 }
                 try work.append(wa, switch_stmt.default_branch);
             },
+            .switch_initialized_payload => |switch_stmt| {
+                try recordProcLocal(locals, switch_stmt.cond);
+                try recordProcLocal(locals, switch_stmt.payload);
+                try work.append(wa, switch_stmt.initialized_branch);
+                try work.append(wa, switch_stmt.uninitialized_branch);
+            },
             .join => |join_stmt| {
                 for (self.store.getLocalSpan(join_stmt.params)) |param| try recordProcLocal(locals, param);
                 try work.append(wa, join_stmt.body);
@@ -7315,6 +7321,19 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 try work.append(wa, .{ .node = .{ .stmt_id = branch.body, .stop = branch_stop } });
                 try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = @bitCast(branch.value) } });
             }
+        },
+        .switch_initialized_payload => |sw| {
+            const cond_vt = try self.procLocalValType(sw.cond);
+            const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
+            try self.emitProcLocal(sw.cond);
+            try self.emitLocalSet(cond_local);
+            const state = try self.allocator.create(SwitchEqState);
+            state.* = .{ .cond_local = cond_local, .cond_vt = cond_vt, .branch_count = 1 };
+            try work.append(wa, .{ .switch_close = state });
+            try work.append(wa, .{ .node = .{ .stmt_id = sw.uninitialized_branch, .stop = stop } });
+            try work.append(wa, .switch_else);
+            try work.append(wa, .{ .node = .{ .stmt_id = sw.initialized_branch, .stop = stop } });
+            try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = 1 } });
         },
         .join => |j| {
             const jp_key = @intFromEnum(j.id);

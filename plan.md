@@ -189,6 +189,21 @@ is a set of scalar locals:
     - A post-ARC backend-only rewrite is not acceptable. `Arc.insert` runs the
       debug ARC certifier immediately, and all backends must keep following
       explicit LIR RC rather than inferring parser slot semantics.
+    - Implemented the first explicit LIR primitive for this representation:
+      `switch_initialized_payload`, which branches on an ordinary presence
+      condition and carries the compiler-known relationship to the payload local
+      whose initialization is being tested. ARC, ARC solving, ARC certification,
+      TRMC, scalarized joins, debug printing, the interpreter, LLVM, Wasm, and
+      the dev backend all traverse or lower this node explicitly.
+    - Added certifier regressions proving an initialized RC payload certifies
+      only the initialized branch, an uninitialized RC payload certifies only
+      the uninitialized branch, and a read of an uninitialized payload is still
+      rejected.
+    - Verified the infrastructure with
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
 
 - [ ] Replace generated slot tag values with presence bits in the lowered parser
       state.
@@ -245,6 +260,11 @@ is a set of scalar locals:
     - ARC certifier passes.
     - Tests with repeated/overwritten string fields do not leak or double free.
     - LIR has explicit conditional cleanup based on presence bits where needed.
+    - Intermediate progress: LIR and ARC now have an explicit conditional
+      initialized-payload switch, and the certifier has direct branch-selection
+      coverage for initialized and uninitialized RC payload states. This item is
+      not complete until generated parser lowering emits that LIR for duplicate
+      overwrites, error exits, and finish-time payload reads.
 
 - [ ] Add regression coverage for wide and nested records.
   - Tasks:

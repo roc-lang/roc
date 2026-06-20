@@ -203,6 +203,10 @@ const Pass = struct {
                         try self.stack.append(self.allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |s| {
+                    try self.stack.append(self.allocator, s.initialized_branch);
+                    try self.stack.append(self.allocator, s.uninitialized_branch);
+                },
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -398,6 +402,12 @@ const Pass = struct {
                         try self.stack.append(self.allocator, s.continuation.?);
                     }
                 },
+                .switch_initialized_payload => |*s| {
+                    s.initialized_branch = self.resolveRemoved(s.initialized_branch);
+                    s.uninitialized_branch = self.resolveRemoved(s.uninitialized_branch);
+                    try self.stack.append(self.allocator, s.initialized_branch);
+                    try self.stack.append(self.allocator, s.uninitialized_branch);
+                },
                 .join => |*j| {
                     j.body = self.resolveRemoved(j.body);
                     j.remainder = self.resolveRemoved(j.remainder);
@@ -446,6 +456,10 @@ const Pass = struct {
                     if (s.continuation) |continuation| {
                         try self.stack.append(self.allocator, continuation);
                     }
+                },
+                .switch_initialized_payload => |s| {
+                    try self.stack.append(self.allocator, s.initialized_branch);
+                    try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     try self.stack.append(self.allocator, join_stmt.body);
@@ -554,6 +568,11 @@ const Pass = struct {
                     if (s.continuation) |continuation| {
                         try self.stack.append(self.allocator, continuation);
                     }
+                },
+                .switch_initialized_payload => |s| {
+                    try self.noteUse(s.cond);
+                    try self.stack.append(self.allocator, s.initialized_branch);
+                    try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
                 .join => |join_stmt| {
                     try self.stack.append(self.allocator, join_stmt.body);
