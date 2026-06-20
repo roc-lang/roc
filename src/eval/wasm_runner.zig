@@ -186,7 +186,6 @@ pub fn runWasmStrWithStats(
             .{ "roc_str_drop_suffix", hostStrDropSuffix },
             .{ "roc_str_concat", hostStrConcat },
             .{ "roc_str_split", hostStrSplit },
-            .{ "roc_str_join_with", hostStrJoinWith },
             .{ "roc_str_repeat", hostStrRepeat },
             .{ "roc_str_reserve", hostStrReserve },
         }) |entry| {
@@ -1119,40 +1118,6 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     writeIntLittle(u32, buffer, result_ptr, @intCast(list_data_start));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(count));
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(count));
-}
-
-fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const list_ptr: usize = @intCast(params[0].I32);
-    const sep = readWasmStr(buffer, @intCast(params[1].I32));
-    const list_data: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
-    const list_len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
-    if (list_len == 0) {
-        writeWasmEmptyStr(buffer, @intCast(params[2].I32));
-        return;
-    }
-    var total_len: usize = 0;
-    for (0..list_len) |i| total_len += readWasmStr(buffer, list_data + i * 12).len;
-    total_len += sep.len * (list_len - 1);
-    if (total_len == 0) {
-        writeWasmEmptyStr(buffer, @intCast(params[2].I32));
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    var offset: usize = 0;
-    for (0..list_len) |i| {
-        if (i > 0 and sep.len > 0) {
-            @memcpy(buffer[dest_start + offset ..][0..sep.len], sep.data[0..sep.len]);
-            offset += sep.len;
-        }
-        const elem = readWasmStr(buffer, list_data + i * 12);
-        if (elem.len > 0) {
-            @memcpy(buffer[dest_start + offset ..][0..elem.len], elem.data[0..elem.len]);
-            offset += elem.len;
-        }
-    }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
 fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

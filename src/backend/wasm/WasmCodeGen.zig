@@ -379,7 +379,6 @@ str_trim_import: ?u32 = null,
 str_trim_start_import: ?u32 = null,
 str_trim_end_import: ?u32 = null,
 str_split_import: ?u32 = null,
-str_join_with_import: ?u32 = null,
 str_reserve_import: ?u32 = null,
 str_release_excess_capacity_import: ?u32 = null,
 str_with_capacity_import: ?u32 = null,
@@ -1338,7 +1337,6 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.str_drop_prefix_import = try self.module.addImport("env", "roc_str_drop_prefix", str_binary_type);
     self.str_drop_suffix_import = try self.module.addImport("env", "roc_str_drop_suffix", str_binary_type);
     self.str_split_import = try self.module.addImport("env", "roc_str_split", str_binary_type);
-    self.str_join_with_import = try self.module.addImport("env", "roc_str_join_with", str_binary_type);
     self.str_concat_import = try self.module.addImport("env", "roc_str_concat", str_binary_type);
     self.str_repeat_import = try self.module.addImport("env", "roc_str_repeat", str_binary_type);
     self.str_reserve_import = try self.module.addImport("env", "roc_str_reserve", str_binary_type);
@@ -10297,12 +10295,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitCall(import_idx);
             try self.emitFpOffset(result_offset);
         },
-        .str_split_on, .str_join_with => {
-            const import_idx = switch (ll.op) {
-                .str_split_on => self.str_split_import orelse unreachable,
-                .str_join_with => self.str_join_with_import orelse unreachable,
-                else => unreachable,
-            };
+        .str_split_on => {
+            const import_idx = self.str_split_import orelse unreachable;
             try self.emitProcLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);

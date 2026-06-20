@@ -187,11 +187,19 @@ expect name_to_upper_ident("Stdout.line!") == "STDOUT_LINE"
 expect name_to_upper_ident("line!") == "LINE"
 expect name_to_upper_ident("Foo.barBaz!") == "FOO_BAR_BAZ"
 
+join_with : List(Str), Str -> Str
+join_with = |strings, sep|
+    match strings {
+        [] => ""
+        [first, .. as rest] =>
+            rest.fold(first, |acc, s| "${acc}${sep}${s}")
+    }
+
 # Replace all occurrences of a substring
 str_replace_all : Str, Str, Str -> Str
 str_replace_all = |s, from, to| {
 	parts = Str.split_on(s, from)
-	Str.join_with(parts, to)
+	join_with(parts, to)
 }
 
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"

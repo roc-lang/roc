@@ -2536,56 +2536,6 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
-        .name = "low_level - Str.join_with basic join",
-        .source =
-        \\{
-        \\x = Str.join_with(["hello", "world"], " ")
-        \\x
-        \\}
-        ,
-        .expected = .{ .inspect_str = "\"hello world\"" },
-    },
-    .{
-        .name = "low_level - Str.join_with multiple elements",
-        .source =
-        \\{
-        \\x = Str.join_with(["a", "b", "c", "d"], ",")
-        \\x
-        \\}
-        ,
-        .expected = .{ .inspect_str = "\"a,b,c,d\"" },
-    },
-    .{
-        .name = "low_level - Str.join_with single element",
-        .source =
-        \\{
-        \\x = Str.join_with(["hello"], "-")
-        \\x
-        \\}
-        ,
-        .expected = .{ .inspect_str = "\"hello\"" },
-    },
-    .{
-        .name = "low_level - Str.join_with empty list",
-        .source =
-        \\{
-        \\x = Str.join_with([], ",")
-        \\x
-        \\}
-        ,
-        .expected = .{ .inspect_str = "\"\"" },
-    },
-    .{
-        .name = "low_level - Str.join_with roundtrip with split_on",
-        .source =
-        \\{
-        \\x = Str.join_with(Str.split_on("hello world", " "), " ")
-        \\x
-        \\}
-        ,
-        .expected = .{ .inspect_str = "\"hello world\"" },
-    },
-    .{
         .name = "low_level - U8.plus basic",
         .source =
         \\{

@@ -2227,7 +2227,6 @@ pub const MonoLlvmCodeGen = struct {
             .str_drop_prefix => try self.emitStrDropEdge(target, arg_locals, .prefix),
             .str_drop_suffix => try self.emitStrDropEdge(target, arg_locals, .suffix),
             .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals, null),
-            .str_join_with => try self.emitStrJoinWith(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
             .str_with_capacity => try self.emitStrWithCapacity(target, arg_locals[0]),
             .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
@@ -4379,21 +4378,6 @@ pub const MonoLlvmCodeGen = struct {
         else
             try self.emitRocStrLen(self.slot(arg).ptr);
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
-    }
-
-    fn emitStrJoinWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
-        var call_args = try self.rocListArgs1(args[0]);
-        defer call_args.deinit(self.allocator);
-        const sep_args = try self.rocStrArgs1(args[1]);
-        defer {
-            var owned = sep_args;
-            owned.deinit(self.allocator);
-        }
-        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.types.appendSlice(self.allocator, sep_args.types.items);
-        try call_args.values.appendSlice(self.allocator, sep_args.values.items);
-        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid("roc_builtins_str_join_with", call_args.types.items, call_args.values.items);
     }
 
     fn emitStrRepeat(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {

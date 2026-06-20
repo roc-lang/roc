@@ -539,11 +539,6 @@ pub const io_spec_tests = [_]TestSpec{
     // wrappers are not reachable from the current Roc surface (List.rev is pure
     // Roc; there is no List.prepend), so they have no coverage here.
     .{
-        .roc_file = "test/fx/leak_join_with_heap_strs.roc",
-        .io_spec = "0<xy|1>joined bytes: 98",
-        .description = "Regression test: Str.join_with consuming a unique heap List(Str) frees its element strings (lld-COFF &strDecref misresolution)",
-    },
-    .{
         .roc_file = "test/fx/leak_list_str_ops.roc",
         .io_spec = "0<xy|1>ops done: 3 5",
         .description = "Leak coverage for refcounted-element list ops (concat/drop_at/sublist/replace/swap/append/release_excess_capacity callback paths in dev_wrappers.zig)",

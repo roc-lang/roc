@@ -847,7 +847,6 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_str_trim_start", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim_start) },
         .{ .name = "roc_builtins_str_trim_end", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim_end) },
         .{ .name = "roc_builtins_str_split", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_split) },
-        .{ .name = "roc_builtins_str_join_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_join_with) },
         .{ .name = "roc_builtins_str_reserve", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_reserve) },
         .{ .name = "roc_builtins_str_release_excess_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_release_excess_capacity) },
         .{ .name = "roc_builtins_str_with_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_with_capacity) },

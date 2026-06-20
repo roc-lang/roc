@@ -1221,7 +1221,6 @@ pub const BuiltinSymbols = struct {
     str_trim_start: u32, // roc_builtins_str_trim_start
     str_trim_end: u32, // roc_builtins_str_trim_end
     str_split: u32, // roc_builtins_str_split
-    str_join_with: u32, // roc_builtins_str_join_with
     str_reserve: u32, // roc_builtins_str_reserve
     str_release_excess_capacity: u32, // roc_builtins_str_release_excess_capacity
     str_with_capacity: u32, // roc_builtins_str_with_capacity
@@ -1278,7 +1277,6 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_str_trim_start", "str_trim_start" },
         .{ "roc_builtins_str_trim_end", "str_trim_end" },
         .{ "roc_builtins_str_split", "str_split" },
-        .{ "roc_builtins_str_join_with", "str_join_with" },
         .{ "roc_builtins_str_reserve", "str_reserve" },
         .{ "roc_builtins_str_release_excess_capacity", "str_release_excess_capacity" },
         .{ "roc_builtins_str_with_capacity", "str_with_capacity" },

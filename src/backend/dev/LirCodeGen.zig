@@ -63,7 +63,6 @@ const strTrim = builtins.str.strTrim;
 const strTrimStart = builtins.str.strTrimStart;
 const strTrimEnd = builtins.str.strTrimEnd;
 const strSplitOn = builtins.str.strSplitOn;
-const strJoinWithC = builtins.str.strJoinWithC;
 const strReserveC = builtins.str.reserveC;
 const strReleaseExcessCapacity = builtins.str.strReleaseExcessCapacity;
 const strWithCapacityC = builtins.str.withCapacityC;
@@ -188,7 +187,6 @@ pub const BuiltinFn = enum {
     str_trim_start,
     str_trim_end,
     str_split,
-    str_join_with,
     str_reserve,
     str_release_excess_capacity,
     str_with_capacity,
@@ -303,7 +301,6 @@ pub const BuiltinFn = enum {
             .str_trim_start => "roc_builtins_str_trim_start",
             .str_trim_end => "roc_builtins_str_trim_end",
             .str_split => "roc_builtins_str_split",
-            .str_join_with => "roc_builtins_str_join_with",
             .str_reserve => "roc_builtins_str_reserve",
             .str_release_excess_capacity => "roc_builtins_str_release_excess_capacity",
             .str_with_capacity => "roc_builtins_str_with_capacity",
@@ -516,13 +513,6 @@ fn wrapStrSplit(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_by
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     out.* = strSplitOn(a, b, roc_ops);
-}
-
-/// Wrapper: strJoinWithC(RocList, RocStr, *RocOps) -> RocStr
-fn wrapStrJoinWith(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, sep_bytes: ?[*]u8, sep_len: usize, sep_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
-    out.* = strJoinWithC(list, sep, roc_ops);
 }
 
 /// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr
@@ -2844,15 +2834,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .str_split, .list, null);
                 },
-                .str_join_with => {
-                    // str_join_with(list, separator) -> Str
-                    if (args.len != 2) unreachable;
-                    const list_loc = try self.emitValueLocal(args[0]);
-                    const sep_loc = try self.emitValueLocal(args[1]);
-                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
-                    return try self.callListStrRocOpsToStr(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str_join_with);
-                },
                 .str_reserve => {
                     // str_reserve(str, spare) -> Str
                     if (args.len != 2) unreachable;
@@ -4239,27 +4220,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, list_off);
             try builder.addMemArg(frame_ptr, list_off + 8);
             try builder.addMemArg(frame_ptr, list_off + 16);
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, fn_addr, builtin_fn);
-
-            return .{ .stack_str = result_offset };
-        }
-
-        /// Call a C wrapper: fn(out, list_bytes, list_len, list_cap, str_bytes, str_len, str_cap, roc_ops) -> void
-        /// Used for list+str->str ops.
-        fn callListStrRocOpsToStr(self: *Self, list_off: i32, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-
-            const base_ptr = frame_ptr;
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_ptr, result_offset);
-            try builder.addMemArg(base_ptr, list_off);
-            try builder.addMemArg(base_ptr, list_off + 8);
-            try builder.addMemArg(base_ptr, list_off + 16);
-            try builder.addMemArg(base_ptr, str_off);
-            try builder.addMemArg(base_ptr, str_off + 16);
-            try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 

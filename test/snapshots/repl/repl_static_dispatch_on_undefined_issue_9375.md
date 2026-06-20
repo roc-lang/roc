@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» lst.map(|_| "zzz ").join_with(" ").trim()
+» lst.map(|_| "zzz ").map(|_| " ")
 ~~~
 # OUTPUT
 **UNDEFINED VARIABLE**
@@ -14,7 +14,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **repl:1:1:1:4:**
 ```roc
-lst.map(|_| "zzz ").join_with(" ").trim()
+lst.map(|_| "zzz ").map(|_| " ")
 ```
 ^^^
 # PROBLEMS

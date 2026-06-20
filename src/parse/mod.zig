@@ -250,7 +250,6 @@ fn expectFileParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
 
 test "method and static dispatch chains parse stack-safely" {
     try expectStatementParsesWithoutDiagnostics("Dict.from_list([(\"a\", 1), (\"b\", 2)]).get(\"a\")");
-    try expectStatementParsesWithoutDiagnostics("lst.map(|_| \"zzz \").join_with(\" \").trim()");
 }
 
 test "double question operator parses after static dispatch" {

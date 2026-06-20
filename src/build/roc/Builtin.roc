@@ -363,14 +363,6 @@ Builtin :: [].{
 		## ```
 		split_on : Str, Str -> List(Str)
 
-		## Combines a [List] of strings into a single string, with a separator
-		## string in between each.
-		## ```roc
-		## expect Str.join_with(["one", "two", "three"], ", ") == "one, two, three"
-		## expect Str.join_with(["1", "2", "3", "4"], ".") == "1.2.3.4"
-		## ```
-		join_with : List(Str), Str -> Str
-
 		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 

@@ -4397,14 +4397,6 @@ pub const Interpreter = struct {
                 const result = builtins.str.strSplitOn(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .str_join_with => blk: {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
             .str_with_capacity => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();

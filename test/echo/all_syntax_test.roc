@@ -298,13 +298,14 @@ early_return = |arg| {
 my_concat = Str.concat
 
 # Complex pipeline: chaining static dispatch methods with a lambda
-format_names : List(Str) -> Str
-format_names = |names|
-	names
-		.map(|name| name.trim())
-		->Str.join_with(", ")
-		->(|joined| {
-			if joined.is_empty() "No names provided" else "Names: ${joined}"
+count_words : List(Str) -> Str
+count_words = |words|
+	words
+		.map(|w| w.trim())
+		.keep_if(|w| !w.is_empty())
+		->(|filtered| {
+			count = filtered.len()
+			if count == 0 "No words" else "${count.to_str()} word(s)"
 		})
 
 # Tags can have multiple payloads
@@ -420,7 +421,7 @@ main! = |_args| {
 	print!(color_to_str(Blue))
 
 	# Complex pipeline with arrow lambda
-	print!(format_names(["  Alice ", "Bob  ", " Charlie"]))
+	print!(count_words(["  Alice ", "Bob  ", " Charlie"]))
 
 	# Type alias for extensible tag union
 	print!(letter_to_str(A))

@@ -291,11 +291,19 @@ is_repr_refcounted = |type_table, type_repr| {
 # String Utilities
 # =============================================================================
 
+join_with : List(Str), Str -> Str
+join_with = |strings, sep|
+    match strings {
+        [] => ""
+        [first, .. as rest] =>
+            rest.fold(first, |acc, s| "${acc}${sep}${s}")
+    }
+
 ## Replace all occurrences of a substring
 str_replace_all : Str, Str, Str -> Str
 str_replace_all = |s, from, to| {
 	parts = Str.split_on(s, from)
-	Str.join_with(parts, to)
+	join_with(parts, to)
 }
 
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"

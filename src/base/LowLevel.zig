@@ -29,7 +29,6 @@ pub const LowLevel = enum {
     str_from_utf8_lossy,
     str_from_utf8,
     str_split_on,
-    str_join_with,
     str_inspect,
 
     // Numeric to_str operations
@@ -704,8 +703,6 @@ pub const LowLevel = enum {
             .num_to_str,
             .list_with_capacity,
             => RcEffect.allocates(),
-
-            .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 

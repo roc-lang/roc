@@ -6,7 +6,7 @@ import pf.Stderr
 
 read_file_loop! = |file_name, acc| {
     match Stdin.line!() {
-        "end" => Ok(Str.join_with(acc, "\n"))
+        "end" => Ok(join_with(acc, "\n"))
         other => read_file_loop!(file_name, List.append(acc, other))
     }
 }
@@ -264,7 +264,7 @@ format_error = |code, result, index, possibilities| {
     expected = match possibilities {
         [one] => ": ${one}"
         _ => {
-            expected_str = possibilities.map(|e| "- ${e}")->Str.join_with("\n")
+            expected_str = possibilities.map(|e| "- ${e}")->join_with("\n")
             " either:\n${expected_str}"
         }
     }
@@ -689,3 +689,11 @@ parse! = |file, var $index, acc| {
         }
     }
 }
+
+join_with : List(Str), Str -> Str
+join_with = |strings, sep|
+    match strings {
+        [] => ""
+        [first, .. as rest] =>
+            rest.fold(first, |acc, s| "${acc}${sep}${s}")
+    }

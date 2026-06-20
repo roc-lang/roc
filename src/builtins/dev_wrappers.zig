@@ -93,7 +93,6 @@ const strTrim = str.strTrim;
 const strTrimStart = str.strTrimStart;
 const strTrimEnd = str.strTrimEnd;
 const strSplitOn = str.strSplitOn;
-const strJoinWithC = str.strJoinWithC;
 const reserveC = str.reserveC;
 const strReleaseExcessCapacity = str.strReleaseExcessCapacity;
 const withCapacityC = str.withCapacityC;
@@ -209,13 +208,6 @@ pub fn roc_builtins_str_split(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_ca
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     out.* = strSplitOn(a, b, roc_ops);
-}
-
-/// Wrapper: strJoinWithC(RocList, RocStr, *RocOps) -> RocStr
-pub fn roc_builtins_str_join_with(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, sep_bytes: ?[*]u8, sep_len: usize, sep_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
-    out.* = strJoinWithC(l, sep, roc_ops);
 }
 
 /// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr. The update

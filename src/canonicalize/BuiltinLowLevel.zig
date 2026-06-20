@@ -194,9 +194,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
         try low_level_map.put(str_split_on_ident, .str_split_on);
     }
-    if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
-        try low_level_map.put(str_join_with_ident, .str_join_with);
-    }
     if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
         try low_level_map.put(box_box_ident, .box_box);
     }

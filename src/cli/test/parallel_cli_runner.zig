@@ -431,7 +431,7 @@ const all_syntax_expected_stdout =
     \\"12345.0"
     \\"Foo with 42 and hello"
     \\"other color"
-    \\"Names: Alice, Bob, Charlie"
+    \\"3 word(s)"
     \\"A"
     \\"other letter"
     \\True
