@@ -6,18 +6,22 @@ const can = @import("can");
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
+/// Version tag for the checked-stage hoisted-root selection algorithm.
 pub const selection_algorithm_version: u64 = 1;
 
+/// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
     roots: []const SelectedHoistedRoot,
 };
 
+/// Body metadata for a root that extracts a value from a pattern match.
 pub const PatternExtraction = struct {
     base_expr: CIR.Expr.Idx,
     scrutinee_pattern: CIR.Pattern.Idx,
     result_pattern: CIR.Pattern.Idx,
 };
 
+/// Shape of the body used to evaluate a selected hoisted root.
 pub const Body = union(enum) {
     expr,
     pattern_extraction: PatternExtraction,
@@ -43,6 +47,7 @@ pub const SelectedHoistedRoot = struct {
     body: Body = .expr,
 };
 
+/// Clones a hoisted-root body into the caller's allocator when needed.
 pub fn cloneBody(allocator: Allocator, body: Body) Allocator.Error!Body {
     _ = allocator;
     return switch (body) {
@@ -51,6 +56,7 @@ pub fn cloneBody(allocator: Allocator, body: Body) Allocator.Error!Body {
     };
 }
 
+/// Releases allocator-owned data inside a hoisted-root body.
 pub fn deinitBody(allocator: Allocator, body: Body) void {
     _ = allocator;
     switch (body) {
@@ -59,6 +65,7 @@ pub fn deinitBody(allocator: Allocator, body: Body) void {
     }
 }
 
+/// Clones a selected hoisted root into the caller's allocator.
 pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Allocator.Error!SelectedHoistedRoot {
     return .{
         .expr = root.expr,
@@ -67,17 +74,20 @@ pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Alloca
     };
 }
 
+/// Releases allocator-owned data inside a selected hoisted root.
 pub fn deinitSelectedRoot(allocator: Allocator, root: *SelectedHoistedRoot) void {
     deinitBody(allocator, root.body);
     root.body = .expr;
 }
 
+/// Releases allocator-owned bodies for a slice of selected hoisted roots.
 pub fn deinitSelectedRootBodies(allocator: Allocator, roots: []const SelectedHoistedRoot) void {
     for (roots) |*root| {
         deinitBody(allocator, root.body);
     }
 }
 
+/// Releases a selected-root slice and all allocator-owned bodies in it.
 pub fn freeSelectedRootSlice(allocator: Allocator, roots: []const SelectedHoistedRoot) void {
     if (roots.len == 0) return;
     deinitSelectedRootBodies(allocator, roots);

@@ -599,6 +599,7 @@ pub const HoistedRootSource = struct {
     expr: CIR.Expr.Idx,
 };
 
+/// Source location of a checked root that must be published for later compiler stages.
 pub const RootSource = union(enum) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
@@ -5369,11 +5370,13 @@ pub const CheckedMatchBranch = struct {
     guard: ?CheckedExprId,
 };
 
+/// Kinds of checked sites that can be evaluated for comptime exhaustiveness.
 pub const CheckedComptimeSiteKind = enum {
     match,
     destructure,
 };
 
+/// Describes whether an exhaustiveness site remains pending, can run at runtime, or is handled at compile time.
 pub const ExhaustivenessResolutionPolicy = union(enum) {
     compile_time_replaced_by_root: ComptimeRootId,
     compile_time_only,
@@ -5381,11 +5384,13 @@ pub const ExhaustivenessResolutionPolicy = union(enum) {
     not_pending,
 };
 
+/// Checked owner that establishes the diagnostic and dependency context for an exhaustiveness site.
 pub const CheckedExhaustivenessSiteOwner = union(enum) {
     procedure_template: canonical.ProcedureTemplateRef,
     root: ComptimeRootId,
 };
 
+/// Checked exhaustiveness metadata preserved for comptime evaluation and diagnostics.
 pub const CheckedExhaustivenessSite = struct {
     id: CheckedExhaustivenessSiteId,
     kind: CheckedComptimeSiteKind,
@@ -5396,6 +5401,7 @@ pub const CheckedExhaustivenessSite = struct {
     policy: ExhaustivenessResolutionPolicy,
 };
 
+/// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
 pub const CheckedExhaustivenessSiteTable = struct {
     sites: []CheckedExhaustivenessSite = &.{},
 
@@ -6872,6 +6878,7 @@ pub const CheckedBodyStore = struct {
     }
 };
 
+/// Builder for `CheckedBodyStore` values that also records synthetic expression origins.
 pub const CheckedBodyStoreBuilder = struct {
     store: CheckedBodyStore = .{},
     synthetic_expr_origins: std.ArrayList(SyntheticExprOriginRecord) = .empty,

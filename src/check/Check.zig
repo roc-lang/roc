@@ -1188,6 +1188,7 @@ pub fn deinit(self: *Self) void {
     self.probe_var_pool_lens.deinit(self.gpa);
 }
 
+/// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
     return self.selected_hoisted_roots.items;
 }
@@ -2347,6 +2348,7 @@ fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
     }
     return false;
 }
+/// In debug builds, verifies that region and type arrays have matching lengths.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
         const region_nodes = self.regions.len();
