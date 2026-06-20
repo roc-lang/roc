@@ -968,7 +968,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, 0, null);
+        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null);
     }
 
     /// Specializations of one template family are deduplicated by the CURRENT
@@ -985,7 +985,6 @@ const Builder = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
-        comptime_exhaustiveness_depth: u32,
         requester: ?*InstGraph,
     ) Allocator.Error!Ast.DefId {
         const family = TemplateFamily.from(template_ref, source_fn_key);
@@ -1095,7 +1094,6 @@ const Builder = struct {
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
-        body_ctx.comptime_exhaustiveness_depth = comptime_exhaustiveness_depth;
         defer body_ctx.deinit();
         if (moduleBytesEqual(source_ty_view.key.bytes, view.key.bytes)) {
             try body_ctx.constrainKnownType(source_fn_ty, lower_fn_ty);
@@ -1825,7 +1823,6 @@ const Builder = struct {
                         .source_fn_ty = fn_template.source_fn_ty,
                         .source_fn_key = fn_template.source_fn_key,
                         .fn_ty = fn_template.mono_fn_ty,
-                        .comptime_exhaustiveness_depth = 0,
                     });
                 }
                 return reserved.fn_id;
@@ -1879,7 +1876,6 @@ const Builder = struct {
                 .source_fn_ty = fn_template.source_fn_ty,
                 .source_fn_key = fn_template.source_fn_key,
                 .fn_ty = fn_template.mono_fn_ty,
-                .comptime_exhaustiveness_depth = source_ctx.comptime_exhaustiveness_depth,
             });
         }
         return reserved.fn_id;
@@ -2037,7 +2033,6 @@ const Builder = struct {
                 request.source_fn_ty,
                 request.source_fn_key,
                 request.fn_ty,
-                request.comptime_exhaustiveness_depth,
                 graph,
             );
         }
@@ -6409,83 +6404,10 @@ const BodyContext = struct {
         comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
-        if (!self.matchContainsListPattern(match)) {
-            return try self.builder.program.addExpr(.{
-                .ty = output_ty,
-                .data = try self.lowerMatch(match, output, comptime_site),
-            });
-        }
-
-        const scrutinee = try self.lowerExpr(match.cond);
-        const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
-        const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
-        const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output, comptime_site);
-        return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
-            .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
-            .value = scrutinee,
-            .rest = rest,
-        } } });
-    }
-
-    fn matchContainsListPattern(self: *BodyContext, match: anytype) bool {
-        for (match.branches) |branch| {
-            for (branch.patterns) |pattern| {
-                if (self.patternContainsList(pattern.pattern)) return true;
-            }
-        }
-        return false;
-    }
-
-    fn patternContainsList(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
-        return switch (pattern.data) {
-            .list => true,
-            .as => |as| self.patternContainsList(as.pattern),
-            .applied_tag => |tag| blk: {
-                for (tag.args) |child| {
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |nominal| self.patternContainsList(nominal.backing_pattern),
-            .record_destructure => |destructs| blk: {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required => |child_pattern| child_pattern,
-                        .sub_pattern => |child_pattern| child_pattern,
-                        .rest => |child_pattern| child_pattern,
-                    };
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tuple => |items| blk: {
-                for (items) |child| {
-                    if (self.patternContainsList(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .str_interpolation => |str| blk: {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| {
-                        if (self.patternContainsList(capture)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .assign,
-            .pending,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => false,
-        };
+        return try self.builder.program.addExpr(.{
+            .ty = output_ty,
+            .data = try self.lowerMatch(match, output, comptime_site),
+        });
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -6559,172 +6481,6 @@ const BodyContext = struct {
             }
         }
         return false;
-    }
-
-    fn lowerListPatternMatchAlternatives(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        scrutinee_ty: Type.TypeId,
-        branches: []const checked.CheckedMatchBranch,
-        output: MatchOutput,
-        comptime_site: ?Ast.ComptimeSiteId,
-    ) Allocator.Error!Ast.ExprId {
-        const output_ty = self.matchOutputType(output);
-        var fallback = if (comptime_site) |site|
-            try self.comptimeExhaustivenessFailedExpr(output_ty, site)
-        else blk: {
-            const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
-            break :blk try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
-        };
-
-        var branch_index = branches.len;
-        var alternative_index = branchCount(branches);
-        while (branch_index > 0) {
-            branch_index -= 1;
-            const branch = branches[branch_index];
-            var pattern_index = branch.patterns.len;
-            while (pattern_index > 0) {
-                pattern_index -= 1;
-                alternative_index -= 1;
-                fallback = try self.lowerListPatternMatchAlternative(
-                    scrutinee,
-                    scrutinee_ty,
-                    branch.patterns[pattern_index],
-                    branch.guard,
-                    branch.value,
-                    fallback,
-                    output,
-                    comptime_site,
-                    alternative_index,
-                );
-            }
-        }
-
-        return fallback;
-    }
-
-    fn lowerListPatternMatchAlternative(
-        self: *BodyContext,
-        scrutinee: Ast.ExprId,
-        scrutinee_ty: Type.TypeId,
-        pattern: checked.CheckedMatchBranchPattern,
-        guard: ?checked.CheckedExprId,
-        body: checked.CheckedExprId,
-        fallback: Ast.ExprId,
-        output: MatchOutput,
-        comptime_site: ?Ast.ComptimeSiteId,
-        alternative_index: usize,
-    ) Allocator.Error!Ast.ExprId {
-        const output_ty = self.matchOutputType(output);
-        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern.pattern)];
-        switch (checked_pattern.data) {
-            .list => |list| {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-
-                try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-
-                var body_lowered = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
-                }
-
-                return try branch_ctx.applyListCheck(scrutinee, scrutinee_ty, list, body_lowered, fallback, output_ty);
-            },
-            .underscore => {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const branch_body = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    return try branch_ctx.builder.ifExpr(guard_cond, branch_body, fallback, output_ty);
-                }
-                return branch_body;
-            },
-            .pending,
-            .assign,
-            .as,
-            .applied_tag,
-            .nominal,
-            .record_destructure,
-            .tuple,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .str_interpolation,
-            .runtime_error,
-            => {
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                defer branch_ctx.deinit();
-                var saved = std.ArrayList(BinderRestore).empty;
-                defer saved.deinit(self.allocator);
-                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
-                defer branch_ctx.restoreBinders(saved.items);
-
-                try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
-
-                var checks = std.ArrayList(CollectedListPattern).empty;
-                defer checks.deinit(branch_ctx.allocator);
-                const literal_guards_start = branch_ctx.pattern_literal_guards.items.len;
-                const pat = try branch_ctx.lowerPatternAtTypeCollectingLists(pattern.pattern, scrutinee_ty, &checks);
-                const literal_guards = try branch_ctx.drainPatternLiteralGuards(literal_guards_start);
-                defer branch_ctx.allocator.free(literal_guards);
-
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-
-                var body_lowered = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    alternative_index,
-                    try branch_ctx.lowerMatchBranchBody(body, output),
-                );
-                if (guard) |guard_expr| {
-                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
-                    body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
-                }
-
-                body_lowered = try branch_ctx.applyPatternLiteralGuards(literal_guards, body_lowered, fallback, output_ty);
-
-                var i = checks.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    const entry = checks.items[i];
-                    const scrut_expr = try branch_ctx.builder.localExpr(entry.local, entry.ty);
-                    body_lowered = try branch_ctx.applyListCheck(scrut_expr, entry.ty, entry, body_lowered, fallback, output_ty);
-                }
-
-                const wildcard = try self.builder.program.addPat(.{ .ty = scrutinee_ty, .data = .wildcard });
-                const match_branches = [_]Ast.Branch{
-                    .{ .pat = pat, .body = body_lowered },
-                    .{ .pat = wildcard, .body = fallback },
-                };
-                return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .match_ = .{
-                    .scrutinee = scrutinee,
-                    .branches = try self.builder.program.addBranchSpan(&match_branches),
-                } } });
-            },
-        }
     }
 
     fn listPatternCondition(

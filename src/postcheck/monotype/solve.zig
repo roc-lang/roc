@@ -30,7 +30,6 @@ pub const DeferredTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
-    comptime_exhaustiveness_depth: u32,
 };
 
 /// Identity of a node in a specialization's instantiation graph.
