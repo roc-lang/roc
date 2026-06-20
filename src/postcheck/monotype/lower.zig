@@ -3541,10 +3541,11 @@ const BodyContext = struct {
 
     fn selectedHoistedConstEntry(
         self: *BodyContext,
-        selected: checked.SelectedHoistedConstResolvedRef,
+        selected: checked.SelectedHoistedConstUse,
     ) checked.HoistedConstEntry {
         const const_ref = selected.const_use.const_ref;
-        if (!std.meta.eql(const_ref.artifact.bytes, self.view.key.bytes)) {
+        const module_id = checked.constModuleId(const_ref);
+        if (!moduleBytesEqual(module_id.bytes, self.view.key.bytes)) {
             Common.invariant("selected hoisted local const ref referenced a different checked module");
         }
         const hoisted = switch (const_ref.owner) {
@@ -3560,7 +3561,7 @@ const BodyContext = struct {
 
     fn selectedHoistedConstMonoType(
         self: *BodyContext,
-        selected: checked.SelectedHoistedConstResolvedRef,
+        selected: checked.SelectedHoistedConstUse,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!?Type.TypeId {
         const entry = self.selectedHoistedConstEntry(selected);
@@ -3572,7 +3573,7 @@ const BodyContext = struct {
 
     fn restoreSelectedHoistedConstAtType(
         self: *BodyContext,
-        selected: checked.SelectedHoistedConstResolvedRef,
+        selected: checked.SelectedHoistedConstUse,
         ty: Type.TypeId,
     ) Allocator.Error!?Ast.ExprId {
         const entry = self.selectedHoistedConstEntry(selected);

@@ -567,13 +567,13 @@ alias roots union-find representatives for concrete structures.
 ## Cache Boundary
 
 The checked module cache is the only checked cache boundary in this design.
-Checked module cache entries are trusted compiler-owned artifacts, not
+Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header, format version,
 payload hash, key, serialized layout, and ordinary binary decoding. They must
-not rerun semantic validation, reselect hoisted roots, reconstruct checked
-facts, or walk checked expressions to prove that cached checked data is still
-maximal. Correctness belongs to the producer path that writes the cache entry,
-and invalidation belongs to the cache key and explicit cache/selection format
+not rerun checked validation, reselect hoisted roots, reconstruct checked data,
+or walk checked expressions to prove that cached checked data is still complete.
+Correctness belongs to the producer path that writes the cache entry, and
+invalidation belongs to the cache key and explicit cache/selection format
 versions.
 
 The checked module cache id is target-independent:
@@ -624,7 +624,7 @@ selected, or how checked compile-time values are serialized, the checked module
 cache format or the specific checked-data selection version must be bumped. A
 cache hit with a matching key and version is consumed as already-checked output;
 the compiler must not pay an extra pass to rediscover whether the cached output
-is semantically maximal.
+is complete for the checked module.
 
 ## Checked Boundary
 
@@ -730,12 +730,12 @@ matching checked nodes.
 
 Hoistability is computed while checking expressions, as part of the existing
 recursive checking work that already determines types, resolved references, and
-effect information. Checking may return temporary hoistability facts from
-`checkExpr` and keep temporary binding facts in the active lexical scope, but it
-must not add permanent hoistability summaries to every checked expression. The
-checked artifact stores only selected hoisted roots plus sparse lookup indexes
-needed by later lowering, such as checked-expression id to hoisted-root id and
-selected local-binding id to hoisted-root id.
+effect data. Checking may return temporary hoistability data from `checkExpr`
+and keep temporary binding data in the active lexical scope, but it must not add
+permanent hoistability summaries to every checked expression. The checked module
+stores only selected hoisted roots plus sparse lookup indexes needed by later
+lowering, such as checked-expression id to hoisted-root id and selected
+local-binding id to hoisted-root id.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -755,19 +755,19 @@ so nested hoisted roots would add metadata and scheduling work without removing
 runtime work. However, ordinary top-level constants can still depend on selected
 hoisted constants indirectly by calling pure checked functions whose bodies
 restore selected hoisted locals. Therefore same-module compile-time roots are
-published as one dependency-sorted request stream, not as permanently separated
+emitted as one dependency-sorted request stream, not as permanently separated
 top-level and hoisted groups.
 
 Canonicalization's top-level dependency order remains an input for ordinary
 top-level constants, and checking should prefer to emit selected hoisted roots
-in dependency-first order as it proves and selects them. The published order is
+in dependency-first order as it proves and selects them. The request order is
 then computed from explicit checked references across all same-module
 compile-time roots: ordinary top-level constants, selected hoisted constants,
-callable eval roots, and literal conversion roots. Publication may build
+callable eval roots, and literal conversion roots. Sorting may build
 temporary dependency edges while sorting, but it must discard those edges before
-the checked artifact is finalized. The durable artifact stores only the roots,
-the sorted request stream, stored `ConstStore` payloads, and sparse lookup
-indexes.
+the checked module is finalized. The durable checked module data stores only the
+roots, the sorted request stream, stored `ConstStore` payloads, and sparse
+lookup indexes.
 
 A checked module must not permanently store a hoisted-root dependency graph or
 per-expression dependency metadata. The durable checked data is the compile-time
@@ -775,7 +775,7 @@ roots, their sorted compile-time request order, their `ConstStore` payloads, and
 sparse root lookup indexes.
 
 Checked module caches persist that same sorted selected-root list. On cache
-miss, checking computes the list once from explicit checked facts while it is
+miss, checking computes the list once from explicit checked data while it is
 already traversing expressions. On cache hit, the cached list is decoded and
 used directly after normal cache header, version, key, payload, and binary-shape
 checks. Cache reads must not run a second hoistability analysis or validate
@@ -787,7 +787,7 @@ That availability check is retained for the generic compile-time pipeline,
 which also handles literal conversions, expects, callable roots, imported
 constants, and platform-required values. It is not a scheduling graph for
 hoisted constants, and it must not require storing dependency edges in the
-checked artifact.
+checked module.
 
 Hoisted-root scheduling is computed after checking has selected the sparse
 hoisted roots, because only checked data can distinguish runtime captures,
@@ -801,11 +801,11 @@ expression is evaluated exactly once by the compile-time finalizer. Nested uses
 of other already-sorted compile-time constants may still restore their stored
 `ConstStore` values.
 
-Hoisted roots use the same compile-time constant semantics as ordinary top-level
+Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
 failure reported at the hoisted expression's original source region. If Roc ever
 needs lazy-runtime-preserving hoists, that must be a separate checked root policy
-with explicit totality and failure semantics; it must not be implemented as a
+with explicit totality and failure behavior; it must not be implemented as a
 best-effort variant of top-level constant hoisting.
 
 Imported checked modules must contain every checked procedure template and checked

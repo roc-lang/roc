@@ -9158,8 +9158,8 @@ pub const PlatformRequiredProcedureResolvedRef = struct {
     procedure: ProcedureUseTemplate,
 };
 
-/// Public `SelectedHoistedConstResolvedRef` declaration.
-pub const SelectedHoistedConstResolvedRef = struct {
+/// Public `SelectedHoistedConstUse` declaration.
+pub const SelectedHoistedConstUse = struct {
     local: LocalBindingRef,
     const_use: ConstUseTemplate,
 };
@@ -9171,7 +9171,7 @@ pub const ResolvedValueRef = union(enum) {
     local_mutable_version: LocalBindingRef,
     pattern_binder: LocalBindingRef,
     local_proc: LocalProcedureBinding,
-    selected_hoisted_const: SelectedHoistedConstResolvedRef,
+    selected_hoisted_const: SelectedHoistedConstUse,
 
     top_level_const: ConstUseTemplate,
     imported_const: ConstUseTemplate,
@@ -9432,7 +9432,7 @@ fn appendSyntheticLocalLookupRefs(
                 const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
                 try records.append(allocator, .{
                     .expr = expr.id,
-                    .ref = selectedHoistedConstResolvedRef(hoisted, .{ .binder = binder }),
+                    .ref = selectedHoistedConstUse(hoisted, .{ .binder = binder }),
                     .checked_ty = expr.ty,
                     .scope_depth = 0,
                 });
@@ -9691,7 +9691,7 @@ fn categorizeLocalValueRef(
     };
 
     if (hoisted_constants.lookupByPattern(checked_pattern)) |hoisted| {
-        return selectedHoistedConstResolvedRef(hoisted, .{ .binder = binder });
+        return selectedHoistedConstUse(hoisted, .{ .binder = binder });
     }
 
     if (local_pattern_roles.isLambdaArg(pattern)) {
@@ -9719,7 +9719,7 @@ fn categorizeLocalValueRef(
     unreachable;
 }
 
-fn selectedHoistedConstResolvedRef(
+fn selectedHoistedConstUse(
     entry: HoistedConstEntry,
     local: LocalBindingRef,
 ) ResolvedValueRef {
