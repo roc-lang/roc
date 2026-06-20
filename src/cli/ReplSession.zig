@@ -272,26 +272,12 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(self.allocator);
 
-    // start setup
-    const definitions = try self.definitionsSource();
-    defer self.allocator.free(definitions);
-
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
-    defer self.allocator.free(source);
-
-    var ret = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
-        self.allocator,
-        .module,
-        source,
-        &.{},
-        self.prePublishedBuiltin(),
-    );
+    var ret = try self.initParsedResources();
     defer ret.deinit(self.allocator);
     const env = ret.module_env;
 
     var tw = try env.initTypeWriter();
     defer tw.deinit();
-    // end setup
 
     for (self.definitions.items.items) |item| {
         switch (item.kind) {
@@ -317,6 +303,22 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
     }
 
     return try output.toOwnedSlice(self.allocator);
+}
+
+fn initParsedResources(self: *ReplSession) anyerror!eval.test_helpers.ParsedResources {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
+    defer self.allocator.free(source);
+
+    return try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        self.prePublishedBuiltin(),
+    );
 }
 
 fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
