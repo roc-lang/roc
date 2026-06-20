@@ -82,8 +82,9 @@ Ordered roughly by how much of the design they block.
    and closure counters). Scope and keyed-row counters are real for active
    branch/row churn, and closure counters now track descriptor-stream ownership
    of retained event transforms, state equality thunks, each key/item/row thunks,
-   active row-scope value cells, and direct map/map2 signal thunks. Leaf sink
-   patch counts now track changed fields on non-structural updates, while
+   host-bound signal bindings, active row-scope value cells, and direct
+   map/map2 signal thunks. Leaf sink patch counts now track changed fields on
+   non-structural updates, while
    structural updates count actual creates, child moves, changed fields, and
    event bindings rather than a full
    reset/recreate. Source-level equal-output pruning suppresses downstream work,
@@ -148,11 +149,14 @@ retained typed value cells owned by the host.
   the changed ones. The active host now invokes retained reducer, row,
   row-owned key equality, row-owned item equality, `Map`/`Map2` transform, and
   `Map`/`Map2`/`Combine` output equality thunks through the generated ABI. This
-  answers the FFI ownership/call-shape question for the current bridge, but the
-  host still evaluates retained `SignalExpr` trees over internal `NodeValue` and
-  still rebuilds descriptor streams for structural changes. Next action: replace
-  those `NodeValue` payloads with opaque typed value cells owned by explicit
-  retained edge thunks. If
+  answers the FFI ownership/call-shape question for the current bridge. Active
+  descriptors now bind `SignalExpr.Ref` to host node ids once and retain a
+  host-owned signal expression, so evaluation no longer depends on a raw ABI
+  `SignalExpr` plus a parallel source-id cursor. The host still evaluates those
+  bound expressions over internal `NodeValue` and still rebuilds descriptor
+  streams for structural changes. Next action: replace those `NodeValue`
+  payloads with opaque typed value cells owned by explicit retained edge thunks.
+  If
   per-call FFI becomes too costly at that point, keep a **batched** recompute
   shape as the permanent protocol rather than one-call-per-node.
 - **G2 — Construction-site identity under dynamic shape.** This is the riskiest
@@ -566,14 +570,16 @@ updates prune through state-owned data instead of recovering equality from the
 active descriptor stream. Dirty signal sink and structural-site caches now also
 retain the equality thunk beside the cached bridge value, so dirty pruning uses
 cache-owned edge data rather than looking equality back up through the retained
-`SignalExpr`. Active source state now stores its current bridge value and
-retained equality thunk in a single host value-cell record, matching the shape
-needed for the eventual opaque typed value carrier; signal caches use that same
-value-cell record now that every signal output edge has equality. Active keyed
-row scopes also use that value-cell record for their retained key and latest
-item values. Active event records now own reducer transforms after stream
-activation, so dispatch no longer reads reducer callables from
-`active_stream.events`.
+`SignalExpr`. Active descriptor streams now bind `SignalExpr.Ref` to explicit
+host node ids and retain host-owned signal expression trees, removing the older
+parallel source-id cursor from evaluation. Active source state now stores its
+current bridge value and retained equality thunk in a single host value-cell
+record, matching the shape needed for the eventual opaque typed value carrier;
+signal caches use that same value-cell record now that every signal output edge
+has equality. Active keyed row scopes also use that value-cell record for their
+retained key and latest item values. Active event records now own reducer
+transforms after stream activation, so dispatch no longer reads reducer
+callables from `active_stream.events`.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned
