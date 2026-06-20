@@ -13,12 +13,9 @@ const LirProgram = core.Program;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
 
-/// Errors that can occur while computing tag reachability facts.
-pub const Error = Allocator.Error;
-
 /// Analyze possible tag values and bypass switches that cannot take some of
 /// their outgoing edges.
-pub fn run(result: *LirProgram.Result) Error!void {
+pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     var pass = try Pass.init(result);
     defer pass.deinit();
     try pass.run();
@@ -64,7 +61,7 @@ const TagSet = struct {
         return true;
     }
 
-    fn add(self: *TagSet, allocator: Allocator, value: u16) Error!bool {
+    fn add(self: *TagSet, allocator: Allocator, value: u16) Allocator.Error!bool {
         if (self.all) return false;
         for (self.values.items) |existing| {
             if (existing == value) return false;
@@ -73,7 +70,7 @@ const TagSet = struct {
         return true;
     }
 
-    fn mergeFrom(self: *TagSet, allocator: Allocator, other: *const TagSet) Error!bool {
+    fn mergeFrom(self: *TagSet, allocator: Allocator, other: *const TagSet) Allocator.Error!bool {
         if (self.all) return false;
         if (other.all) return self.markAll(allocator);
         var changed = false;
@@ -129,7 +126,7 @@ const ValueInfo = struct {
         return changed;
     }
 
-    fn mergeFrom(self: *ValueInfo, allocator: Allocator, other: *const ValueInfo) Error!bool {
+    fn mergeFrom(self: *ValueInfo, allocator: Allocator, other: *const ValueInfo) Allocator.Error!bool {
         if (self.tags.all) return false;
         if (other.tags.all) return self.markAll(allocator);
         var changed = try self.tags.mergeFrom(allocator, &other.tags);
@@ -142,7 +139,7 @@ const ValueInfo = struct {
         return changed;
     }
 
-    fn mergePayloadTags(self: *ValueInfo, allocator: Allocator, slot: PayloadSlot, tags: *const TagSet) Error!bool {
+    fn mergePayloadTags(self: *ValueInfo, allocator: Allocator, slot: PayloadSlot, tags: *const TagSet) Allocator.Error!bool {
         if (self.tags.all) return false;
         for (self.payloads.items) |*payload| {
             if (payload.slot.variant == slot.variant and payload.slot.payload == slot.payload) {
@@ -153,7 +150,7 @@ const ValueInfo = struct {
         return self.payloads.items[self.payloads.items.len - 1].tags.mergeFrom(allocator, tags);
     }
 
-    fn mergeFieldTags(self: *ValueInfo, allocator: Allocator, field_index: u16, tags: *const TagSet) Error!bool {
+    fn mergeFieldTags(self: *ValueInfo, allocator: Allocator, field_index: u16, tags: *const TagSet) Allocator.Error!bool {
         if (self.tags.all) return false;
         for (self.fields.items) |*field| {
             if (field.field == field_index) {
@@ -192,7 +189,7 @@ const Pass = struct {
     redirects: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
     use_counts: []u32,
 
-    fn init(result: *LirProgram.Result) Error!Pass {
+    fn init(result: *LirProgram.Result) Allocator.Error!Pass {
         const allocator = result.store.allocator;
         const local_info = try allocator.alloc(ValueInfo, result.store.locals.items.len);
         errdefer allocator.free(local_info);
@@ -230,7 +227,7 @@ const Pass = struct {
         self.allocator.free(self.local_info);
     }
 
-    fn run(self: *Pass) Error!void {
+    fn run(self: *Pass) Allocator.Error!void {
         try self.seedBoundaries();
         try self.analyze();
         try self.collectUseCounts();
@@ -239,7 +236,7 @@ const Pass = struct {
         try self.patchRedirects();
     }
 
-    fn seedBoundaries(self: *Pass) Error!void {
+    fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (self.store.proc_specs.items, 0..) |proc, proc_index| {
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
@@ -250,7 +247,7 @@ const Pass = struct {
         }
     }
 
-    fn analyze(self: *Pass) Error!void {
+    fn analyze(self: *Pass) Allocator.Error!void {
         var changed = true;
         while (changed) {
             changed = false;
@@ -263,7 +260,7 @@ const Pass = struct {
         }
     }
 
-    fn analyzeProc(self: *Pass, proc_id: LIR.LirProcSpecId, body: LIR.CFStmtId) Error!bool {
+    fn analyzeProc(self: *Pass, proc_id: LIR.LirProcSpecId, body: LIR.CFStmtId) Allocator.Error!bool {
         var changed = false;
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
@@ -278,7 +275,7 @@ const Pass = struct {
         return changed;
     }
 
-    fn analyzeStmt(self: *Pass, proc_id: LIR.LirProcSpecId, stmt: LIR.CFStmt) Error!bool {
+    fn analyzeStmt(self: *Pass, proc_id: LIR.LirProcSpecId, stmt: LIR.CFStmt) Allocator.Error!bool {
         var changed = false;
         switch (stmt) {
             .init_uninitialized => |s| {
@@ -383,7 +380,7 @@ const Pass = struct {
         return changed;
     }
 
-    fn mergeRef(self: *Pass, target: LIR.LocalId, op: LIR.RefOp) Error!bool {
+    fn mergeRef(self: *Pass, target: LIR.LocalId, op: LIR.RefOp) Allocator.Error!bool {
         return switch (op) {
             .local => |source| self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(source)),
             .nominal => |ref| self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(ref.backing_ref)),
@@ -401,14 +398,14 @@ const Pass = struct {
         };
     }
 
-    fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u16) Error!bool {
+    fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u16) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         const tags = source_info.fieldTags(field_index) orelse return false;
         return self.localInfoMut(target).tags.mergeFrom(self.allocator, tags);
     }
 
-    fn mergePayloadRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, slot: PayloadSlot) Error!bool {
+    fn mergePayloadRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, slot: PayloadSlot) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         if (!source_info.tags.contains(slot.variant)) return false;
@@ -416,14 +413,14 @@ const Pass = struct {
         return self.localInfoMut(target).tags.mergeFrom(self.allocator, tags);
     }
 
-    fn collectUseCounts(self: *Pass) Error!void {
+    fn collectUseCounts(self: *Pass) Allocator.Error!void {
         @memset(self.use_counts, 0);
         for (self.store.cf_stmts.items) |stmt| {
             try self.countStmtUses(stmt);
         }
     }
 
-    fn countStmtUses(self: *Pass, stmt: LIR.CFStmt) Error!void {
+    fn countStmtUses(self: *Pass, stmt: LIR.CFStmt) Allocator.Error!void {
         switch (stmt) {
             .assign_ref => |s| {
                 switch (s.op) {
@@ -471,7 +468,7 @@ const Pass = struct {
         }
     }
 
-    fn rewriteSwitches(self: *Pass) Error!void {
+    fn rewriteSwitches(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
@@ -518,7 +515,7 @@ const Pass = struct {
         return switch_stmt.default_branch;
     }
 
-    fn removeDeadDiscriminantReads(self: *Pass) Error!void {
+    fn removeDeadDiscriminantReads(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
@@ -542,7 +539,7 @@ const Pass = struct {
         }
     }
 
-    fn patchRedirects(self: *Pass) Error!void {
+    fn patchRedirects(self: *Pass) Allocator.Error!void {
         if (self.redirects.count() == 0) return;
 
         for (self.store.proc_specs.items) |*proc| {
@@ -632,7 +629,7 @@ const Pass = struct {
         return &self.local_info[@intFromEnum(local)];
     }
 
-    fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Error!void {
+    fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
         try self.stack.append(self.allocator, stmt);
     }
 
