@@ -16616,6 +16616,17 @@ fn appendRecursiveNominalTestType(
         args[0] = arg_root;
         break :blk args;
     } else &.{};
+    const source_decl: ?u32 = null;
+    const declaration_id: CheckedNominalDeclarationId, const should_append_declaration = if (store.nominalDeclaration(.{
+        .module_name = module_name,
+        .type_name = type_name,
+        .source_decl = source_decl,
+    })) |declaration| blk: {
+        if (declaration.formalArgs(store).len != nominal_args.len) {
+            checkedArtifactInvariant("synthetic recursive nominal test declaration arity mismatch", .{});
+        }
+        break :blk .{ declaration.id, false };
+    } else .{ @enumFromInt(@as(u32, @intCast(store.nominal_declarations.items.len))), true };
 
     try store.fillSyntheticTypeRoot(allocator, backing_root, .{ .tag_union = .{
         .tags = tags,
@@ -16624,11 +16635,11 @@ fn appendRecursiveNominalTestType(
     try store.fillSyntheticTypeRoot(allocator, nominal_root, .{ .nominal = .{
         .name = type_name,
         .origin_module = module_name,
-        .source_decl = 0,
+        .source_decl = source_decl,
         .builtin = null,
         .is_opaque = false,
         .backing = backing_root,
-        .representation = .{ .local_declaration = @enumFromInt(0) },
+        .representation = .{ .local_declaration = declaration_id },
         .args = nominal_args,
     } });
 
@@ -16639,6 +16650,9 @@ fn appendRecursiveNominalTestType(
     const nominal_key = try checkedTypePayloadKey(allocator, names, store, store.payload(nominal_root));
     store.roots.items[@intFromEnum(nominal_root)].key = nominal_key;
     try store.ensureSyntheticSchemeForRoot(allocator, nominal_root, nominal_key);
+    if (should_append_declaration) {
+        try appendCheckedNominalDeclarationFromPayload(allocator, store, nominal_root);
+    }
 
     return .{ .nominal = nominal_root, .backing = backing_root };
 }
