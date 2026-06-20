@@ -12609,11 +12609,12 @@ fn ensureCustomInterpolationPartsChecked(
         }
         unreachable;
     };
-    const metadata = &self.interpolation_constraint_metadata.items[@intFromEnum(metadata_id)];
-    if (metadata.checked_parts) return;
-    metadata.checked_parts = true;
+    const metadata_index = @intFromEnum(metadata_id);
+    if (self.interpolation_constraint_metadata.items[metadata_index].checked_parts) return;
+    self.interpolation_constraint_metadata.items[metadata_index].checked_parts = true;
 
-    const expr_idx = metadata.expr_idx;
+    const expr_idx = self.interpolation_constraint_metadata.items[metadata_index].expr_idx;
+    const item_var = self.interpolation_constraint_metadata.items[metadata_index].item_var;
     const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
     const parts = self.cir.store.sliceExpr(interpolation.parts);
     std.debug.assert(parts.len % 2 == 0);
@@ -12622,7 +12623,7 @@ fn ensureCustomInterpolationPartsChecked(
     var part_i: usize = 0;
     while (part_i < parts.len) : (part_i += 2) {
         const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
-        const result = try self.unify(metadata.item_var, interpolated_var, env);
+        const result = try self.unify(item_var, interpolated_var, env);
         did_err = did_err or result.isProblem() or self.types.resolveVar(interpolated_var).desc.content == .err;
     }
 
