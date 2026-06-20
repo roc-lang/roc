@@ -769,6 +769,30 @@ const HostRenderBoolSink = struct {
     field: RenderBoolField,
 };
 
+const HostActiveTextSignalSinkKind = enum {
+    text_node,
+    text_attr,
+};
+
+const HostActiveTextSignalSink = struct {
+    kind: HostActiveTextSignalSinkKind,
+    index: usize,
+};
+
+const HostActiveBoolSignalSink = struct {
+    index: usize,
+};
+
+const HostActiveStructuralSignalKind = enum {
+    when,
+    each,
+};
+
+const HostActiveStructuralSignal = struct {
+    kind: HostActiveStructuralSignalKind,
+    index: usize,
+};
+
 const RecomputeApplyOutcome = struct {
     structural_render_required: bool,
 };
@@ -1250,6 +1274,9 @@ const HostEnv = struct {
     node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
     dom_identities: std.ArrayListUnmanaged(HostDomIdentity) = .empty,
     active_stream: HostNodeDescriptorStream = .{},
+    active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
+    active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
+    active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
     render_text_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderTextSink)) = .empty,
     render_bool_sink_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostRenderBoolSink)) = .empty,
     render_structural_signals: std.ArrayListUnmanaged(bool) = .empty,
@@ -1501,6 +1528,108 @@ const HostEnv = struct {
             slot.deinit(self.roc_host.?, &self.pending_roc_metrics);
         }
         self.signal_cache.items.len = 0;
+    }
+
+    fn clearActiveSignalRoutes(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.active_text_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_text_signal_routes.items.len = 0;
+
+        for (self.active_bool_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_bool_signal_routes.items.len = 0;
+
+        for (self.active_structural_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_structural_signal_routes.items.len = 0;
+    }
+
+    fn ensureActiveTextSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
+        if (source_node_id >= self.node_identities.items.len) failHost("active text signal route referenced an unknown source node");
+        const allocator = self.gpa.allocator();
+        const route_index: usize = @intCast(source_node_id);
+        while (self.active_text_signal_routes.items.len <= route_index) {
+            self.active_text_signal_routes.append(allocator, .empty) catch std.process.exit(1);
+        }
+        return &self.active_text_signal_routes.items[route_index];
+    }
+
+    fn ensureActiveBoolSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
+        if (source_node_id >= self.node_identities.items.len) failHost("active bool signal route referenced an unknown source node");
+        const allocator = self.gpa.allocator();
+        const route_index: usize = @intCast(source_node_id);
+        while (self.active_bool_signal_routes.items.len <= route_index) {
+            self.active_bool_signal_routes.append(allocator, .empty) catch std.process.exit(1);
+        }
+        return &self.active_bool_signal_routes.items[route_index];
+    }
+
+    fn ensureActiveStructuralSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
+        if (source_node_id >= self.node_identities.items.len) failHost("active structural signal route referenced an unknown source node");
+        const allocator = self.gpa.allocator();
+        const route_index: usize = @intCast(source_node_id);
+        while (self.active_structural_signal_routes.items.len <= route_index) {
+            self.active_structural_signal_routes.append(allocator, .empty) catch std.process.exit(1);
+        }
+        return &self.active_structural_signal_routes.items[route_index];
+    }
+
+    fn rebuildActiveSignalRoutesFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
+        const allocator = self.gpa.allocator();
+        self.clearActiveSignalRoutes();
+
+        for (stream.signal_text_nodes.items, 0..) |desc, index| {
+            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
+                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
+                self.ensureActiveTextSignalRoute(source_node_id).append(allocator, .{
+                    .kind = .text_node,
+                    .index = index,
+                }) catch std.process.exit(1);
+            }
+        }
+
+        for (stream.signal_text_attrs.items, 0..) |desc, index| {
+            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
+                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
+                self.ensureActiveTextSignalRoute(source_node_id).append(allocator, .{
+                    .kind = .text_attr,
+                    .index = index,
+                }) catch std.process.exit(1);
+            }
+        }
+
+        for (stream.signal_bool_attrs.items, 0..) |desc, index| {
+            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
+                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
+                self.ensureActiveBoolSignalRoute(source_node_id).append(allocator, .{
+                    .index = index,
+                }) catch std.process.exit(1);
+            }
+        }
+
+        for (stream.whens.items, 0..) |desc, index| {
+            for (desc.condition.source_node_ids, 0..) |source_node_id, source_index| {
+                if (u64SliceContains(desc.condition.source_node_ids[0..source_index], source_node_id)) continue;
+                self.ensureActiveStructuralSignalRoute(source_node_id).append(allocator, .{
+                    .kind = .when,
+                    .index = index,
+                }) catch std.process.exit(1);
+            }
+        }
+
+        for (stream.eaches.items, 0..) |desc, index| {
+            for (desc.items.source_node_ids, 0..) |source_node_id, source_index| {
+                if (u64SliceContains(desc.items.source_node_ids[0..source_index], source_node_id)) continue;
+                self.ensureActiveStructuralSignalRoute(source_node_id).append(allocator, .{
+                    .kind = .each,
+                    .index = index,
+                }) catch std.process.exit(1);
+            }
+        }
     }
 
     fn clearRenderSinkRoutes(self: *HostEnv) void {
@@ -2760,6 +2889,10 @@ const HostEnv = struct {
         self.scopes.deinit(allocator);
         self.node_identities.deinit(allocator);
         self.dom_identities.deinit(allocator);
+        self.clearActiveSignalRoutes();
+        self.active_text_signal_routes.deinit(allocator);
+        self.active_bool_signal_routes.deinit(allocator);
+        self.active_structural_signal_routes.deinit(allocator);
         self.clearRenderSinkRoutes();
         self.render_text_sink_routes.deinit(allocator);
         self.render_bool_sink_routes.deinit(allocator);
@@ -3545,15 +3678,24 @@ fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
 }
 
 fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) bool {
-    for (host.active_stream.whens.items) |*desc| {
-        if (!sourceNodeIdsIntersect(desc.condition.source_node_ids, dirty_source_node_ids)) continue;
-        const value = evalHostSignalBinding(host, roc_host, &desc.condition);
-        if (updateDirtySignalCache(host, roc_host, &desc.cached_value, value)) return true;
-    }
-    for (host.active_stream.eaches.items) |*desc| {
-        if (!sourceNodeIdsIntersect(desc.items.source_node_ids, dirty_source_node_ids)) continue;
-        const value = evalHostSignalBinding(host, roc_host, &desc.items);
-        if (updateDirtySignalCache(host, roc_host, &desc.cached_value, value)) return true;
+    for (dirty_source_node_ids) |source_node_id| {
+        const route_index: usize = @intCast(source_node_id);
+        if (route_index >= host.active_structural_signal_routes.items.len) continue;
+
+        for (host.active_structural_signal_routes.items[route_index].items) |route| {
+            switch (route.kind) {
+                .when => {
+                    const desc = &host.active_stream.whens.items[route.index];
+                    const value = evalHostSignalBinding(host, roc_host, &desc.condition);
+                    if (updateDirtySignalCache(host, roc_host, &desc.cached_value, value)) return true;
+                },
+                .each => {
+                    const desc = &host.active_stream.eaches.items[route.index];
+                    const value = evalHostSignalBinding(host, roc_host, &desc.items);
+                    if (updateDirtySignalCache(host, roc_host, &desc.cached_value, value)) return true;
+                },
+            }
+        }
     }
     return false;
 }
@@ -3561,24 +3703,34 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
 fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) CommandCounts {
     var counts: CommandCounts = .{};
 
-    for (host.active_stream.signal_text_nodes.items) |*desc| {
-        if (!sourceNodeIdsIntersect(desc.signal.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value)) {
-            counts.addTextField(.text);
+    for (dirty_source_node_ids) |source_node_id| {
+        const route_index: usize = @intCast(source_node_id);
+        if (route_index < host.active_text_signal_routes.items.len) {
+            for (host.active_text_signal_routes.items[route_index].items) |route| {
+                switch (route.kind) {
+                    .text_node => {
+                        const desc = &host.active_stream.signal_text_nodes.items[route.index];
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value)) {
+                            counts.addTextField(.text);
+                        }
+                    },
+                    .text_attr => {
+                        const desc = &host.active_stream.signal_text_attrs.items[route.index];
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+                            counts.addTextField(desc.field);
+                        }
+                    },
+                }
+            }
         }
-    }
 
-    for (host.active_stream.signal_text_attrs.items) |*desc| {
-        if (!sourceNodeIdsIntersect(desc.signal.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
-            counts.addTextField(desc.field);
-        }
-    }
-
-    for (host.active_stream.signal_bool_attrs.items) |*desc| {
-        if (!sourceNodeIdsIntersect(desc.signal.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
-            counts.addBoolField(desc.field);
+        if (route_index < host.active_bool_signal_routes.items.len) {
+            for (host.active_bool_signal_routes.items[route_index].items) |route| {
+                const desc = &host.active_stream.signal_bool_attrs.items[route.index];
+                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+                    counts.addBoolField(desc.field);
+                }
+            }
         }
     }
 
@@ -3709,6 +3861,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         counts.addEventBinding();
     }
 
+    host.rebuildActiveSignalRoutesFromStream(stream);
     host.render_metrics.patches_emitted += counts.total;
     return counts;
 }
@@ -3843,6 +3996,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
 
     applyStructuralEventBindings(host, stream, seen, &counts);
 
+    host.rebuildActiveSignalRoutesFromStream(stream);
     host.render_metrics.patches_emitted += counts.total;
     return counts;
 }

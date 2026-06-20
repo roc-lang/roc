@@ -58,15 +58,16 @@ Ordered roughly by how much of the design they block.
    runtime crash.
 
 2. **Minimal patch emission is partial.** For state changes that do not feed an
-   active `Ui.when` condition or `Ui.each` item list, dispatch now reuses the
-   retained descriptor stream and applies only dirty signal-backed text/value/
-   checked/disabled sinks. If the dirty source feeds a structural site, the host
-   rebuilds the active descriptor stream, then patches DOM shape from explicit
-   host-owned DOM identities: removed branch/row DOM is detached, surviving keyed
-   row DOM is moved/reused, and the simulated DOM is not reset. Event bindings are
-   compared against the next explicit event descriptor stream, so unchanged
-   element/kind/event-id slots are left alone and only added, removed, or shifted
-   bindings are patched. `Ui.each` now also retains an item equality thunk, and
+   active `Ui.when` condition or `Ui.each` item list, dispatch now routes the
+   dirty source node id to only the retained signal-backed text/value/checked/
+   disabled sinks that depend on it. If the dirty source feeds a structural site,
+   the host routes to that `when`/`each` site, rebuilds the active descriptor
+   stream, then patches DOM shape from explicit host-owned DOM identities:
+   removed branch/row DOM is detached, surviving keyed row DOM is moved/reused,
+   and the simulated DOM is not reset. Event bindings are compared against the
+   next explicit event descriptor stream, so unchanged element/kind/event-id
+   slots are left alone and only added, removed, or shifted bindings are patched.
+   `Ui.each` now also retains an item equality thunk, and
    active row scopes store their key and latest item in retained value cells, so
    the host has explicit data to distinguish reused unchanged rows from reused
    updated rows. The active
@@ -84,9 +85,8 @@ Ordered roughly by how much of the design they block.
    of retained event transforms, state equality thunks, each key/item/row thunks,
    host-bound signal bindings, active row-scope value cells, and direct
    map/map2 signal thunks. Leaf sink patch counts now track changed fields on
-   non-structural updates, while
-   structural updates count actual creates, child moves, changed fields, and
-   event bindings rather than a full
+   non-structural updates, while structural updates count actual creates, child
+   moves, changed fields, and event bindings rather than a full
    reset/recreate. Source-level equal-output pruning suppresses downstream work,
    and retained `Map`/`Map2`/`Combine` output equality thunks now prune unchanged
    dirty sink and structural-site outputs in the current `NodeValue` bridge.
@@ -461,9 +461,10 @@ ops dashboard script has a high-fan-out no-op source A/B that proves equal
 source output prunes downstream work and patches. Descriptor-stream closure
 retain/release counters are live for the host-retained thunk fields. Retained
 signal output equality thunks now prune dirty leaf sinks and unchanged
-structural-site outputs in the active `NodeValue` bridge. The remaining pruning
-work is the fuller design target: opaque typed value cells once confined erasure
-removes `NodeValue`.
+structural-site outputs in the active `NodeValue` bridge, and dirty sink/
+structural checks are routed by explicit source node id instead of scanning every
+active descriptor. The remaining pruning work is the fuller design target:
+opaque typed value cells once confined erasure removes `NodeValue`.
 
 - Replace the old-model `RuntimeMetrics` fields with the design's counters:
   `nodes_recomputed`, `propagation_prunes`, `derived_calls_into_roc`,
@@ -624,10 +625,11 @@ This delivers the headline feature (real keyed reuse) and true incremental rende
 
 Status as of 2026-06-20: the host scope forest, keyed-row diff/reuse/removal,
 and active `Ui.when` branch disposal are wired into the active app lifecycle.
-Dirty non-structural source changes now patch only matching leaf sinks from the
-retained descriptor stream, and unchanged dirty outputs are pruned with the
-retained signal equality thunk. Structural source changes first compare the
-active `When`/`Each` output cache with the retained equality thunk; changed
+Dirty non-structural source changes now route from source node id to only
+matching leaf sinks from the retained descriptor stream, and unchanged dirty
+outputs are pruned with the retained signal equality thunk. Structural source
+changes route from source node id to only matching `When`/`Each` sites, then
+first compare the active output cache with the retained equality thunk; changed
 structural outputs still rebuild the active descriptor stream, but the host now
 applies the result as a structural DOM patch using explicit DOM identities scoped
 by branch/row and compares event binding slots rather than rebinding every active
@@ -650,12 +652,14 @@ on the internal `NodeValue` path and Roc-side active descriptor evaluation.
 - Done for leaf sinks: non-structural dirty source nodes emit only matching
   `SetText`/`SetValue`/`SetChecked`/`SetDisabled` patches, with no descriptor
   rebuild and no DOM reset; unchanged outputs are pruned through the retained
-  signal equality thunk before any patch is emitted.
+  signal equality thunk before any patch is emitted. Matching is routed by
+  explicit source node id rather than by scanning every active sink descriptor.
 - Done for structural DOM shape: dirty structural source nodes detach removed
   branch/row DOM, move/reuse surviving keyed row DOM, create only new DOM nodes,
   and avoid the full DOM reset when a dirty source feeds `when`/`each`. Unchanged
   `when` condition or `each` item-list outputs are pruned before the structural
-  descriptor stream is rebuilt.
+  descriptor stream is rebuilt, and dirty structural checks are routed by source
+  node id.
 - Done for structural event bindings: unchanged event-id slots stay bound; only
   added, removed, or shifted event-id bindings are patched.
 - Done for unchanged keyed-row bodies: when a reused row's retained item equality
