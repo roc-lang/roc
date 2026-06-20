@@ -4925,10 +4925,15 @@ fn addMainExe(
     builtins_extern_obj.bundle_compiler_rt = false;
     configureBackend(builtins_extern_obj, target);
 
-    // Create shim static library at build time - fully static without libc
+    const shim_host_abi_module = b.createModule(.{
+        .root_source_file = b.path("src/shim_host_abi.zig"),
+    });
+    shim_host_abi_module.addImport("builtins", roc_modules.builtins);
+
+    // Create LIR interpreter shim static library at build time - fully static without libc
     //
     // NOTE we do NOT link libC here to avoid dynamic dependency on libC
-    const shim_lib = b.addLibrary(.{
+    const interpreter_shim_lib = b.addLibrary(.{
         .name = "roc_interpreter_shim",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
@@ -4940,30 +4945,65 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
-    configureBackend(shim_lib, target);
+    configureBackend(interpreter_shim_lib, target);
     // Add all modules from roc_modules that the shim needs
-    roc_modules.addAll(shim_lib);
-    shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+    roc_modules.addAll(interpreter_shim_lib);
+    interpreter_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    interpreter_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    interpreter_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_interpreter", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
+    interpreter_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
     // Add compiled builtins module for loading builtin types
-    shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    shim_lib.step.dependOn(&write_compiled_builtins.step);
+    interpreter_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    interpreter_shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Include the pre-built builtins object
-    shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    shim_lib.bundle_compiler_rt = true;
+    interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
+    interpreter_shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
-    const install_shim = b.addInstallArtifact(shim_lib, .{});
-    b.getInstallStep().dependOn(&install_shim.step);
+    const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
+    b.getInstallStep().dependOn(&install_interpreter_shim.step);
     // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
-    const copy_shim = b.addUpdateSourceFiles();
+    const copy_interpreter_shim = b.addUpdateSourceFiles();
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
-    exe.step.dependOn(&copy_shim.step);
+    copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+    exe.step.dependOn(&copy_interpreter_shim.step);
+
+    // Create machine-code shim static library for dev backend run images.
+    const machine_code_shim_lib = b.addLibrary(.{
+        .name = "roc_machine_code_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+        .linkage = .static,
+    });
+    configureBackend(machine_code_shim_lib, target);
+    roc_modules.addAll(machine_code_shim_lib);
+    machine_code_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    machine_code_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    machine_code_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_machine_code", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
+    machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
+    machine_code_shim_lib.bundle_compiler_rt = true;
+
+    const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
+    b.getInstallStep().dependOn(&install_machine_code_shim.step);
+
+    const copy_machine_code_shim = b.addUpdateSourceFiles();
+    const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
+    copy_machine_code_shim.addCopyFileToSource(machine_code_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
+    exe.step.dependOn(&copy_machine_code_shim.step);
 
     // Copy builtins object for the host target for embedding into CLI
     // This is used by `roc build --opt=dev` to link the app object with builtins
@@ -4978,7 +5018,8 @@ fn addMainExe(
     exe.step.dependOn(&copy_builtins_extern.step);
 
     // Add tracy support (required by parse/can/check modules)
-    add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
+    add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
+    add_tracy(b, roc_modules.build_options, machine_code_shim_lib, b.graph.host, false, flag_enable_tracy);
 
     // Cross-compile builtins objects for all supported targets.
     // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.

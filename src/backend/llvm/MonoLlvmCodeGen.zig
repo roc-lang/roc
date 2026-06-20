@@ -396,6 +396,7 @@ pub const MonoLlvmCodeGen = struct {
         entrypoints: []const ShimEntrypoint,
         hosted_symbols: []const []const u8,
         image: ?[]const u8,
+        default_run_start: bool,
     ) Error!ModuleBitcodeResult {
         self.reset();
 
@@ -460,10 +461,62 @@ pub const MonoLlvmCodeGen = struct {
             );
         }
 
+        if (default_run_start) {
+            try self.emitDefaultRunStartModuleAsm(&builder);
+        }
+
         return .{
             .bitcode = try self.serializeBuilderToBitcode(&builder),
             .allocator = self.allocator,
         };
+    }
+
+    fn emitDefaultRunStartModuleAsm(self: *MonoLlvmCodeGen, builder: *LlvmBuilder) Error!void {
+        if (self.target.os.tag != .linux) return error.CompilationFailed;
+
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        const w = &aw.writer;
+
+        switch (self.target.cpu.arch) {
+            .x86_64 => w.writeAll(
+                \\.text
+                \\.globl _start
+                \\.type _start,@function
+                \\_start:
+                \\    mov %rsp, %rbx
+                \\    and $-16, %rsp
+                \\    call roc_default_runtime_init
+                \\    mov (%rbx), %rdi
+                \\    lea 8(%rbx), %rsi
+                \\    call roc_shim_default_main
+                \\    mov %rax, %rdi
+                \\    mov $60, %rax
+                \\    syscall
+                \\    ud2
+                \\.size _start, .-_start
+                \\
+            ) catch return error.OutOfMemory,
+            .aarch64 => w.writeAll(
+                \\.text
+                \\.globl _start
+                \\.type _start,%function
+                \\_start:
+                \\    mov x19, sp
+                \\    bl roc_default_runtime_init
+                \\    ldr x0, [x19]
+                \\    add x1, x19, #8
+                \\    bl roc_shim_default_main
+                \\    mov x8, #94
+                \\    svc #0
+                \\    brk #0
+                \\.size _start, .-_start
+                \\
+            ) catch return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        }
+
+        builder.finishModuleAsm(&aw) catch return error.OutOfMemory;
     }
 
     pub fn generateEntrypointModule(
