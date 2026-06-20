@@ -20467,7 +20467,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 1;
+    const serialized_layout_version: u32 = 2;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -23381,12 +23381,11 @@ test "checked body builder appends reserved synthetic expressions without alloca
             .empty_record,
         );
         try std.testing.expectEqual(i, @intFromEnum(expr));
-        try std.testing.expectEqual(expr, builder.store.exprs[i].id);
-        try std.testing.expect(!builder.store.expr_diverges[i]);
+        try std.testing.expectEqual(expr, builder.store.stored_exprs.items[i].id);
+        try std.testing.expect(!builder.store.stored_exprs.items[i].diverges);
     }
 
-    try std.testing.expectEqual(synthetic_count, builder.store.exprs.len);
-    try std.testing.expectEqual(synthetic_count, builder.store.expr_diverges.len);
+    try std.testing.expectEqual(synthetic_count, builder.store.stored_exprs.items.len);
     try std.testing.expectEqual(synthetic_count, builder.synthetic_expr_origins.items.len);
     try std.testing.expectEqual(@as(usize, 0), failing_allocator.allocations);
     try std.testing.expectEqual(@as(usize, 0), failing_allocator.deallocations);
@@ -23914,6 +23913,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .hoisted_constants = .{},
         .const_templates = .{},
         .checked_types = checked_types_src,
         .const_store = const_store_src,
@@ -23965,8 +23965,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x65, 0xC1, 0x31, 0xA9, 0xAF, 0x1F, 0x6D, 0x18, 0x8A, 0xD7, 0x9A, 0x13, 0xA9, 0x6B, 0xCF, 0x34,
-        0x71, 0x44, 0x39, 0xAE, 0x7B, 0x4A, 0x48, 0x66, 0xAA, 0x60, 0x43, 0x1F, 0x8C, 0xC9, 0xEA, 0x4C,
+        0x75, 0x86, 0x03, 0xB6, 0xE4, 0xB2, 0xDE, 0xF5, 0xBB, 0xF8, 0xA5, 0x3A, 0xAE, 0x07, 0x6C, 0x8C,
+        0x22, 0xC2, 0x24, 0x41, 0x27, 0x53, 0xCC, 0x85, 0xBF, 0x32, 0x09, 0xED, 0x23, 0x0A, 0x4A, 0x15,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
