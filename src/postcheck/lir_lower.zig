@@ -1967,6 +1967,16 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const elems = self.program.patSpan(list.patterns);
         const fixed_count: i64 = @intCast(elems.len);
+
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
+
         const len_local = try self.addLocalForLayout(.u64);
 
         var current = on_match;

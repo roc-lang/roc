@@ -3065,6 +3065,15 @@ const Lowerer = struct {
         const elems = self.solved.lifted.patSpan(list.patterns);
         const fixed_count: i64 = @intCast(elems.len);
 
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
+
         // The list length is read by the length test, by the indices of fixed
         // elements that match from the back, and by the rest slice. It is
         // assigned once at the head of the chain so every reader sees it.

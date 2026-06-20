@@ -667,7 +667,7 @@ fn evalCompileTimeRoot(
         .ret_layout = ret_layout,
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
+        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed"),
         error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),

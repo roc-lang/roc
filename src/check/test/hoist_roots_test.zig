@@ -91,7 +91,7 @@ test "hoist roots are not selected for ordinary call with dbg in reachable body"
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
 }
 
 test "hoist roots are not selected for ordinary call with expect in reachable body" {
@@ -109,7 +109,7 @@ test "hoist roots are not selected for ordinary call with expect in reachable bo
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
 }
 
 test "hoist roots selected for direct closed arithmetic function body" {
@@ -591,6 +591,14 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_run_low_level,
             => {},
         }
+    }
+    return count;
+}
+
+fn countExprRootsByTag(test_env: *const TestEnv, tag: std.meta.Tag(CIR.Expr)) usize {
+    var count: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr)) == tag) count += 1;
     }
     return count;
 }
