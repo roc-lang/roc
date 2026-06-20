@@ -201,9 +201,16 @@ const Solver = struct {
     fn encodeKey(self: *Solver, offset_mod: u32) []const u8 {
         const needed = 4 + self.counts.len * 2;
         std.debug.assert(needed <= self.key_scratch.len);
-        std.mem.writeInt(u32, self.key_scratch[0..4], offset_mod, .little);
+        // Write the bytes by hand (the type-checker-patterns lint forbids the
+        // `std.mem` int helpers here). Byte order is irrelevant — the key only has
+        // to be unique per (offset_mod, counts) state.
+        self.key_scratch[0] = @truncate(offset_mod);
+        self.key_scratch[1] = @truncate(offset_mod >> 8);
+        self.key_scratch[2] = @truncate(offset_mod >> 16);
+        self.key_scratch[3] = @truncate(offset_mod >> 24);
         for (self.counts, 0..) |c, i| {
-            std.mem.writeInt(u16, self.key_scratch[4 + i * 2 ..][0..2], c, .little);
+            self.key_scratch[4 + i * 2] = @truncate(c);
+            self.key_scratch[4 + i * 2 + 1] = @truncate(c >> 8);
         }
         return self.key_scratch[0..needed];
     }
