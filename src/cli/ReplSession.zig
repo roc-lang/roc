@@ -292,7 +292,7 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
 
                 try out.print(
                     self.allocator,
-                    "\x1b[90m{s} : {s}\x1b[0m\n{s}\n",
+                    "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n",
                     .{ name, tw.get(), item.source },
                 );
             },
@@ -301,7 +301,7 @@ fn printDefs(self: *ReplSession) anyerror![]u8 {
                 try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
             },
             .type_decl, .import => {
-                try out.print(self.allocator, "{s}\n", .{item.source});
+                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n\n", .{item.source});
             },
         }
     }
