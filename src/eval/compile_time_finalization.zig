@@ -694,10 +694,22 @@ fn recordComptimeSiteHits(
                 }
             }
         }
-        if (site.proc == root_proc) {
+        if (reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
             try coverage.record(site, hit.branch_index);
         }
     }
+}
+
+fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
+    return switch (kind) {
+        .constant,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        => true,
+        .hoisted_constant => false,
+    };
 }
 
 fn reportCompileTimeExhaustiveness(

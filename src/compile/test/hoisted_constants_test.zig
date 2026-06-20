@@ -847,6 +847,74 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     try std.testing.expect(!coord.hasUserErrors());
 }
 
+test "hoisted match guard does not report unused branch warning" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    result = match 5.I64 {
+        \\        x if x > 0 => "positive"
+        \\        _ => "non-positive"
+        \\    }
+        \\    _ = List.len(args)
+        \\    Echo.line!(result)
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found_unused_branch = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "UNUSED BRANCH")) found_unused_branch = true;
+    }
+    try std.testing.expect(!found_unused_branch);
+
+    const artifact = coord.rootCheckedArtifact("app");
+    var found_hoisted_root = false;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind == .hoisted_constant) found_hoisted_root = true;
+    }
+    try std.testing.expect(found_hoisted_root);
+}
+
 test "hoisted successful call does not clear runtime reachable helper exhaustiveness" {
     const gpa = std.testing.allocator;
 
