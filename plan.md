@@ -698,7 +698,7 @@ fixed-width word compares because unused SSO bytes are zeroed.
       masked tail path for partial lanes, and byte-at-a-time handling only for
       the bounded short-tail/seamless cases where fixed overreads are not safe.
 
-- [ ] Use exact string fast paths in generated field dispatch when possible.
+- [x] Use exact string fast paths in generated field dispatch when possible.
   - Tasks:
     - For static small field names, prefer generated direct compares over calling
       `Str.is_eq`.
@@ -716,6 +716,12 @@ fixed-width word compares because unused SSO bytes are zeroed.
       discriminating word-lane probe before full verification for transformed
       field names up to 24 bytes. The general optimized `Str.is_eq` path remains
       the fallback for runtime-created parsers and long field names.
+    - Completed for generated static SSO exact dispatch: refreshed optimized
+      HTTP and JSON disassembly after the static lane work contains no
+      references to `roc_builtins_str_equal`,
+      `roc_builtins_str_equal_static_small`, or
+      `roc_builtins_str_static_small_word_eq`; generated static exact dispatch
+      uses direct lowered compares.
 
 ## Phase 9: Remove Remaining Generic Parser State Traffic
 
@@ -767,6 +773,9 @@ Roc API.
       `zig build run-test-zig-json-decoder-platform`.
     - Passed after the static exact-dispatch operation and lowering changes:
       `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Passed after the static ASCII-caseless dispatch operation and lowering
+      changes: `zig build run-test-zig-http-header-decoder-platform` and
       `zig build run-test-zig-json-decoder-platform`.
 
 - [x] Run focused string equality tests after the `Str.is_eq` phase.
@@ -835,7 +844,7 @@ The plan is not complete until every item below is true:
       LIR where producer and consumer are compiler-generated parser code.
 - [ ] Immediately-consumed `{ value, rest }` parser result records are avoided
       where direct locals are semantically equivalent.
-- [ ] Static known `Fields` dispatch emits direct exact small-string compares.
+- [x] Static known `Fields` dispatch emits direct exact small-string compares.
 - [x] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
       for eligible small strings.
 - [ ] Generic iterator/string-helper dispatch is not used on the static SSO hot
@@ -851,9 +860,9 @@ The plan is not complete until every item below is true:
       while still using no allocator and preserving request-memory lifetime.
 - [x] `Str.is_eq` has a fast SSO path comparable in spirit to
       `Str.is_caseless_eq`, with tests and disassembly confirmation.
-- [ ] HTTP header platform tests pass.
-- [ ] JSON platform tests pass.
-- [ ] String equality tests pass across the relevant execution paths.
+- [x] HTTP header platform tests pass.
+- [x] JSON platform tests pass.
+- [x] String equality tests pass across the relevant execution paths.
 - [ ] `zig build minici` passes after targeted failures, if any, have been fixed
       through the targeted-failure loop.
 - [ ] Optimized HTTP header disassembly has no hot-path allocation, no hot-path
