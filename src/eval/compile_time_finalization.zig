@@ -370,8 +370,8 @@ const RootCompletionState = struct {
         const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
             finalizationInvariant("platform-required procedure dependency referenced a missing binding");
         return switch (binding.value_use) {
-            .procedure_value => |procedure| self.procedureUseDependenciesComplete(procedure.procedure),
-            .const_value => |const_value| self.constUseComplete(const_value.const_use),
+            .procedure_value => |procedure_use| self.procedureUseDependenciesComplete(procedure_use.procedure),
+            .const_value => |const_use| self.constUseComplete(const_use.const_use),
         };
     }
 };

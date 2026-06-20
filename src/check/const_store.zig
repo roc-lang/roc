@@ -4,7 +4,7 @@ const std = @import("std");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
-const serde = @import("artifact_serde.zig");
+const artifact_serialize = @import("artifact_serialize.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -98,22 +98,71 @@ pub const ConstValue = union(enum) {
     fn_value: ConstFnId,
 };
 
+/// `(start, len)` range into one of `ConstStore`'s flat side pools (transform B).
+pub const ConstRange = extern struct { start: u32 = 0, len: u32 = 0 };
+
+/// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
+/// replaced by `ConstRange`s into the store's flat pools. The public `ConstValue`
+/// (with slices) is reconstructed on demand by `get`.
+const StoredValue = union(enum) {
+    pending,
+    zst,
+    scalar: ConstScalar,
+    str: ConstStr,
+    list: ConstRange,
+    box: ConstNodeId,
+    tuple: ConstRange,
+    record: ConstRange,
+    crash: ConstStr,
+    tag: struct { tag_name: ConstRange, payloads: ConstRange },
+    nominal: struct { named_type: NamedType, backing: ConstNodeId },
+    fn_value: ConstFnId,
+};
+
+/// POD form of `ConstFn`: captures slice → range into `capture_pool`.
+const StoredFn = struct {
+    fn_def: FnDef,
+    source_fn_ty: checked_ids.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    captures: ConstRange = .{},
+};
+
 /// Store of compile-time constants completed by checking finalization.
 pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
 
     allocator: Allocator,
-    values: std.ArrayList(ConstValue),
-    fns: std.ArrayList(ConstFn),
-    str_data: std.ArrayList([]const u8),
+    values: std.ArrayList(StoredValue),
+    fns: std.ArrayList(StoredFn),
+    /// Flat pool of `ConstNodeId`s for list/tuple/record/tag-payload ranges.
+    node_pool: std.ArrayList(ConstNodeId),
+    /// Flat pool of tag-name bytes.
+    tag_name_pool: std.ArrayList(u8),
+    /// Flat pool of function captures.
+    capture_pool: std.ArrayList(ConstCapture),
+    /// Flat pool of all string backing bytes; `str_views` indexes into it.
+    str_backing: std.ArrayList(u8),
+    /// `ConstStrDataId` -> range into `str_backing`.
+    str_views: std.ArrayList(ConstRange),
+    /// True for a store reconstructed from a serialized buffer (pools point into
+    /// buffer-owned memory and must not be freed).
+    serialized: bool = false,
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
             .allocator = allocator,
             .values = .empty,
             .fns = .empty,
-            .str_data = .empty,
+            .node_pool = .empty,
+            .tag_name_pool = .empty,
+            .capture_pool = .empty,
+            .str_backing = .empty,
+            .str_views = .empty,
         };
+    }
+
+    fn appendNodes(self: *ConstStore, nodes: []const ConstNodeId) Allocator.Error!ConstRange {
+        return artifact_serialize.appendSpan(ConstRange, ConstNodeId, &self.node_pool, self.allocator, nodes);
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
@@ -122,13 +171,38 @@ pub const ConstStore = struct {
         return id;
     }
 
+    /// Store `value` at `id`. Any slices in `value` are copied into the store's
+    /// pools; the caller retains ownership of the input slices and frees them.
     pub fn fill(self: *ConstStore, id: ConstNodeId, value: ConstValue) void {
         const slot = &self.values.items[@intFromEnum(id)];
         switch (slot.*) {
             .pending => {},
             else => constStoreInvariant("const node filled more than once"),
         }
-        slot.* = value;
+        slot.* = self.storeValue(value) catch constStoreInvariant("out of memory storing const value");
+    }
+
+    fn storeValue(self: *ConstStore, value: ConstValue) Allocator.Error!StoredValue {
+        return switch (value) {
+            // `reserve` writes the `.pending` placeholder directly; `fill` always supplies
+            // a concrete value, so filling a node *with* `.pending` is an invariant break.
+            .pending => constStoreInvariant("cannot fill a const node with a pending value"),
+            .zst => .zst,
+            .scalar => |s| .{ .scalar = s },
+            .str => |s| .{ .str = s },
+            .crash => |s| .{ .crash = s },
+            .box => |n| .{ .box = n },
+            .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
+            .fn_value => |f| .{ .fn_value = f },
+            .list => |items| .{ .list = try self.appendNodes(items) },
+            .tuple => |items| .{ .tuple = try self.appendNodes(items) },
+            .record => |items| .{ .record = try self.appendNodes(items) },
+            .tag => |tag| blk: {
+                const name_range = try artifact_serialize.appendSpan(ConstRange, u8, &self.tag_name_pool, self.allocator, tag.tag_name);
+                const payloads_range = try self.appendNodes(tag.payloads);
+                break :blk .{ .tag = .{ .tag_name = name_range, .payloads = payloads_range } };
+            },
+        };
     }
 
     pub fn append(self: *ConstStore, value: ConstValue) Allocator.Error!ConstNodeId {
@@ -137,61 +211,90 @@ pub const ConstStore = struct {
         return id;
     }
 
+    /// Store `fn_value`; its `captures` are copied into the pool. The caller
+    /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         const id: ConstFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
-        try self.fns.append(self.allocator, fn_value);
+        const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
+        try self.fns.append(self.allocator, .{
+            .fn_def = fn_value.fn_def,
+            .source_fn_ty = fn_value.source_fn_ty,
+            .source_fn_key = fn_value.source_fn_key,
+            .captures = captures_range,
+        });
         return id;
     }
 
     pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
-        const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_data.items.len)));
-        const owned = try self.allocator.dupe(u8, bytes);
-        errdefer self.allocator.free(owned);
-        try self.str_data.append(self.allocator, owned);
+        const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_views.items.len)));
+        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.str_backing, self.allocator, bytes);
+        try self.str_views.append(self.allocator, view);
         return id;
     }
 
+    fn nodeSlice(self: *const ConstStore, range: ConstRange) []const ConstNodeId {
+        return self.node_pool.items[range.start .. range.start + range.len];
+    }
+
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
-        return self.values.items[@intFromEnum(id)];
+        return switch (self.values.items[@intFromEnum(id)]) {
+            .pending => .pending,
+            .zst => .zst,
+            .scalar => |s| .{ .scalar = s },
+            .str => |s| .{ .str = s },
+            .crash => |s| .{ .crash = s },
+            .box => |n| .{ .box = n },
+            .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
+            .fn_value => |f| .{ .fn_value = f },
+            .list => |r| .{ .list = self.nodeSlice(r) },
+            .tuple => |r| .{ .tuple = self.nodeSlice(r) },
+            .record => |r| .{ .record = self.nodeSlice(r) },
+            .tag => |tag| .{ .tag = .{
+                .tag_name = self.tag_name_pool.items[tag.tag_name.start .. tag.tag_name.start + tag.tag_name.len],
+                .payloads = self.nodeSlice(tag.payloads),
+            } },
+        };
     }
 
-    /// Serialize the three backing lists. Nested owned slices (list/tuple/record
-    /// payloads, fn captures, string bytes) are deep-copied on deserialize, so
-    /// the restored store frees exactly what `deinit` expects.
-    pub fn rocSerialize(self: *const ConstStore, w: *serde.Writer) Allocator.Error!void {
-        try serde.serializeValue([]const ConstValue, w, &self.values.items);
-        try serde.serializeValue([]const ConstFn, w, &self.fns.items);
-        try serde.serializeValue([]const []const u8, w, &self.str_data.items);
-    }
-
-    /// Free hook for the artifact deserializer: the store owns its lists and
-    /// their nested data via `self.allocator`, so `deinit` frees everything.
-    pub fn rocFree(self: *ConstStore, _: Allocator) void {
-        self.deinit();
-    }
-
-    pub fn rocDeserialize(r: *serde.Reader) serde.Reader.Error!ConstStore {
-        var store = ConstStore.init(r.gpa);
-        errdefer store.deinit();
-        var values: []ConstValue = undefined;
-        try serde.deserializeValue([]ConstValue, r, &values);
-        store.values = .{ .items = values, .capacity = values.len };
-        var fns: []ConstFn = undefined;
-        try serde.deserializeValue([]ConstFn, r, &fns);
-        store.fns = .{ .items = fns, .capacity = fns.len };
-        var str_data: [][]const u8 = undefined;
-        try serde.deserializeValue([][]const u8, r, &str_data);
-        store.str_data = .{ .items = str_data, .capacity = str_data.len };
-        return store;
+    pub fn getFn(self: *const ConstStore, id: ConstFnId) ConstFn {
+        const stored = self.fns.items[@intFromEnum(id)];
+        return .{
+            .fn_def = stored.fn_def,
+            .source_fn_ty = stored.source_fn_ty,
+            .source_fn_key = stored.source_fn_key,
+            .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
+        };
     }
 
     pub fn strData(self: *const ConstStore, id: ConstStrDataId) []const u8 {
         const index = @intFromEnum(id);
-        if (@import("builtin").mode == .Debug and index >= self.str_data.items.len) {
+        if (@import("builtin").mode == .Debug and index >= self.str_views.items.len) {
             constStoreInvariant("string backing id is out of range");
         }
-        return self.str_data.items[index];
+        const view = self.str_views.items[index];
+        return self.str_backing.items[view.start .. view.start + view.len];
     }
+
+    /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
+    /// slice, so the store relocates with a fixed number of base-pointer fixups.
+    pub const Serialized = extern struct {
+        values: artifact_serialize.SerializedSlice(StoredValue) = .{},
+        fns: artifact_serialize.SerializedSlice(StoredFn) = .{},
+        node_pool: artifact_serialize.SerializedSlice(ConstNodeId) = .{},
+        tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
+        capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
+        str_backing: artifact_serialize.SerializedSlice(u8) = .{},
+        str_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
+
+        comptime {
+            // 7 side lists → 7 base-pointer fixups, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
+        }
+
+        const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserializeWithAllocator;
+    };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
         const backing = self.strData(str.data);
@@ -228,34 +331,16 @@ pub const ConstStore = struct {
     }
 
     pub fn deinit(self: *ConstStore) void {
-        for (self.values.items) |*value| self.deinitValue(value);
-        for (self.fns.items) |fn_value| self.allocator.free(fn_value.captures);
-        for (self.str_data.items) |bytes| self.allocator.free(bytes);
-        self.str_data.deinit(self.allocator);
-        self.fns.deinit(self.allocator);
-        self.values.deinit(self.allocator);
-        self.* = ConstStore.init(self.allocator);
-    }
-
-    fn deinitValue(self: *ConstStore, value: *ConstValue) void {
-        switch (value.*) {
-            .pending,
-            .zst,
-            .scalar,
-            .box,
-            .nominal,
-            .fn_value,
-            .str,
-            .crash,
-            => {},
-            .list => |items| self.allocator.free(items),
-            .tuple => |items| self.allocator.free(items),
-            .record => |items| self.allocator.free(items),
-            .tag => |tag| {
-                self.allocator.free(tag.tag_name);
-                self.allocator.free(tag.payloads);
-            },
+        if (!self.serialized) {
+            self.values.deinit(self.allocator);
+            self.fns.deinit(self.allocator);
+            self.node_pool.deinit(self.allocator);
+            self.tag_name_pool.deinit(self.allocator);
+            self.capture_pool.deinit(self.allocator);
+            self.str_backing.deinit(self.allocator);
+            self.str_views.deinit(self.allocator);
         }
+        self.* = ConstStore.init(self.allocator);
     }
 
     fn verifyAcyclic(
@@ -273,7 +358,7 @@ pub const ConstStore = struct {
         }
 
         value_state[index] = .active;
-        switch (self.values.items[index]) {
+        switch (self.get(id)) {
             .pending => constStoreInvariant("completed store contains a pending node"),
             .zst, .scalar => {},
             .str, .crash => |str| {
@@ -310,7 +395,7 @@ pub const ConstStore = struct {
         }
 
         fn_state[index] = .active;
-        for (self.fns.items[index].captures) |capture| {
+        for (self.getFn(id).captures) |capture| {
             self.verifyAcyclic(capture.value, value_state, fn_state);
         }
         fn_state[index] = .done;
@@ -326,4 +411,98 @@ fn constStoreInvariant(comptime message: []const u8) noreturn {
 
 test "const store declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "ConstStore: build, serialize/relocate, and read back values, fns, strings" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = @import("collections").CompactWriter;
+
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+
+    // Scalars + a list + a tag (exercises node_pool + tag_name_pool).
+    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const b = try store.append(.{ .scalar = .{ .i32 = -3 } });
+    // The store copies inputs into its pools and never frees them, so this test
+    // owns and frees the slices it hands to `append`/`appendFn`.
+    const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
+    defer gpa.free(list_items);
+    const list = try store.append(.{ .list = list_items });
+    const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
+    defer gpa.free(tag_payloads);
+    const tag_name = try gpa.dupe(u8, "Ok");
+    defer gpa.free(tag_name);
+    const tag = try store.append(.{ .tag = .{ .tag_name = tag_name, .payloads = tag_payloads } });
+    // A string backing + a str value (exercises str_backing + str_views).
+    const sd = try store.addStrData("hello world");
+    const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
+    // A function value with a capture (exercises capture_pool).
+    const caps = try gpa.dupe(ConstCapture, &.{.{ .binder = @enumFromInt(1), .value = a }});
+    defer gpa.free(caps);
+    const fn_id = try store.appendFn(.{
+        // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
+        // fields just need to survive, not be specific values.
+        .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+        .source_fn_ty = @enumFromInt(3),
+        .source_fn_key = .{},
+        .captures = caps,
+    });
+
+    // Serialize → aligned buffer → deserialize.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var writer = CompactWriter.init();
+    const hdr = try writer.appendAlloc(aa, ConstStore.Serialized);
+    try hdr.serialize(&store, aa, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const ser: *const ConstStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = ser.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+
+    // Scalars
+    try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
+    try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
+    // List range resolves to the same node ids
+    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list);
+    // Tag name + payloads
+    const loaded_tag = loaded.get(tag).tag;
+    try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
+    try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
+    // String backing
+    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
+    // Function captures
+    const loaded_fn = loaded.getFn(fn_id);
+    try std.testing.expectEqual(@as(usize, 1), loaded_fn.captures.len);
+    try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+}
+
+test "ConstStore.appendFn: no leak or double-free under allocation failure" {
+    // `appendFn` copies `captures` into the pool and does not free the input; the
+    // caller owns it. Drive every allocation in that path to fail in turn and assert
+    // no leak and no double-free (the testing allocator panics on a double-free, so
+    // this would have caught the prior `defer free` + caller `errdefer free` overlap).
+    const Helper = struct {
+        fn run(allocator: Allocator) anyerror!void {
+            var store = ConstStore.init(allocator);
+            defer store.deinit();
+            const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+            const caps = try allocator.dupe(ConstCapture, &.{
+                .{ .binder = @enumFromInt(1), .value = a },
+                .{ .binder = @enumFromInt(2), .value = a },
+            });
+            defer allocator.free(caps);
+            _ = try store.appendFn(.{
+                .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+                .source_fn_ty = @enumFromInt(3),
+                .source_fn_key = .{},
+                .captures = caps,
+            });
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
 }

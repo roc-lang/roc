@@ -3,7 +3,8 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Output Builtin.bin and builtin_indices.bin to paths provided by the build system
+//! 3. Publish the type-checked module to a CheckedModuleArtifact and serialize it
+//! 4. Output Builtin.bin, builtin_indices.bin, and Builtin.artifact.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -13,6 +14,8 @@ const check = @import("check");
 const collections = @import("collections");
 const types = @import("types");
 const reporting = @import("reporting");
+const builtin_loading = @import("builtin_loading");
+const comptime_finalizer = @import("comptime_finalizer");
 
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
@@ -20,8 +23,14 @@ const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CoreCtx = can.CoreCtx;
 const CIR = can.CIR;
+const CompactWriter = collections.CompactWriter;
+const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 
 const max_builtin_bytes = 1024 * 1024;
+
+/// Generous cap for reading back serialized binaries (Builtin.bin), which are
+/// substantially larger than the .roc source.
+const max_serialized_bytes = 64 * 1024 * 1024;
 
 // Stderr writer for diagnostic reporting
 var stderr_buffer: [4096]u8 = undefined;
@@ -45,12 +54,12 @@ fn stderrWriter(io: std.Io) *std.Io.Writer {
 // Use the canonical BuiltinIndices from CIR
 const BuiltinIndices = CIR.BuiltinIndices;
 
-fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
+fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8, limit: usize) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         const root_dir = try std.Io.Dir.openDirAbsolute(io, "/", .{});
-        return try root_dir.readFileAlloc(io, path, gpa, .limited(max_builtin_bytes));
+        return try root_dir.readFileAlloc(io, path, gpa, .limited(limit));
     }
-    return try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_builtin_bytes));
+    return try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(limit));
 }
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
@@ -61,6 +70,7 @@ fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
 /// 1. the absolute path to Builtin.roc for cache tracking
 /// 2. the output path for Builtin.bin
 /// 3. the output path for builtin_indices.bin
+/// 4. the output path for Builtin.artifact.bin
 ///
 /// We also keep project-relative defaults so manual runs still succeed.
 pub fn main(process_init: std.process.Init) !void {
@@ -81,11 +91,11 @@ pub fn main(process_init: std.process.Init) !void {
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
     const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
     const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
-    const builtin_checked_bin_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.checked.bin";
+    const builtin_artifact_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.artifact.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
-    const builtin_roc_source = try readFileAllocPath(gpa, io, builtin_src_path);
+    const builtin_roc_source = try readFileAllocPath(gpa, io, builtin_src_path, max_builtin_bytes);
 
     // Compile Builtin.roc (it's completely self-contained)
     const builtin_env = try compileModule(
@@ -115,68 +125,85 @@ pub fn main(process_init: std.process.Init) !void {
     if (std.fs.path.dirname(builtin_indices_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
-    if (std.fs.path.dirname(builtin_checked_bin_path)) |dir| {
+    if (std.fs.path.dirname(builtin_artifact_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
+    // Publish the type-checked Builtin to a CheckedModuleArtifact and serialize
+    // it. This reloads the just-written Builtin.bin via the same loader
+    // BuiltinModules.init uses, so the baked artifact pairs identically with the
+    // env loaded at runtime.
+    try serializeBuiltinArtifact(gpa, io, builtin_bin_path, builtin_roc_source, builtin_artifact_path);
+
     // Validate that BuiltinIndices contains all type declarations under Builtin
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
     try validateBuiltinIndicesCompleteness(gpa, builtin_env, builtin_indices);
 
     try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
-
-    // Assemble and cache the pre-finalize CheckedArtifact. The expensive,
-    // deterministic publish work runs here at build time; `roc` deserializes the
-    // result and runs only compile-time finalization at startup.
-    try serializeCheckedArtifact(gpa, io, builtin_env, builtin_checked_bin_path);
 }
 
-/// Build the pre-finalize checked artifact for the Builtin module and write it
-/// to `output_path` using the generic artifact serializer.
-fn serializeCheckedArtifact(
+/// Reload the just-written Builtin.bin, publish it to a CheckedModuleArtifact
+/// using the same sequence BuiltinModules.init follows, then serialize the
+/// artifact to the output path.
+fn serializeBuiltinArtifact(
     gpa: Allocator,
     io: std.Io,
-    env: *ModuleEnv,
+    builtin_bin_path: []const u8,
+    builtin_source: []const u8,
     output_path: []const u8,
 ) !void {
+    const builtin_bin = try readFileAllocPath(gpa, io, builtin_bin_path, max_serialized_bytes);
+    defer gpa.free(builtin_bin);
+
+    var builtin_module = try builtin_loading.loadCompiledModule(gpa, builtin_bin, "Builtin", builtin_source);
+    defer builtin_module.deinit();
+
     var typed_modules = try check.TypedCIR.Modules.init(gpa, &.{
-        .{ .precompiled = env },
+        .{ .precompiled = builtin_module.env },
     });
     defer typed_modules.deinit();
 
-    var artifact = try check.CheckedArtifact.assembleUnfinalizedArtifact(
+    var artifact = try check.CheckedArtifact.publishFromTypedModule(
         gpa,
         &typed_modules,
         0,
         .{
-            .module_env_storage = .{ .checked_source = env },
-            // Never invoked: assembly does not run finalization.
-            .compile_time_finalizer = .{ .finalize = noopFinalize },
+            .module_env_storage = .{ .compiled_buffer = .{
+                .env = builtin_module.env,
+                .buffer = builtin_module.buffer,
+            } },
+            .compile_time_finalizer = comptime_finalizer.finalizer(),
         },
     );
-    // The module env is owned by `main`; do not free it through the artifact.
+    // The artifact's module_env storage now owns builtin_module's env and buffer;
+    // retain them so `builtin_module.deinit()` above frees them exactly once.
     defer artifact.deinitRetainingModuleEnv(gpa);
 
-    const bytes = try artifact.serialize(gpa);
-    defer gpa.free(bytes);
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
 
-    const file = try std.Io.Dir.cwd().createFile(io, output_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .read = true });
     defer file.close(io);
-    try file.writePositionalAll(io, bytes, 0);
-}
 
-fn noopFinalize(
-    _: ?*anyopaque,
-    _: Allocator,
-    _: *check.CheckedArtifact.CheckedModuleArtifact,
-    _: []const check.CheckedArtifact.PublishImportArtifact,
-    _: []const check.CheckedArtifact.ImportedModuleView,
-    _: []const check.CheckedArtifact.ImportedModuleView,
-    _: ?*check.problem.Store,
-) anyerror!void {}
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
+
+    const hdr = try writer.appendAlloc(arena_alloc, CheckedModuleArtifact.Serialized);
+    try hdr.serialize(&artifact, arena_alloc, &writer);
+
+    try writer.writeGather(file, io);
+
+    // Append the layout-version hash as a trailer (after the serialized region, so
+    // the `Serialized` stays at offset 0 / 16-byte-aligned for the loader). The
+    // loader (`CheckedModuleArtifact.splitVersionTrailer`) validates and strips it
+    // before relocating, rejecting a blob whose layout differs from the running
+    // compiler's instead of reading into a mismatched struct.
+    try file.writePositionalAll(io, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH, writer.total_bytes);
+}
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");

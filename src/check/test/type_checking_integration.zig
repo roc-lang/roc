@@ -2953,6 +2953,27 @@ test "check type - crash" {
     );
 }
 
+test "check type - if with all crash branches makes following code unreachable" {
+    const source =
+        \\choose : Bool -> Str
+        \\choose = |flag| {
+        \\    if flag {
+        \\        crash "true branch"
+        \\    } else {
+        \\        crash "false branch"
+        \\    }
+        \\
+        \\    after = "after"
+        \\    after
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNREACHABLE CODE"},
+    } }, "Bool -> Str");
+}
+
 // dbg //
 
 test "check type - dbg" {
