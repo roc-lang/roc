@@ -150,7 +150,7 @@ is a set of scalar locals:
 - no release-build read of a payload unless the corresponding presence bit is
   known to be set.
 
-- [ ] Identify the first IR stage where payload locals can be represented
+- [x] Identify the first IR stage where payload locals can be represented
       without sentinel/default values.
   - Tasks:
     - Inspect Monotype, lifted Monotype, Lambda Solved, Lambda Mono, and LIR
@@ -164,6 +164,16 @@ is a set of scalar locals:
       may not be read until its presence bit is set."
     - Debug builds can assert invalid reads.
     - Release builds do not emit runtime checks for compiler invariants.
+    - Conclusion: this cannot be implemented as a Monotype-only rewrite without
+      reintroducing fake values, because loop/join parameters require every
+      carried value to have an initial value. The right boundary is LIR with
+      ARC/certifier support for conditionally initialized parser payload cells:
+      presence bits are ordinary initialized locals, while payload cells are
+      assigned only on `Field` hits and may be read only in branches dominated
+      by the corresponding presence bit.
+    - A post-ARC backend-only rewrite is not acceptable. `Arc.insert` runs the
+      debug ARC certifier immediately, and all backends must keep following
+      explicit LIR RC rather than inferring parser slot semantics.
 
 - [ ] Replace generated slot tag values with presence bits in the lowered parser
       state.
@@ -581,7 +591,7 @@ fixed-width word compares because unused SSO bytes are zeroed.
       by caseless equality for non-small tails, while keeping the caseless SWAR
       path unchanged.
 
-- [ ] Add edge-case tests for `Str.is_eq`.
+- [x] Add edge-case tests for `Str.is_eq`.
   - Tasks:
     - Equal and unequal SSO strings of lengths 0 through SSO max.
     - Equal and unequal heap strings.
@@ -608,6 +618,13 @@ fixed-width word compares because unused SSO bytes are zeroed.
       `zig-out/bin/roc test --no-cache test/cli/StrIsEqEdgeCases.roc` and
       through the CLI runner with
       `zig build run-test-cli -- --suite subcommands --filter "Str.is_eq edge"`.
+    - Verified optimized native code shape by running
+      `zig build run-test-zig-module-builtins -Doptimize=ReleaseFast` and
+      dumping the resulting builtin test binary to
+      `/tmp/roc-builtins-releasefast-str-eq.s`. The `_str.RocStr.eql`
+      disassembly shows direct 8-byte loads and compares for the SSO path, a
+      masked tail path for partial lanes, and byte-at-a-time handling only for
+      the bounded short-tail/seamless cases where fixed overreads are not safe.
 
 - [ ] Use exact string fast paths in generated field dispatch when possible.
   - Tasks:
@@ -741,7 +758,7 @@ The plan is not complete until every item below is true:
       out of the main generated parser hot proc where practical.
 - [x] The host no longer reserves roughly 16 KiB of stack for the request buffer,
       while still using no allocator and preserving request-memory lifetime.
-- [ ] `Str.is_eq` has a fast SSO path comparable in spirit to
+- [x] `Str.is_eq` has a fast SSO path comparable in spirit to
       `Str.is_caseless_eq`, with tests and disassembly confirmation.
 - [ ] HTTP header platform tests pass.
 - [ ] JSON platform tests pass.
