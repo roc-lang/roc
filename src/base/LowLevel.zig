@@ -8,6 +8,7 @@
 pub const LowLevel = enum {
     // String operations
     str_is_eq,
+    str_is_eq_static_small,
     str_concat,
     str_contains,
     str_trim,
@@ -720,6 +721,7 @@ pub const LowLevel = enum {
             => RcEffect.none(),
 
             .str_is_eq,
+            .str_is_eq_static_small,
             .str_contains,
             .str_caseless_ascii_equals,
             .str_starts_with,

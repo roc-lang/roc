@@ -338,6 +338,21 @@ and dispatch directly to the field parser.
     - Hot miss path compares one selected word per candidate in the relevant
       size class.
     - Long fields still work via a correct allocation-free fallback.
+    - Intermediate progress: static exact `TryField` dispatch now uses explicit
+      precomputed renamed field bytes when parser construction happened at
+      compile time. Lowering emits the internal `str_is_eq_static_small`
+      operation for transformed field names up to 24 bytes, and LLVM lowers that
+      op to direct guarded byte comparisons rather than a call to
+      `roc_builtins_str_equal`. Runtime-created parsers and long transformed
+      names still use the ordinary `Str.is_eq` fallback. Verified with
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`, and disassembly dumps
+      `/tmp/roc_http_after_static_exact.s` and
+      `/tmp/roc_json_camel_direct_after_static_exact.s`, which contain no calls
+      to `roc_builtins_str_equal`,
+      `roc_builtins_str_equal_static_small`, or
+      `roc_builtins_str_caseless_ascii_equals`. This does not yet complete the
+      word-lane bucketed dispatcher described above.
 
 - [ ] Generate an SSO ASCII-caseless dispatcher.
   - Tasks:
@@ -635,6 +650,11 @@ fixed-width word compares because unused SSO bytes are zeroed.
   - Success criteria:
     - Field-dispatch disassembly uses immediates/direct word compares.
     - Ordinary `Str.is_eq` also benefits outside generated parser code.
+    - Intermediate progress: exact static field dispatch no longer calls
+      generic `Str.is_eq` or a static equality helper in the optimized HTTP and
+      JSON parser binaries. The current LLVM lowering emits guarded byte
+      comparisons; the remaining work is to generate the word-lane SSO
+      dispatcher and discriminating-lane ordering from Phase 4.
 
 ## Phase 9: Remove Remaining Generic Parser State Traffic
 
@@ -684,6 +704,9 @@ Roc API.
     - Passed after the host-buffer and `Str.is_eq` changes:
       `zig build run-test-zig-http-header-decoder-platform` and
       `zig build run-test-zig-json-decoder-platform`.
+    - Passed after the static exact-dispatch operation and lowering changes:
+      `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`.
 
 - [x] Run focused string equality tests after the `Str.is_eq` phase.
   - Tasks:
@@ -730,6 +753,13 @@ Roc API.
   - Success criteria:
     - Any remaining instance is either removed or documented with the exact
       reason it is still necessary.
+    - Current exact static-dispatch evidence: `/tmp/roc_http_after_static_exact.s`
+      and `/tmp/roc_json_camel_direct_after_static_exact.s` contain no calls to
+      `roc_builtins_str_equal`,
+      `roc_builtins_str_equal_static_small`, or
+      `roc_builtins_str_caseless_ascii_equals`. Broad parser stack zeroing and
+      large parser frames remain visible, so the presence-bit/LIR scalarization
+      and cold-path outlining phases remain open.
 
 ## Completion Checklist
 

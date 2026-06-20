@@ -171,6 +171,12 @@ pub fn roc_builtins_str_equal(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_byt
     return strEqual(a, b);
 }
 
+/// Wrapper: strEqualStaticSmall(RocStr, u64, u64, u64, u64) -> bool
+pub fn roc_builtins_str_equal_static_small(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strEqualStaticSmall(a, static_len, word0, word1, word2);
+}
+
 /// Wrapper: countUtf8Bytes(RocStr) -> u64
 pub fn roc_builtins_str_count_utf8_bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };

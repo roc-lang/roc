@@ -5921,6 +5921,7 @@ const BodyContext = struct {
                 precomputed_plan,
                 if (precomputed) |record| record.renamed_field_locals else null,
                 if (precomputed) |record| record.renamed_field_lengths else null,
+                if (precomputed) |record| record.renamed_field_texts else null,
             );
         }
 
@@ -5980,6 +5981,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
         precomputed_renamed_field_locals: ?[]const Ast.LocalId,
         precomputed_renamed_field_lengths: ?[]const u32,
+        precomputed_renamed_field_texts: ?[][]const u8,
     ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
         const parse_ok_ty = try self.parseResultOkType(shape_ty, state_ty);
@@ -6063,6 +6065,10 @@ const BodyContext = struct {
             if (lengths.len != record_fields.len) Common.invariant("precomputed renamed field length arity differed from record field count");
             break :blk lengths;
         } else null;
+        const renamed_field_texts = if (precomputed_renamed_field_texts) |texts| blk: {
+            if (texts.len != record_fields.len) Common.invariant("precomputed renamed field text arity differed from record field count");
+            break :blk texts;
+        } else null;
 
         const cursor_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
         const fields_expr = try self.lowerFieldsValue(fields_ty, fields_backing_ty, field_handle_ty, renamed_field_locals, renamed_field_lengths);
@@ -6085,6 +6091,7 @@ const BodyContext = struct {
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
+            renamed_field_texts,
             event_local,
             event_ty,
         );
@@ -6127,6 +6134,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
+        renamed_field_texts: ?[]const []const u8,
         event_local: Ast.LocalId,
         event_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -6205,6 +6213,7 @@ const BodyContext = struct {
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
+            renamed_field_texts,
             try_field_payload_local,
             try_field_payload_ty,
             .exact,
@@ -6226,6 +6235,7 @@ const BodyContext = struct {
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
+            renamed_field_texts,
             try_field_caseless_payload_local,
             try_field_caseless_payload_ty,
             .caseless,
@@ -6250,6 +6260,7 @@ const BodyContext = struct {
         key_ty: Type.TypeId,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
+        renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const Ast.ExprId,
         unknown_body: Ast.ExprId,
         mode: RecordFieldMatchMode,
@@ -6263,6 +6274,7 @@ const BodyContext = struct {
                 key_ty,
                 renamed_field_locals,
                 lengths,
+                renamed_field_texts,
                 matched_bodies,
                 unknown_body,
                 mode,
@@ -6274,7 +6286,13 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[index], key_ty);
-            const cond = try self.recordFieldNameMatch(key_local, key_ty, renamed_field_expr, mode);
+            const cond = try self.recordFieldNameMatch(
+                key_local,
+                key_ty,
+                renamed_field_expr,
+                if (renamed_field_texts) |texts| texts[index] else null,
+                mode,
+            );
             body = try self.builder.ifExpr(cond, matched_bodies[index], body, ret_ty);
         }
         return body;
@@ -6286,6 +6304,7 @@ const BodyContext = struct {
         key_ty: Type.TypeId,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: []const u32,
+        renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const Ast.ExprId,
         unknown_body: Ast.ExprId,
         mode: RecordFieldMatchMode,
@@ -6309,7 +6328,13 @@ const BodyContext = struct {
                 if (renamed_field_lengths[field_index] != length) continue;
 
                 const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[field_index], key_ty);
-                const cond = try self.recordFieldNameMatch(key_local, key_ty, renamed_field_expr, mode);
+                const cond = try self.recordFieldNameMatch(
+                    key_local,
+                    key_ty,
+                    renamed_field_expr,
+                    if (renamed_field_texts) |texts| texts[field_index] else null,
+                    mode,
+                );
                 group_body = try self.builder.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
             }
 
@@ -6371,6 +6396,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
+        renamed_field_texts: ?[]const []const u8,
         payload_local: Ast.LocalId,
         payload_ty: Type.TypeId,
         mode: RecordFieldMatchMode,
@@ -6396,6 +6422,7 @@ const BodyContext = struct {
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
+            renamed_field_texts,
             mode,
         );
         return try self.wrapLet(key_local, str_ty, key_expr, try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty), ret_ty);
@@ -6559,6 +6586,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const Ast.LocalId,
         renamed_field_lengths: ?[]const u32,
+        renamed_field_texts: ?[]const []const u8,
         mode: RecordFieldMatchMode,
     ) Allocator.Error!Ast.ExprId {
         const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
@@ -6571,6 +6599,9 @@ const BodyContext = struct {
         if (fields.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
         if (renamed_field_lengths) |lengths| {
             if (fields.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
+        }
+        if (renamed_field_texts) |texts| {
+            if (fields.len != texts.len) Common.invariant("record named field dispatch renamed text arity differed from field count");
         }
 
         const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
@@ -6602,6 +6633,7 @@ const BodyContext = struct {
             key_ty,
             renamed_field_locals,
             renamed_field_lengths,
+            renamed_field_texts,
             matched_bodies,
             unknown_body,
             mode,
@@ -7254,6 +7286,31 @@ const BodyContext = struct {
         return try self.builder.lowLevelExpr(.str_is_eq, &.{ key_expr, field_expr }, try self.builder.primitiveType(.bool));
     }
 
+    fn recordFieldNameStaticSmallExactMatch(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        field_text: []const u8,
+    ) Allocator.Error!Ast.ExprId {
+        if (field_text.len > 24) Common.invariant("static small field match requested for a long field name");
+
+        var words = [3]u64{ 0, 0, 0 };
+        for (field_text, 0..) |byte, index| {
+            words[index / @sizeOf(u64)] |= @as(u64, byte) << @intCast((index % @sizeOf(u64)) * 8);
+        }
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const args = [_]Ast.ExprId{
+            key_expr,
+            try self.builder.intLiteralExpr(@intCast(field_text.len), u64_ty),
+            try self.builder.intLiteralExpr(words[0], u64_ty),
+            try self.builder.intLiteralExpr(words[1], u64_ty),
+            try self.builder.intLiteralExpr(words[2], u64_ty),
+        };
+        return try self.builder.lowLevelExpr(.str_is_eq_static_small, &args, try self.builder.primitiveType(.bool));
+    }
+
     fn renamedRecordFieldNameExpr(
         self: *BodyContext,
         encoding_expr: Ast.ExprId,
@@ -7285,11 +7342,18 @@ const BodyContext = struct {
         key_local: Ast.LocalId,
         key_ty: Type.TypeId,
         field_expr: Ast.ExprId,
+        precomputed_field_text: ?[]const u8,
         mode: RecordFieldMatchMode,
     ) Allocator.Error!Ast.ExprId {
         return switch (mode) {
             .direct => Common.invariant("direct field handles do not use string matching"),
-            .exact => try self.recordFieldNameExactMatch(key_local, key_ty, field_expr),
+            .exact => if (precomputed_field_text) |field_text|
+                if (field_text.len <= 24)
+                    try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text)
+                else
+                    try self.recordFieldNameExactMatch(key_local, key_ty, field_expr)
+            else
+                try self.recordFieldNameExactMatch(key_local, key_ty, field_expr),
             .caseless => blk: {
                 const key_expr = try self.builder.localExpr(key_local, key_ty);
                 break :blk try self.builder.lowLevelExpr(.str_caseless_ascii_equals, &.{ key_expr, field_expr }, try self.builder.primitiveType(.bool));

@@ -4098,6 +4098,18 @@ pub const Interpreter = struct {
                 val.write(u8, if (result) 1 else 0);
                 break :blk val;
             },
+            .str_is_eq_static_small => blk: {
+                const result = builtins.str.strEqualStaticSmall(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                    args[4].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
             .str_concat => self.callBuiltinStr2Mode(builtins.str.strConcatC, valueToRocStr(args[0]), valueToRocStr(args[1]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_contains => blk: {
                 const result = builtins.str.strContains(valueToRocStr(args[0]), valueToRocStr(args[1]));

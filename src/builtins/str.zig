@@ -312,6 +312,23 @@ pub const RocStr = extern struct {
         return bytesEqualFast(self.asU8ptr(), slice.ptr, self_len);
     }
 
+    /// Compare this RocStr against up to 24 static bytes packed little-endian
+    /// into three u64 words. This is an internal compiler/runtime helper for
+    /// generated record-field dispatch; it is not a user-facing primitive.
+    ///
+    /// The static side is already known by the compiler. The runtime side may be
+    /// small, heap-backed, or a seamless slice, so all fixed-width loads stay
+    /// inside the logical `self.len()` range. Short slices below one full word
+    /// use a bounded byte build instead of over-reading past their allocation.
+    pub fn eqlStaticSmall(self: RocStr, static_len: usize, word0: u64, word1: u64, word2: u64) bool {
+        if (static_len > 24) return false;
+
+        const self_len = self.len();
+        if (self_len != static_len) return false;
+
+        return bytesEqualStaticSmall(self.asU8ptr(), static_len, word0, word1, word2);
+    }
+
     pub fn clone(
         str: RocStr,
         roc_ops: *RocOps,
@@ -567,6 +584,24 @@ inline fn bytesEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool
     return true;
 }
 
+inline fn bytesEqualStaticSmall(bytes: [*]const u8, len: usize, word0: u64, word1: u64, word2: u64) bool {
+    const static_words = [3]u64{ word0, word1, word2 };
+    const word_size = @sizeOf(u64);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const runtime_word = std.mem.readInt(u64, bytes[index..][0..word_size], .little);
+        if (runtime_word != static_words[index / word_size]) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len == 0) return true;
+
+    const mask = lowBytesMask64(tail_len);
+    const runtime_tail = readTailU64(bytes, len, index, tail_len);
+    return (runtime_tail & mask) == (static_words[index / word_size] & mask);
+}
+
 inline fn smallBytesEqual(left: [@sizeOf(RocStr)]u8, right: [@sizeOf(RocStr)]u8, len: usize) bool {
     const word_size = @sizeOf(u64);
 
@@ -624,6 +659,11 @@ pub fn init(
 /// TODO: Document strEqual.
 pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
     return self.eql(other);
+}
+
+/// Internal helper for compiler-generated static small string comparison.
+pub fn strEqualStaticSmall(self: RocStr, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
+    return self.eqlStaticSmall(@intCast(static_len), word0, word1, word2);
 }
 
 // Str.numberOfBytes
@@ -2389,6 +2429,68 @@ test "RocStr.eq: all small lengths compare by bytes" {
         unequal_right.decref(test_env.getOps());
         right_buf[len - 1] = left_buf[len - 1];
     }
+}
+
+fn packStaticSmallForTest(text: []const u8) [3]u64 {
+    var words = [3]u64{ 0, 0, 0 };
+    for (text, 0..) |byte, index| {
+        words[index / @sizeOf(u64)] |= @as(u64, byte) << @intCast((index % @sizeOf(u64)) * 8);
+    }
+    return words;
+}
+
+test "RocStr.eqStaticSmall: all static lengths compare by bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var buf: [24]u8 = undefined;
+    for (&buf, 0..) |*byte, index| {
+        byte.* = @as(u8, @intCast('A' + (index % 26)));
+    }
+
+    for (0..25) |len| {
+        const text = buf[0..len];
+        const words = packStaticSmallForTest(text);
+        const roc_str = RocStr.init(text.ptr, text.len, test_env.getOps());
+        defer roc_str.decref(test_env.getOps());
+
+        try std.testing.expect(roc_str.eqlStaticSmall(len, words[0], words[1], words[2]));
+
+        if (len > 0) {
+            var changed = buf;
+            changed[len - 1] ^= 1;
+            const changed_words = packStaticSmallForTest(changed[0..len]);
+            try std.testing.expect(!roc_str.eqlStaticSmall(len, changed_words[0], changed_words[1], changed_words[2]));
+        }
+    }
+}
+
+test "RocStr.eqStaticSmall: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "abcdefghijklmnopqrstuvxy";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 2, 2, test_env.getOps());
+
+    const words = packStaticSmallForTest("xy");
+    const mismatch = packStaticSmallForTest("xz");
+
+    try std.testing.expect(slice.eqlStaticSmall(2, words[0], words[1], words[2]));
+    try std.testing.expect(!slice.eqlStaticSmall(2, mismatch[0], mismatch[1], mismatch[2]));
+}
+
+test "RocStr.eqStaticSmall: rejects long static metadata" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "abcdefghijklmnopqrstuvwx";
+    const roc_str = RocStr.init(text, text.len, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    try std.testing.expect(!roc_str.eqlStaticSmall(25, 0, 0, 0));
 }
 
 test "RocStr.eq: embedded nul bytes use byte equality" {
