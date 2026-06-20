@@ -13281,6 +13281,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 }
                 break :blk finalized_args;
             };
+            errdefer self.allocator.free(args);
             try out.append(self.allocator, .{ .name = platform_tag.name, .args = args });
         }
         for (app_tags) |app_tag| {
