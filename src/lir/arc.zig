@@ -759,7 +759,7 @@ const Inserter = struct {
                             .initialize_join_result => {},
                         }
                         if (move_value) {
-                            path.owned.unset(assign.value);
+                            self.unsetOwnedUnit(&path.owned, assign.value);
                             retain_set_target = false;
                         }
                         self.addOwnedIfRc(&path.owned, assign.target);
@@ -1598,7 +1598,7 @@ const Inserter = struct {
                             .local => |source| {
                                 if (assign.target != source) {
                                     const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.loop_keep);
-                                    if (move_value) path.owned.unset(source);
+                                    if (move_value) self.unsetOwnedUnit(&path.owned, source);
                                     self.addOwnedIfRc(&path.owned, assign.target);
                                 }
                             },
@@ -1659,7 +1659,7 @@ const Inserter = struct {
                     );
                     const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
                     if (target_consumed) {
-                        path.owned.unset(assign.target);
+                        self.unsetOwnedUnit(&path.owned, assign.target);
                     }
                     self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                     if (assign.rc_effect.retain_args != 0) {
@@ -1700,7 +1700,7 @@ const Inserter = struct {
                             .replace_existing, .initialize_join_param => path.owned.unset(assign.target),
                             .initialize_join_result => {},
                         }
-                        if (move_value) path.owned.unset(assign.value);
+                        if (move_value) self.unsetOwnedUnit(&path.owned, assign.value);
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
@@ -5612,6 +5612,21 @@ test "RC alias into aggregate moves the leader unit" {
     const alias_assign = try f.assignRefLocal(alias, value, pair_assign);
     const body = try f.assignStr(value, "through", alias_assign);
     _ = try f.addProc(&.{}, body, f.pair_str);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC alias into set_local moves the leader unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.str);
+    const ret = try f.ret(result);
+    const set_result = try f.setLocal(result, alias, .initialize_join_result, ret);
+    const alias_assign = try f.assignRefLocal(alias, value, set_result);
+    const body = try f.assignStr(value, "through-set-local", alias_assign);
+    _ = try f.addProc(&.{}, body, .str);
     try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }

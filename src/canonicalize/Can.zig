@@ -4960,6 +4960,12 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
     return null;
 }
 
+fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
+    const import_idx = external.import_idx orelse return false;
+    const import_name_idx = self.env.imports.imports.items.items[@intFromEnum(import_idx)];
+    return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
+}
+
 /// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
 /// `5.Foo`), what its suffix target resolves to in the current scope. The type
 /// checker consumes this so it can unify the literal against the right concrete
@@ -4967,12 +4973,12 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
 /// `type_ident` names a type binding in scope.
 fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
     const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
-    if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-        try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
-        return;
-    }
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+        if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+        } else {
+            try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+        }
         return;
     };
     switch (binding_location.binding.*) {
@@ -4980,6 +4986,12 @@ fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.I
             try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
         },
         .external_nominal => |external| {
+            if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+                    return;
+                }
+            }
             const import_idx = external.import_idx orelse {
                 try self.env.recordNumericSuffixTarget(node_idx, .invalid);
                 return;
@@ -18318,8 +18330,13 @@ pub fn introduceType(
         else => null,
     } else null;
 
+    const ShadowedType = union(enum) {
+        statement: Statement.Idx,
+        region: Region,
+    };
+
     // Check for shadowing in parent scopes
-    var shadowed_in_parent: ?Statement.Idx = null;
+    var shadowed_in_parent: ?ShadowedType = null;
     if (self.scopes.items.len > 1) {
         var i = self.scopes.items.len - 1;
         while (i > 0) {
@@ -18327,12 +18344,12 @@ pub fn introduceType(
             const scope = &self.scopes.items[i];
             if (scope.type_bindings.get(name_ident)) |binding| {
                 shadowed_in_parent = switch (binding) {
-                    .local_nominal => |stmt| stmt,
-                    .local_alias => |stmt| stmt,
-                    .associated_nominal => |stmt| stmt,
-                    .external_nominal => null,
+                    .local_nominal => |stmt| .{ .statement = stmt },
+                    .local_alias => |stmt| .{ .statement = stmt },
+                    .associated_nominal => |stmt| .{ .statement = stmt },
+                    .external_nominal => |external| .{ .region = external.origin_region },
                 };
-                if (shadowed_in_parent) |_| break;
+                break;
             }
         }
     }
@@ -18361,8 +18378,11 @@ pub fn introduceType(
     switch (result) {
         .success => {
             // Check if we're shadowing a type in a parent scope
-            if (shadowed_in_parent) |shadowed_stmt| {
-                const original_region = self.env.store.getStatementRegion(shadowed_stmt);
+            if (shadowed_in_parent) |shadowed| {
+                const original_region = switch (shadowed) {
+                    .statement => |shadowed_stmt| self.env.store.getStatementRegion(shadowed_stmt),
+                    .region => |original_region| original_region,
+                };
                 try self.env.pushDiagnostic(Diagnostic{
                     .shadowing_warning = .{
                         .ident = name_ident,
