@@ -58,8 +58,8 @@ HeaderEncoding := [Caseless].{
 		],
 		Headers.DecodeErr,
 	)
-	parse_record_field = |fields, state|
-		parse_record_field_from_headers(fields, state.raw)
+	parse_record_field = |_, state|
+		parse_record_field_from_headers(state.raw)
 
 	skip_record_field : Headers -> Try(Headers, Headers.DecodeErr)
 	skip_record_field = |state| {
@@ -86,7 +86,7 @@ HeaderEncoding := [Caseless].{
 	}
 }
 
-parse_record_field_from_headers : Fields(_shape), Str -> Try(
+parse_record_field_from_headers : Str -> Try(
 	[
 		Field({ field : Field(_shape), rest : Headers }),
 		TryField({ name : Str, rest : Headers }),
@@ -96,7 +96,7 @@ parse_record_field_from_headers : Fields(_shape), Str -> Try(
 	],
 	Headers.DecodeErr,
 )
-parse_record_field_from_headers = |fields, headers|
+parse_record_field_from_headers = |headers|
 	if headers.is_empty() {
 		Ok(Done({ rest: { raw: "" } }))
 	} else {
@@ -114,25 +114,10 @@ parse_record_field_from_headers = |fields, headers|
 					line_len = Str.count_utf8_bytes(line_parts.before)
 
 					if name_len < line_len {
-						shorter_than_any_field = name_len < Fields.shortest_name(fields)
-						longer_than_any_field = name_len > Fields.longest_name(fields)
-
-						if shorter_than_any_field {
-							Ok(Continue({ rest: { raw: line_parts.after } }))
-						} else if longer_than_any_field {
-							Ok(Continue({ rest: { raw: line_parts.after } }))
-						} else {
-							match find_field_caseless(fields, name) {
-								Ok(field) =>
-									Ok(Field({
-										field,
-										rest: { raw: value_start },
-									}))
-
-								Err(NotFound) =>
-									Ok(Continue({ rest: { raw: line_parts.after } }))
-							}
-						}
+						Ok(TryFieldCaseless({
+							name,
+							rest: { raw: value_start },
+						}))
 					} else {
 						Err(Headers.DecodeErr.BadHeader)
 					}
@@ -149,29 +134,6 @@ take_header_value = |raw|
 		Ok({ before, after }) => Ok({ value: before.trim(), after })
 		Err(NotFound) => Ok({ value: raw.trim(), after: "" })
 	}
-
-find_field_caseless : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
-find_field_caseless = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
-
-	while True {
-		match Iter.next($remaining) {
-			One({ item, rest }) =>
-				if Str.caseless_ascii_equals(name, Field.name(item)) {
-					return Ok(item)
-				} else {
-					$remaining = rest
-				}
-
-			Skip({ rest }) => {
-				$remaining = rest
-			}
-
-			Done =>
-				return Err(NotFound)
-		}
-	}
-}
 
 underscores_to_dashes : Str -> Str
 underscores_to_dashes = |text|

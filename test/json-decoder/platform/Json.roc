@@ -33,9 +33,9 @@ JsonEncoding := [Default, CamelCase].{
 		],
 		Json.DecodeErr,
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, state|
 		match state {
-			Input(raw) => parse_record_field_from_object(fields, raw)
+			Input(raw) => parse_record_field_from_object(raw)
 		}
 
 	skip_record_field : JsonState -> Try(JsonState, Json.DecodeErr)
@@ -113,7 +113,7 @@ Json :: [].{
 invalid_json : Json.DecodeErr
 invalid_json = Json.DecodeErr.InvalidJson
 
-parse_record_field_from_object : Fields(_shape), Str -> Try(
+parse_record_field_from_object : Str -> Try(
 	[
 		Field({ field : Field(_shape), rest : JsonState }),
 		TryField({ name : Str, rest : JsonState }),
@@ -123,15 +123,15 @@ parse_record_field_from_object : Fields(_shape), Str -> Try(
 	],
 	Json.DecodeErr,
 )
-parse_record_field_from_object = |fields, raw| {
+parse_record_field_from_object = |raw| {
 	remaining = Str.trim_start(raw)
 
 	if Str.starts_with(remaining, "{") {
-		return parse_record_field_from_object(fields, Str.trim_start(Str.drop_prefix(remaining, "{")))
+		return parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, "{")))
 	}
 
 	if Str.starts_with(remaining, ",") {
-		return parse_record_field_from_object(fields, Str.trim_start(Str.drop_prefix(remaining, ",")))
+		return parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, ",")))
 	}
 
 	if Str.starts_with(remaining, "}") {
@@ -154,36 +154,7 @@ parse_record_field_from_object = |fields, raw| {
 	after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
 	rest = JsonState.Input(after_colon)
 
-	match find_field(fields, key) {
-		Ok(field) => Ok(Field({ field, rest }))
-		Err(NotFound) => {
-			after_skip = skip_json_value(rest)?
-			Ok(Continue({ rest: after_skip }))
-		}
-	}
-}
-
-find_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
-find_field = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
-
-	while True {
-		match Iter.next($remaining) {
-			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), name) {
-					return Ok(item)
-				} else {
-					$remaining = rest
-				}
-
-			Skip({ rest }) => {
-				$remaining = rest
-			}
-
-			Done =>
-				return Err(NotFound)
-		}
-	}
+	Ok(TryField({ name: key, rest }))
 }
 
 snake_to_camel : Str -> Str

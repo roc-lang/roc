@@ -6203,66 +6203,6 @@ const BodyContext = struct {
             done_payload_ty,
         );
 
-        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
-            .zst => &.{},
-            else => Common.invariant("record parse event requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
-        defer self.allocator.free(item_tys);
-        if (fields.len != item_tys.len) Common.invariant("record parser state arity did not match derived record field count");
-        if (fields.len != renamed_field_locals.len) Common.invariant("record parser renamed field arity did not match derived record field count");
-
-        const str_ty = try self.builder.primitiveType(.str);
-        const dispatch_key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
-        const dispatch_rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
-        const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
-        defer self.allocator.free(matched_bodies);
-        for (fields, 0..) |field, index| {
-            matched_bodies[index] = try self.lowerParseMatchedRecordField(
-                field,
-                index,
-                item_tys,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                record_state_local,
-                record_state_ty,
-                precomputed_plan,
-                dispatch_rest_local,
-            );
-        }
-        const unknown_body = try self.lowerUnknownRecordFieldEvent(
-            encoding_ty,
-            state_ty,
-            ret_ty,
-            record_state_local,
-            record_state_ty,
-            try self.builder.localExpr(dispatch_rest_local, state_ty),
-        );
-        const exact_dispatch_body = try self.lowerParseRecordNamedDispatchBody(
-            dispatch_key_local,
-            str_ty,
-            renamed_field_locals,
-            renamed_field_lengths,
-            matched_bodies,
-            unknown_body,
-            .exact,
-            ret_ty,
-        );
-        const caseless_dispatch_body = try self.lowerParseRecordNamedDispatchBody(
-            dispatch_key_local,
-            str_ty,
-            renamed_field_locals,
-            renamed_field_lengths,
-            matched_bodies,
-            unknown_body,
-            .caseless,
-            ret_ty,
-        );
-
         const field_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), field_payload_ty);
         const field_payload_pat = try self.builder.bindPat(field_payload_local, field_payload_ty);
         const field_pat = try self.builder.program.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
@@ -6288,15 +6228,20 @@ const BodyContext = struct {
             .name = try_field_tag.name,
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{try_field_payload_pat}),
         } } });
-        const try_field_body = try self.lowerParseRecordNamedFieldBranch(
-            try_field_payload_local,
-            try_field_payload_ty,
-            dispatch_key_local,
-            dispatch_rest_local,
-            exact_dispatch_body,
-            str_ty,
+        const try_field_body = try self.lowerParseRecordNamedFieldEvent(
+            shape_ty,
+            encoding_expr,
+            encoding_ty,
             state_ty,
             ret_ty,
+            record_state_local,
+            record_state_ty,
+            precomputed_plan,
+            renamed_field_locals,
+            renamed_field_lengths,
+            try_field_payload_local,
+            try_field_payload_ty,
+            .exact,
         );
 
         const try_field_caseless_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), try_field_caseless_payload_ty);
@@ -6305,15 +6250,20 @@ const BodyContext = struct {
             .name = try_field_caseless_tag.name,
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{try_field_caseless_payload_pat}),
         } } });
-        const try_field_caseless_body = try self.lowerParseRecordNamedFieldBranch(
-            try_field_caseless_payload_local,
-            try_field_caseless_payload_ty,
-            dispatch_key_local,
-            dispatch_rest_local,
-            caseless_dispatch_body,
-            str_ty,
+        const try_field_caseless_body = try self.lowerParseRecordNamedFieldEvent(
+            shape_ty,
+            encoding_expr,
+            encoding_ty,
             state_ty,
             ret_ty,
+            record_state_local,
+            record_state_ty,
+            precomputed_plan,
+            renamed_field_locals,
+            renamed_field_lengths,
+            try_field_caseless_payload_local,
+            try_field_caseless_payload_ty,
+            .caseless,
         );
 
         const branches = [_]Ast.Branch{
@@ -6409,22 +6359,70 @@ const BodyContext = struct {
         return try self.wrapLet(key_len_local, u64_ty, key_len_expr, body, ret_ty);
     }
 
-    fn lowerParseRecordNamedFieldBranch(
+    fn lowerParseRecordNamedFieldEvent(
         self: *BodyContext,
-        payload_local: Ast.LocalId,
-        payload_ty: Type.TypeId,
-        key_local: Ast.LocalId,
-        rest_local: Ast.LocalId,
-        dispatch_body: Ast.ExprId,
-        str_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        payload_local: Ast.LocalId,
+        payload_ty: Type.TypeId,
+        mode: RecordFieldMatchMode,
     ) Allocator.Error!Ast.ExprId {
-        const name_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "name");
+        const str_ty = try self.builder.primitiveType(.str);
+        const key_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "name");
+        if (!self.sameType(self.builder.program.exprs.items[@intFromEnum(key_expr)].ty, str_ty)) {
+            Common.invariant("record named-field event key was not Str");
+        }
         const rest_expr = try self.recordPayloadFieldAccess(payload_local, payload_ty, "rest");
-        var body = dispatch_body;
-        body = try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty);
-        return try self.wrapLet(key_local, str_ty, name_expr, body, ret_ty);
+        const next_ok_ty = try self.parseRecordLoopNextType(state_ty, record_state_ty);
+        const helper_try_ty = try self.tryTypeLike(ret_ty, next_ok_ty, self.tryInfo(ret_ty).err_ty);
+        const helper_fn = try self.recordNamedFieldDispatchFn(
+            shape_ty,
+            encoding_ty,
+            state_ty,
+            record_state_ty,
+            helper_try_ty,
+            precomputed_plan,
+            renamed_field_locals,
+            renamed_field_lengths,
+            mode,
+        );
+
+        var arg_exprs = std.ArrayList(Ast.ExprId).empty;
+        defer arg_exprs.deinit(self.allocator);
+        try arg_exprs.append(self.allocator, encoding_expr);
+        try arg_exprs.append(self.allocator, key_expr);
+        try arg_exprs.append(self.allocator, rest_expr);
+        try arg_exprs.append(self.allocator, try self.builder.localExpr(record_state_local, record_state_ty));
+        if (precomputed_plan) |plan| {
+            for (plan.captures.items) |capture| {
+                try arg_exprs.append(self.allocator, try self.builder.localExpr(capture.local, str_ty));
+            }
+        } else {
+            for (renamed_field_locals) |local| {
+                try arg_exprs.append(self.allocator, try self.builder.localExpr(local, str_ty));
+            }
+        }
+        const helper_call = try self.builder.program.addExpr(.{
+            .ty = helper_try_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = helper_fn },
+                .args = try self.builder.program.addExprSpan(arg_exprs.items),
+            } },
+        });
+
+        const next_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), next_ok_ty);
+        const cursor_expr = try self.recordPayloadFieldAccess(next_local, next_ok_ty, "cursor");
+        const next_record_state_expr = try self.recordPayloadFieldAccess(next_local, next_ok_ty, "record_state");
+        const ok_body = try self.continueWith(ret_ty, &.{ cursor_expr, next_record_state_expr });
+        return try self.sequenceTry(helper_call, helper_try_ty, next_local, ok_body, ret_ty);
     }
 
     fn lowerParseRecordContinueEvent(
@@ -6613,6 +6611,107 @@ const BodyContext = struct {
         return fn_id;
     }
 
+    fn recordNamedFieldDispatchFn(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        record_state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        mode: RecordFieldMatchMode,
+    ) Allocator.Error!Ast.FnId {
+        const capture_count = if (precomputed_plan) |plan| plan.captures.items.len else renamed_field_locals.len;
+        const arg_tys = try self.allocator.alloc(Type.TypeId, 4 + capture_count);
+        defer self.allocator.free(arg_tys);
+        arg_tys[0] = encoding_ty;
+        arg_tys[1] = try self.builder.primitiveType(.str);
+        arg_tys[2] = state_ty;
+        arg_tys[3] = record_state_ty;
+        const str_ty = arg_tys[1];
+        for (arg_tys[4..]) |*arg_ty| {
+            arg_ty.* = str_ty;
+        }
+
+        const fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(arg_tys),
+            .ret = ret_ty,
+        } });
+        const owner = self.view.templates.get(self.owner_template.template);
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = owner.checked_fn_root,
+            .source_fn_key = generatedRecordNamedDispatchKey(self.current_fn_key, fn_ty, mode),
+            .mono_fn_ty = fn_ty,
+        });
+
+        const encoding_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), encoding_ty);
+        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const record_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), record_state_ty);
+        const capture_arg_locals = try self.allocator.alloc(Ast.LocalId, capture_count);
+        defer self.allocator.free(capture_arg_locals);
+        for (capture_arg_locals) |*local| {
+            local.* = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+        }
+
+        const args_items = try self.allocator.alloc(Ast.TypedLocal, 4 + capture_count);
+        defer self.allocator.free(args_items);
+        args_items[0] = .{ .local = encoding_local, .ty = encoding_ty };
+        args_items[1] = .{ .local = key_local, .ty = str_ty };
+        args_items[2] = .{ .local = rest_local, .ty = state_ty };
+        args_items[3] = .{ .local = record_state_local, .ty = record_state_ty };
+        for (capture_arg_locals, 0..) |local, index| {
+            args_items[4 + index] = .{ .local = local, .ty = str_ty };
+        }
+        const args = try self.builder.program.addTypedLocalSpan(args_items);
+
+        var helper_plan: ?ParserPrecomputedPlan = if (precomputed_plan) |plan|
+            try self.cloneParserPrecomputedPlanForCaptureArgs(plan, capture_arg_locals)
+        else
+            null;
+        defer if (helper_plan) |*plan| plan.deinit();
+
+        const helper_renamed_field_locals: []const Ast.LocalId = if (helper_plan) |*plan| blk: {
+            const record = plan.records.get(shape_ty) orelse
+                Common.invariant("named field dispatch helper missing precomputed field metadata for record shape");
+            break :blk record.renamed_field_locals;
+        } else capture_arg_locals;
+        const helper_renamed_field_lengths: ?[]const u32 = if (helper_plan) |*plan| blk: {
+            const record = plan.records.get(shape_ty) orelse
+                Common.invariant("named field dispatch helper missing precomputed field lengths for record shape");
+            break :blk record.renamed_field_lengths;
+        } else renamed_field_lengths;
+
+        const body = try self.lowerRecordNamedFieldDispatchBody(
+            shape_ty,
+            encoding_local,
+            encoding_ty,
+            key_local,
+            str_ty,
+            rest_local,
+            state_ty,
+            record_state_local,
+            record_state_ty,
+            ret_ty,
+            if (helper_plan) |*plan| plan else null,
+            helper_renamed_field_locals,
+            helper_renamed_field_lengths,
+            mode,
+        );
+        try self.builder.program.defs.append(self.allocator, .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = self.builder.program.fns.items[@intFromEnum(fn_id)].source,
+            .fn_id = fn_id,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = ret_ty,
+        });
+        return fn_id;
+    }
+
     fn lowerRecordDirectFieldDispatchBody(
         self: *BodyContext,
         shape_ty: Type.TypeId,
@@ -6687,6 +6786,76 @@ const BodyContext = struct {
 
         const handle_index = try self.fieldHandleIndexExpr(field_local, field_ty, u64_ty);
         return try self.wrapLet(index_local, u64_ty, handle_index, body, ret_ty);
+    }
+
+    fn lowerRecordNamedFieldDispatchBody(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        encoding_local: Ast.LocalId,
+        encoding_ty: Type.TypeId,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        rest_local: Ast.LocalId,
+        state_ty: Type.TypeId,
+        record_state_local: Ast.LocalId,
+        record_state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        renamed_field_locals: []const Ast.LocalId,
+        renamed_field_lengths: ?[]const u32,
+        mode: RecordFieldMatchMode,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => Common.invariant("record named field dispatch requested for a non-record shape"),
+        });
+        defer self.allocator.free(fields);
+        const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(record_state_ty));
+        defer self.allocator.free(item_tys);
+        if (fields.len != item_tys.len) Common.invariant("record named field dispatch state arity differed from field count");
+        if (fields.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
+        if (renamed_field_lengths) |lengths| {
+            if (fields.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
+        }
+
+        const matched_bodies = try self.allocator.alloc(Ast.ExprId, fields.len);
+        defer self.allocator.free(matched_bodies);
+        for (fields, 0..) |field, index| {
+            matched_bodies[index] = try self.lowerParseMatchedRecordFieldNext(
+                field,
+                index,
+                item_tys,
+                encoding_local,
+                encoding_ty,
+                state_ty,
+                record_state_local,
+                record_state_ty,
+                precomputed_plan,
+                rest_local,
+                ret_ty,
+            );
+        }
+
+        const unknown_body = try self.lowerSkipRecordFieldNext(
+            encoding_ty,
+            state_ty,
+            record_state_ty,
+            ret_ty,
+            rest_local,
+            record_state_local,
+        );
+
+        return try self.lowerParseRecordNamedDispatchBody(
+            key_local,
+            key_ty,
+            renamed_field_locals,
+            renamed_field_lengths,
+            matched_bodies,
+            unknown_body,
+            mode,
+            ret_ty,
+        );
     }
 
     fn lowerSkipRecordFieldNext(
@@ -14180,6 +14349,28 @@ fn generatedRecordDirectDispatchKey(
     hasher.update(&current_fn_key.bytes);
     var fn_ty_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_ty));
     hasher.update(std.mem.asBytes(&fn_ty_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn generatedRecordNamedDispatchKey(
+    current_fn_key: names.TypeDigest,
+    fn_ty: Type.TypeId,
+    mode: BodyContext.RecordFieldMatchMode,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    // Domain separator only. This helper key is compiler-owned and never
+    // user-facing, so a single ASCII control byte is enough to keep it distinct
+    // from ordinary source-derived keys without hashing a long label.
+    hasher.update(&[_]u8{0x1f});
+    hasher.update(&current_fn_key.bytes);
+    var fn_ty_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_ty));
+    hasher.update(std.mem.asBytes(&fn_ty_bytes));
+    const mode_byte: u8 = switch (mode) {
+        .direct => 0,
+        .exact => 1,
+        .caseless => 2,
+    };
+    hasher.update(&[_]u8{mode_byte});
     return .{ .bytes = hasher.finalResult() };
 }
 
