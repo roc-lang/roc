@@ -162,9 +162,41 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	}
 
 	## Combine a list of same-typed signals into a signal of the list of values.
-	combine : List(Signal(a)) -> Signal(List(a))
+	combine :
+		List(Signal(a)) -> Signal(List(a))
+			where [
+				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+				a.is_eq : a, a -> Bool,
+			]
 	combine = |signals| {
 		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
-		{ expr: Box.box(Node.SignalExpr.Combine(exprs)) }
+		eq : NodeValue, NodeValue -> Bool
+		eq = |left_nv, right_nv| {
+			A : a
+			decode_one = |nv, fmt| A.decode(nv, fmt)
+			(left_result, _) = NodeValue.decode_list(NodeValue.format, left_nv, decode_one)
+			(right_result, _) = NodeValue.decode_list(NodeValue.format, right_nv, decode_one)
+			match left_result {
+				Ok(left_items) => {
+					left_list : List(a)
+					left_list = left_items
+					match right_result {
+						Ok(right_items) => {
+							right_list : List(a)
+							right_list = right_items
+							left_list.is_eq(right_list)
+						}
+						Err(_) => {
+							crash "Signal.combine equality received a right value that does not match the output type"
+						}
+					}
+				}
+
+				Err(_) => {
+					crash "Signal.combine equality received a left value that does not match the output type"
+				}
+			}
+		}
+		{ expr: Box.box(Node.SignalExpr.Combine(exprs, Box.box(eq))) }
 	}
 }

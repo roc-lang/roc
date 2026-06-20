@@ -279,7 +279,9 @@ pub const RocStr = extern struct {
     pub fn eql(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
         if (self.bytes == other.bytes and self.length == other.length) {
-            return true;
+            if (!self.isSmallStr() or self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
+                return true;
+            }
         }
 
         const self_len = self.len();
@@ -2038,6 +2040,23 @@ test "RocStr.eq: small, not equal, same length" {
     var str2: [str2_len]u8 = "abc".*;
     const str2_ptr: [*]u8 = &str2;
     var roc_str2 = RocStr.init(str2_ptr, str2_len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(!roc_str1.eql(roc_str2));
+}
+
+test "RocStr.eq: small, not equal after first word" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const content1 = "Requests: 1200";
+    var roc_str1 = RocStr.init(content1, content1.len, test_env.getOps());
+    const content2 = "Requests: 1275";
+    var roc_str2 = RocStr.init(content2, content2.len, test_env.getOps());
 
     defer {
         roc_str1.decref(test_env.getOps());

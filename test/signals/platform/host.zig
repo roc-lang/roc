@@ -109,6 +109,19 @@ const HostSignalDependentsRoute = struct {
 const HostSignalCacheSlot = union(enum) {
     absent,
     present: abi.NodeValue,
+
+    fn deinit(self: *HostSignalCacheSlot, roc_host: *abi.RocHost) void {
+        switch (self.*) {
+            .absent => {},
+            .present => |value| abi.decrefNodeValue(value, roc_host),
+        }
+        self.* = .absent;
+    }
+
+    fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: abi.NodeValue) void {
+        self.deinit(roc_host);
+        self.* = .{ .present = value };
+    }
 };
 
 const HostScopeBranch = enum(u8) {
@@ -220,6 +233,7 @@ const HostNodeSignalTextNodeDesc = struct {
     scope_id: u64,
     signal: abi.NodeSignalExpr,
     source_node_ids: []u64,
+    cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeStaticTextAttrDesc = struct {
@@ -233,6 +247,7 @@ const HostNodeSignalTextAttrDesc = struct {
     field: RenderTextField,
     signal: abi.NodeSignalExpr,
     source_node_ids: []u64,
+    cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeStaticBoolAttrDesc = struct {
@@ -246,6 +261,7 @@ const HostNodeSignalBoolAttrDesc = struct {
     field: RenderBoolField,
     signal: abi.NodeSignalExpr,
     source_node_ids: []u64,
+    cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeEventDesc = struct {
@@ -267,6 +283,7 @@ const HostNodeWhenDesc = struct {
     node_id: u64,
     condition: abi.NodeSignalExpr,
     source_node_ids: []u64,
+    cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeEachDesc = struct {
@@ -276,6 +293,7 @@ const HostNodeEachDesc = struct {
     key_of: abi.RocErasedCallable,
     key_eq: abi.RocErasedCallable,
     row: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeDescriptorStream = struct {
@@ -307,7 +325,8 @@ const HostNodeDescriptorStream = struct {
         }
         self.text_nodes.deinit(allocator);
 
-        for (self.signal_text_nodes.items) |desc| {
+        for (self.signal_text_nodes.items) |*desc| {
+            desc.cached_value.deinit(roc_host);
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
@@ -319,7 +338,8 @@ const HostNodeDescriptorStream = struct {
         }
         self.static_text_attrs.deinit(allocator);
 
-        for (self.signal_text_attrs.items) |desc| {
+        for (self.signal_text_attrs.items) |*desc| {
+            desc.cached_value.deinit(roc_host);
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
@@ -328,7 +348,8 @@ const HostNodeDescriptorStream = struct {
 
         self.static_bool_attrs.deinit(allocator);
 
-        for (self.signal_bool_attrs.items) |desc| {
+        for (self.signal_bool_attrs.items) |*desc| {
+            desc.cached_value.deinit(roc_host);
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.signal);
             abi.decrefNodeSignalExpr(desc.signal, roc_host);
             allocator.free(desc.source_node_ids);
@@ -353,14 +374,16 @@ const HostNodeDescriptorStream = struct {
         }
         self.states.deinit(allocator);
 
-        for (self.whens.items) |desc| {
+        for (self.whens.items) |*desc| {
+            desc.cached_value.deinit(roc_host);
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.condition);
             abi.decrefNodeSignalExpr(desc.condition, roc_host);
             allocator.free(desc.source_node_ids);
         }
         self.whens.deinit(allocator);
 
-        for (self.eaches.items) |desc| {
+        for (self.eaches.items) |*desc| {
+            desc.cached_value.deinit(roc_host);
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.items);
             abi.decrefNodeSignalExpr(desc.items, roc_host);
             allocator.free(desc.source_node_ids);
@@ -582,7 +605,8 @@ const HostNodeDescriptorStream = struct {
 fn nodeSignalExprDirectCallableCount(expr: abi.NodeSignalExpr) u64 {
     return switch (expr.tag) {
         .Map, .Map2 => 2,
-        .Combine, .ConstValue, .Ref => 0,
+        .Combine => 1,
+        .ConstValue, .Ref => 0,
     };
 }
 
@@ -1990,7 +2014,7 @@ const HostEnv = struct {
                 self.collectNodeSignalExprSources(allocator, expr.payload.map2._1.*, binder_stack, source_node_ids);
             },
             .Combine => {
-                for (expr.payload.combine.items()) |child| {
+                for (expr.payload.combine._0.items()) |child| {
                     self.collectNodeSignalExprSources(allocator, child, binder_stack, source_node_ids);
                 }
             },
@@ -2253,8 +2277,9 @@ const HostEnv = struct {
                 const source_node_ids = self.nodeSignalExprSourceNodeIds(allocator, elem.payload.when.condition.*, binder_stack.items);
                 stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.when.condition.*, source_node_ids);
 
+                const when_index = stream.whens.items.len - 1;
                 const condition = evalNodeSignalExpr(self, roc_host, elem.payload.when.condition.*, source_node_ids);
-                defer abi.decrefNodeValue(condition, roc_host);
+                stream.whens.items[when_index].cached_value.replace(roc_host, condition);
                 const active_branch: HostScopeBranch = if (nodeValueBoolValue(condition)) .true_branch else .false_branch;
                 if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite())) |inactive_scope_id| {
                     self.disposeScopeSubtree(roc_host, inactive_scope_id);
@@ -2285,10 +2310,11 @@ const HostEnv = struct {
                     elem.payload.each.key_eq,
                     elem.payload.each.row,
                 );
+                const each_index = stream.eaches.items.len - 1;
                 const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
 
                 const items_value = evalNodeSignalExpr(self, roc_host, elem.payload.each.items.*, source_node_ids);
-                defer abi.decrefNodeValue(items_value, roc_host);
+                stream.eaches.items[each_index].cached_value.replace(roc_host, items_value);
                 const items = nodeValueListItems(items_value);
 
                 const keys = allocator.alloc(abi.NodeValue, items.len) catch std.process.exit(1);
@@ -2890,7 +2916,7 @@ fn clearRenderBoolField(elem: *DomElement, field: RenderBoolField) bool {
     };
 }
 
-fn nodeValueText(value: abi.NodeValue) []const u8 {
+fn nodeValueText(value: *const abi.NodeValue) []const u8 {
     return switch (value.tag) {
         .NvStr => value.payload.nv_str.asSlice(),
         else => failHost("render text sink expected a Str signal value"),
@@ -2946,6 +2972,13 @@ fn findTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?Host
 
 fn findSignalTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostNodeSignalTextNodeDesc {
     for (stream.signal_text_nodes.items) |desc| {
+        if (desc.elem_id == elem_id) return desc;
+    }
+    return null;
+}
+
+fn findSignalTextNodeDescMutable(stream: *HostNodeDescriptorStream, elem_id: u64) ?*HostNodeSignalTextNodeDesc {
+    for (stream.signal_text_nodes.items) |*desc| {
         if (desc.elem_id == elem_id) return desc;
     }
     return null;
@@ -3065,7 +3098,7 @@ fn evalNodeSignalExprWithSources(host: *HostEnv, roc_host: *abi.RocHost, expr: a
                 }
                 values.deinit(host.gpa.allocator());
             }
-            for (expr.payload.combine.items()) |child| {
+            for (expr.payload.combine._0.items()) |child| {
                 values.append(host.gpa.allocator(), evalNodeSignalExprWithSources(host, roc_host, child, source_node_ids, source_index)) catch std.process.exit(1);
             }
             const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
@@ -3082,15 +3115,66 @@ fn evalNodeSignalExpr(host: *HostEnv, roc_host: *abi.RocHost, expr: abi.NodeSign
     return value;
 }
 
-fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: abi.NodeSignalExpr, source_node_ids: []const u64) bool {
-    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
-    defer abi.decrefNodeValue(value, roc_host);
-    return applyRenderTextField(host, elem_id, field, nodeValueText(value));
+fn signalExprOutputEqCallable(host: *HostEnv, expr: abi.NodeSignalExpr, source_node_ids: []const u64) abi.RocErasedCallable {
+    return switch (expr.tag) {
+        .Ref => {
+            if (source_node_ids.len != 1) failHost("Ref signal equality requires exactly one source node id");
+            return host.stateEqCallable(source_node_ids[0]);
+        },
+        .Map => expr.payload.map._2,
+        .Map2 => expr.payload.map2._3,
+        .Combine => expr.payload.combine._1,
+        .ConstValue => failHost("constant signal has no dirty equality edge"),
+    };
 }
 
-fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: abi.NodeSignalExpr, source_node_ids: []const u64) bool {
+fn recordSignalPrune(host: *HostEnv) void {
+    var metrics = host.pending_roc_metrics;
+    metrics.propagation_prunes += 1;
+    host.pending_roc_metrics = metrics;
+}
+
+fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, signal: abi.NodeSignalExpr, source_node_ids: []const u64, cache_slot: *HostSignalCacheSlot, value: abi.NodeValue) bool {
+    switch (cache_slot.*) {
+        .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
+        .present => |cached| {
+            const eq = signalExprOutputEqCallable(host, signal, source_node_ids);
+            const values_equal = callErasedNodeValueNodeValueToBool(roc_host, eq, cached, value);
+            if (values_equal) {
+                abi.decrefNodeValue(value, roc_host);
+                recordSignalPrune(host);
+                return false;
+            }
+
+            cache_slot.replace(roc_host, value);
+            return true;
+        },
+    }
+}
+
+fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: abi.NodeSignalExpr, source_node_ids: []const u64, cache_slot: *HostSignalCacheSlot) bool {
     const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
-    defer abi.decrefNodeValue(value, roc_host);
+    const changed = applyRenderTextField(host, elem_id, field, nodeValueText(&value));
+    cache_slot.replace(roc_host, value);
+    return changed;
+}
+
+fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: abi.NodeSignalExpr, source_node_ids: []const u64, cache_slot: *HostSignalCacheSlot) bool {
+    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
+    const changed = applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(value));
+    cache_slot.replace(roc_host, value);
+    return changed;
+}
+
+fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: abi.NodeSignalExpr, source_node_ids: []const u64, cache_slot: *HostSignalCacheSlot) bool {
+    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
+    if (!updateDirtySignalCache(host, roc_host, signal, source_node_ids, cache_slot, value)) return false;
+    return applyRenderTextField(host, elem_id, field, nodeValueText(&value));
+}
+
+fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: abi.NodeSignalExpr, source_node_ids: []const u64, cache_slot: *HostSignalCacheSlot) bool {
+    const value = evalNodeSignalExpr(host, roc_host, signal, source_node_ids);
+    if (!updateDirtySignalCache(host, roc_host, signal, source_node_ids, cache_slot, value)) return false;
     return applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(value));
 }
 
@@ -3103,12 +3187,16 @@ fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
     return false;
 }
 
-fn activeStreamNeedsStructuralRender(host: *HostEnv, dirty_source_node_ids: []const u64) bool {
-    for (host.active_stream.whens.items) |desc| {
-        if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) bool {
+    for (host.active_stream.whens.items) |*desc| {
+        if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
+        const value = evalNodeSignalExpr(host, roc_host, desc.condition, desc.source_node_ids);
+        if (updateDirtySignalCache(host, roc_host, desc.condition, desc.source_node_ids, &desc.cached_value, value)) return true;
     }
-    for (host.active_stream.eaches.items) |desc| {
-        if (sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) return true;
+    for (host.active_stream.eaches.items) |*desc| {
+        if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
+        const value = evalNodeSignalExpr(host, roc_host, desc.items, desc.source_node_ids);
+        if (updateDirtySignalCache(host, roc_host, desc.items, desc.source_node_ids, &desc.cached_value, value)) return true;
     }
     return false;
 }
@@ -3116,23 +3204,23 @@ fn activeStreamNeedsStructuralRender(host: *HostEnv, dirty_source_node_ids: []co
 fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64) CommandCounts {
     var counts: CommandCounts = .{};
 
-    for (host.active_stream.signal_text_nodes.items) |desc| {
+    for (host.active_stream.signal_text_nodes.items) |*desc| {
         if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids)) {
+        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addTextField(.text);
         }
     }
 
-    for (host.active_stream.signal_text_attrs.items) |desc| {
+    for (host.active_stream.signal_text_attrs.items) |*desc| {
         if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
 
-    for (host.active_stream.signal_bool_attrs.items) |desc| {
+    for (host.active_stream.signal_bool_attrs.items) |*desc| {
         if (!sourceNodeIdsIntersect(desc.source_node_ids, dirty_source_node_ids)) continue;
-        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+        if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -3203,7 +3291,7 @@ fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescripto
     }
 }
 
-fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) CommandCounts {
+fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
     traceHostDomReset();
@@ -3228,11 +3316,11 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *co
                 }
             },
             .signal_text => {
-                const desc = findSignalTextNodeDesc(stream, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
+                const desc = findSignalTextNodeDescMutable(stream, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
                 appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
-                if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids)) {
+                if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids, &desc.cached_value)) {
                     counts.addTextField(.text);
                 }
             },
@@ -3244,8 +3332,8 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *co
             counts.addTextField(desc.field);
         }
     }
-    for (stream.signal_text_attrs.items) |desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+    for (stream.signal_text_attrs.items) |*desc| {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -3254,8 +3342,8 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *co
             counts.addBoolField(desc.field);
         }
     }
-    for (stream.signal_bool_attrs.items) |desc| {
-        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+    for (stream.signal_bool_attrs.items) |*desc| {
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -3268,7 +3356,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *co
     return counts;
 }
 
-fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) CommandCounts {
+fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
 
     const allocator = host.gpa.allocator();
@@ -3370,8 +3458,8 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
             counts.addTextField(.text);
         }
     }
-    for (stream.signal_text_nodes.items) |desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids)) {
+    for (stream.signal_text_nodes.items) |*desc| {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addTextField(.text);
         }
     }
@@ -3380,8 +3468,8 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
             counts.addTextField(desc.field);
         }
     }
-    for (stream.signal_text_attrs.items) |desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+    for (stream.signal_text_attrs.items) |*desc| {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -3390,8 +3478,8 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
             counts.addBoolField(desc.field);
         }
     }
-    for (stream.signal_bool_attrs.items) |desc| {
-        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids)) {
+    for (stream.signal_bool_attrs.items) |*desc| {
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, desc.signal, desc.source_node_ids, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -3591,7 +3679,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 
     if (stats) |s| {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
-        if (activeStreamNeedsStructuralRender(host, &dirty_source_node_ids)) {
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
             renderActiveRootMeasured(host, roc_host, &s.dispatch_apply_ns, &s.commands);
         } else {
             const apply_start_ns = benchmarkNowNs();
@@ -3603,7 +3691,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         s.actions += 1;
     } else {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
-        if (activeStreamNeedsStructuralRender(host, &dirty_source_node_ids)) {
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids)) {
             renderActiveRootMeasured(host, roc_host, null, null);
         } else {
             _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids);
@@ -4359,11 +4447,39 @@ fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: 
 fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = capture_ptr;
     const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const is_equal =
-        call_args.arg0.tag == .NvI64 and
-        call_args.arg1.tag == .NvI64 and
-        call_args.arg0.payload.nv_i64 == call_args.arg1.payload.nv_i64;
+    const is_equal = if (call_args.arg0.tag != call_args.arg1.tag)
+        false
+    else switch (call_args.arg0.tag) {
+        .NvBool => call_args.arg0.payload.nv_bool == call_args.arg1.payload.nv_bool,
+        .NvF64 => call_args.arg0.payload.nv_f64 == call_args.arg1.payload.nv_f64,
+        .NvI64 => call_args.arg0.payload.nv_i64 == call_args.arg1.payload.nv_i64,
+        .NvStr => blk: {
+            const left = call_args.arg0.payload.nv_str;
+            const right = call_args.arg1.payload.nv_str;
+            break :blk std.mem.eql(u8, left.asSlice(), right.asSlice());
+        },
+        .NvUnit => true,
+        .NvList => false,
+    };
     writeTestErasedResult(bool, ret, is_equal);
+}
+
+fn testStableStrNodeValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = args;
+    _ = capture_ptr;
+    writeTestErasedResult(abi.NodeValue, ret, nodeValueStr(roc_host, "stable"));
+}
+
+fn testStableBoolNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = args;
+    _ = capture_ptr;
+    writeTestErasedResult(abi.NodeValue, ret, nodeValueBool(true));
+}
+
+fn testAlwaysEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = args;
+    _ = capture_ptr;
+    writeTestErasedResult(bool, ret, true);
 }
 
 fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
@@ -4577,7 +4693,7 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
-    try std.testing.expect(!activeStreamNeedsStructuralRender(&host, &dirty_source_node_ids));
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
 
     const patch_start = host.render_metrics.patches_emitted;
     const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
@@ -4592,6 +4708,75 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
 
     const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
     try std.testing.expectEqual(@as(u64, 0), unchanged_counts.total);
+}
+
+test "signals host prunes dirty leaf sink when retained map equality is unchanged" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const stable_label = testNodeStableStrMapExpr(&roc_host, testNodeRefExpr(state_token));
+    const root = testNodeStateWithTokenAndInitial(
+        &roc_host,
+        state_token,
+        nodeValueI64(1),
+        testNodeTextSignal(&roc_host, stable_label),
+    );
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    const initial_counts = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expectEqual(@as(u64, 1), initial_counts.set_text);
+    try std.testing.expectEqualStrings("stable", host.dom_elements.items[1].text.?);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
+    host.states.items[state_index].value = nodeValueI64(2);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const prune_start = host.pending_roc_metrics.propagation_prunes;
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids);
+
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
+    try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
+    try std.testing.expectEqualStrings("stable", host.dom_elements.items[1].text.?);
+}
+
+test "signals host prunes dirty combine output through retained equality" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const combine = testNodeCombineExpr(&roc_host, &.{});
+    defer abi.decrefNodeSignalExpr(combine, &roc_host);
+
+    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2) };
+    var cache: HostSignalCacheSlot = .absent;
+    cache.replace(&roc_host, nodeValueList(&roc_host, &initial_items));
+    defer cache.deinit(&roc_host);
+
+    const dirty_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(4) };
+    const prune_start = host.pending_roc_metrics.propagation_prunes;
+    try std.testing.expect(!updateDirtySignalCache(&host, &roc_host, combine, &.{}, &cache, nodeValueList(&roc_host, &dirty_items)));
+    try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
 }
 
 test "signals host marks dirty structural sources for structural patching" {
@@ -4626,13 +4811,12 @@ test "signals host marks dirty structural sources for structural patching" {
 
     try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
     const state_id = host.active_stream.scope_sites.items[0].node_id;
-    const dirty_source_node_ids = [_]u64{state_id};
-    try std.testing.expect(activeStreamNeedsStructuralRender(&host, &dirty_source_node_ids));
-
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
     abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
     host.states.items[state_index].value = nodeValueBool(false);
     host.states.items[state_index].version += 1;
+    const dirty_source_node_ids = [_]u64{state_id};
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
 
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root);
@@ -4645,6 +4829,54 @@ test "signals host marks dirty structural sources for structural patching" {
     try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
     try std.testing.expect(activeTextElementId(&host, "true branch") == null);
     try std.testing.expect(activeTextElementId(&host, "false branch") != null);
+}
+
+test "signals host prunes structural render when retained condition equality is unchanged" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const condition = testNodeStableBoolMapExpr(&roc_host, testNodeRefExpr(state_token));
+    const when_elem: abi.Elem = .{
+        .payload = .{
+            .when = .{
+                .condition = boxTestNodeSignalExpr(&roc_host, condition),
+                .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
+                .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
+            },
+        },
+        .tag = .When,
+    };
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(1), when_elem);
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root);
+    _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expect(activeTextElementId(&host, "true branch") != null);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    abi.decrefNodeValue(host.states.items[state_index].value, &roc_host);
+    host.states.items[state_index].value = nodeValueI64(2);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const prune_start = host.pending_roc_metrics.propagation_prunes;
+
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids));
+    try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
+    try std.testing.expect(activeTextElementId(&host, "true branch") != null);
+    try std.testing.expect(activeTextElementId(&host, "false branch") == null);
 }
 
 test "signals host structural patch reorders keyed row DOM without recreating survivors" {
@@ -4974,6 +5206,79 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
             },
         },
         .tag = .Map,
+    };
+}
+
+fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSignalExpr {
+    const transform = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testStableStrNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .map = .{
+                ._0 = boxTestNodeSignalExpr(roc_host, input),
+                ._1 = transform,
+                ._2 = eq,
+            },
+        },
+        .tag = .Map,
+    };
+}
+
+fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSignalExpr {
+    const transform = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testStableBoolNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .map = .{
+                ._0 = boxTestNodeSignalExpr(roc_host, input),
+                ._1 = transform,
+                ._2 = eq,
+            },
+        },
+        .tag = .Map,
+    };
+}
+
+fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalExpr) abi.NodeSignalExpr {
+    const eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testAlwaysEqualNodeValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    return .{
+        .payload = .{
+            .combine = .{
+                ._0 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
+                ._1 = eq,
+            },
+        },
+        .tag = .Combine,
     };
 }
 

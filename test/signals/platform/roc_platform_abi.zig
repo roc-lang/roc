@@ -684,6 +684,12 @@ comptime {
     }
 }
 
+/// Payload struct for Combine variant.
+pub const NodeSignalExprCombinePayload = extern struct {
+    _0: RocList(NodeSignalExpr),
+    _1: RocErasedCallable,
+};
+
 /// Payload struct for Map variant.
 pub const NodeSignalExprMapPayload = extern struct {
     _0: *NodeSignalExpr,
@@ -711,7 +717,7 @@ pub const NodeSignalExprTag = enum(u8) {
 /// Tag union: Node.SignalExpr
 pub const NodeSignalExpr = extern struct {
     payload: extern union {
-        combine: RocList(NodeSignalExpr),
+        combine: NodeSignalExprCombinePayload,
         const_value: NodeValue,
         map: NodeSignalExprMapPayload,
         map2: NodeSignalExprMap2Payload,
@@ -862,8 +868,9 @@ pub fn incref__AnonStruct3(value: __AnonStruct3, amount: isize) void {
 pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
     switch (value.tag) {
         .Combine => {
+        const payload = value.payload.combine;
         {
-            const list = value.payload.combine;
+            const list = payload._0;
             if (list.isUnique()) {
                 for (list.items()) |item| {
                         decrefNodeSignalExpr(item, roc_host);
@@ -871,6 +878,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
             }
             list.decref(roc_host);
         }
+        decrefErasedCallable(payload._1, roc_host);
         },
         .ConstValue => {
         decrefNodeValue(value.payload.const_value, roc_host);
@@ -898,7 +906,9 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
 pub fn increfNodeSignalExpr(value: NodeSignalExpr, amount: isize) void {
     switch (value.tag) {
         .Combine => {
-        value.payload.combine.incref(amount);
+        const payload = value.payload.combine;
+        payload._0.incref(amount);
+        increfErasedCallable(payload._1, amount);
         },
         .ConstValue => {
         increfNodeValue(value.payload.const_value, amount);

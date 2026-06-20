@@ -77,9 +77,11 @@ Ordered roughly by how much of the design they block.
    direct map/map2 signal thunks. Leaf sink patch counts now track changed fields
    on non-structural updates, while structural updates count actual creates,
    child moves, changed fields, and event bindings rather than a full
-   reset/recreate. Source-level equal-output pruning suppresses downstream work;
-   full per-edge `is_eq` thunk pruning is still pending until confined erasure
-   moves typed edge thunks into the runtime.
+   reset/recreate. Source-level equal-output pruning suppresses downstream work,
+   and retained `Map`/`Map2`/`Combine` output equality thunks now prune unchanged
+   dirty sink and structural-site outputs in the current `NodeValue` bridge.
+   The remaining design work is moving those retained thunks onto opaque typed
+   value cells so the internal `NodeValue` encode/decode path disappears.
 
 4. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
    `Ui.on_change`, `Ui.on_cleanup` are unimplemented. (Lowest priority; the
@@ -128,19 +130,21 @@ blocker, not merely measure the current compromise more precisely.
 
 `DESIGN.md` names three experiments that gate the architecture. G2 and G3 are
 now answered well enough by the active host and app suite to stop expanding test
-coverage around them. G1 is the unresolved architecture gate because the final
-design depends on retained typed thunks owned by the host.
+coverage around them. G1's retained-callable ownership path is proven through the
+current bridge; the unresolved architecture gate is replacing that bridge with
+retained typed value cells owned by the host.
 
 - **G1 — Retained closures across FFI.** The design's end state stores boxed Roc
-  transform/reducer closures in the host node table and re-invokes only the
-  changed ones. The current code does **not** do this yet — it re-sends dirty
-  signal *ids* and Roc re-walks those signals' boxed transforms each recompute.
-  Next action: implement the smallest real retained-thunk path needed by the
-  active platform boundary, then measure it. A small synthetic retain/invoke
-  probe is allowed only if it directly answers refcount safety or FFI cost; do
-  not build a broad benchmark harness before the boundary shape is proven. If
-  per-call FFI is too costly, keep the **batched** `ui_recompute` shape as the
-  permanent protocol rather than one-call-per-node.
+  transform/reducer/equality closures in the host node table and re-invokes only
+  the changed ones. The active host now invokes retained reducer, row, key
+  equality, `Map`/`Map2` transform, and `Map`/`Map2`/`Combine` output equality
+  thunks through the generated ABI. This answers the FFI ownership/call-shape
+  question for the current bridge, but the host still evaluates retained
+  `SignalExpr` trees over internal `NodeValue` and still rebuilds descriptor
+  streams for structural changes. Next action: replace those `NodeValue` payloads
+  with opaque typed value cells owned by explicit retained edge thunks. If
+  per-call FFI becomes too costly at that point, keep a **batched** recompute
+  shape as the permanent protocol rather than one-call-per-node.
 - **G2 — Construction-site identity under dynamic shape.** This is the riskiest
   solved item: the active host now mints scope-relative ids without strings, and
   `identity_stress` proves row-local state survives reorder, filtering/removal,
@@ -151,9 +155,10 @@ design depends on retained typed thunks owned by the host.
   join appears once in the dirty plan. The ops dashboard now includes a
   high-fan-out no-op source whose unchanged output prunes all downstream labels
   (`nodes_recomputed +1`, `propagation_prunes +1`, `patches_emitted +0` for the
-  scripted click). Full per-edge `is_eq` pruning should be implemented as part
-  of confined erasure, where typed edge thunks exist; do not add more pruning
-  harnesses before that machinery exists.
+  scripted click). Dirty sink and structural-site caches now also use retained
+  signal output equality thunks to suppress unchanged leaf patches and unchanged
+  structural rebuilds. Do not add more pruning harnesses before confined erasure
+  replaces the temporary `NodeValue` bridge with typed edge value cells.
 
 Also confirm the two maturity unknowns: that static dispatch on
 `is_eq`/`encode`/`decode` methods resolves and monomorphizes across the platform
@@ -334,14 +339,16 @@ In dependency order. Each sub-step ends green per `minici` discipline.
    Progress: `platform/host.zig` now has typed helper calls for
    `NodeValue -> NodeValue`, `(NodeValue, NodeValue) -> NodeValue`, and
    `(NodeValue, NodeValue) -> Bool`, with Zig unit coverage that allocates boxed
-   erased callables through the real ABI payload/capture path. `Signal.map` and
-   `Signal.map2` descriptors now carry retained output equality thunks produced
-   by static dispatch at the map call site. The host also has the
-   `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each` row
-   thunks and explicitly release the returned descriptor tree. These helpers are
-   now wired into keyed-row diffing, reducer dispatch, and signal transforms;
-   value-pruning still needs the host value-cell/cache path that consumes the
-   retained map/map2 equality thunks.
+   erased callables through the real ABI payload/capture path. `Signal.map`,
+   `Signal.map2`, and `Signal.combine` descriptors now carry retained output
+   equality thunks produced by static dispatch at the call site. The host also
+   has the `(NodeValue, NodeValue) -> NodeElem` helper needed to invoke `Ui.each`
+   row thunks and explicitly release the returned descriptor tree. These helpers
+   are now wired into keyed-row diffing, reducer dispatch, signal transforms, and
+   dirty output pruning. Signal-backed text/value/checked/disabled sinks and
+   active `When`/`Each` structural sites cache their last output value and
+   compare dirty evaluations with the retained output equality thunk before
+   emitting patches or rebuilding structure.
 3. **Keyed-row diff + disposal.** Diff new typed key-set against old via the key
    `is_eq` thunk; reuse surviving row scopes (and their local state) → `rows_reused`;
    mint new keys → `rows_created`; dispose removed keys → drop one refcount per
@@ -417,9 +424,11 @@ Status as of 2026-06-20: the metrics surface has been replaced and
 The host has a Zig diamond dirty-plan test wired into `run-test-zig`, and the
 ops dashboard script has a high-fan-out no-op source A/B that proves equal
 source output prunes downstream work and patches. Descriptor-stream closure
-retain/release counters are live for the host-retained thunk fields. The
-remaining pruning work is the fuller design target: per-edge `is_eq` thunk
-pruning once confined erasure provides typed edge thunks.
+retain/release counters are live for the host-retained thunk fields. Retained
+signal output equality thunks now prune dirty leaf sinks and unchanged
+structural-site outputs in the active `NodeValue` bridge. The remaining pruning
+work is the fuller design target: opaque typed value cells once confined erasure
+removes `NodeValue`.
 
 - Replace the old-model `RuntimeMetrics` fields with the design's counters:
   `nodes_recomputed`, `propagation_prunes`, `derived_calls_into_roc`,
@@ -544,10 +553,13 @@ This delivers the headline feature (real keyed reuse) and true incremental rende
 Status as of 2026-06-20: the host scope forest, keyed-row diff/reuse/removal,
 and active `Ui.when` branch disposal are wired into the active app lifecycle.
 Dirty non-structural source changes now patch only matching leaf sinks from the
-retained descriptor stream. Structural source changes still rebuild the active
-descriptor stream, but the host now applies the result as a structural DOM patch
-using explicit DOM identities scoped by branch/row and compares event binding
-slots rather than rebinding every active event.
+retained descriptor stream, and unchanged dirty outputs are pruned with the
+retained signal equality thunk. Structural source changes first compare the
+active `When`/`Each` output cache with the retained equality thunk; changed
+structural outputs still rebuild the active descriptor stream, but the host now
+applies the result as a structural DOM patch using explicit DOM identities scoped
+by branch/row and compares event binding slots rather than rebinding every active
+event.
 
 Current priority: pause feature work here until Phase 4 gives structural sites
 retained typed data. Correctness fixes are still in scope, but the remaining
@@ -563,10 +575,13 @@ on the internal `NodeValue` path and Roc-side active descriptor evaluation.
   flip; keep-alive only via an explicit flag.
 - Done for leaf sinks: non-structural dirty source nodes emit only matching
   `SetText`/`SetValue`/`SetChecked`/`SetDisabled` patches, with no descriptor
-  rebuild and no DOM reset.
+  rebuild and no DOM reset; unchanged outputs are pruned through the retained
+  signal equality thunk before any patch is emitted.
 - Done for structural DOM shape: dirty structural source nodes detach removed
   branch/row DOM, move/reuse surviving keyed row DOM, create only new DOM nodes,
-  and avoid the full DOM reset when a dirty source feeds `when`/`each`.
+  and avoid the full DOM reset when a dirty source feeds `when`/`each`. Unchanged
+  `when` condition or `each` item-list outputs are pruned before the structural
+  descriptor stream is rebuilt.
 - Done for structural event bindings: unchanged event-id slots stay bound; only
   added, removed, or shifted event-id bindings are patched.
 - Remaining structural patch work: remove the active descriptor-stream rebuild
