@@ -22,6 +22,7 @@ Elem := [
 			items : Box(Node.SignalExpr),
 			key_of : Box((NodeValue -> NodeValue)),
 			key_eq : Box((NodeValue, NodeValue -> Bool)),
+			item_eq : Box((NodeValue, NodeValue -> Bool)),
 			row : Box((NodeValue, NodeValue -> Elem)),
 		},
 	),

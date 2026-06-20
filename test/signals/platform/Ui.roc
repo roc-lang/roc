@@ -160,6 +160,7 @@ Ui := [].{
 		Signal(List(item)), (item -> k), (k, Signal(item) -> Elem) -> Elem
 			where [
 				item.decode : NodeValue, NodeValue -> (Try(item, [TypeMismatch]), NodeValue),
+				item.is_eq : item, item -> Bool,
 				k.encode : k, NodeValue -> Try(NodeValue, []),
 				k.decode : NodeValue, NodeValue -> (Try(k, [TypeMismatch]), NodeValue),
 				k.to_hash : k, Hasher -> Hasher,
@@ -204,6 +205,27 @@ Ui := [].{
 			}
 			left_k.is_eq(right_k)
 		}
+		item_eq_nv : NodeValue, NodeValue -> Bool
+		item_eq_nv = |left, right| {
+			Item : item
+			left_item : item
+			left_item =
+				match Item.decode(left, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Ui.each item equality received a left item that does not match the item type"
+					}
+				}
+			right_item : item
+			right_item =
+				match Item.decode(right, NodeValue.format) {
+					(Ok(value), _) => value
+					(Err(_), _) => {
+						crash "Ui.each item equality received a right item that does not match the item type"
+					}
+				}
+			left_item.is_eq(right_item)
+		}
 		row_nv : NodeValue, NodeValue -> Elem
 		row_nv = |key_nv, item_nv| {
 			K : k
@@ -222,6 +244,7 @@ Ui := [].{
 				items: Signal.to_expr(items),
 				key_of: Box.box(key_of_nv),
 				key_eq: Box.box(key_eq_nv),
+				item_eq: Box.box(item_eq_nv),
 				row: Box.box(row_nv),
 			},
 		)

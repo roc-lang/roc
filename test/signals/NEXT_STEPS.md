@@ -66,17 +66,21 @@ Ordered roughly by how much of the design they block.
    row DOM is moved/reused, and the simulated DOM is not reset. Event bindings are
    compared against the next explicit event descriptor stream, so unchanged
    element/kind/event-id slots are left alone and only added, removed, or shifted
-   bindings are patched. Remaining work is eventually eliminating the descriptor
-   rebuild once retained typed closures replace the internal `NodeValue` path.
+   bindings are patched. `Ui.each` now also retains an item equality thunk and
+   row scopes cache their latest item value, so the host has explicit data to
+   distinguish reused unchanged rows from reused updated rows. Remaining work is
+   using that row cache to skip unchanged row body collection and eventually
+   eliminating the descriptor rebuild once retained typed closures replace the
+   internal `NodeValue` path.
 
 3. **Metrics are partway through the design migration.** `RuntimeMetrics` now
    carries the design counter names (`nodes_recomputed`,
    `propagation_prunes`, `derived_calls_into_roc`, `patches_emitted`, row/scope
    and closure counters). Scope and keyed-row counters are real for active
    branch/row churn, and closure counters now track descriptor-stream ownership
-   of retained event transforms, state equality thunks, each key/row thunks, and
-   direct map/map2 signal thunks. Leaf sink patch counts now track changed fields
-   on non-structural updates, while structural updates count actual creates,
+   of retained event transforms, state equality thunks, each key/item/row thunks,
+   and direct map/map2 signal thunks. Leaf sink patch counts now track changed
+   fields on non-structural updates, while structural updates count actual creates,
    child moves, changed fields, and event bindings rather than a full
    reset/recreate. Source-level equal-output pruning suppresses downstream work,
    and retained `Map`/`Map2`/`Combine` output equality thunks now prune unchanged
@@ -138,12 +142,13 @@ retained typed value cells owned by the host.
 - **G1 — Retained closures across FFI.** The design's end state stores boxed Roc
   transform/reducer/equality closures in the host node table and re-invokes only
   the changed ones. The active host now invokes retained reducer, row, key
-  equality, `Map`/`Map2` transform, and `Map`/`Map2`/`Combine` output equality
-  thunks through the generated ABI. This answers the FFI ownership/call-shape
-  question for the current bridge, but the host still evaluates retained
-  `SignalExpr` trees over internal `NodeValue` and still rebuilds descriptor
-  streams for structural changes. Next action: replace those `NodeValue` payloads
-  with opaque typed value cells owned by explicit retained edge thunks. If
+  equality, item equality, `Map`/`Map2` transform, and `Map`/`Map2`/`Combine`
+  output equality thunks through the generated ABI. This answers the FFI
+  ownership/call-shape question for the current bridge, but the host still
+  evaluates retained `SignalExpr` trees over internal `NodeValue` and still
+  rebuilds descriptor streams for structural changes. Next action: replace
+  those `NodeValue` payloads with opaque typed value cells owned by explicit
+  retained edge thunks. If
   per-call FFI becomes too costly at that point, keep a **batched** recompute
   shape as the permanent protocol rather than one-call-per-node.
 - **G2 — Construction-site identity under dynamic shape.** This is the riskiest
@@ -503,9 +508,10 @@ and the old `Reactive` module has been deleted.
   `map`, `map2`, `combine`), `Html.roc` (`div`/`button`/`input`/`text`/`text_s`,
   signal-backed attrs, `on_click`/`on_input`/`on_check` taking typed messages),
   and `Ui.roc` (`when`, `each(items, key_fn, |key, row| ...)`, `component`).
-- `Ui.each` carries a `where [key.to_hash : ..., key.is_eq : ...]` static-dispatch
-  constraint on its key type; no string keys. The key type provides `hash` and
-  `is_eq` through its `.{ }` method block.
+- `Ui.each` carries static-dispatch constraints for `item.is_eq`,
+  `key.to_hash`, and `key.is_eq`; no string keys. The key type provides `hash`
+  and `is_eq` through its `.{ }` method block, and the item type provides
+  `is_eq` so row reuse and row value changes are distinct host facts.
 - Port `ops_dashboard`, `checkout_wizard`, `kanban_board` to the new API,
   deleting every `Str.concat("...:", id)` key and every `unit_channel`/`fold_i64`
   call. Re-run their `.txt` specs unchanged (the specs assert user-facing

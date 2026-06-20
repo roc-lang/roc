@@ -118,9 +118,11 @@ host during graph ingestion.
 - **Dynamic lists use typed keys, not position.** `Ui.each` takes a typed key
   function `item -> key` where `key` provides `hash` and `is_eq` methods (the
   `where [key.hash : ..., key.is_eq : ...]` static-dispatch constraints below).
-  A row's identity is its key, so per-row local state survives
-  reorder/insert/delete. Duplicate keys are an `is_eq` question the host answers
-  explicitly (reported as a host error), never a silent alias.
+  The item type also provides `is_eq`, so the host can distinguish "same row
+  identity, unchanged row value" from "same row identity, changed row value"
+  without guessing from bytes. A row's identity is its key, so per-row local
+  state survives reorder/insert/delete. Duplicate keys are an `is_eq` question
+  the host answers explicitly (reported as a host error), never a silent alias.
 
 This replaces string-collision/rename hazards with explicit, typed structure.
 
@@ -223,7 +225,11 @@ State.on_unit : State(a), (a -> a) -> Msg
 State.on_value : State(a), (a, payload -> a) -> Msg
 Ui.when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 Ui.each : Signal(List(item)), (item -> key), (key, Signal(item) -> Elem) -> Elem
-    where [key.hash : key, Hasher -> Hasher, key.is_eq : key, key -> Bool]
+    where [
+        item.is_eq : item, item -> Bool,
+        key.hash : key, Hasher -> Hasher,
+        key.is_eq : key, key -> Bool,
+    ]
 
 # Components (named scopes for local state)
 Ui.component : ({} -> Elem) -> Elem

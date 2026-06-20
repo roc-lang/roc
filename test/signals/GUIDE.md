@@ -222,9 +222,9 @@ Ui.when(
 Each branch is its own scope. When the condition flips, the host disposes the
 losing branch (releasing its state and detaching its DOM) and mounts the other.
 
-Use `Ui.each` for lists. You supply a typed key function and a row renderer. Key
-types wrap a single-tag union and provide `hash` and `is_eq` methods through
-their method block:
+Use `Ui.each` for lists. You supply a typed key function and a row renderer. The
+item type provides `is_eq`; key types wrap a single-tag union and provide `hash`
+and `is_eq` methods through their method block:
 
 ```roc
 TodoId := [Tid(U64)].{
@@ -278,7 +278,8 @@ reported as a host error rather than silently aliased.
 
 When the list changes, the host diffs the new key set against the old: surviving
 rows are reused (including their local state), new keys mint a fresh row scope,
-and removed keys are disposed. Only changed rows touch the DOM.
+and removed keys are disposed. The item `is_eq` method tells the host whether a
+surviving row's value actually changed. Only changed rows touch the DOM.
 
 ## Typed Values
 
@@ -296,6 +297,8 @@ the type):
   stop propagation when a recomputed value is unchanged.
 - Any `Ui.each` key type defines both `hash : t, Hasher -> Hasher` and
   `is_eq : t, t -> Bool`.
+- Any `Ui.each` item type also defines `is_eq : t, t -> Bool`, so keyed row
+  reuse and row value changes are separate explicit facts.
 
 ```roc
 Todo := { id : TodoId, title : Str, done : Bool }.{

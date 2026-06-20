@@ -144,6 +144,7 @@ const HostWhenBranchScopeStep = struct {
 const HostEachRowScopeStep = struct {
     site_ordinal: u64,
     key: abi.NodeValue,
+    item: abi.NodeValue,
 };
 
 const HostScopeStep = union(enum) {
@@ -153,7 +154,10 @@ const HostScopeStep = union(enum) {
 
     fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost) void {
         switch (self.*) {
-            .each_row => |row| abi.decrefNodeValue(row.key, roc_host),
+            .each_row => |row| {
+                abi.decrefNodeValue(row.key, roc_host);
+                abi.decrefNodeValue(row.item, roc_host);
+            },
             .root, .when_branch => {},
         }
     }
@@ -292,6 +296,7 @@ const HostNodeEachDesc = struct {
     source_node_ids: []u64,
     key_of: abi.RocErasedCallable,
     key_eq: abi.RocErasedCallable,
+    item_eq: abi.RocErasedCallable,
     row: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
@@ -387,9 +392,10 @@ const HostNodeDescriptorStream = struct {
             metrics.closure_releases += nodeSignalExprDirectCallableCount(desc.items);
             abi.decrefNodeSignalExpr(desc.items, roc_host);
             allocator.free(desc.source_node_ids);
-            metrics.closure_releases += 3;
+            metrics.closure_releases += 4;
             abi.decrefErasedCallable(desc.key_of, roc_host);
             abi.decrefErasedCallable(desc.key_eq, roc_host);
+            abi.decrefErasedCallable(desc.item_eq, roc_host);
             abi.decrefErasedCallable(desc.row, roc_host);
         }
         self.eaches.deinit(allocator);
@@ -576,26 +582,29 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, items: abi.NodeSignalExpr, source_node_ids: []u64, key_of: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, row: abi.RocErasedCallable) void {
+    fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, items: abi.NodeSignalExpr, source_node_ids: []u64, key_of: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, row: abi.RocErasedCallable) void {
         abi.increfNodeSignalExpr(items, 1);
         abi.increfErasedCallable(key_of, 1);
         abi.increfErasedCallable(key_eq, 1);
+        abi.increfErasedCallable(item_eq, 1);
         abi.increfErasedCallable(row, 1);
-        metrics.closure_retains += nodeSignalExprDirectCallableCount(items) + 3;
+        metrics.closure_retains += nodeSignalExprDirectCallableCount(items) + 4;
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
             .source_node_ids = source_node_ids,
             .key_of = key_of,
             .key_eq = key_eq,
+            .item_eq = item_eq,
             .row = row,
         }) catch {
             metrics.closure_releases += nodeSignalExprDirectCallableCount(items);
             abi.decrefNodeSignalExpr(items, roc_host);
             allocator.free(source_node_ids);
-            metrics.closure_releases += 3;
+            metrics.closure_releases += 4;
             abi.decrefErasedCallable(key_of, roc_host);
             abi.decrefErasedCallable(key_eq, roc_host);
+            abi.decrefErasedCallable(item_eq, roc_host);
             abi.decrefErasedCallable(row, roc_host);
             std.process.exit(1);
         };
@@ -629,6 +638,8 @@ const HostKeyedRowDiffResult = struct {
     rows_reused: u64,
     rows_created: u64,
     rows_removed: u64,
+    row_items_unchanged: u64,
+    row_items_updated: u64,
 };
 
 const HostRenderMetrics = struct {
@@ -1734,30 +1745,19 @@ const HostEnv = struct {
         return scope_id;
     }
 
-    fn internEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, key_eq: abi.RocErasedCallable) u64 {
+    fn createEachRowScope(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue) u64 {
         self.validateScopeId(parent_scope_id);
-
-        for (self.scopes.items) |scope| {
-            if (!scope.active) continue;
-            if (scope.parent_scope_id != parent_scope_id) continue;
-            switch (scope.step) {
-                .each_row => |step| {
-                    if (step.site_ordinal == site_ordinal and callErasedNodeValueNodeValueToBool(roc_host, key_eq, step.key, key)) {
-                        return scope.scope_id;
-                    }
-                },
-                .root, .when_branch => {},
-            }
-        }
 
         abi.increfNodeValue(key, 1);
         errdefer abi.decrefNodeValue(key, roc_host);
+        abi.increfNodeValue(item, 1);
+        errdefer abi.decrefNodeValue(item, roc_host);
 
         const scope_id: u64 = @intCast(self.scopes.items.len);
         self.scopes.append(self.gpa.allocator(), .{
             .scope_id = scope_id,
             .parent_scope_id = parent_scope_id,
-            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key } },
+            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key, .item = item } },
             .active = true,
         }) catch std.process.exit(1);
         var metrics = self.pending_roc_metrics;
@@ -1878,6 +1878,28 @@ const HostEnv = struct {
         };
     }
 
+    fn eachRowScopeItem(self: *HostEnv, scope_id: u64) abi.NodeValue {
+        self.validateScopeId(scope_id);
+        const scope = self.scopes.items[@intCast(scope_id)];
+        return switch (scope.step) {
+            .each_row => |row| row.item,
+            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+        };
+    }
+
+    fn replaceEachRowScopeItem(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: abi.NodeValue) void {
+        self.validateScopeId(scope_id);
+        const scope = &self.scopes.items[@intCast(scope_id)];
+        switch (scope.step) {
+            .each_row => {},
+            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+        }
+
+        abi.increfNodeValue(item, 1);
+        abi.decrefNodeValue(scope.step.each_row.item, roc_host);
+        scope.step.each_row.item = item;
+    }
+
     fn nextKeyIsDuplicate(roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, keys: []const abi.NodeValue, key_index: usize) bool {
         const key = keys[key_index];
         for (keys[0..key_index]) |previous| {
@@ -1888,8 +1910,9 @@ const HostEnv = struct {
         return false;
     }
 
-    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const abi.NodeValue, key_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {
+    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const abi.NodeValue, items: []const abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {
         self.validateScopeId(parent_scope_id);
+        if (keys.len != items.len) failHost("Ui.each keyed scope received mismatched key and item lists");
 
         const allocator = self.gpa.allocator();
         const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal);
@@ -1904,8 +1927,10 @@ const HostEnv = struct {
 
         var rows_reused: u64 = 0;
         var rows_created: u64 = 0;
+        var row_items_unchanged: u64 = 0;
+        var row_items_updated: u64 = 0;
 
-        for (keys, 0..) |key, key_index| {
+        for (keys, items, 0..) |key, item, key_index| {
             if (HostEnv.nextKeyIsDuplicate(roc_host, key_eq, keys, key_index)) {
                 failHost("Ui.each keyed scope received duplicate keys");
             }
@@ -1924,8 +1949,15 @@ const HostEnv = struct {
             if (matched_scope_id) |scope_id| {
                 next_scope_ids[key_index] = scope_id;
                 rows_reused += 1;
+                const existing_item = self.eachRowScopeItem(scope_id);
+                if (callErasedNodeValueNodeValueToBool(roc_host, item_eq, existing_item, item)) {
+                    row_items_unchanged += 1;
+                } else {
+                    self.replaceEachRowScopeItem(roc_host, scope_id, item);
+                    row_items_updated += 1;
+                }
             } else {
-                next_scope_ids[key_index] = self.internEachRowScope(roc_host, parent_scope_id, site_ordinal, key, key_eq);
+                next_scope_ids[key_index] = self.createEachRowScope(roc_host, parent_scope_id, site_ordinal, key, item);
                 rows_created += 1;
             }
         }
@@ -1948,6 +1980,8 @@ const HostEnv = struct {
             .rows_reused = rows_reused,
             .rows_created = rows_created,
             .rows_removed = rows_removed,
+            .row_items_unchanged = row_items_unchanged,
+            .row_items_updated = row_items_updated,
         };
     }
 
@@ -2124,6 +2158,7 @@ const HostEnv = struct {
                     source_node_ids,
                     elem.payload.each.key_of,
                     elem.payload.each.key_eq,
+                    elem.payload.each.item_eq,
                     elem.payload.each.row,
                 );
             },
@@ -2212,7 +2247,7 @@ const HostEnv = struct {
             initialized_keys += 1;
         }
 
-        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, each.key_eq);
+        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, items, each.key_eq, each.item_eq);
 
         var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
@@ -2308,6 +2343,7 @@ const HostEnv = struct {
                     source_node_ids,
                     elem.payload.each.key_of,
                     elem.payload.each.key_eq,
+                    elem.payload.each.item_eq,
                     elem.payload.each.row,
                 );
                 const each_index = stream.eaches.items.len - 1;
@@ -2331,7 +2367,7 @@ const HostEnv = struct {
                     initialized_keys += 1;
                 }
 
-                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, each_desc.key_eq);
+                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, items, each_desc.key_eq, each_desc.item_eq);
                 defer allocator.free(diff.scope_ids);
 
                 for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
@@ -4597,13 +4633,21 @@ test "signals host interns scopes and node identities from explicit paths" {
     );
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
-    const row_a = host.internEachRowScope(&roc_host, root, 7, nodeValueI64(10), key_eq);
-    try std.testing.expectEqual(row_a, host.internEachRowScope(&roc_host, root, 7, nodeValueI64(10), key_eq));
-
-    const row_b = host.internEachRowScope(&roc_host, root, 7, nodeValueI64(11), key_eq);
+    const initial_keys = [_]abi.NodeValue{ nodeValueI64(10), nodeValueI64(11) };
+    const initial_rows = host.syncEachRowScopes(&roc_host, root, 7, &initial_keys, &initial_keys, key_eq, key_eq);
+    defer freeKeyedRowDiff(&host, initial_rows);
+    const row_a = initial_rows.scope_ids[0];
+    const row_b = initial_rows.scope_ids[1];
     try std.testing.expect(row_b != row_a);
 
-    const same_key_other_site = host.internEachRowScope(&roc_host, root, 8, nodeValueI64(10), key_eq);
+    const same_keys = [_]abi.NodeValue{nodeValueI64(10)};
+    const same_rows = host.syncEachRowScopes(&roc_host, root, 7, &same_keys, &same_keys, key_eq, key_eq);
+    defer freeKeyedRowDiff(&host, same_rows);
+    try std.testing.expectEqual(row_a, same_rows.scope_ids[0]);
+
+    const other_site_rows = host.syncEachRowScopes(&roc_host, root, 8, &same_keys, &same_keys, key_eq, key_eq);
+    defer freeKeyedRowDiff(&host, other_site_rows);
+    const same_key_other_site = other_site_rows.scope_ids[0];
     try std.testing.expect(same_key_other_site != row_a);
 
     const root_state = host.internNodeIdentity(root, 0);
@@ -4637,7 +4681,7 @@ test "signals host disposal retires scope subtree identities" {
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
     const root = host.internRootScope();
-    const row = host.internEachRowScope(&roc_host, root, 3, nodeValueI64(10), key_eq);
+    const row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10));
     const branch = host.internWhenBranchScope(row, 4, .true_branch);
     const row_state = host.internNodeIdentity(row, 0);
     const branch_state = host.internNodeIdentity(branch, 0);
@@ -4649,7 +4693,7 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(!host.node_identities.items[@intCast(row_state)].active);
     try std.testing.expect(!host.node_identities.items[@intCast(branch_state)].active);
 
-    const recreated_row = host.internEachRowScope(&roc_host, root, 3, nodeValueI64(10), key_eq);
+    const recreated_row = host.createEachRowScope(&roc_host, root, 3, nodeValueI64(10), nodeValueI64(10));
     try std.testing.expect(recreated_row != row);
 
     const recreated_state = host.internNodeIdentity(recreated_row, 0);
@@ -5448,6 +5492,13 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const item_eq = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testNodeValueEqCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5461,6 +5512,7 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
                 .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(nodeValueList(roc_host, items))),
                 .key_eq = key_eq,
                 .key_of = key_of,
+                .item_eq = item_eq,
                 .row = row,
             },
         },
@@ -5508,41 +5560,50 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     const root = host.internRootScope();
 
     const initial_keys = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
-    const initial = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, key_eq);
+    const initial = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
     try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
     try std.testing.expectEqual(@as(u64, 0), initial.rows_removed);
+    try std.testing.expectEqual(@as(u64, 0), initial.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), initial.row_items_updated);
 
     const state_for_key_2 = host.internNodeIdentity(initial.scope_ids[1], 0);
 
     const reordered_keys = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
-    const reordered = host.syncEachRowScopes(&roc_host, root, 5, &reordered_keys, key_eq);
+    const reordered = host.syncEachRowScopes(&roc_host, root, 5, &reordered_keys, &reordered_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, reordered);
     try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
+    try std.testing.expectEqual(@as(u64, 3), reordered.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), reordered.row_items_updated);
     try std.testing.expectEqual(initial.scope_ids[2], reordered.scope_ids[0]);
     try std.testing.expectEqual(initial.scope_ids[0], reordered.scope_ids[1]);
     try std.testing.expectEqual(initial.scope_ids[1], reordered.scope_ids[2]);
     try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(reordered.scope_ids[2], 0));
 
     const changed_keys = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
-    const changed = host.syncEachRowScopes(&roc_host, root, 5, &changed_keys, key_eq);
+    const changed_items = [_]abi.NodeValue{ nodeValueI64(22), nodeValueI64(4) };
+    const changed = host.syncEachRowScopes(&roc_host, root, 5, &changed_keys, &changed_items, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, changed);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
     try std.testing.expectEqual(@as(u64, 2), changed.rows_removed);
+    try std.testing.expectEqual(@as(u64, 0), changed.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 1), changed.row_items_updated);
     try std.testing.expectEqual(initial.scope_ids[1], changed.scope_ids[0]);
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[0]);
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
 
     const reappeared_keys = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(4) };
-    const reappeared = host.syncEachRowScopes(&roc_host, root, 5, &reappeared_keys, key_eq);
+    const reappeared = host.syncEachRowScopes(&roc_host, root, 5, &reappeared_keys, &reappeared_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, reappeared);
     try std.testing.expectEqual(@as(u64, 2), reappeared.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), reappeared.rows_created);
     try std.testing.expectEqual(@as(u64, 0), reappeared.rows_removed);
+    try std.testing.expectEqual(@as(u64, 1), reappeared.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 1), reappeared.row_items_updated);
     try std.testing.expect(reappeared.scope_ids[0] != initial.scope_ids[0]);
     try std.testing.expectEqual(initial.scope_ids[1], reappeared.scope_ids[1]);
     try std.testing.expectEqual(changed.scope_ids[1], reappeared.scope_ids[2]);
@@ -5777,13 +5838,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 7), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 8), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host carries binder context into Elem when branch collection" {
@@ -5926,6 +5987,8 @@ test "signals host collects Elem each row bodies by keyed scope" {
     try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
     try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
     try std.testing.expectEqual(@as(u64, 0), initial.rows_removed);
+    try std.testing.expectEqual(@as(u64, 0), initial.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), initial.row_items_updated);
     try std.testing.expectEqual(@as(usize, 4), initial_stream.scope_sites.items.len);
     try std.testing.expectEqual(@as(usize, 3), initial_stream.states.items.len);
     try std.testing.expectEqual(@as(usize, 3), initial_stream.text_nodes.items.len);
@@ -5953,6 +6016,8 @@ test "signals host collects Elem each row bodies by keyed scope" {
     try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
+    try std.testing.expectEqual(@as(u64, 3), reordered.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), reordered.row_items_updated);
     try std.testing.expectEqual(initial.scope_ids[2], reordered.scope_ids[0]);
     try std.testing.expectEqual(initial.scope_ids[0], reordered.scope_ids[1]);
     try std.testing.expectEqual(initial.scope_ids[1], reordered.scope_ids[2]);
@@ -5970,6 +6035,8 @@ test "signals host collects Elem each row bodies by keyed scope" {
     try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
     try std.testing.expectEqual(@as(u64, 2), changed.rows_removed);
+    try std.testing.expectEqual(@as(u64, 1), changed.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), changed.row_items_updated);
     try std.testing.expectEqual(initial.scope_ids[1], changed.scope_ids[0]);
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[0]);
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
