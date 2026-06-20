@@ -878,7 +878,7 @@ const CompileTimeRequestScheduler = struct {
     seen_edges: std.AutoHashMap(u64, void),
     visit: u32 = 0,
     current_request_index: usize = 0,
-    current_root_id: ComptimeRootId = @enumFromInt(0),
+    current_root_id: ComptimeRootId = undefined, // Set before dependency collection for each scheduled root.
 
     fn init(
         allocator: Allocator,
@@ -20912,7 +20912,7 @@ test "checked body builder appends reserved synthetic expressions without alloca
                 .selected_root_index = @intCast(i),
                 .scrutinee_pattern = @enumFromInt(@as(u32, @intCast(i))),
             } },
-            @enumFromInt(0),
+            undefined, // Type is deliberately unread; this test only exercises reserved synthetic expression storage.
             base.Region.zero(),
             .empty_record,
         );
