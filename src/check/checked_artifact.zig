@@ -20285,7 +20285,15 @@ pub fn publishFromTypedModule(
     var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, &checked_bodies);
     errdefer method_registry.deinit(allocator);
 
-    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
+    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_type_publication,
+        &checked_bodies,
+        &method_registry,
+        inputs.available_artifacts,
+    );
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
     checked_bodies.attachNumeralPlans(&static_dispatch_plans);
@@ -21534,8 +21542,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x65, 0xC1, 0x31, 0xA9, 0xAF, 0x1F, 0x6D, 0x18, 0x8A, 0xD7, 0x9A, 0x13, 0xA9, 0x6B, 0xCF, 0x34,
-        0x71, 0x44, 0x39, 0xAE, 0x7B, 0x4A, 0x48, 0x66, 0xAA, 0x60, 0x43, 0x1F, 0x8C, 0xC9, 0xEA, 0x4C,
+        0x85, 0x1F, 0x43, 0x59, 0x26, 0x3D, 0x3F, 0x99, 0x41, 0x26, 0x0B, 0x0B, 0x0A, 0x60, 0xB7, 0xBC,
+        0xA3, 0xA5, 0x59, 0x7F, 0xBB, 0xA6, 0x5F, 0x28, 0xBB, 0x50, 0xBD, 0x12, 0x72, 0x2F, 0x50, 0x39,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

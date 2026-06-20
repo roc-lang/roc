@@ -5521,6 +5521,11 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
         dispatcher_ty: Type.TypeId,
     ) ?MethodLookup {
+        switch (plan.resolution) {
+            .resolved_target => |target| return self.methodLookupForResolvedTarget(target),
+            .unresolved_checked_plan => {},
+        }
+
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
@@ -5531,6 +5536,22 @@ const BodyContext = struct {
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
+    }
+
+    fn methodLookupForResolvedTarget(
+        self: *BodyContext,
+        target: static_dispatch.MethodTarget,
+    ) MethodLookup {
+        return switch (target.kind) {
+            .procedure => |procedure| .{
+                .view = self.builder.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
+                .target = target,
+            },
+            .local_proc => .{
+                .view = self.view,
+                .target = target,
+            },
+        };
     }
 
     fn methodTargetContext(
