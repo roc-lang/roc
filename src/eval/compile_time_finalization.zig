@@ -669,8 +669,8 @@ fn evalCompileTimeRoot(
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
         error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, lir_result, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, lir_result, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
 }
@@ -809,7 +809,6 @@ fn reportCompileTimeCrash(
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
-    lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     message: []const u8,
 ) anyerror!Interpreter.EvalResult {
@@ -817,7 +816,6 @@ fn reportCompileTimeCrash(
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try problem_store.putExtraString(message);
-    _ = lir_result;
     const region = compileTimeCrashRegion(module, root, interpreter);
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,

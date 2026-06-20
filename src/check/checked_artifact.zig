@@ -9438,13 +9438,11 @@ fn appendSyntheticLocalLookupRefs(
                 });
                 by_checked_expr[raw_expr] = id;
             },
-            .pattern_extraction_wrapper => |origin| {
+            .pattern_extraction_wrapper => {
                 const raw_expr = @intFromEnum(origin_record.expr);
                 if (raw_expr >= checked_bodies.exprs.len) {
                     checkedArtifactInvariant("synthetic wrapper origin referenced an expression out of range", .{});
                 }
-                _ = origin.selected_root_index;
-                _ = origin.scrutinee_pattern;
                 if (checkedExprDataCategory(std.meta.activeTag(checked_bodies.exprs[raw_expr].data)) != .match_expr) {
                     checkedArtifactInvariant("synthetic wrapper origin pointed at a non-match expression", .{});
                 }

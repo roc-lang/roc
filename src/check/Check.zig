@@ -1659,8 +1659,7 @@ fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
     self.popHoistBindingCandidateScope(scope.binding_candidate_start);
 }
 
-fn deinitHoistKnownValue(self: *Self, value: HoistKnownValue) void {
-    _ = self;
+fn deinitHoistKnownValue(_: *Self, value: HoistKnownValue) void {
     switch (value) {
         .pattern_extraction,
         .binding_rhs,

@@ -48,8 +48,7 @@ pub const SelectedHoistedRoot = struct {
 };
 
 /// Clones a hoisted-root body into the caller's allocator when needed.
-pub fn cloneBody(allocator: Allocator, body: Body) Allocator.Error!Body {
-    _ = allocator;
+pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
     return switch (body) {
         .expr => .expr,
         .pattern_extraction => |extraction| .{ .pattern_extraction = extraction },
@@ -57,8 +56,7 @@ pub fn cloneBody(allocator: Allocator, body: Body) Allocator.Error!Body {
 }
 
 /// Releases allocator-owned data inside a hoisted-root body.
-pub fn deinitBody(allocator: Allocator, body: Body) void {
-    _ = allocator;
+pub fn deinitBody(_: Allocator, body: Body) void {
     switch (body) {
         .expr => {},
         .pattern_extraction => {},
