@@ -1616,14 +1616,14 @@ fn unifyTypedLiteralWithExplicitType(
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
         }
         unreachable;
     };
 
-    switch (suffix_type.target()) {
+    switch (suffix_target.target()) {
         .builtin => |num_kind| {
             try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
         },
@@ -1660,10 +1660,10 @@ fn explicitTypeSuffixVar(
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!?Var {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return null;
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return null;
     const suffix_var = try self.fresh(env, expr_region);
 
-    switch (suffix_type.target()) {
+    switch (suffix_target.target()) {
         .builtin => |num_kind| {
             try self.unifyWith(suffix_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
         },
@@ -1697,8 +1697,8 @@ fn explicitTypeSuffixVar(
 }
 
 fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kind: CIR.NumKind) bool {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
-    return switch (suffix_type.target()) {
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
+    return switch (suffix_target.target()) {
         .builtin => |target_kind| target_kind == num_kind,
         .local, .external, .invalid => false,
     };
@@ -6021,7 +6021,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A plain literal converts to its target type through from_quote,
                 // defaulting to Str if nothing pins it.
                 const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
-                if (self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+                if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
                     // Explicit type suffix, e.g. `"foo".MyType`.
                     try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
                 }

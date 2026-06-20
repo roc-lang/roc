@@ -948,7 +948,8 @@ static-dispatch owner. It is a direct associated-function call to
 `Regex.from_interpolation`; the function's argument types constrain the
 literal segments and interpolated expressions, and the function's return type is
 the type of the whole interpolation expression. Missing suffixed interpolation
-functions are reported as missing associated functions on the suffix type.
+functions are reported as missing associated functions on the resolved suffix
+target.
 
 Interpolation deliberately does not parameterize literal segments over an
 arbitrary `literal` type with a `literal.from_quote` constraint. That design

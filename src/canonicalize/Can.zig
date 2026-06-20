@@ -4961,34 +4961,34 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
 }
 
 /// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
-/// `5.Foo`), what its suffix type resolves to in the current scope. The type
+/// `5.Foo`), what its suffix target resolves to in the current scope. The type
 /// checker consumes this so it can unify the literal against the right concrete
 /// type without re-running scope resolution. The caller has already verified
 /// `type_ident` names a type binding in scope.
 fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
     const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
     if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
+        try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
         return;
     }
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        try self.env.recordNumericSuffixType(node_idx, .invalid);
+        try self.env.recordNumericSuffixTarget(node_idx, .invalid);
         return;
     };
     switch (binding_location.binding.*) {
         .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
-            try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
         },
         .external_nominal => |external| {
             const import_idx = external.import_idx orelse {
-                try self.env.recordNumericSuffixType(node_idx, .invalid);
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
                 return;
             };
             const target_node_idx = external.target_node_idx orelse {
-                try self.env.recordNumericSuffixType(node_idx, .invalid);
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
                 return;
             };
-            try self.env.recordNumericSuffixType(node_idx, .{ .external = .{
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
             } });
