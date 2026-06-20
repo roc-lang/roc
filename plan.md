@@ -41,7 +41,7 @@ to the code shape a hand-written C/Rust parser would produce.
     - All format-specific behavior remains in Roc platform/test format code or
       ordinary format methods.
 
-- [ ] Runtime allocation remains forbidden on the HTTP header benchmark path.
+- [x] Runtime allocation remains forbidden on the HTTP header benchmark path.
   - Success criteria:
     - The Zig host still has no allocator.
     - The HTTP platform's `roc_alloc` still crashes.
@@ -49,6 +49,21 @@ to the code shape a hand-written C/Rust parser would produce.
       is taken.
     - Optimized disassembly still has no reachable hot-path allocator call in
       the request parse/respond path.
+    - Verified host-side invariants in `test/http-headers/platform/host.zig`:
+      `roc_alloc`, `roc_realloc`, and `roc_dealloc` all print a diagnostic and
+      abort; request storage is a fixed 2 KiB stack buffer; content length is
+      rejected above 1 KiB or above the remaining buffer capacity; and the path
+      plus full header section are UTF-8 validated before constructing Roc
+      `Str` values.
+    - Verified test-side invariants in
+      `src/cli/test/http_header_decoder_platform_test.zig`: the end-to-end test
+      exercises successful request combinations, invalid UTF-8, malformed
+      content length, and `Content-Length: 1025` rejection, and every success or
+      expected-failure server run asserts stderr contains none of
+      `roc_alloc called`, `roc_realloc called`, or `roc_dealloc called`.
+    - Verified by rerunning
+      `zig build run-test-zig-http-header-decoder-platform` after the current
+      static exact/caseless dispatch work.
 
 - [ ] Seamless slices remain the representation for parsed input strings.
   - Success criteria:
@@ -800,7 +815,7 @@ Roc API.
   - Success criteria:
     - `zig build minici` passes.
 
-- [ ] Check optimized allocation invariants.
+- [x] Check optimized allocation invariants.
   - Tasks:
     - Rebuild the HTTP header platform with ReleaseFast host and `--opt=speed`
       Roc app.
@@ -810,6 +825,10 @@ Roc API.
   - Success criteria:
     - No runtime allocation is possible on the tested path without failing the
       test.
+    - Verified by `zig build run-test-zig-http-header-decoder-platform`. The
+      test host still exports aborting `roc_alloc`, `roc_realloc`, and
+      `roc_dealloc` hooks, and the test harness asserts those diagnostics are
+      absent for every accepted request and every expected request failure.
 
 - [ ] Check generated code shape before final report.
   - Tasks:
