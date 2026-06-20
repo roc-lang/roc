@@ -262,6 +262,10 @@ last_hoist_result: ?CompletedHoistResult,
 /// top-level compile-time root. Nested hoisted roots there would only add
 /// metadata and duplicate compile-time work.
 hoist_suppressed_depth: u32,
+/// Nonzero while checking a conditionally evaluated expression whose own
+/// eligibility still contributes to an enclosing expression, but whose child
+/// expressions must not become independent compile-time roots.
+hoist_selection_suppressed_depth: u32,
 /// True when canonicalization already recorded diagnostics before type checking.
 /// In that case, we avoid adding "erroneous value" diagnostics during checking
 /// to prevent cascading errors from malformed nodes.
@@ -377,6 +381,7 @@ const LocalRecursiveRef = struct {
 const HoistFrame = struct {
     expr: CIR.Expr.Idx,
     suppressed: bool,
+    selection_suppressed: bool,
     binding_rhs: bool,
     binding_pattern: ?CIR.Pattern.Idx,
     candidate_start: usize,
@@ -1059,6 +1064,7 @@ fn initAssumePrepared(
         .selected_hoisted_roots = .empty,
         .last_hoist_result = null,
         .hoist_suppressed_depth = 0,
+        .hoist_selection_suppressed_depth = 0,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .instantiation_dispatchers = .empty,
         .open_literal_vars = .empty,
@@ -1197,6 +1203,7 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator
     try self.hoist_frames.append(self.gpa, .{
         .expr = expr,
         .suppressed = self.hoist_suppressed_depth != 0,
+        .selection_suppressed = self.hoist_selection_suppressed_depth != 0,
         .binding_rhs = binding_rhs,
         .binding_pattern = if (binding_rhs) self.checking_binding_rhs_pattern else null,
         .candidate_start = self.hoist_expr_candidates.items.len,
@@ -1238,14 +1245,16 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
     const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
     const can_cover_children = top_level_equivalent and self.exprCanCoverHoistedChildren(expr);
+    const selection_suppressed = frame.suppressed or frame.selection_suppressed;
     const binding_rhs_can_cover_children = frame.binding_rhs and
         top_level_equivalent and
+        !selection_suppressed and
         self.exprCanBeHoistedBindingRoot(expr) and
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
-    const action: HoistSelectionAction = if (frame.suppressed)
+    const action: HoistSelectionAction = if (selection_suppressed)
         .suppress_children
     else if (current_covers_children)
         .cover_with_current_root
@@ -1255,27 +1264,31 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         .drop_empty;
     const should_flush_child_candidates = action == .flush_child_candidates;
     const should_bubble_to_parent = frame_index != 0 and
-        can_be_root and !frame.binding_rhs and !frame.suppressed;
-
-    var transaction = HoistSelectionTransaction.init(self);
-    defer transaction.deinit();
-
-    if (should_flush_child_candidates) {
-        for (self.hoist_expr_candidates.items[frame.candidate_start..]) |candidate| {
-            _ = try transaction.stageExprRoot(candidate, null);
-        }
+        can_be_root and !frame.binding_rhs and !selection_suppressed;
+    if (should_bubble_to_parent) {
+        try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
-    if (frame.binding_rhs) {
-        if (!binding_rhs_can_cover_children and !frame.suppressed) {
+
+    const should_flush_deferred_binding_dependencies = frame.binding_rhs and
+        !binding_rhs_can_cover_children and
+        !selection_suppressed and
+        self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
+    if (should_flush_child_candidates or should_flush_deferred_binding_dependencies) {
+        var transaction = HoistSelectionTransaction.init(self);
+        defer transaction.deinit();
+
+        if (should_flush_child_candidates) {
+            for (self.hoist_expr_candidates.items[frame.candidate_start..]) |candidate| {
+                _ = try transaction.stageExprRoot(candidate, null);
+            }
+        }
+        if (should_flush_deferred_binding_dependencies) {
             for (self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]) |dependency| {
                 _ = try transaction.stageBindingRoot(dependency);
             }
         }
+        try transaction.commit();
     }
-    if (should_bubble_to_parent) {
-        try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
-    }
-    try transaction.commit();
 
     if (builtin.mode == .Debug and has_child_candidates) {
         switch (action) {
@@ -1303,7 +1316,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         const parent = &self.hoist_frames.items[frame_index - 1];
         if (!completed.eligible) {
             parent.has_runtime_dependency = true;
-        } else if (can_be_root and !frame.binding_rhs and !frame.suppressed) {
+        } else if (can_be_root and !frame.binding_rhs and !selection_suppressed) {
             self.hoist_expr_candidates.appendAssumeCapacity(expr);
         }
     }
@@ -1322,7 +1335,14 @@ fn markCurrentHoistObservableEffect(self: *Self) void {
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_observable_effect = true;
 }
 
+fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!bool {
+    self.hoist_selection_suppressed_depth += 1;
+    defer self.hoist_selection_suppressed_depth -= 1;
+    return try self.checkExpr(expr, env, expected);
+}
+
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
+    if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
@@ -1354,6 +1374,7 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
 }
 
 fn recordHoistPatternProvenance(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
+    if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
@@ -1419,8 +1440,51 @@ fn recordHoistSingleBranchMatchPatternProvenance(
 
     const branch_pattern = self.cir.store.getMatchBranchPattern(branch_patterns[0]);
     if (branch_pattern.degenerate) return;
+    if (!self.patternIsIrrefutableForHoistExtraction(branch_pattern.pattern)) return;
 
     try self.recordHoistPatternProvenance(branch_pattern.pattern, match.cond);
+}
+
+fn patternIsIrrefutableForHoistExtraction(self: *Self, pattern: CIR.Pattern.Idx) bool {
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign,
+        .underscore,
+        => true,
+        .as => |as_pattern| self.patternIsIrrefutableForHoistExtraction(as_pattern.pattern),
+        .tuple => |tuple| {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
+                if (!self.patternIsIrrefutableForHoistExtraction(elem_pattern)) return false;
+            }
+            return true;
+        },
+        .record_destructure => |destructure| {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (!self.patternIsIrrefutableForHoistExtraction(destruct.kind.toPatternIdx())) return false;
+            }
+            return true;
+        },
+        .list => |list| {
+            if (list.patterns.span.len != 0) return false;
+            const rest_info = list.rest_info orelse return false;
+            if (rest_info.pattern) |rest_pattern| {
+                return self.patternIsIrrefutableForHoistExtraction(rest_pattern);
+            }
+            return true;
+        },
+        .nominal => |nominal| self.patternIsIrrefutableForHoistExtraction(nominal.backing_pattern),
+        .nominal_external => |nominal| self.patternIsIrrefutableForHoistExtraction(nominal.backing_pattern),
+        .applied_tag,
+        .str_interpolation,
+        .runtime_error,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => false,
+    };
 }
 
 fn recordHoistMatchBranchContextualBindings(
@@ -1810,6 +1874,7 @@ const HoistSelectionTestState = struct {
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
         checker.hoist_suppressed_depth = 0;
+        checker.hoist_selection_suppressed_depth = 0;
         return .{
             .checker = checker,
             .allocator = allocator,
@@ -9423,6 +9488,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
+                if (self.hoist_selection_suppressed_depth != 0) {
+                    if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
+                        switch (known_value) {
+                            .pattern_extraction => {
+                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                            },
+                            .binding_rhs,
+                            .selected_root,
+                            .unavailable_runtime,
+                            => {},
+                        }
+                    }
+                }
                 if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
                     try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
                     break :known true;
@@ -11618,7 +11696,7 @@ fn checkIfElseExpr(
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
     // Then we check the 1st branch's body
-    does_fx = try self.checkExpr(first_branch.body, env, expected.forBranchBody()) or does_fx;
+    does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()) or does_fx;
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -11648,7 +11726,7 @@ fn checkIfElseExpr(
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        does_fx = try self.checkExpr(branch.body, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()) or does_fx;
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -11681,7 +11759,7 @@ fn checkIfElseExpr(
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    does_fx = try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
+                    does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -11694,7 +11772,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExpr(if_.final_else, env, expected.forBranchBody()) or does_fx;
+    does_fx = try self.checkExprWithHoistSelectionSuppressed(if_.final_else, env, expected.forBranchBody()) or does_fx;
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -11838,14 +11916,14 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
-            does_fx = try self.checkExpr(guard_idx, env, Expected.none()) or does_fx;
+            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Check the first branch's value, then use that at the branch_var
-        does_fx = try self.checkExpr(first_branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.value, env, expected.forBranchBody()) or does_fx;
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -11893,14 +11971,14 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
-            does_fx = try self.checkExpr(guard_idx, env, Expected.none()) or does_fx;
+            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Then, check the body
-        does_fx = try self.checkExpr(branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.value, env, expected.forBranchBody()) or does_fx;
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
@@ -11949,7 +12027,7 @@ fn checkMatchExpr(
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
 
                     // Then check the other branch's exprs
-                    does_fx = try self.checkExpr(other_branch.value, env, expected.forBranchBody()) or does_fx;
+                    does_fx = try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()) or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
                 }
 

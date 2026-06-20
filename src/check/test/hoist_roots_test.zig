@@ -461,6 +461,27 @@ test "hoist roots are not selected for runtime-dependent multi-branch match" {
     try std.testing.expectEqual(@as(usize, 0), countMatchExprRoots(&test_env));
 }
 
+test "hoist roots are not selected for runtime-controlled match branch bodies" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    input : Try(I64, I64)
+        \\    input = if arg == 0.I64 {
+        \\        Ok(40.I64)
+        \\    } else {
+        \\        Err(0.I64)
+        \\    }
+        \\    match input {
+        \\        Ok(_) => 1.I64 + 2.I64
+        \\        Err(_) => arg
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected for local values depending on function arguments" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
@@ -810,7 +831,7 @@ test "hoist roots are not selected inside ordinary top-level constants" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots selected for arbitrary closed child expressions" {
+test "hoist roots are not selected for runtime-controlled branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    if arg == 0.I64 {
@@ -823,9 +844,24 @@ test "hoist roots selected for arbitrary closed child expressions" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots selected for whole closed conditional expressions" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| if 1.I64 == 1.I64 {
+        \\    1.I64 + 2.I64
+        \\} else {
+        \\    3.I64 + 4.I64
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_if);
 }
 
 test "hoist roots are not selected for custom from_numeral conversion roots" {
