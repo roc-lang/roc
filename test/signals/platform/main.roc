@@ -1,6 +1,6 @@
 platform ""
 	requires {} { main : {} -> Elem }
-	exposes [Elem, Node, Signal, Html, Ui]
+	exposes [Elem, Signal, Html, Ui]
 	packages {}
 	provides {
 		"roc_ui_init": ui_init,
@@ -12,7 +12,6 @@ platform ""
 	}
 
 import Elem exposing [Elem]
-import Node
 import Signal
 import Html
 import Ui

@@ -50,9 +50,9 @@ or structural no-rebuild patching.
 Ordered roughly by how much of the design they block.
 
 1. **Internal erasure still uses `NodeValue`.** Apps no longer import
-   `NodeValue`, define app-local row encode/decode boilerplate, or receive
-   `NodeValue` from the platform exposes list, but the platform still serializes
-   values through `NodeValue` and still has
+   `NodeValue` or internal `Node`, define app-local row encode/decode
+   boilerplate, or receive `NodeValue`/`Node` from the platform exposes list,
+   but the platform still serializes values through `NodeValue` and still has
    crash-on-decode-mismatch wrappers inside `Signal.roc`/`Ui.roc`. The design
    requires confined per-edge erasure so a mismatch is a compile error, not a
    runtime crash.
