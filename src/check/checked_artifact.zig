@@ -5081,20 +5081,22 @@ fn copyCheckedFlatType(
         },
         .nominal_type => |nominal| blk: {
             const builtin_nominal = categorizeBuiltinNominal(module, imports, nominal);
-            break :blk .{ .nominal = .{
-                .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
-                .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
-                .source_decl = nominal.sourceDeclOptional(),
-                .builtin = builtin_nominal,
-                .is_opaque = nominal.isOpaque(),
-                .backing = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.typeStoreConst().getNominalBackingVar(nominal)),
-                .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
-                .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceNominalArgs(nominal)),
-                // Padding lives on the nominal declaration (built from its source
-                // annotation), not on usage payloads copied from the internal
-                // type store, which carry no unnamed-field information.
-                .padding_field_types = &.{},
-            } };
+            break :blk .{
+                .nominal = .{
+                    .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
+                    .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
+                    .source_decl = nominal.sourceDeclOptional(),
+                    .builtin = builtin_nominal,
+                    .is_opaque = nominal.isOpaque(),
+                    .backing = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.typeStoreConst().getNominalBackingVar(nominal)),
+                    .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
+                    .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceNominalArgs(nominal)),
+                    // Padding lives on the nominal declaration (built from its source
+                    // annotation), not on usage payloads copied from the internal
+                    // type store, which carry no unnamed-field information.
+                    .padding_field_types = &.{},
+                },
+            };
         },
         .fn_pure => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .pure, func) },
         .fn_effectful => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .effectful, func) },
