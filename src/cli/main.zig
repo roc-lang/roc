@@ -5356,6 +5356,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .inline_mode = postCheckInlineModeForOpt(args.opt),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .tag_reachability = tagReachabilityForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
     );
@@ -5689,6 +5690,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .inline_mode = postCheckInlineModeForOpt(args.opt),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .tag_reachability = tagReachabilityForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
     );
@@ -6562,6 +6564,13 @@ fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn debugEffectsForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.DebugEffectMode {
     return switch (opt) {
         .size, .speed => .erase,
@@ -6905,6 +6914,7 @@ fn runCheckedArtifactTests(
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt),
             .list_in_place_map = listInPlaceMapForOpt(opt),
+            .tag_reachability = tagReachabilityForOpt(opt),
         },
     );
     defer lowered.deinit();
