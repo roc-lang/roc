@@ -8072,6 +8072,21 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     };
 }
 
+fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    return switch (self.cir.store.getExpr(expr_idx)) {
+        .e_if => |if_expr| {
+            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                if (!self.exprAlwaysCrashes(branch.body)) return false;
+            }
+            return self.exprAlwaysCrashes(if_expr.final_else);
+        },
+        .e_block => |block| self.exprIsAllCrashConditional(block.final_expr),
+        else => false,
+    };
+}
+
 fn exhaustiveBuiltinIdents(self: *const Self) exhaustive.BuiltinIdents {
     return .{
         .builtin_module = self.cir.idents.builtin_module,
@@ -8318,13 +8333,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
     var does_fx = false;
     var diverges = false;
+    var warn_unreachable = false;
     for (0..statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
 
-        if (diverges) {
+        if (warn_unreachable) {
             _ = try self.problems.appendProblem(self.gpa, .{ .unreachable_code = .{
                 .region = stmt_region,
             } });
@@ -8556,8 +8572,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
 
                 _ = try self.unify(stmt_var, expr_var, env);
-                if (self.exprAlwaysCrashes(expr.expr)) {
+                if (self.exprIsAllCrashConditional(expr.expr)) {
                     diverges = true;
+                    warn_unreachable = true;
                 }
             },
             .s_dbg => |expr| {
