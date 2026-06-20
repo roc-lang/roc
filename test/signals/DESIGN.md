@@ -149,6 +149,13 @@ reserved for persistence and the wire, never forced on every event. We do not
 `memcmp` encoded bytes for equality (fragile for floats/maps); we call the
 generated `is_eq` thunk.
 
+This opaque carrier must be produced at a real typed edge boundary. It is not a
+generic `Box({})` field in the descriptor tree: Roc keeps `Box(a)` typed, so a
+generic `Opaque(a)` value cannot be placed directly into heterogeneous `Elem`
+payloads. The platform boundary must either generate an erased host value cell at
+the monomorphized call site or reshape descriptors so each stored value is owned
+by the one typed thunk that can read it.
+
 There is no untyped value representation crossing the boundary. The public API
 is a few polymorphic functions (below); monomorphization generates concrete code
 for each instantiation, so there is no hand-written family of type-specialized
