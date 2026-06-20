@@ -1461,6 +1461,34 @@ test "fx platform valid nested where-clause static dispatch builds" {
     try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
 }
 
+test "fx platform divergent if with all crash branches does not hit postcheck invariant" {
+    const allocator = testing.allocator;
+
+    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env_map.deinit();
+
+    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--no-cache",
+        "test/fx/divergent_if_all_branches_crash_repro.roc",
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    const did_abort = switch (build_result.term) {
+        .exited => |code| code == 134,
+        .signal => true,
+        else => true,
+    };
+    try testing.expect(!did_abort);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "panic") == null);
+}
+
 test "external platform memory alignment regression" {
     // SKIPPED: aoc_day2.roc crashes at runtime due to a dev backend bug with
     // mutable variables + for loops + closures (.contains/.append).

@@ -7362,6 +7362,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .if_ => |if_| try self.lowerIf(if_, ty, ty, &.{}, try self.ifComptimeSite(checked_expr_id, if_)),
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },

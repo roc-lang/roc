@@ -59,6 +59,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
 
     pub const Idx = enum(u32) { _ };
@@ -294,6 +295,11 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Code that appears after an expression or statement that never returns.
+pub const UnreachableCode = struct {
+    region: base.Region,
 };
 
 // static dispatch //
