@@ -437,6 +437,25 @@ and dispatch directly to the field parser.
       still shows `_roc__proc_11b` at 260088 code bytes and 4192 total stack
       bytes, so the remaining frame/code-size gap is the generic parser-state
       and cold/error-path machinery tracked by later phases.
+    - The HTTP header platform now returns `TryFieldCaseless` from
+      `parse_record_field` instead of doing a userspace `Fields.for_size` loop
+      and `Str.caseless_ascii_equals` before returning a direct `Field`. This
+      puts the motivating header parser on the generated static caseless
+      dispatch path. Verified with
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`,
+      `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`,
+      and optimized artifacts
+      `/tmp/roc_http_after_tryfield_caseless_headers.s` and
+      `/tmp/roc_http_after_tryfield_caseless_headers.ll`.
+    - The refreshed optimized HTTP IR/disassembly contains no references to
+      `roc_builtins_str_equal`, `roc_builtins_str_caseless_ascii_equals`, or
+      the static string-helper symbols. The main generated parser proc changed
+      from `_roc__proc_11b` at about 261,328 code bytes in
+      `/tmp/roc_http_after_runtime_error_helper.s` to `_roc__proc_e4` at about
+      103,444 code bytes. The proc still has 2,434 allocas and 255 memsets in
+      IR, so the remaining large gap is parser-state/control-flow shape rather
+      than field-name dispatch.
 
 - [x] Keep `Fields.iter` and `Fields.for_size` correct for userspace.
   - Tasks:
@@ -515,13 +534,14 @@ real Roc `Str` value.
   - Success criteria:
     - Unknown header skip path has no Roc `Str` construction.
     - Matched field dispatch for static fields has direct byte/word compares.
-    - Intermediate progress: `test/http-headers/platform/Headers.roc` now uses
-      `Fields.for_size` and returns direct `Field` events for known headers.
-      Unknown headers return `Continue` after the format consumes the line, so
-      they no longer enter generated record string-dispatch or
-      `skip_record_field`. The format still represents the parsed header name
-      as a safe Roc `Str` slice; the lower-level borrowed pointer/length
-      representation remains open.
+    - Intermediate progress: `test/http-headers/platform/Headers.roc` now returns
+      `TryFieldCaseless` with the parsed header-name slice and value-start
+      state. Generated static dispatch handles known headers, and unknown
+      headers use the format's `skip_record_field` from the value-start state.
+      This removes the userspace field iterator/string-helper dispatch from the
+      HTTP hot path, but the parsed field name is still an ordinary safe Roc
+      `Str` slice rather than the lower-level borrowed pointer/length
+      representation tracked by this phase.
 
 - [ ] Use deferred string construction for `Str` field values.
   - Tasks:
@@ -930,6 +950,15 @@ Roc API.
       `_roc__proc_11b` remains at 2434 allocas and 255 memsets. This confirms
       the helper removes duplicated cold crash bodies but does not address the
       hot parser-state stack traffic.
+    - Current HTTP static-dispatch evidence:
+      `/tmp/roc_http_after_tryfield_caseless_headers.ll` and
+      `/tmp/roc_http_after_tryfield_caseless_headers.s` contain no references
+      to `roc_builtins_str_equal`, `roc_builtins_str_caseless_ascii_equals`, or
+      static string-helper symbols. The main generated parser proc is now about
+      103,444 code bytes, down from about 261,328 bytes before the HTTP format
+      moved from userspace field lookup to generated `TryFieldCaseless`
+      dispatch. The proc still has 2434 allocas and 255 memsets, so broad
+      parser-state lowering remains open.
 
 ## Completion Checklist
 
@@ -947,7 +976,7 @@ The plan is not complete until every item below is true:
 - [x] Static known `Fields` dispatch emits direct exact small-string compares.
 - [x] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
       for eligible small strings.
-- [ ] Generic iterator/string-helper dispatch is not used on the static SSO hot
+- [x] Generic iterator/string-helper dispatch is not used on the static SSO hot
       path.
 - [x] Runtime-created parsers still work correctly, even if they are slower than
       compile-time-created parsers.
