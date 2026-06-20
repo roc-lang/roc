@@ -38,9 +38,9 @@ test {
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
-    // not a size win: the literal-origin variant still embeds a full ~32-byte
-    // `NumeralInfo`, so the `Origin` union dominates the struct at 48 bytes total.
-    try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
+    // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
+    // so the `Origin` union dominates the struct at 52 bytes total.
+    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
