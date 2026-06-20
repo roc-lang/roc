@@ -565,7 +565,8 @@ retain the equality thunk beside the cached bridge value, so dirty pruning uses
 cache-owned edge data rather than looking equality back up through the retained
 `SignalExpr`. Active source state now stores its current bridge value and
 retained equality thunk in a single host value-cell record, matching the shape
-needed for the eventual opaque typed value carrier.
+needed for the eventual opaque typed value carrier; signal caches use that same
+value-cell record now that every signal output edge has equality.
 
 - Resolve per-edge `is_eq` (and, where a value must serialize, `encode`/`decode`)
   thunks by static dispatch on the surrounding `Signal(a)`'s value type, pinned

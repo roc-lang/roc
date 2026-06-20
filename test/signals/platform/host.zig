@@ -90,6 +90,13 @@ const HostValueCell = struct {
         return .{ .value = value, .eq = eq };
     }
 
+    fn cloneRetained(self: HostValueCell, metrics: *RuntimeMetrics) HostValueCell {
+        abi.increfNodeValue(self.value, 1);
+        abi.increfErasedCallable(self.eq, 1);
+        metrics.closure_retains += 1;
+        return self;
+    }
+
     fn deinit(self: *HostValueCell, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
         abi.decrefNodeValue(self.value, roc_host);
         abi.decrefErasedCallable(self.eq, roc_host);
@@ -133,41 +140,27 @@ const HostSignalDependentsRoute = struct {
     signal_ids: []u64,
 };
 
-const HostSignalCachedValue = struct {
-    value: abi.NodeValue,
-    eq: abi.RocErasedCallable,
-};
-
 const HostSignalCacheSlot = union(enum) {
     absent,
-    present: HostSignalCachedValue,
+    present: HostValueCell,
 
     fn deinit(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
         switch (self.*) {
             .absent => {},
-            .present => |cached| {
-                abi.decrefNodeValue(cached.value, roc_host);
-                abi.decrefErasedCallable(cached.eq, roc_host);
-                metrics.closure_releases += 1;
-            },
+            .present => |*cached| cached.deinit(roc_host, metrics),
         }
         self.* = .absent;
     }
 
     fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: abi.NodeValue, eq: abi.RocErasedCallable) void {
         self.deinit(roc_host, metrics);
-        abi.increfErasedCallable(eq, 1);
-        metrics.closure_retains += 1;
-        self.* = .{ .present = .{ .value = value, .eq = eq } };
+        self.* = .{ .present = HostValueCell.initRetained(value, eq, metrics) };
     }
 
     fn replaceValue(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: abi.NodeValue) void {
         switch (self.*) {
             .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
-            .present => |*cached| {
-                abi.decrefNodeValue(cached.value, roc_host);
-                cached.value = value;
-            },
+            .present => |*cached| cached.replaceValue(roc_host, value),
         }
     }
 };
@@ -2365,12 +2358,7 @@ const HostEnv = struct {
     fn cloneHostSignalCacheSlot(slot: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
         return switch (slot) {
             .absent => .absent,
-            .present => |cached| blk: {
-                abi.increfNodeValue(cached.value, 1);
-                abi.increfErasedCallable(cached.eq, 1);
-                metrics.closure_retains += 1;
-                break :blk .{ .present = cached };
-            },
+            .present => |cached| .{ .present = cached.cloneRetained(metrics) },
         };
     }
 
@@ -3372,7 +3360,7 @@ fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *H
     switch (cache_slot.*) {
         .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
         .present => |cached| {
-            const values_equal = callErasedNodeValueNodeValueToBool(roc_host, cached.eq, cached.value, value);
+            const values_equal = cached.valueEquals(roc_host, value);
             if (values_equal) {
                 abi.decrefNodeValue(value, roc_host);
                 recordSignalPrune(host);
