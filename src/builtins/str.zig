@@ -329,6 +329,26 @@ pub const RocStr = extern struct {
         return bytesEqualStaticSmall(self.asU8ptr(), static_len, word0, word1, word2);
     }
 
+    /// Compare one packed static word lane against this RocStr. This is an
+    /// internal discriminator for generated field-name dispatch. It is separate
+    /// from `eqlStaticSmall` so generated code can cheaply reject most fields
+    /// with one selected lane before doing full verification on a rare hit.
+    ///
+    /// `active_len` says how many low byte lanes in `word` are meaningful. The
+    /// runtime string may be small, heap-backed, or a seamless slice; every load
+    /// is either proven in-bounds or assembled byte-by-byte.
+    pub fn staticSmallWordEq(self: RocStr, offset: usize, active_len: usize, word: u64) bool {
+        if (active_len > @sizeOf(u64)) return false;
+
+        const self_len = self.len();
+        if (offset > self_len) return false;
+        if (active_len > self_len - offset) return false;
+
+        const mask = lowBytesMask64(active_len);
+        const runtime_word = staticSmallRuntimeWord(self, offset, active_len);
+        return (runtime_word & mask) == (word & mask);
+    }
+
     pub fn clone(
         str: RocStr,
         roc_ops: *RocOps,
@@ -602,6 +622,21 @@ inline fn bytesEqualStaticSmall(bytes: [*]const u8, len: usize, word0: u64, word
     return (runtime_tail & mask) == (static_words[index / word_size] & mask);
 }
 
+inline fn staticSmallRuntimeWord(str: RocStr, offset: usize, active_len: usize) u64 {
+    if (str.isSmallStr()) {
+        const bytes: [@sizeOf(RocStr)]u8 = @bitCast(str);
+        return readSmallStringU64(bytes, offset);
+    }
+
+    const bytes = str.asU8ptr();
+    const len = str.len();
+    if (offset + @sizeOf(u64) <= len) {
+        return std.mem.readInt(u64, bytes[offset..][0..@sizeOf(u64)], .little);
+    }
+
+    return readTailU64(bytes, len, offset, active_len);
+}
+
 inline fn smallBytesEqual(left: [@sizeOf(RocStr)]u8, right: [@sizeOf(RocStr)]u8, len: usize) bool {
     const word_size = @sizeOf(u64);
 
@@ -664,6 +699,11 @@ pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
 /// Internal helper for compiler-generated static small string comparison.
 pub fn strEqualStaticSmall(self: RocStr, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
     return self.eqlStaticSmall(@intCast(static_len), word0, word1, word2);
+}
+
+/// Internal helper for generated static small word-lane comparison.
+pub fn strStaticSmallWordEq(self: RocStr, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    return self.staticSmallWordEq(@intCast(offset), @intCast(active_len), word);
 }
 
 // Str.numberOfBytes
@@ -2491,6 +2531,50 @@ test "RocStr.eqStaticSmall: rejects long static metadata" {
     defer roc_str.decref(test_env.getOps());
 
     try std.testing.expect(!roc_str.eqlStaticSmall(25, 0, 0, 0));
+}
+
+test "RocStr.staticSmallWordEq: compares selected full lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "cacheControlUserIdValue";
+    const roc_str = RocStr.init(text, text.len, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest(text);
+    try std.testing.expect(roc_str.staticSmallWordEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordEq(8, 8, words[1]));
+    try std.testing.expect(roc_str.staticSmallWordEq(16, text.len - 16, words[2]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(8, 8, words[1] ^ 0x01));
+}
+
+test "RocStr.staticSmallWordEq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "abcdefghijklmnopqrstuvxyz";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 3, 3, test_env.getOps());
+    const words = packStaticSmallForTest("xyz");
+    const mismatch = packStaticSmallForTest("xyZ");
+
+    try std.testing.expect(slice.staticSmallWordEq(0, 3, words[0]));
+    try std.testing.expect(!slice.staticSmallWordEq(0, 3, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordEq: rejects out-of-range lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.init("abc", 3, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("abc");
+    try std.testing.expect(!roc_str.staticSmallWordEq(0, 9, words[0]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(4, 1, words[0]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(2, 2, words[0]));
 }
 
 test "RocStr.eq: embedded nul bytes use byte equality" {

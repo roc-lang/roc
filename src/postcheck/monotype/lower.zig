@@ -6320,6 +6320,10 @@ const BodyContext = struct {
             index -= 1;
             const length = renamed_field_lengths[index];
             if (fieldLengthAlreadyHandled(renamed_field_lengths, index, length)) continue;
+            const static_lane: ?StaticFieldLane = if (mode == .exact and length <= 24)
+                if (renamed_field_texts) |texts| selectStaticFieldLane(renamed_field_lengths, texts, length) else null
+            else
+                null;
 
             var group_body = unknown_body;
             var field_index = matched_bodies.len;
@@ -6328,14 +6332,27 @@ const BodyContext = struct {
                 if (renamed_field_lengths[field_index] != length) continue;
 
                 const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[field_index], key_ty);
-                const cond = try self.recordFieldNameMatch(
-                    key_local,
-                    key_ty,
-                    renamed_field_expr,
-                    if (renamed_field_texts) |texts| texts[field_index] else null,
-                    mode,
-                );
-                group_body = try self.builder.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
+                if (static_lane) |lane| {
+                    const texts = renamed_field_texts orelse Common.invariant("static field lane requested without field text");
+                    const field_text = texts[field_index];
+                    const probe = try self.recordFieldNameStaticSmallWordMatch(key_local, key_ty, field_text, lane.offset, lane.active_len);
+                    const matched_or_next = if (lane.offset == 0 and lane.active_len == length)
+                        matched_bodies[field_index]
+                    else blk: {
+                        const full_cond = try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text);
+                        break :blk try self.builder.ifExpr(full_cond, matched_bodies[field_index], group_body, ret_ty);
+                    };
+                    group_body = try self.builder.ifExpr(probe, matched_or_next, group_body, ret_ty);
+                } else {
+                    const cond = try self.recordFieldNameMatch(
+                        key_local,
+                        key_ty,
+                        renamed_field_expr,
+                        if (renamed_field_texts) |texts| texts[field_index] else null,
+                        mode,
+                    );
+                    group_body = try self.builder.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
+                }
             }
 
             const key_len_expr = try self.builder.localExpr(key_len_local, u64_ty);
@@ -7309,6 +7326,28 @@ const BodyContext = struct {
             try self.builder.intLiteralExpr(words[2], u64_ty),
         };
         return try self.builder.lowLevelExpr(.str_is_eq_static_small, &args, try self.builder.primitiveType(.bool));
+    }
+
+    fn recordFieldNameStaticSmallWordMatch(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        field_text: []const u8,
+        offset: u32,
+        active_len: u32,
+    ) Allocator.Error!Ast.ExprId {
+        if (field_text.len > 24) Common.invariant("static small field lane requested for a long field name");
+        const word = staticFieldLaneWord(field_text, offset, active_len);
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const args = [_]Ast.ExprId{
+            key_expr,
+            try self.builder.intLiteralExpr(offset, u64_ty),
+            try self.builder.intLiteralExpr(active_len, u64_ty),
+            try self.builder.intLiteralExpr(word, u64_ty),
+        };
+        return try self.builder.lowLevelExpr(.str_static_small_word_eq, &args, try self.builder.primitiveType(.bool));
     }
 
     fn renamedRecordFieldNameExpr(
@@ -10023,6 +10062,66 @@ const BodyContext = struct {
         exact,
         caseless,
     };
+
+    const StaticFieldLane = struct {
+        offset: u32,
+        active_len: u32,
+    };
+
+    fn selectStaticFieldLane(lengths: []const u32, texts: []const []const u8, length: u32) StaticFieldLane {
+        if (lengths.len != texts.len) Common.invariant("record parser dispatch text arity did not match field lengths");
+        if (length == 0 or length > 24) Common.invariant("static field lane requested for an unsupported field length");
+
+        var group_count: usize = 0;
+        for (lengths, texts) |field_len, text| {
+            if (field_len != length) continue;
+            if (text.len != length) Common.invariant("record parser dispatch text length did not match precomputed length");
+            group_count += 1;
+        }
+        if (group_count == 0) Common.invariant("static field lane requested for an empty length bucket");
+
+        var best = StaticFieldLane{ .offset = 0, .active_len = @min(length, 8) };
+        var best_distinct: usize = 0;
+        const offsets = [_]u32{ 0, 8, 16 };
+        for (offsets) |offset| {
+            if (offset >= length) continue;
+            const active_len: u32 = @min(length - offset, 8);
+            var distinct: usize = 0;
+            for (texts, lengths, 0..) |text, field_len, text_index| {
+                if (field_len != length) continue;
+                const word = staticFieldLaneWord(text, offset, active_len);
+                var seen = false;
+                var previous: usize = 0;
+                while (previous < text_index) : (previous += 1) {
+                    if (lengths[previous] != length) continue;
+                    if (staticFieldLaneWord(texts[previous], offset, active_len) == word) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) distinct += 1;
+            }
+            if (distinct > best_distinct) {
+                best = .{ .offset = offset, .active_len = active_len };
+                best_distinct = distinct;
+                if (distinct == group_count) break;
+            }
+        }
+        return best;
+    }
+
+    fn staticFieldLaneWord(text: []const u8, offset: u32, active_len: u32) u64 {
+        if (active_len > 8) Common.invariant("static field lane exceeded one word");
+        const offset_usize: usize = @intCast(offset);
+        const active_len_usize: usize = @intCast(active_len);
+        if (offset_usize > text.len or active_len_usize > text.len - offset_usize) Common.invariant("static field lane exceeded field text");
+        var word: u64 = 0;
+        var index: u32 = 0;
+        while (index < active_len) : (index += 1) {
+            word |= @as(u64, text[offset_usize + @as(usize, @intCast(index))]) << @intCast(index * 8);
+        }
+        return word;
+    }
 
     fn fieldLengthAlreadyHandled(lengths: []const u32, index: usize, length: u32) bool {
         var i = index + 1;

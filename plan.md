@@ -353,6 +353,27 @@ and dispatch directly to the field parser.
       `roc_builtins_str_equal_static_small`, or
       `roc_builtins_str_caseless_ascii_equals`. This does not yet complete the
       word-lane bucketed dispatcher described above.
+    - Intermediate progress: exact static dispatch now selects a deterministic
+      discriminating 8-byte lane for each equal-length transformed field-name
+      group, probes that lane with the internal
+      `str_static_small_word_eq` operation, and performs the full static-small
+      exact verification only after a lane hit. The runtime helper has tests for
+      full lanes, short seamless slices at allocation end, and out-of-range
+      lanes. Verified with `zig build run-test-zig-module-builtins -- --test-filter staticSmallWordEq`,
+      `zig build run-test-zig-module-builtins`,
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`,
+      `zig build run-test-wasm-static-lib`, and
+      `zig build run-test-cli -- --suite subcommands --filter "Str.is_eq edge"`.
+      Optimized disassembly dumps
+      `/tmp/roc_http_after_word_lane.s` and
+      `/tmp/roc_json_camel_direct_after_word_lane.s` contain no calls to
+      `roc_builtins_str_equal`, `roc_builtins_str_equal_static_small`,
+      `roc_builtins_str_static_small_word_eq`, or
+      `roc_builtins_str_caseless_ascii_equals`. The HTTP header benchmark path
+      still primarily uses caseless matching, so the remaining work in this
+      phase is the analogous direct caseless dispatcher plus reducing the
+      generic parser-state traffic.
 
 - [ ] Generate an SSO ASCII-caseless dispatcher.
   - Tasks:
@@ -655,6 +676,10 @@ fixed-width word compares because unused SSO bytes are zeroed.
       JSON parser binaries. The current LLVM lowering emits guarded byte
       comparisons; the remaining work is to generate the word-lane SSO
       dispatcher and discriminating-lane ordering from Phase 4.
+    - Intermediate progress: exact static field dispatch now uses the Phase 4
+      discriminating word-lane probe before full verification for transformed
+      field names up to 24 bytes. The general optimized `Str.is_eq` path remains
+      the fallback for runtime-created parsers and long field names.
 
 ## Phase 9: Remove Remaining Generic Parser State Traffic
 

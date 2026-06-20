@@ -59,6 +59,7 @@ const strCountUtf8Bytes = builtins.str.countUtf8Bytes;
 const strCaselessAsciiEquals = builtins.str.strCaselessAsciiEquals;
 const strEqual = builtins.str.strEqual;
 const strEqualStaticSmall = builtins.str.strEqualStaticSmall;
+const strStaticSmallWordEq = builtins.str.strStaticSmallWordEq;
 const strRepeatC = builtins.str.repeatC;
 const strTrim = builtins.str.strTrim;
 const strTrimStart = builtins.str.strTrimStart;
@@ -184,6 +185,7 @@ pub const BuiltinFn = enum {
     str_ends_with,
     str_equal,
     str_equal_static_small,
+    str_static_small_word_eq,
     str_count_utf8_bytes,
     str_find_first,
     str_caseless_ascii_equals,
@@ -301,6 +303,7 @@ pub const BuiltinFn = enum {
             .str_ends_with => "roc_builtins_str_ends_with",
             .str_equal => "roc_builtins_str_equal",
             .str_equal_static_small => "roc_builtins_str_equal_static_small",
+            .str_static_small_word_eq => "roc_builtins_str_static_small_word_eq",
             .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
             .str_find_first => "roc_builtins_str_find_first",
             .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
@@ -484,6 +487,12 @@ fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_
 fn wrapStrEqualStaticSmall(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     return strEqualStaticSmall(a, static_len, word0, word1, word2);
+}
+
+/// Wrapper: strStaticSmallWordEq(RocStr, u64, u64, u64) -> bool
+fn wrapStrStaticSmallWordEq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return strStaticSmallWordEq(a, offset, active_len, word);
 }
 
 /// Wrapper: countUtf8Bytes(RocStr) -> u64
@@ -2782,6 +2791,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
+                .str_static_small_word_eq => {
+                    if (args.len != 4) unreachable;
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const offset_loc = try self.emitValueLocal(args[1]);
+                    const active_len_loc = try self.emitValueLocal(args[2]);
+                    const word_loc = try self.emitValueLocal(args[3]);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    const offset_off = try self.ensureOnStack(offset_loc, 8);
+                    const active_len_off = try self.ensureOnStack(active_len_loc, 8);
+                    const word_off = try self.ensureOnStack(word_loc, 8);
+                    const eq_loc = try self.callStrStaticSmallWordToScalar(str_off, offset_off, active_len_off, word_off, @intFromPtr(&wrapStrStaticSmallWordEq), .str_static_small_word_eq);
+                    const eq_reg = try self.ensureInGeneralReg(eq_loc);
+                    return .{ .general_reg = eq_reg };
+                },
                 .str_concat => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.emitValueLocal(args[0]);
@@ -4405,6 +4428,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, word0_off);
             try builder.addMemArg(base_ptr, word1_off);
             try builder.addMemArg(base_ptr, word2_off);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            const result_reg = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+            } else {
+                try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                try self.codegen.emit.andRegImm8(result_reg, 1);
+            }
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Call a C wrapper: fn(str_f0, str_f1, str_f2, offset, active_len, word) -> bool
+        /// Used by compiler-generated static small field dispatch as a cheap discriminator.
+        fn callStrStaticSmallWordToScalar(self: *Self, str_off: i32, offset_off: i32, active_len_off: i32, word_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const base_ptr = frame_ptr;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(base_ptr, str_off);
+            try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, str_off + 8);
+            try builder.addMemArg(base_ptr, offset_off);
+            try builder.addMemArg(base_ptr, active_len_off);
+            try builder.addMemArg(base_ptr, word_off);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             const result_reg = try self.allocTempGeneral();
