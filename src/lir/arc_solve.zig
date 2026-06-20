@@ -176,7 +176,7 @@ pub const Solution = struct {
         while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
             cursor = self.alias_source[cursor];
             steps += 1;
-            if (steps > self.alias_source.len) return local;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
         return @enumFromInt(cursor);
     }
