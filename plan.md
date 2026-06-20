@@ -564,6 +564,22 @@ inflate the main parser frame and instruction footprint.
     - `_roc__proc_e3` code size decreases materially.
     - Hot-path disassembly has fewer interleaved crash/error blocks.
     - Correctness tests for errors still pass.
+    - Intermediate progress: generic LIR `.runtime_error` sites in the LLVM
+      backend now call one internal cold `roc_runtime_error` helper instead of
+      inlining the same `emitCrashBytes("hit a runtime error")` sequence at
+      every site. Verified with `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Refreshed optimized HTTP artifacts:
+      `/tmp/roc_http_after_runtime_error_helper.ll` and
+      `/tmp/roc_http_after_runtime_error_helper.s`. The IR has one
+      `define internal void @roc_runtime_error`, the helper disassembles to
+      about 4,068 bytes, and generated runtime-error sites call it instead of
+      duplicating the crash body. `_roc__proc_11c` dropped from about 56,980
+      bytes after static-byte deduplication to about 53,144 bytes; the main
+      generated parser proc `_roc__proc_11b` only dropped from about 261,488 to
+      261,328 bytes, so broader decode-error/missing-field/ARC cold outlining
+      remains open.
 
 - [ ] Mark or structure cold compiler-generated paths in a backend-appropriate
       way.
@@ -907,6 +923,13 @@ Roc API.
       duplicate cold runtime-error data from the module. It does not change
       `_roc__proc_11b`'s parser-state alloca/memset counts, so hot parser
       scalarization and cold control-flow outlining remain open.
+    - Current runtime-error helper evidence:
+      `/tmp/roc_http_after_runtime_error_helper.ll` routes generated
+      `.runtime_error` instructions through one internal `roc_runtime_error`
+      helper. `_roc__proc_117` remains at 133 allocas and 19 memsets, while
+      `_roc__proc_11b` remains at 2434 allocas and 255 memsets. This confirms
+      the helper removes duplicated cold crash bodies but does not address the
+      hot parser-state stack traffic.
 
 ## Completion Checklist
 

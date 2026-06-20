@@ -162,6 +162,7 @@ pub const MonoLlvmCodeGen = struct {
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
+    runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
@@ -357,6 +358,7 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
         self.string_counter = 0;
+        self.runtime_error_func = null;
         self.debug_compile_unit = .none;
         self.debug_enums_fwd_ref = .none;
         self.debug_globals_fwd_ref = .none;
@@ -1066,9 +1068,64 @@ pub const MonoLlvmCodeGen = struct {
         for (procs, 0..) |proc, i| {
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
+        try self.declareRuntimeErrorHelper();
+        try self.compileRuntimeErrorHelper();
         for (procs, 0..) |proc, i| {
             try self.compileProcBody(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
+    }
+
+    fn declareRuntimeErrorHelper(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
+        const func = builder.addFunction(fn_ty, builder.strtabString("roc_runtime_error") catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+        func.setLinkage(.internal, builder);
+
+        var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs.deinit(builder);
+        try attrs.addFnAttr(.cold, builder);
+        try attrs.addFnAttr(.@"noinline", builder);
+        func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
+
+        self.runtime_error_func = func;
+    }
+
+    fn compileRuntimeErrorHelper(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const func = self.runtime_error_func orelse return error.CompilationFailed;
+
+        const outer_wip = self.wip;
+        const outer_roc_ops = self.roc_ops_arg;
+        const outer_ret = self.ret_ptr_arg;
+        const outer_args = self.args_ptr_arg;
+        const outer_capture = self.capture_ptr_arg;
+        const outer_ret_layout = self.current_ret_layout;
+        const outer_slots = self.local_slots;
+        defer {
+            self.wip = outer_wip;
+            self.roc_ops_arg = outer_roc_ops;
+            self.ret_ptr_arg = outer_ret;
+            self.args_ptr_arg = outer_args;
+            self.capture_ptr_arg = outer_capture;
+            self.current_ret_layout = outer_ret_layout;
+            self.local_slots = outer_slots;
+        }
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = true }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+        self.roc_ops_arg = wip.arg(0);
+        self.ret_ptr_arg = null;
+        self.args_ptr_arg = null;
+        self.capture_ptr_arg = null;
+        self.current_ret_layout = .zst;
+        self.local_slots = &.{};
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+        try self.emitCrashBytes("hit a runtime error");
+        try self.finishCurrentWipFunction();
     }
 
     fn declareProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
@@ -1947,7 +2004,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = expect_stmt.next });
             },
             .runtime_error => {
-                try self.emitCrashBytes("hit a runtime error");
+                try self.emitRuntimeError();
             },
             .comptime_exhaustiveness_failed => {
                 try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
@@ -2880,6 +2937,20 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitStaticRocOpsMessageCall(.crashed, msg);
         // Linux AArch64 eval tests handle crashes by returning to the Zig host.
         // Longjmping through LLVM-generated frames is not reliable on that target.
+        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        } else {
+            _ = wip.@"unreachable"() catch return error.OutOfMemory;
+        }
+    }
+
+    fn emitRuntimeError(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const func = self.runtime_error_func orelse return error.CompilationFailed;
+        _ = wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), &.{self.rocOps()}, "") catch return error.OutOfMemory;
+        // Keep the terminal behavior identical to the previous inline
+        // `emitCrashBytes("hit a runtime error")` lowering at the call site.
         if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
             _ = wip.retVoid() catch return error.OutOfMemory;
         } else {
