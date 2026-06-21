@@ -1507,7 +1507,32 @@ const Builder = struct {
                 try ctx.constrainTypeToMono(ctx.checkedTypeInCurrentView(source.view, formal), mono_arg);
             }
         }
-        return try ctx.lowerType(ctx.nominalBackingRoot(nominal));
+        const backing = try ctx.lowerType(ctx.nominalBackingRoot(nominal));
+        return try self.structuralBackingForNominal(view, nominal, backing);
+    }
+
+    fn structuralBackingForNominal(
+        self: *Builder,
+        view: ModuleView,
+        nominal: checked.CheckedNominalType,
+        backing: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
+        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var current = backing;
+        while (true) {
+            if (seen.contains(current)) return current;
+            try seen.put(current, {});
+            switch (self.program.types.get(current)) {
+                .named => |named| {
+                    if (named.kind != .alias and !sameTypeDef(named.def, owner_def)) return current;
+                    const next = named.backing orelse return current;
+                    current = next.ty;
+                },
+                else => return current,
+            }
+        }
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
@@ -1780,8 +1805,7 @@ const Builder = struct {
             .platform_required => |required| blk: {
                 const app_view = self.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
-                break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
+                break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
             },
         };
         return try self.lowerFnTemplateDef(source_ty_view, fn_template);
@@ -4250,8 +4274,7 @@ const BodyContext = struct {
             .platform_required => |required| blk: {
                 const app_view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
-                break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
+                break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
             },
         };
         return try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
@@ -9635,6 +9658,12 @@ fn branchCount(branches: anytype) usize {
 
 fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
+}
+
+fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
+    return left.module_name == right.module_name and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl;
 }
 
 const CheckedTypeAddress = struct {

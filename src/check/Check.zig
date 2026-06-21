@@ -43,6 +43,14 @@ const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
 
+const InterpolationConstraintId = enum(u32) { _ };
+
+const InterpolationConstraintMetadata = struct {
+    expr_idx: CIR.Expr.Idx,
+    item_var: Var,
+    checked_parts: bool = false,
+};
+
 gpa: std.mem.Allocator,
 // This module's types store
 types: *types_mod.Store,
@@ -116,10 +124,11 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
-/// Generated interpolation iterator item type, keyed by its static dispatch constraint function.
-interpolation_item_var_by_fn_var: std.AutoHashMap(Var, Var),
-/// Custom interpolation item constraints already applied for each constraint function.
-checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
+/// Interpolation metadata records keyed by their static dispatch constraint function.
+interpolation_constraint_ids_by_fn_var: std.AutoHashMap(Var, InterpolationConstraintId),
+/// Metadata produced when checking interpolation expressions and consumed when
+/// finalizing custom `from_interpolation` dispatch.
+interpolation_constraint_metadata: std.ArrayListUnmanaged(InterpolationConstraintMetadata),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
@@ -1037,8 +1046,8 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
-        .interpolation_item_var_by_fn_var = std.AutoHashMap(Var, Var).init(gpa),
-        .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
+        .interpolation_constraint_ids_by_fn_var = std.AutoHashMap(Var, InterpolationConstraintId).init(gpa),
+        .interpolation_constraint_metadata = .empty,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
@@ -1175,8 +1184,8 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
-    self.interpolation_item_var_by_fn_var.deinit();
-    self.checked_interpolation_part_constraints.deinit();
+    self.interpolation_constraint_ids_by_fn_var.deinit();
+    self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
@@ -3384,14 +3393,14 @@ fn unifyTypedLiteralWithExplicitType(
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
         }
         unreachable;
     };
 
-    switch (suffix_type.target()) {
+    switch (suffix_target.target()) {
         .builtin => |num_kind| {
             try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
         },
@@ -3416,6 +3425,9 @@ fn unifyTypedLiteralWithExplicitType(
                 try self.unifyWith(flex_var, .err, env);
             }
         },
+        .invalid => {
+            try self.unifyWith(flex_var, .err, env);
+        },
     }
 }
 
@@ -3425,10 +3437,10 @@ fn explicitTypeSuffixVar(
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!?Var {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return null;
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return null;
     const suffix_var = try self.fresh(env, expr_region);
 
-    switch (suffix_type.target()) {
+    switch (suffix_target.target()) {
         .builtin => |num_kind| {
             try self.unifyWith(suffix_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
         },
@@ -3453,16 +3465,19 @@ fn explicitTypeSuffixVar(
                 try self.unifyWith(suffix_var, .err, env);
             }
         },
+        .invalid => {
+            try self.unifyWith(suffix_var, .err, env);
+        },
     }
 
     return suffix_var;
 }
 
 fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kind: CIR.NumKind) bool {
-    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
-    return switch (suffix_type.target()) {
+    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
+    return switch (suffix_target.target()) {
         .builtin => |target_kind| target_kind == num_kind,
-        else => false,
+        .local, .external, .invalid => false,
     };
 }
 
@@ -4927,12 +4942,13 @@ fn hoistedIfAllowsStoredConst(
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     const node = ModuleEnv.nodeIdxFrom(expr);
     if (self.cir.numeralDispatchPlanForNode(node) != null) {
-        if (self.cir.numericSuffixTypeForNode(node)) |suffix_type| {
-            return switch (suffix_type.target()) {
+        if (self.cir.numericSuffixTargetForNode(node)) |suffix_target| {
+            return switch (suffix_target.target()) {
                 .builtin => false,
                 .local,
                 .external,
                 => true,
+                .invalid => false,
             };
         }
         return !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr));
@@ -5372,6 +5388,19 @@ fn expectRegionForFnVar(self: *Self, fn_var: Var) ?Region {
     return null;
 }
 
+fn interpolationConstraintIdForFnVar(self: *Self, fn_var: Var) ?InterpolationConstraintId {
+    if (self.interpolation_constraint_ids_by_fn_var.count() == 0) return null;
+
+    if (self.interpolation_constraint_ids_by_fn_var.get(fn_var)) |id| return id;
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        if (self.interpolation_constraint_ids_by_fn_var.get(resolved)) |id| return id;
+    }
+
+    return null;
+}
+
 fn recordConstraintExprForFnVar(
     self: *Self,
     fn_var: Var,
@@ -5398,6 +5427,33 @@ fn recordExpectRegionForFnVar(
     }
 }
 
+fn recordInterpolationConstraintIdForFnVar(
+    self: *Self,
+    fn_var: Var,
+    id: InterpolationConstraintId,
+) std.mem.Allocator.Error!void {
+    try self.interpolation_constraint_ids_by_fn_var.put(fn_var, id);
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        try self.interpolation_constraint_ids_by_fn_var.put(resolved, id);
+    }
+}
+
+fn recordInterpolationConstraintMetadata(
+    self: *Self,
+    fn_var: Var,
+    expr_idx: CIR.Expr.Idx,
+    item_var: Var,
+) std.mem.Allocator.Error!void {
+    const id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
+    try self.interpolation_constraint_metadata.append(self.gpa, .{
+        .expr_idx = expr_idx,
+        .item_var = item_var,
+    });
+    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
+}
+
 fn linkConstraintMetadata(
     self: *Self,
     left: Var,
@@ -5412,10 +5468,22 @@ fn linkConstraintMetadata(
         try self.recordExpectRegionForFnVar(left, region);
         try self.recordExpectRegionForFnVar(right, region);
     }
+
+    if (self.interpolationConstraintIdForFnVar(left) orelse self.interpolationConstraintIdForFnVar(right)) |id| {
+        try self.recordInterpolationConstraintIdForFnVar(left, id);
+        try self.recordInterpolationConstraintIdForFnVar(right, id);
+    }
 }
 
 fn hasConstraintMetadata(self: *Self) bool {
-    return self.constraint_expr_by_fn_var.count() > 0 or self.expect_region_by_constraint_fn_var.count() > 0;
+    return self.constraint_expr_by_fn_var.count() > 0 or
+        self.expect_region_by_constraint_fn_var.count() > 0 or
+        self.interpolation_constraint_ids_by_fn_var.count() > 0;
+}
+
+fn instantiatedMetadataVar(self: *Self, var_: Var) Var {
+    const resolved = self.types.resolveVar(var_).var_;
+    return self.var_map.get(resolved) orelse resolved;
 }
 
 fn copyConstraintMetadata(
@@ -5427,8 +5495,9 @@ fn copyConstraintMetadata(
 
     var maybe_expr_idx = self.constraint_expr_by_fn_var.get(old_var);
     var maybe_region = self.expect_region_by_constraint_fn_var.get(old_var);
+    var maybe_interpolation_id = self.interpolation_constraint_ids_by_fn_var.get(old_var);
 
-    if (maybe_expr_idx == null or maybe_region == null) {
+    if (maybe_expr_idx == null or maybe_region == null or maybe_interpolation_id == null) {
         const resolved_old = self.types.resolveVar(old_var).var_;
         if (resolved_old != old_var) {
             if (maybe_expr_idx == null) {
@@ -5437,10 +5506,13 @@ fn copyConstraintMetadata(
             if (maybe_region == null) {
                 maybe_region = self.expect_region_by_constraint_fn_var.get(resolved_old);
             }
+            if (maybe_interpolation_id == null) {
+                maybe_interpolation_id = self.interpolation_constraint_ids_by_fn_var.get(resolved_old);
+            }
         }
     }
 
-    if (maybe_expr_idx == null and maybe_region == null) return;
+    if (maybe_expr_idx == null and maybe_region == null and maybe_interpolation_id == null) return;
 
     const resolved_fresh = self.types.resolveVar(fresh_var).var_;
     if (maybe_expr_idx) |expr_idx| {
@@ -5454,6 +5526,19 @@ fn copyConstraintMetadata(
         try self.expect_region_by_constraint_fn_var.put(fresh_var, region);
         if (resolved_fresh != fresh_var) {
             try self.expect_region_by_constraint_fn_var.put(resolved_fresh, region);
+        }
+    }
+
+    if (maybe_interpolation_id) |old_id| {
+        const old_metadata = self.interpolation_constraint_metadata.items[@intFromEnum(old_id)];
+        const new_id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
+        try self.interpolation_constraint_metadata.append(self.gpa, .{
+            .expr_idx = old_metadata.expr_idx,
+            .item_var = self.instantiatedMetadataVar(old_metadata.item_var),
+        });
+        try self.recordInterpolationConstraintIdForFnVar(fresh_var, new_id);
+        if (resolved_fresh != fresh_var) {
+            try self.recordInterpolationConstraintIdForFnVar(resolved_fresh, new_id);
         }
     }
 }
@@ -8836,7 +8921,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A plain literal converts to its target type through from_quote,
                 // defaulting to Str if nothing pins it.
                 const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
-                if (self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+                if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
                     // Explicit type suffix, e.g. `"foo".MyType`.
                     try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
                 }
@@ -8965,12 +9050,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_typed_int => |typed_num| {
             // Typed integer literal like 123.U64
             // Create from_numeral constraint and unify with the explicit type
-            const num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
+            var num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
                 try self.exactNumeralInfoForExpr(expr_idx, expr_region)
             else switch (typed_num.value.kind) {
                 .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
                 .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
             };
+            num_literal_info.explicit_suffix = true;
 
             // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
@@ -8990,7 +9076,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            num_literal_info.explicit_suffix = true;
 
             // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
@@ -9009,7 +9096,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
         },
         .e_typed_num_from_numeral => {
-            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            num_literal_info.explicit_suffix = true;
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(
@@ -10128,12 +10216,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     dispatcher_var,
                     &arg_vars,
                     expr_var,
+                    item_var,
                     self.cir.idents.from_interpolation,
                     env,
                     interpolation.method_name_region,
                     expr_idx,
                 );
-                try self.interpolation_item_var_by_fn_var.put(constraint_fn_var, item_var);
                 try self.cir.store.replaceExprWithInterpolationConstraint(
                     expr_idx,
                     interpolation.first,
@@ -12568,7 +12656,7 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
-    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsImplicitIsEq(nominal_type)) {
+    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsDerivedIsEq(nominal_type)) {
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
@@ -12961,6 +13049,7 @@ fn mkInterpolationConstraint(
     dispatcher_var: Var,
     arg_vars: []const Var,
     ret_var: Var,
+    item_var: Var,
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
@@ -12980,6 +13069,7 @@ fn mkInterpolationConstraint(
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
+    try self.recordInterpolationConstraintMetadata(constraint_fn_var, expr_idx, item_var);
     if (self.current_expect_region) |expect_region| {
         try self.expect_region_by_constraint_fn_var.put(constraint_fn_var, expect_region);
     }
@@ -12999,42 +13089,32 @@ fn mkInterpolationConstraint(
     return constraint_fn_var;
 }
 
-fn rewriteImplicitEqMethodCallAsStructuralEq(
+fn rewriteDerivedIsEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
-) void {
-    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return;
+) bool {
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return true;
 
     switch (self.cir.store.getExpr(expr_idx)) {
         .e_method_call => |method_call| {
             const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) {
-                std.debug.panic(
-                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
-                    .{args.len},
-                );
-            }
+            if (args.len != 1) return false;
 
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
         },
         .e_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return;
+            if (method_call.constraint_fn_var != constraint.fn_var) return true;
             const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) {
-                std.debug.panic(
-                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
-                    .{args.len},
-                );
-            }
+            if (args.len != 1) return false;
 
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
         },
         .e_method_eq => |eq| {
-            if (eq.constraint_fn_var != constraint.fn_var) return;
+            if (eq.constraint_fn_var != constraint.fn_var) return true;
             self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
         },
         .e_binop => |binop| {
-            if (binop.op != .eq and binop.op != .ne) return;
+            if (binop.op != .eq and binop.op != .ne) return true;
             self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, constraint.origin.binopNegated());
         },
         .e_structural_eq => |eq| {
@@ -13042,6 +13122,8 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
         },
         else => {},
     }
+
+    return true;
 }
 
 fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) void {
@@ -15019,15 +15101,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        try self.nominalSupportsImplicitIsEq(nominal_type))
+                        try self.nominalSupportsDerivedIsEq(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and try self.nominalSupportsImplicitIsEq(nominal_type)) {
-                            try self.satisfyImplicitEqualityConstraint(
+                        if (exact_method_binding == null and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+                            try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
@@ -15240,7 +15322,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (method_binding == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsIsEq(backing_var)) {
-                                try self.satisfyImplicitEqualityConstraint(
+                                try self.satisfyDerivedIsEqConstraint(
                                     deferred_constraint.var_,
                                     constraint,
                                     constraint.fn_var,
@@ -15393,17 +15475,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     dispatcher_content.structure == .empty_record or
                     dispatcher_content.structure == .empty_tag_union))
             {
-                // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
+                // Anonymous structural types (records, tuples, tag unions) have derived is_eq
                 // only if all their components also support is_eq
                 // iterRange re-fetches each item through the SafeList, so it stays valid even if
-                // satisfyImplicitEqualityConstraint appends and reallocates the backing array.
+                // satisfyDerivedIsEqConstraint appends and reallocates the backing array.
                 var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
                 while (constraints_iter.next()) |constraint| {
-                    // Check if this is a call to is_eq (anonymous types have implicit structural equality)
+                    // Check if this is a call to is_eq (anonymous types have derived is_eq)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
                         if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
-                            try self.satisfyImplicitEqualityConstraint(
+                            try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
@@ -15497,7 +15579,8 @@ fn reportEffectfulDispatchInExpect(
 
 fn interpolationExprForConstraint(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     if (constraint.origin.literalKind() != .interpolation) return null;
-    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return null;
+    const id = self.interpolationConstraintIdForFnVar(constraint.fn_var) orelse return null;
+    const expr_idx = self.interpolation_constraint_metadata.items[@intFromEnum(id)].expr_idx;
     if (self.cir.store.getExpr(expr_idx) != .e_interpolation) return null;
     return expr_idx;
 }
@@ -15568,17 +15651,18 @@ fn ensureCustomInterpolationPartsChecked(
     constraint: StaticDispatchConstraint,
     env: *Env,
 ) Allocator.Error!void {
-    const expr_idx = self.interpolationExprForConstraint(constraint) orelse return;
-    const entry = try self.checked_interpolation_part_constraints.getOrPut(constraint.fn_var);
-    if (entry.found_existing) return;
-
-    const item_var = self.interpolation_item_var_by_fn_var.get(constraint.fn_var) orelse {
+    const metadata_id = self.interpolationConstraintIdForFnVar(constraint.fn_var) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
         }
         unreachable;
     };
+    const metadata_index = @intFromEnum(metadata_id);
+    if (self.interpolation_constraint_metadata.items[metadata_index].checked_parts) return;
+    self.interpolation_constraint_metadata.items[metadata_index].checked_parts = true;
 
+    const expr_idx = self.interpolation_constraint_metadata.items[metadata_index].expr_idx;
+    const item_var = self.interpolation_constraint_metadata.items[metadata_index].item_var;
     const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
     const parts = self.cir.store.sliceExpr(interpolation.parts);
     std.debug.assert(parts.len % 2 == 0);
@@ -15774,7 +15858,7 @@ fn flatTypeContainsUnboxedFunction(
     };
 }
 
-fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
@@ -15975,7 +16059,7 @@ fn validateFromNumeralLiteralForBuiltinAlias(
     return true;
 }
 
-fn satisfyImplicitEqualityConstraint(
+fn satisfyDerivedIsEqConstraint(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
@@ -15991,10 +16075,17 @@ fn satisfyImplicitEqualityConstraint(
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 2) {
-        std.debug.panic(
-            "type checker invariant violated: implicit equality constraint expected 2 args, found {d}",
-            .{args.len},
-        );
+        const bool_var = try self.freshBool(env, region);
+        const expected_content = try self.types.mkFuncUnbound(&.{ dispatcher_var, dispatcher_var }, bool_var);
+        const expected_fn_var = try self.freshFromContent(expected_content, env, region);
+
+        _ = try self.unifyInContext(expected_fn_var, constraint_fn_var, env, .{ .fn_call_arity = .{
+            .fn_name = self.cir.idents.is_eq,
+            .expected_args = 2,
+            .actual_args = @intCast(args.len),
+        } });
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
     }
 
     // Read both arg vars before unifying: the first unify can append fresh
@@ -16004,7 +16095,9 @@ fn satisfyImplicitEqualityConstraint(
     _ = try self.unify(dispatcher_var, arg0, env);
     _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
-    self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
+    if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
+        try self.markConstraintFunctionAsError(constraint, env);
+    }
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

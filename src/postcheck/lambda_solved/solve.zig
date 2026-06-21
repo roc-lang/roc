@@ -1382,9 +1382,9 @@ const TypeCloner = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
-                    .backing = if (named.backing) |backing| .{
-                        .ty = try self.lower(backing.ty),
-                        .use = backing.use,
+                    .backing = if (named.backing) |raw_backing| .{
+                        .ty = try self.lower(try self.structuralBackingForNamed(named.def, raw_backing.ty)),
+                        .use = raw_backing.use,
                     } else null,
                 } };
             },
@@ -1406,7 +1406,35 @@ const TypeCloner = struct {
         for (items, 0..) |item, i| lowered[i] = try self.lower(item);
         return lowered;
     }
+
+    fn structuralBackingForNamed(
+        self: *TypeCloner,
+        owner_def: MonoType.TypeDef,
+        backing: MonoType.TypeId,
+    ) Allocator.Error!MonoType.TypeId {
+        var seen = std.AutoHashMap(MonoType.TypeId, void).init(self.solver.allocator);
+        defer seen.deinit();
+        var current = backing;
+        while (true) {
+            if (seen.contains(current)) return current;
+            try seen.put(current, {});
+            switch (self.solver.program.lifted.types.get(current)) {
+                .named => |named| {
+                    if (named.kind != .alias and !sameMonoTypeDef(named.def, owner_def)) return current;
+                    const next = named.backing orelse return current;
+                    current = next.ty;
+                },
+                else => return current,
+            }
+        }
+    }
 };
+
+fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
+    return left.module_name == right.module_name and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl;
+}
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());

@@ -530,7 +530,7 @@ const Inserter = struct {
                                 const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.options.loop_keep);
                                 current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                                 if (move_value) {
-                                    path.owned.unset(source);
+                                    self.unsetOwnedUnit(&path.owned, source);
                                     retain_assign_ref_target = false;
                                 }
                                 self.addOwnedIfRc(&path.owned, assign.target);
@@ -668,7 +668,7 @@ const Inserter = struct {
                     );
                     const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
                     if (target_consumed) {
-                        path.owned.unset(assign.target);
+                        self.unsetOwnedUnit(&path.owned, assign.target);
                     } else {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
@@ -759,7 +759,7 @@ const Inserter = struct {
                             .initialize_join_result => {},
                         }
                         if (move_value) {
-                            path.owned.unset(assign.value);
+                            self.unsetOwnedUnit(&path.owned, assign.value);
                             retain_set_target = false;
                         }
                         self.addOwnedIfRc(&path.owned, assign.target);
@@ -875,10 +875,10 @@ const Inserter = struct {
                         // The caller borrows the result from its own
                         // arguments; no unit transfers.
                         tail = try self.releaseAll(&path.owned, tail);
-                    } else if (path.owned.contains(ret_stmt.value)) {
+                    } else if (self.ownsUnit(&path.owned, ret_stmt.value)) {
                         // Move on return: the binding's own unit transfers to
                         // the caller; no retain/release pair is needed.
-                        path.owned.unset(ret_stmt.value);
+                        self.unsetOwnedUnit(&path.owned, ret_stmt.value);
                         tail = try self.releaseAll(&path.owned, tail);
                     } else {
                         tail = try self.releaseAll(&path.owned, tail);
@@ -898,8 +898,8 @@ const Inserter = struct {
                     // Terminal: the message's ownership unit transfers to the
                     // failure report, so it is not released here.
                     var tail = path.cursor;
-                    if (path.owned.contains(expect_err_stmt.message)) {
-                        path.owned.unset(expect_err_stmt.message);
+                    if (self.ownsUnit(&path.owned, expect_err_stmt.message)) {
+                        self.unsetOwnedUnit(&path.owned, expect_err_stmt.message);
                         tail = try self.releaseAll(&path.owned, tail);
                     } else {
                         tail = try self.releaseAll(&path.owned, tail);
@@ -1187,11 +1187,15 @@ const Inserter = struct {
             .id = join_stmt.id,
             .params = join_stmt.params,
             .incoming_owned = try path.owned.clone(),
-            .entry_keep = try self.joinEntryOwnedSet(&path.owned, join_stmt.remainder),
             .body_keep = try self.joinBodyOwnedSet(&path.owned, join_stmt.params, join_stmt.body),
+            .entry_keep = try self.joinEntryOwnedSet(&path.owned, join_stmt.remainder),
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
+        var carried_body_keep = try state.body_keep.clone();
+        defer carried_body_keep.deinit();
+        carried_body_keep.intersect(&state.incoming_owned);
+        state.entry_keep.unionWith(&carried_body_keep);
         errdefer if (!queued) state.incoming_owned.deinit();
         errdefer if (!queued) state.entry_keep.deinit();
         errdefer if (!queued) state.body_keep.deinit();
@@ -1597,7 +1601,7 @@ const Inserter = struct {
                             .local => |source| {
                                 if (assign.target != source) {
                                     const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.loop_keep);
-                                    if (move_value) path.owned.unset(source);
+                                    if (move_value) self.unsetOwnedUnit(&path.owned, source);
                                     self.addOwnedIfRc(&path.owned, assign.target);
                                 }
                             },
@@ -1658,7 +1662,7 @@ const Inserter = struct {
                     );
                     const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
                     if (target_consumed) {
-                        path.owned.unset(assign.target);
+                        self.unsetOwnedUnit(&path.owned, assign.target);
                     }
                     self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                     if (assign.rc_effect.retain_args != 0) {
@@ -1699,7 +1703,7 @@ const Inserter = struct {
                             .replace_existing, .initialize_join_param => path.owned.unset(assign.target),
                             .initialize_join_result => {},
                         }
-                        if (move_value) path.owned.unset(assign.value);
+                        if (move_value) self.unsetOwnedUnit(&path.owned, assign.value);
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
@@ -1930,6 +1934,14 @@ const Inserter = struct {
         }
     }
 
+    fn ownsUnit(self: *const Inserter, owned: *const OwnedSet, local: LIR.LocalId) bool {
+        return owned.contains(self.solution.unitLocalOf(local));
+    }
+
+    fn unsetOwnedUnit(self: *const Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
+        owned.unset(self.solution.unitLocalOf(local));
+    }
+
     fn joinBodyOwnedSet(
         self: *Inserter,
         entry_owned: *const OwnedSet,
@@ -1990,9 +2002,9 @@ const Inserter = struct {
             if ((position_mask & bit) == 0) continue;
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
-            if (!owned.contains(local)) continue;
+            if (!self.ownsUnit(owned, local)) continue;
             if (try self.groupUsedInPath(next, local, loop_keep)) continue;
-            owned.unset(local);
+            self.unsetOwnedUnit(owned, local);
             transfer |= bit;
         }
         return transfer;
@@ -2011,9 +2023,9 @@ const Inserter = struct {
         if (local == target) return false;
         if (!self.localContainsRefcounted(target)) return false;
         if (!self.localContainsRefcounted(local)) return false;
-        if (!owned.contains(local)) return false;
+        if (!self.ownsUnit(owned, local)) return false;
         if (try self.groupUsedInPath(next, local, loop_keep)) return false;
-        owned.unset(local);
+        self.unsetOwnedUnit(owned, local);
         return true;
     }
 
@@ -2113,7 +2125,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?*const OwnedSet,
     ) ResourceError!bool {
-        if (!owned.contains(value)) return false;
+        if (!self.ownsUnit(owned, value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
         return !(try self.groupUsedInPath(next, value, loop_keep));
     }
@@ -2390,7 +2402,8 @@ const Inserter = struct {
                 if (!self.variants.enabled) continue;
                 if (position >= 64) continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
-                const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
+                const owner = self.solution.unitLocalOf(local);
+                const can_transfer = owned.contains(owner) and !used_after_call and !transferred.contains(owner);
                 if (!can_transfer) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
@@ -2407,12 +2420,13 @@ const Inserter = struct {
                     result.demanded.unique_params |= bit;
                 }
                 try result.transfer_args.append(self.store.allocator, local);
-                transferred.set(local);
+                transferred.set(owner);
                 continue;
             }
 
             const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
-            const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
+            const owner = self.solution.unitLocalOf(local);
+            const can_transfer = owned.contains(owner) and !used_after_call and !transferred.contains(owner);
 
             if (can_transfer) {
                 // A dying argument moving into an owned position that is
@@ -2429,7 +2443,7 @@ const Inserter = struct {
                     result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
                 }
                 try result.transfer_args.append(self.store.allocator, local);
-                transferred.set(local);
+                transferred.set(owner);
             } else {
                 try result.retain_args.append(self.store.allocator, local);
             }
@@ -2493,9 +2507,9 @@ const Inserter = struct {
         return false;
     }
 
-    fn unsetArgs(_: *Inserter, owned: *OwnedSet, args: []const LIR.LocalId) void {
+    fn unsetArgs(self: *Inserter, owned: *OwnedSet, args: []const LIR.LocalId) void {
         for (args) |local| {
-            owned.unset(local);
+            self.unsetOwnedUnit(owned, local);
         }
     }
 
@@ -2511,7 +2525,7 @@ const Inserter = struct {
         for (locals, 0..) |local, i| {
             if (i >= 64) break;
             if ((mask & argMaskBit(i)) != 0 and local != except) {
-                owned.unset(local);
+                self.unsetOwnedUnit(owned, local);
             }
         }
     }
@@ -3180,6 +3194,11 @@ const OwnedSet = struct {
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
         if (self.len() != other.len()) arcInvariant("ARC owned-set intersection length mismatch");
         self.bits.setIntersection(other.bits);
+    }
+
+    fn unionWith(self: *OwnedSet, other: *const OwnedSet) void {
+        if (self.len() != other.len()) arcInvariant("ARC owned-set union length mismatch");
+        self.bits.setUnion(other.bits);
     }
 };
 
@@ -5582,6 +5601,36 @@ test "RC alias chain into a consuming call moves the unit through" {
     try f.run();
     // The demand on the consumed alias propagates to the chain's owner, so
     // the single unit moves link by link into the call.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC alias into aggregate moves the leader unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const alias = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const ret = try f.ret(pair);
+    const pair_assign = try f.assignStruct(pair, &.{alias}, ret);
+    const alias_assign = try f.assignRefLocal(alias, value, pair_assign);
+    const body = try f.assignStr(value, "through", alias_assign);
+    _ = try f.addProc(&.{}, body, f.pair_str);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC alias into set_local moves the leader unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.str);
+    const ret = try f.ret(result);
+    const set_result = try f.setLocal(result, alias, .initialize_join_result, ret);
+    const alias_assign = try f.assignRefLocal(alias, value, set_result);
+    const body = try f.assignStr(value, "through-set-local", alias_assign);
+    _ = try f.addProc(&.{}, body, .str);
+    try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 

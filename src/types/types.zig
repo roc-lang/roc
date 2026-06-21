@@ -38,9 +38,9 @@ test {
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
-    // not a size win: the literal-origin variant still embeds a full ~32-byte
-    // `NumeralInfo`, so the `Origin` union dominates the struct at 48 bytes total.
-    try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
+    // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
+    // so the `Origin` union dominates the struct at 52 bytes total.
+    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -853,6 +853,9 @@ pub const NumeralInfo = struct {
     /// Source region for error reporting
     region: base.Region,
 
+    /// Whether this literal had an explicit type suffix such as `12.Str`.
+    explicit_suffix: bool = false,
+
     /// Get the value as i128 (may overflow for large u128 values)
     pub fn toI128(self: NumeralInfo) i128 {
         return @bitCast(self.bytes);
@@ -873,6 +876,7 @@ pub const NumeralInfo = struct {
             .fits_dec = null,
             .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 
@@ -886,6 +890,7 @@ pub const NumeralInfo = struct {
             .fits_dec = null,
             .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 
@@ -904,6 +909,7 @@ pub const NumeralInfo = struct {
             else
                 null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 };

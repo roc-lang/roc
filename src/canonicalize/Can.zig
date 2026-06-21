@@ -4960,19 +4960,51 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
     return null;
 }
 
+fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
+    const import_idx = external.import_idx orelse return false;
+    const import_name_idx = self.env.imports.imports.items.items[@intFromEnum(import_idx)];
+    return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
+}
+
 /// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
-/// `5.Foo`), what its suffix type resolves to in the current scope. The type
+/// `5.Foo`), what its suffix target resolves to in the current scope. The type
 /// checker consumes this so it can unify the literal against the right concrete
 /// type without re-running scope resolution. The caller has already verified
 /// `type_ident` names a type binding in scope.
 fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
     const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
-    if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
+        if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+        } else {
+            try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+        }
         return;
-    }
-    if (try self.scopeLookupOrPrepareTypeDecl(type_ident)) |stmt_idx| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+    };
+    switch (binding_location.binding.*) {
+        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
+        },
+        .external_nominal => |external| {
+            if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+                    return;
+                }
+            }
+            const import_idx = external.import_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } });
+        },
     }
 }
 
@@ -12298,10 +12330,33 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         },
     }, region);
 
+    if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
+        const bool_stmt_idx = bool_info.statement_idx orelse {
+            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+        };
+        const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
+            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+        };
+        const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
+        const import_idx = try self.env.imports.getOrPutWithIdent(
+            self.env.gpa,
+            self.env.common.getStringStore(),
+            CIR.Import.compiler_builtin_import_name,
+            builtin_ident,
+        );
+        return try self.env.addExpr(CIR.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region);
+    }
+
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
         @panic("Bool type binding was absent during boolean operator canonicalization");
     };
-
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
@@ -17542,19 +17597,6 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
         } });
     };
 
-    // Check if this is a builtin type
-    // Allow builtin type names to be redeclared in the Builtin module
-    // (e.g., Str := ... within Builtin.roc)
-    // Use identifier index comparison instead of string comparison for efficiency
-    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
-        if (self.env.module_role != .builtin) {
-            return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
-                .ident = name_ident,
-                .region = region,
-            } });
-        }
-    }
-
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
@@ -18283,9 +18325,18 @@ pub fn introduceType(
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    const shadowed_external_region: ?Region = if (current_scope.type_bindings.get(name_ident)) |binding| switch (binding) {
+        .external_nominal => |external| external.origin_region,
+        else => null,
+    } else null;
+
+    const ShadowedType = union(enum) {
+        statement: Statement.Idx,
+        region: Region,
+    };
 
     // Check for shadowing in parent scopes
-    var shadowed_in_parent: ?Statement.Idx = null;
+    var shadowed_in_parent: ?ShadowedType = null;
     if (self.scopes.items.len > 1) {
         var i = self.scopes.items.len - 1;
         while (i > 0) {
@@ -18293,12 +18344,12 @@ pub fn introduceType(
             const scope = &self.scopes.items[i];
             if (scope.type_bindings.get(name_ident)) |binding| {
                 shadowed_in_parent = switch (binding) {
-                    .local_nominal => |stmt| stmt,
-                    .local_alias => |stmt| stmt,
-                    .associated_nominal => |stmt| stmt,
-                    .external_nominal => null,
+                    .local_nominal => |stmt| .{ .statement = stmt },
+                    .local_alias => |stmt| .{ .statement = stmt },
+                    .associated_nominal => |stmt| .{ .statement = stmt },
+                    .external_nominal => |external| .{ .region = external.origin_region },
                 };
-                if (shadowed_in_parent) |_| break;
+                break;
             }
         }
     }
@@ -18306,13 +18357,32 @@ pub fn introduceType(
     // Determine if this is an alias or nominal type based on the statement
     const stmt = self.env.store.getStatement(type_decl_stmt);
     const is_alias = stmt == .s_alias_decl;
+    if (shadowed_external_region) |original_region| {
+        try current_scope.type_bindings.put(
+            gpa,
+            name_ident,
+            if (is_alias) Scope.TypeBinding{ .local_alias = type_decl_stmt } else Scope.TypeBinding{ .local_nominal = type_decl_stmt },
+        );
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = name_ident,
+                .region = region,
+                .original_region = original_region,
+            },
+        });
+        return;
+    }
+
     const result = try current_scope.introduceTypeDeclWithKind(gpa, name_ident, type_decl_stmt, is_alias, null);
 
     switch (result) {
         .success => {
             // Check if we're shadowing a type in a parent scope
-            if (shadowed_in_parent) |shadowed_stmt| {
-                const original_region = self.env.store.getStatementRegion(shadowed_stmt);
+            if (shadowed_in_parent) |shadowed| {
+                const original_region = switch (shadowed) {
+                    .statement => |shadowed_stmt| self.env.store.getStatementRegion(shadowed_stmt),
+                    .region => |original_region| original_region,
+                };
                 try self.env.pushDiagnostic(Diagnostic{
                     .shadowing_warning = .{
                         .ident = name_ident,
