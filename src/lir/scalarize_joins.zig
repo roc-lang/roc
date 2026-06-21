@@ -18,6 +18,15 @@
 //! alias chains that borrow inference turns into moves, and the wrapper
 //! disappears entirely.
 //!
+//! A join's remainder (its run-once entry path) may enter the join without an
+//! `initialize_join_param` write for a parameter — a plain tail-call
+//! elimination loop header does this, entering with a bare jump because the
+//! parameters are the proc's own argument locals. Such a parameter is still
+//! scalarizable: its per-field parameters are seeded once on the remainder by
+//! reading the incoming struct's fields. That read is sound only because the
+//! sole write-less entry shape supplies the value through a proc argument, an
+//! invariant the pass enforces.
+//!
 //! The pass iterates to a fixpoint so nested wrappers dissolve layer by
 //! layer. Parameters with any whole-value use, any non-literal initializer,
 //! or a shared initializer keep their shape.
@@ -173,6 +182,13 @@ const Pass = struct {
         self.resetProc();
         try self.collect(body);
 
+        // Resolve proc-argument membership here, where the argument span is
+        // freshly valid, and pass a plain bool into `tryScalarize`. The span is
+        // a view into the store's local-id buffer, which `tryScalarize`
+        // reallocates when it scalarizes, so it must not be read across that
+        // call.
+        const proc_args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
+
         // Find one scalarizable parameter; the fixpoint loop picks up the
         // rest on later rounds.
         var changed = false;
@@ -186,7 +202,8 @@ const Pass = struct {
             switch (self.store.getCFStmt(current)) {
                 .join => |join_stmt| {
                     for (self.store.getLocalSpan(join_stmt.params), 0..) |param, position| {
-                        if (try self.tryScalarize(current, join_stmt, param, position)) {
+                        const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
+                        if (try self.tryScalarize(param_is_proc_arg, current, join_stmt, param, position)) {
                             changed = true;
                             break :outer;
                         }
@@ -207,7 +224,17 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                .str_match => |s| {
+                    try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try self.stack.append(self.allocator, s.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -233,8 +260,21 @@ const Pass = struct {
         proc.frame_locals = try self.store.addLocalSpan(combined.items);
     }
 
+    /// `param_is_proc_arg` records whether this join parameter is also one of
+    /// the proc's argument locals. Every jump that targets the join carries
+    /// `initialize_join_param` writes for its parameters, which the rewrite
+    /// below turns into per-field writes. The one entry that carries no such
+    /// write is a plain-TCE loop header: it reuses the proc's own argument
+    /// locals as the join parameters and enters with a bare jump, so the
+    /// parameter's initial value arrives through the argument. That is the only
+    /// shape in which a join parameter is also a proc argument, and it is
+    /// exactly the shape whose field parameters must be seeded from the
+    /// argument struct on entry. (Any future shape that entered a parameter
+    /// without a write and without a seed would surface as an unbound local in
+    /// the ARC borrow certifier, never as a silent miscompile.)
     fn tryScalarize(
         self: *Pass,
+        param_is_proc_arg: bool,
         join_id: LIR.CFStmtId,
         join_stmt: anytype,
         param: LIR.LocalId,
@@ -242,6 +282,7 @@ const Pass = struct {
     ) ScalarizeError!bool {
         const param_layout = self.layouts.getLayout(self.store.getLocal(param).layout_idx);
         if (param_layout.tag != .struct_) return false;
+
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
         for (0..info.fields.len) |i| {
@@ -342,7 +383,43 @@ const Pass = struct {
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
 
+        // Seed the field parameters on the write-less proc-entry path (see the
+        // comment at param_is_proc_arg above): reading the argument struct's
+        // fields in the join's remainder, which runs once before the loop body.
+        if (param_is_proc_arg) try self.seedFieldsFromArgStruct(join_id, param, field_locals);
+
         return true;
+    }
+
+    /// Prepend, to the join's remainder, one `ref.field arg[k]` read plus an
+    /// `initialize_join_param` write into the corresponding field parameter,
+    /// so the field parameters carry the argument struct's fields on the
+    /// proc-entry path. The read temporaries join the proc's frame locals.
+    fn seedFieldsFromArgStruct(
+        self: *Pass,
+        join_id: LIR.CFStmtId,
+        arg_struct: LIR.LocalId,
+        field_locals: []const LIR.LocalId,
+    ) ScalarizeError!void {
+        var next = self.store.getCFStmtPtr(join_id).join.remainder;
+        var k: usize = field_locals.len;
+        while (k > 0) {
+            k -= 1;
+            const tmp = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_locals[k]).layout_idx });
+            try self.new_locals.append(self.allocator, tmp);
+            const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
+                .target = field_locals[k],
+                .value = tmp,
+                .mode = .initialize_join_param,
+                .next = next,
+            } });
+            next = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = tmp,
+                .op = .{ .field = .{ .source = arg_struct, .field_idx = @intCast(k) } },
+                .next = set_stmt,
+            } });
+        }
+        self.store.getCFStmtPtr(join_id).join.remainder = next;
     }
 
     /// Replaces `stmt` with an `initialize_join_param` write of field 0 and
@@ -408,13 +485,32 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
+                .str_match => |*s| {
+                    s.on_match = self.resolveRemoved(s.on_match);
+                    s.on_miss = self.resolveRemoved(s.on_miss);
+                    try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |*s| {
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    const rewritten_arms = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
+                    defer self.allocator.free(rewritten_arms);
+                    for (arms, rewritten_arms) |arm, *rewritten| {
+                        rewritten.* = arm;
+                        rewritten.on_match = self.resolveRemoved(arm.on_match);
+                        try self.stack.append(self.allocator, rewritten.on_match);
+                    }
+                    s.arms = try self.store.addStrMatchArms(rewritten_arms);
+                    s.on_miss = self.resolveRemoved(s.on_miss);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
                 .join => |*j| {
                     j.body = self.resolveRemoved(j.body);
                     j.remainder = self.resolveRemoved(j.remainder);
                     try self.stack.append(self.allocator, j.body);
                     try self.stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
                     s.next = self.resolveRemoved(s.next);
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -461,11 +557,21 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
+                .str_match => |s| {
+                    try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
                 .join => |join_stmt| {
                     try self.stack.append(self.allocator, join_stmt.body);
                     try self.stack.append(self.allocator, join_stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -495,6 +601,10 @@ const Pass = struct {
                 .assign_literal => |assign| {
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
+                },
+                .init_uninitialized => |init| {
+                    try self.noteWrite(init.target);
+                    try self.stack.append(self.allocator, init.next);
                 },
                 .assign_call => |assign| {
                     for (self.store.getLocalSpan(assign.args)) |arg| try self.noteUse(arg);
@@ -573,6 +683,30 @@ const Pass = struct {
                     try self.noteUse(s.cond);
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
+                },
+                .str_match => |s| {
+                    try self.noteUse(s.source);
+                    for (self.store.getStrMatchSteps(s.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| try self.noteWrite(local),
+                        }
+                    }
+                    try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    try self.noteUse(s.source);
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| try self.noteWrite(local),
+                            }
+                        }
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
+                    try self.stack.append(self.allocator, s.on_miss);
                 },
                 .join => |join_stmt| {
                     try self.stack.append(self.allocator, join_stmt.body);

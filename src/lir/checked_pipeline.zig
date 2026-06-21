@@ -13,6 +13,8 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const TagReachability = @import("tag_reachability.zig");
+const ReachableProcs = @import("reachable_procs.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -50,6 +52,10 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Delete LIR switch edges whose tag discriminants are unreachable. This
+    /// is enabled for optimized builds and kept off for dev and compile-time
+    /// evaluation.
+    tag_reachability: bool = false,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -241,6 +247,10 @@ pub fn lowerCheckedModulesToLir(
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.tag_reachability) {
+        try TagReachability.run(&lowered.lir_result);
+    }
+    try ReachableProcs.run(&lowered.lir_result);
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
@@ -400,8 +410,8 @@ fn checkedTypeContainsFunctionInner(
     defer _ = active.remove(root);
 
     const index: usize = @intFromEnum(root);
-    if (index >= types.payloads.len) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payloads[index]) {
+    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
+    return switch (types.payload(root)) {
         .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
         .function => true,
         .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
@@ -450,7 +460,7 @@ fn checkedTagsContainFunction(
     active: *std.AutoHashMap(checked.CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.args, active)) return true;
+        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
     }
     return false;
 }

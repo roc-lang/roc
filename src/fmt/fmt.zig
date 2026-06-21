@@ -449,21 +449,23 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 try fmt.pushTokenText(v.name);
-                if (multiline and try fmt.flushCommentsAfter(v.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                if (v.body) |body| {
+                    if (multiline and try fmt.flushCommentsAfter(v.name)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.push('=');
+                    const body_region = fmt.nodeRegion(@intFromEnum(body));
+                    if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.formatExprDiscard(body);
                 }
-                try fmt.push('=');
-                const body_region = fmt.nodeRegion(@intFromEnum(v.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatExprDiscard(v.body);
             },
             .expr => |e| {
                 try fmt.formatExprDiscard(e.expr);
@@ -1097,6 +1099,25 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
+    fn formatPatternString(fmt: *Formatter, str: anytype) anyerror!void {
+        try fmt.push('"');
+        for (fmt.ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+            switch (fmt.ast.store.getPatternStringPart(part_idx)) {
+                .text => |text| try fmt.pushTokenText(text.token),
+                .capture => |capture| {
+                    try fmt.pushAll("${");
+                    if (capture.name) |name| {
+                        try fmt.pushTokenText(name);
+                    } else {
+                        try fmt.push('_');
+                    }
+                    try fmt.push('}');
+                },
+            }
+        }
+        try fmt.push('"');
+    }
+
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
     }
@@ -1314,7 +1335,12 @@ const Formatter = struct {
                 }
                 try fmt.push('.');
                 try fmt.pushTokenText(mc.method_token);
-                try fmt.formatCollection(mc.region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
+                // Only the argument list (from the method token onwards) should
+                // determine whether the call is multiline. Using the full
+                // `mc.region` would include newlines from the receiver chain and
+                // wrongly expand short, inline arguments. (See issue #9646)
+                const args_region = AST.TokenizedRegion{ .start = mc.method_token + 1, .end = mc.region.end };
+                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
             },
             .arrow_call => |ld| {
                 try fmt.formatExprDiscard(ld.left);
@@ -1815,17 +1841,18 @@ const Formatter = struct {
         }
         if (field.rest) {
             try fmt.pushAll("..");
-            if (multiline and try fmt.flushCommentsBefore(field.name)) {
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            }
-            if (field.name != 0) {
-                try fmt.pushTokenText(field.name);
+            if (field.name) |name_tok| {
+                if (multiline and try fmt.flushCommentsBefore(name_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(name_tok);
             }
         } else {
-            try fmt.pushTokenText(field.name);
+            const name_tok = field.name orelse unreachable;
+            try fmt.pushTokenText(name_tok);
             if (field.value) |v| {
-                if (multiline and try fmt.flushCommentsAfter(field.name)) {
+                if (multiline and try fmt.flushCommentsAfter(name_tok)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
@@ -1874,7 +1901,7 @@ const Formatter = struct {
             },
             .string => |s| {
                 region = s.region;
-                try fmt.formatExprDiscard(s.expr);
+                try fmt.formatPatternString(s);
             },
             .single_quote => |sq| {
                 region = sq.region;
@@ -3439,6 +3466,30 @@ test "issue 8894: typed frac literal formats correctly" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
+
+test "issue 9646: multiline method chain keeps short args inline without trailing comma" {
+    // In a multiline method chain, each method-call argument that fits on one
+    // line and has no input trailing comma should stay inline, not get expanded
+    // into a multiline call with a trailing comma.
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\sprite = Sprite.from_texture(texture)
+        \\    .source(Math.rect(1, 2, 3, 4))
+        \\    .pos({ x: 5, y: 6 })
+        \\    .scale(2)
+        \\    .centered()
+        \\    .rotation(90)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "sprite = Sprite.from_texture(texture)\n" ++
+            "\t.source(Math.rect(1, 2, 3, 4))\n" ++
+            "\t.pos({ x: 5, y: 6 })\n" ++
+            "\t.scale(2)\n" ++
+            "\t.centered()\n" ++
+            "\t.rotation(90)\n",
+        result,
+    );
 }
 
 test "issue 8989: platform header targets section is preserved" {

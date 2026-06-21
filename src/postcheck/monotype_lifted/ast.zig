@@ -44,6 +44,10 @@ pub const FieldExpr = Mono.FieldExpr;
 pub const RecordDestruct = Mono.RecordDestruct;
 /// Compiler-generated initialized-payload switch shared with Monotype IR.
 pub const InitializedPayloadSwitch = Mono.InitializedPayloadSwitch;
+/// List destructuring pattern.
+pub const ListPattern = Mono.ListPattern;
+/// `..`/`.. as name` portion of a list pattern.
+pub const ListRestPattern = Mono.ListRestPattern;
 
 /// Typed Monotype Lifted expression.
 pub const Expr = Mono.Expr;
@@ -56,6 +60,12 @@ pub const Pat = Mono.Pat;
 
 /// Monotype Lifted pattern forms.
 pub const PatData = Mono.PatData;
+/// Monotype Lifted string interpolation pattern.
+pub const StrPattern = Mono.StrPattern;
+/// Monotype Lifted delimited capture step inside a string interpolation pattern.
+pub const StrPatternStep = Mono.StrPatternStep;
+/// Monotype Lifted end behavior for a string interpolation pattern.
+pub const StrPatternEnd = Mono.StrPatternEnd;
 
 /// Match branch.
 pub const Branch = Mono.Branch;
@@ -126,6 +136,7 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     record_destructs: std.ArrayList(RecordDestruct),
+    str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
@@ -138,14 +149,20 @@ pub const Program = struct {
     source_files: std.ArrayList([]const u8),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per expression, parallel to `exprs`.
+    expr_regions: std.ArrayList(base.Region),
     /// Source location per statement, parallel to `stmts`.
     stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per statement, parallel to `stmts`.
+    stmt_regions: std.ArrayList(base.Region),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; moved from Monotype).
     local_names: std.ArrayList([]const u8),
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
+    /// Ambient checked source region recorded by `addExpr`/`addStmt`.
+    current_region: base.Region,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -161,13 +178,16 @@ pub const Program = struct {
         stmt_ids: std.ArrayList(StmtId),
         field_exprs: std.ArrayList(FieldExpr),
         record_destructs: std.ArrayList(RecordDestruct),
+        str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
         proc_debug_names: ProcDebugNameMap,
         source_files: std.ArrayList([]const u8),
         expr_locs: std.ArrayList(base.SourceLoc),
+        expr_regions: std.ArrayList(base.Region),
         stmt_locs: std.ArrayList(base.SourceLoc),
+        stmt_regions: std.ArrayList(base.Region),
         local_names: std.ArrayList([]const u8),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
@@ -188,6 +208,7 @@ pub const Program = struct {
             .stmt_ids = stmt_ids,
             .field_exprs = field_exprs,
             .record_destructs = record_destructs,
+            .str_pattern_steps = str_pattern_steps,
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
@@ -198,9 +219,12 @@ pub const Program = struct {
             .comptime_sites = comptime_sites,
             .source_files = source_files,
             .expr_locs = expr_locs,
+            .expr_regions = expr_regions,
             .stmt_locs = stmt_locs,
+            .stmt_regions = stmt_regions,
             .local_names = local_names,
             .current_loc = base.SourceLoc.none,
+            .current_region = base.Region.zero(),
         };
     }
 
@@ -209,7 +233,9 @@ pub const Program = struct {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
+        self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
+        self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
@@ -225,6 +251,7 @@ pub const Program = struct {
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
+        self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -258,6 +285,7 @@ pub const Program = struct {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
+        try self.expr_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -266,9 +294,19 @@ pub const Program = struct {
         return self.expr_locs.items[@intFromEnum(id)];
     }
 
+    /// Checked source region of an expression.
+    pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
+        return self.expr_regions.items[@intFromEnum(id)];
+    }
+
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
         return self.stmt_locs.items[@intFromEnum(id)];
+    }
+
+    /// Checked source region of a statement.
+    pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
+        return self.stmt_regions.items[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
@@ -281,6 +319,7 @@ pub const Program = struct {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt_);
         try self.stmt_locs.append(self.allocator, self.current_loc);
+        try self.stmt_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -345,6 +384,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStrPatternStepSpan(self: *Program, values: []const Mono.StrPatternStep) std.mem.Allocator.Error!Span(Mono.StrPatternStep) {
+        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        try self.str_pattern_steps.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         const start: u32 = @intCast(self.branches.items.len);
         try self.branches.appendSlice(self.allocator, values);
@@ -379,6 +424,10 @@ pub const Program = struct {
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
+        return self.str_pattern_steps.items[span_.start..][0..span_.len];
     }
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {

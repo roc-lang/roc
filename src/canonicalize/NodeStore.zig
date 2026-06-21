@@ -36,6 +36,8 @@ def_data: collections.SafeList(DefData), // Typed storage for definitions
 import_data: collections.SafeList(ImportData), // Typed storage for import statements
 type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type annotation apply
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
+pattern_str_interpolation_data: collections.SafeList(PatternStrInterpolationData), // Typed storage for string interpolation patterns
+pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData), // Typed storage for string interpolation pattern steps
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -151,6 +153,22 @@ pub const PatternListData = extern struct {
     rest_index: u32, // only valid if has_rest=1
     has_pattern: u32, // only valid if has_rest=1, 0 or 1
     pattern_idx: u32, // only valid if has_rest=1 and has_pattern=1
+};
+
+/// Pattern string interpolation data.
+/// Stores the literal prefix, span into pattern_str_interpolation_steps, and end mode.
+pub const PatternStrInterpolationData = extern struct {
+    prefix: u32,
+    steps_start: u32,
+    steps_len: u32,
+    end: u32,
+};
+
+/// One step in a string interpolation pattern.
+/// capture_plus_one is 0 for `${_}`, otherwise pattern index + 1.
+pub const PatternStrInterpolationStepData = extern struct {
+    capture_plus_one: u32,
+    delimiter: u32,
 };
 
 const Scratch = struct {
@@ -285,6 +303,10 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer type_apply_data.deinit(gpa);
     var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
     errdefer pattern_list_data.deinit(gpa);
+    var pattern_str_interpolation_data = try collections.SafeList(PatternStrInterpolationData).initCapacity(gpa, capacity / 32);
+    errdefer pattern_str_interpolation_data.deinit(gpa);
+    var pattern_str_interpolation_steps = try collections.SafeList(PatternStrInterpolationStepData).initCapacity(gpa, capacity / 16);
+    errdefer pattern_str_interpolation_steps.deinit(gpa);
     var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
     errdefer index_data.deinit(gpa);
     const scratch = try Scratch.init(gpa);
@@ -307,6 +329,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .import_data = import_data,
         .type_apply_data = type_apply_data,
         .pattern_list_data = pattern_list_data,
+        .pattern_str_interpolation_data = pattern_str_interpolation_data,
+        .pattern_str_interpolation_steps = pattern_str_interpolation_steps,
         .index_data = index_data,
         .scratch = scratch,
     };
@@ -331,6 +355,8 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .import_data = try self.import_data.clone(gpa),
         .type_apply_data = try self.type_apply_data.clone(gpa),
         .pattern_list_data = try self.pattern_list_data.clone(gpa),
+        .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.clone(gpa),
+        .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.clone(gpa),
         .index_data = try self.index_data.clone(gpa),
         .scratch = null,
     };
@@ -355,6 +381,8 @@ pub fn deinit(store: *NodeStore) void {
     store.import_data.deinit(store.gpa);
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
+    store.pattern_str_interpolation_data.deinit(store.gpa);
+    store.pattern_str_interpolation_steps.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -379,6 +407,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.import_data.relocate(offset);
     store.type_apply_data.relocate(offset);
     store.pattern_list_data.relocate(offset);
+    store.pattern_str_interpolation_data.relocate(offset);
+    store.pattern_str_interpolation_steps.relocate(offset);
     store.index_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
@@ -387,15 +417,15 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 79;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 81;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 54;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 19;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 16;
+pub const MODULEENV_PATTERN_NODE_COUNT = 17;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -550,6 +580,20 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             return CIR.Statement{ .s_var = .{
                 .pattern_idx = @enumFromInt(p.pattern_idx),
                 .expr = @enumFromInt(p.expr),
+                .anno = blk: {
+                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    if (anno_data.start != 0) {
+                        break :blk @enumFromInt(anno_data.len);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
+        .statement_var_uninitialized => {
+            const p = payload.statement_var_uninitialized;
+            return CIR.Statement{ .s_var_uninitialized = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
                 .anno = blk: {
                     const anno_data = store.span2_data.items.items[p.anno_span2_idx];
                     if (anno_data.start != 0) {
@@ -1596,6 +1640,7 @@ fn isPatternTag(tag: Node.Tag) bool {
         .pattern_f64_literal,
         .pattern_small_dec_literal,
         .pattern_str_literal,
+        .pattern_str_interpolation,
         .pattern_underscore,
         .malformed, // Valid pattern tag for runtime_error patterns
         => true,
@@ -1763,6 +1808,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const p = payload.pattern_str_literal;
             return CIR.Pattern{ .str_literal = .{
                 .literal = @enumFromInt(p.literal),
+            } };
+        },
+        .pattern_str_interpolation => {
+            const p = payload.pattern_str_interpolation;
+            const data = store.pattern_str_interpolation_data.items.items[p.data_idx];
+            return CIR.Pattern{ .str_interpolation = .{
+                .prefix = @enumFromInt(data.prefix),
+                .steps = .{ .span = .{ .start = data.steps_start, .len = data.steps_len } },
+                .end = @enumFromInt(data.end),
             } };
         },
 
@@ -1949,7 +2003,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const p = payload.annotation;
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
-    const where_clause = if (p.has_where == 1) blk: {
+    const where_clause = if (p.has_where) blk: {
         const where_data = store.span2_data.items.items[p.where_span2_idx];
         break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
     } else null;
@@ -1957,6 +2011,8 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     return CIR.Annotation{
         .anno = anno,
         .where = where_clause,
+        .mentions_type_var = p.mentions_type_var,
+        .introduces_type_var = p.introduces_type_var,
     };
 }
 
@@ -2002,6 +2058,15 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
     store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
 }
 
+/// Replaces an existing expression node with a runtime error expression.
+pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) void {
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
+    } });
+    store.nodes.set(@enumFromInt(@intFromEnum(expr_idx)), node);
+}
+
 /// Creates a statement node, but does not append to the store.
 /// IMPORTANT: It *does* append to typed data lists (span2_data, import_data, etc.)
 ///
@@ -2037,6 +2102,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_var = .{
                 .pattern_idx = @intFromEnum(s.pattern_idx),
                 .expr = @intFromEnum(s.expr),
+                .anno_span2_idx = anno_span2_idx,
+            } });
+        },
+        .s_var_uninitialized => |s| {
+            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
+            const anno_data: Span2 = if (s.anno) |anno| .{
+                .start = 1,
+                .len = @intFromEnum(anno),
+            } else .{ .start = 0, .len = 0 };
+            _ = try store.span2_data.append(store.gpa, anno_data);
+
+            node.tag = .statement_var_uninitialized;
+            node.setPayload(.{ .statement_var_uninitialized = .{
+                .pattern_idx = @intFromEnum(s.pattern_idx),
                 .anno_span2_idx = anno_span2_idx,
             } });
         },
@@ -2936,6 +3015,19 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .literal = @intFromEnum(p.literal),
             } });
         },
+        .str_interpolation => |p| {
+            node.tag = .pattern_str_interpolation;
+            const data_idx: u32 = @intCast(store.pattern_str_interpolation_data.len());
+            _ = try store.pattern_str_interpolation_data.append(store.gpa, .{
+                .prefix = @intFromEnum(p.prefix),
+                .steps_start = p.steps.span.start,
+                .steps_len = p.steps.span.len,
+                .end = @intFromEnum(p.end),
+            });
+            node.setPayload(.{ .pattern_str_interpolation = .{
+                .data_idx = data_idx,
+            } });
+        },
         .frac_f32_literal => |p| {
             node.tag = Node.Tag.pattern_f32_literal;
             node.setPayload(.{ .pattern_frac_f32 = .{
@@ -3163,6 +3255,11 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
     var node = Node.init(.annotation);
 
+    // Derive the type-variable flags once, here, so the check phase can read them
+    // off the annotation rather than re-walking the type tree (see getAnnotation).
+    const mentions_type_var = store.typeAnnoHasTypeVar(annotation.anno, .any);
+    const introduces_type_var = store.typeAnnoHasTypeVar(annotation.anno, .introduced_only);
+
     if (annotation.where) |where_clause| {
         const where_span2_idx: u32 = @intCast(store.span2_data.len());
         _ = try store.span2_data.append(store.gpa, .{
@@ -3171,20 +3268,66 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
         });
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
-            .has_where = 1,
             .where_span2_idx = where_span2_idx,
+            .has_where = true,
+            .mentions_type_var = mentions_type_var,
+            .introduces_type_var = introduces_type_var,
         } });
     } else {
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
-            .has_where = 0,
             .where_span2_idx = 0,
+            .has_where = false,
+            .mentions_type_var = mentions_type_var,
+            .introduces_type_var = introduces_type_var,
         } });
     }
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Which type-variable occurrences to count when scanning an annotation.
+pub const TypeVarScan = enum {
+    /// Any type variable: a fresh introduction (`.rigid_var`) or a reference to
+    /// an enclosing-scope variable (`.rigid_var_lookup`).
+    any,
+    /// Only a type variable this annotation *introduces* (`.rigid_var`), not one
+    /// it references from an enclosing scope.
+    introduced_only,
+};
+
+/// Returns true if the type annotation mentions a type variable (a user-written
+/// var like `a`, or an anonymous open-extension var from `..`). `.any` is the
+/// pre-filter for value generalization; `.introduced_only` detects a variable the
+/// annotation introduces but cannot bind (used to reject one on a mutable `var`).
+fn typeAnnoHasTypeVar(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx, comptime scan: TypeVarScan) bool {
+    return switch (store.getTypeAnno(anno_idx)) {
+        .rigid_var => true,
+        .rigid_var_lookup => scan == .any,
+        .underscore, .lookup, .malformed => false,
+        .apply => |a| store.anyTypeAnnoHasTypeVar(a.args, scan),
+        .tag_union => |tu| store.anyTypeAnnoHasTypeVar(tu.tags, scan) or
+            (if (tu.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false),
+        .tag => |t| store.anyTypeAnnoHasTypeVar(t.args, scan),
+        .tuple => |t| store.anyTypeAnnoHasTypeVar(t.elems, scan),
+        .record => |r| blk: {
+            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (store.typeAnnoHasTypeVar(store.getAnnoRecordField(field_idx).ty, scan)) break :blk true;
+            }
+            break :blk if (r.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false;
+        },
+        .@"fn" => |f| store.anyTypeAnnoHasTypeVar(f.args, scan) or store.typeAnnoHasTypeVar(f.ret, scan),
+        .parens => |p| store.typeAnnoHasTypeVar(p.anno, scan),
+    };
+}
+
+fn anyTypeAnnoHasTypeVar(store: *const NodeStore, annos: CIR.TypeAnno.Span, comptime scan: TypeVarScan) bool {
+    for (store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (store.typeAnnoHasTypeVar(anno_idx, scan)) return true;
+    }
+    return false;
 }
 
 /// Adds an exposed item to the store.
@@ -3565,6 +3708,22 @@ pub fn patternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Patter
     return try store.spanFrom("patterns", CIR.Pattern.Span, start);
 }
 
+/// Stores string interpolation pattern steps and returns their span.
+pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern.StrPatternStep) Allocator.Error!CIR.Pattern.StrPatternStep.Span {
+    const start: u32 = @intCast(store.pattern_str_interpolation_steps.len());
+    for (steps) |step| {
+        const capture_plus_one: u32 = if (step.capture) |capture|
+            @intFromEnum(capture) + 1
+        else
+            0;
+        _ = try store.pattern_str_interpolation_steps.append(store.gpa, .{
+            .capture_plus_one = capture_plus_one,
+            .delimiter = @intFromEnum(step.delimiter),
+        });
+    }
+    return .{ .span = .{ .start = start, .len = @intCast(steps.len) } };
+}
+
 /// Clears scratch definitions starting from a specified index.
 pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
     store.clearScratchFrom("defs", start);
@@ -3727,6 +3886,19 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
     return store.sliceFromSpan(CIR.Pattern.RecordDestruct.Idx, span.span);
 }
 
+/// Retrieves one string interpolation pattern step.
+pub fn getStrPatternStep(store: *const NodeStore, span: CIR.Pattern.StrPatternStep.Span, offset: u32) CIR.Pattern.StrPatternStep {
+    std.debug.assert(offset < span.span.len);
+    const item = store.pattern_str_interpolation_steps.items.items[span.span.start + offset];
+    return .{
+        .capture = if (item.capture_plus_one == 0)
+            null
+        else
+            @as(CIR.Pattern.Idx, @enumFromInt(item.capture_plus_one - 1)),
+        .delimiter = @enumFromInt(item.delimiter),
+    };
+}
+
 /// Creates a diagnostic node that stores error information.
 ///
 /// Diagnostics are informational nodes that contain details about compilation errors.
@@ -3793,6 +3965,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
+        .read_uninitialized_var => |r| {
+            node.tag = .diag_read_uninitialized_var;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
         .self_referential_definition => |r| {
             node.tag = .diag_self_referential_definition;
             region = r.region;
@@ -3838,6 +4015,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         },
         .invalid_string_interpolation => |r| {
             node.tag = .diag_invalid_string_interpolation;
+            region = r.region;
+        },
+        .unreachable_string_pattern_capture => |r| {
+            node.tag = .diag_unreachable_string_pattern_capture;
             region = r.region;
         },
         .pattern_arg_invalid => |r| {
@@ -4222,6 +4403,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_read_uninitialized_var => return CIR.Diagnostic{ .read_uninitialized_var = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
@@ -4258,6 +4443,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
@@ -4711,6 +4899,8 @@ pub const Serialized = extern struct {
     import_data: collections.SafeList(ImportData).Serialized,
     type_apply_data: collections.SafeList(TypeApplyData).Serialized,
     pattern_list_data: collections.SafeList(PatternListData).Serialized,
+    pattern_str_interpolation_data: collections.SafeList(PatternStrInterpolationData).Serialized,
+    pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData).Serialized,
     index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
@@ -4751,6 +4941,10 @@ pub const Serialized = extern struct {
         try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
         // Serialize pattern_list_data
         try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
+        // Serialize pattern_str_interpolation_data
+        try self.pattern_str_interpolation_data.serialize(&store.pattern_str_interpolation_data, allocator, writer);
+        // Serialize pattern_str_interpolation_steps
+        try self.pattern_str_interpolation_steps.serialize(&store.pattern_str_interpolation_steps, allocator, writer);
         // Serialize index_data
         try self.index_data.serialize(&store.index_data, allocator, writer);
     }
@@ -4777,6 +4971,8 @@ pub const Serialized = extern struct {
             .import_data = self.import_data.deserializeInto(base_addr),
             .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
             .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
             .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
@@ -4803,6 +4999,8 @@ pub const Serialized = extern struct {
             .import_data = self.import_data.deserializeInto(base_addr),
             .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
             .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
             .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null,
         };

@@ -38,7 +38,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
-    // not a size win: the `from_literal` variant still embeds a full ~32-byte
+    // not a size win: the literal-origin variant still embeds a full ~32-byte
     // `NumeralInfo`, so the `Origin` union dominates the struct at 48 bytes total.
     try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
@@ -924,7 +924,7 @@ pub const StaticDispatchConstraint = struct {
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
 
-    /// The kinds of literal that desugar to an open `from_literal` constraint.
+    /// The kinds of literal that desugar to open literal-conversion constraints.
     /// Adding a variant makes every kind-keyed `switch` fail to compile until
     /// handled — the exhaustiveness *is* the checklist.
     pub const LiteralKind = enum(u4) {
@@ -933,7 +933,7 @@ pub const StaticDispatchConstraint = struct {
         interpolation, // interpolated string literal, dispatches `from_interpolation`
     };
 
-    /// The per-kind payload carried by a `from_literal` origin. The payload can't
+    /// The per-kind payload carried by a literal-conversion origin. The payload can't
     /// exist without its kind, nor a literal-origin without its payload.
     pub const LiteralInfo = union(LiteralKind) {
         numeral: NumeralInfo,
@@ -953,10 +953,10 @@ pub const StaticDispatchConstraint = struct {
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
-        from_literal: LiteralInfo, // From a literal conversion (e.g. from_numeral, from_quote, from_interpolation)
+        from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
 
-        /// The numeral payload, if this origin is a `from_literal` of kind
-        /// `numeral`; null otherwise.
+        /// The numeral payload, if this origin is a numeric literal conversion;
+        /// null otherwise.
         pub fn numeralInfo(self: Origin) ?NumeralInfo {
             return switch (self) {
                 .from_literal => |lit| switch (lit) {
@@ -968,7 +968,7 @@ pub const StaticDispatchConstraint = struct {
             };
         }
 
-        /// The literal kind, if this origin is a `from_literal`; null otherwise.
+        /// The literal kind, if this origin is a literal conversion; null otherwise.
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,

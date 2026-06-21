@@ -54,6 +54,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const UnreachableCode = problem_mod.UnreachableCode;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 
 // Type declaration errors
@@ -71,6 +72,7 @@ const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 
@@ -119,6 +121,10 @@ pub const ReportBuilder = struct {
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
+    /// When the current report is a record-destructure pattern mismatch, holds
+    /// the pattern and value type snapshots so `makeMismatchReport` can show the
+    /// tailored `field: _` / `..` hint in place of the generic field diff.
+    record_pattern_hint: ?struct { pattern: SnapshotContentIdx, value: SnapshotContentIdx } = null,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -165,6 +171,7 @@ pub const ReportBuilder = struct {
         self.diff_fields.items.clearRetainingCapacity();
         self.diff_tags.items.clearRetainingCapacity();
         self.typo_suggestions.clearRetainingCapacity();
+        self.record_pattern_hint = null;
     }
 
     // Helpers
@@ -500,6 +507,14 @@ pub const ReportBuilder = struct {
             try D.renderSlice(hint, self, &report);
         }
 
+        // For a too-narrow record-destructure pattern, show the tailored
+        // `field: _` / `..` hint instead of the generic field-level diff.
+        if (self.record_pattern_hint) |rp| {
+            if (try self.renderRecordPatternHint(&report, rp.pattern, rp.value)) {
+                return report;
+            }
+        }
+
         // Generate and print type comparison hints
         const diff_hints = try diff.compareTypes(
             self.snapshots,
@@ -785,10 +800,11 @@ pub const ReportBuilder = struct {
                         &.{D.bytes("This expression is used in an unexpected way:")},
                         &.{D.bytes("It has the type:")},
                         mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the annotation say it should be:")},
+                        &.{D.bytes("But the annotation says it should be:")},
                         mismatch.types.expected_snapshot,
                         &.{},
                     ),
+                    .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
                     .none => return try self.buildGenericMismatch(mismatch.types),
                 };
             },
@@ -825,6 +841,9 @@ pub const ReportBuilder = struct {
             .polymorphic_value => |data| {
                 return self.buildPolymorphicValueReport(data);
             },
+            .polymorphic_var_annotation => |data| {
+                return self.buildPolymorphicVarAnnotationReport(data);
+            },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
             },
@@ -857,6 +876,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
         }
     }
@@ -873,6 +893,121 @@ pub const ReportBuilder = struct {
             types.expected_snapshot,
             &.{},
         );
+    }
+
+    /// Build a report for a record-destructure pattern that fails to match its
+    /// value (e.g. `{ x, y } = { x: 1, y: 2, z: 3 }`). Here the pattern is the
+    /// `expected` side and the value is the `actual` side.
+    fn buildRecordDestructureMismatch(self: *Self, types: TypePair) Allocator.Error!Report {
+        // The pattern is the `expected` side, the value the `actual` side.
+        self.record_pattern_hint = .{ .pattern = types.expected_snapshot, .value = types.actual_snapshot };
+        return try self.makeMismatchReport(
+            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            &.{D.bytes("This expression is used in an unexpected way:")},
+            &.{D.bytes("It has the type:")},
+            types.actual_snapshot,
+            &.{D.bytes("But you are trying to use it as:")},
+            types.expected_snapshot,
+            &.{},
+        );
+    }
+
+    /// When a closed record-destructure pattern fails to match a record that
+    /// carries fields the pattern doesn't bind, suggest the two ways to cover
+    /// them: matching a field explicitly with `field: _`, or matching all the
+    /// rest with `..`. `pattern_snapshot` is the destructure pattern's type and
+    /// `value_snapshot` is the type of the value it is matched against. Returns
+    /// whether a hint was rendered (false when this isn't a too-narrow pattern).
+    fn renderRecordPatternHint(
+        self: *Self,
+        report: *Report,
+        pattern_snapshot: SnapshotContentIdx,
+        value_snapshot: SnapshotContentIdx,
+    ) Allocator.Error!bool {
+        // Only a closed record pattern can be "too narrow"; an open (`..`)
+        // pattern would have absorbed the extra fields rather than mismatching.
+        if (!self.snapshots.isClosedRecord(pattern_snapshot)) return false;
+
+        self.diff_fields.items.clearRetainingCapacity();
+
+        const pattern_range: ?SnapshotRecordFieldSafeList.Range =
+            switch (try self.snapshots.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
+                .record => |r| r,
+                .empty_record => null,
+                .not_a_record => return false,
+            };
+        const value_range = switch (try self.snapshots.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
+            .record => |r| r,
+            else => return false,
+        };
+
+        // Slice only after both gathers, since the second append may reallocate.
+        const pattern_names: []const Ident.Idx = if (pattern_range) |r|
+            self.diff_fields.sliceRange(r).items(.name)
+        else
+            &.{};
+        const value_names = self.diff_fields.sliceRange(value_range).items(.name);
+
+        // Collect the value's fields that the pattern doesn't bind.
+        var unmatched_buf: [16]Ident.Idx = undefined;
+        var unmatched_len: usize = 0;
+        for (value_names) |value_name| {
+            var found = false;
+            for (pattern_names) |pattern_name| {
+                if (value_name.eql(pattern_name)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found and unmatched_len < unmatched_buf.len) {
+                unmatched_buf[unmatched_len] = value_name;
+                unmatched_len += 1;
+            }
+        }
+        if (unmatched_len == 0) return false;
+        const unmatched = unmatched_buf[0..unmatched_len];
+
+        const ident_store = self.module_env.getIdentStoreConst();
+        const example_text = try std.fmt.allocPrint(self.gpa, "{s}: _", .{ident_store.getText(unmatched[0])});
+        defer self.gpa.free(example_text);
+        const underscore_example = try report.addOwnedString(example_text);
+
+        try report.document.addLineBreak();
+        if (unmatched.len == 1) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This pattern doesn't bind the"),
+                D.ident(unmatched[0]).withAnnotation(.inline_code),
+                D.bytes("field. Match it explicitly with"),
+                D.bytes(underscore_example).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("or add"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("to match all the remaining fields."),
+            }, self, report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This pattern doesn't bind these fields:"),
+            }, self, report);
+            for (unmatched) |fld| {
+                try report.document.addLineBreak();
+                try D.renderSlice(&.{
+                    D.bytes(" -"),
+                    D.ident(fld).withAnnotation(.inline_code),
+                }, self, report);
+            }
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Match them explicitly with"),
+                D.bytes(underscore_example).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("or add"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("to match all the remaining fields."),
+            }, self, report);
+        }
+        return true;
     }
 
     /// Build a report for if condition type error
@@ -960,6 +1095,8 @@ pub const ReportBuilder = struct {
                     &.{D.bytes("The first pattern is trying to match:")}
                 else
                     &.{D.bytes("This pattern is trying to match:")};
+            // The pattern is the `actual` side; the scrutinee is the `expected` side.
+            self.record_pattern_hint = .{ .pattern = types.actual_snapshot, .value = types.expected_snapshot };
             return try self.makeMismatchReport(
                 ProblemRegion{ .focused = .{
                     .outer = regionIdxFrom(ctx.match_expr),
@@ -1009,6 +1146,8 @@ pub const ReportBuilder = struct {
                     &.{
                         D.bytes("This pattern is trying to match:"),
                     };
+            // The pattern is the `actual` side; the scrutinee is the `expected` side.
+            self.record_pattern_hint = .{ .pattern = types.actual_snapshot, .value = types.expected_snapshot };
             return try self.makeMismatchReport(
                 ProblemRegion{ .focused = .{
                     .outer = regionIdxFrom(ctx.match_expr),
@@ -3525,6 +3664,32 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for a mutable `var` whose annotation introduces an unbound
+    /// type variable.
+    fn buildPolymorphicVarAnnotationReport(self: *Self, data: PolymorphicVarAnnotation) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "POLYMORPHIC VAR", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes("var").withAnnotation(.inline_code),
+            D.bytes("is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Give it a concrete type, or replace the type variable with"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("to let the type be inferred from how the"),
+            D.bytes("var").withAnnotation(.inline_code),
+            D.bytes("is used."),
+        }, self, &report);
+        return report;
+    }
+
     /// Build a report for compile-time crash
     fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
         var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
@@ -3862,6 +4027,27 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
         }, self, &report);
+
+        return report;
+    }
+
+    fn buildUnreachableCodeReport(self: *Self, data: UnreachableCode) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "UNREACHABLE CODE", .warning);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This code is unreachable because an earlier expression always exits:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
 
         return report;
     }

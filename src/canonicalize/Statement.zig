@@ -49,6 +49,13 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A rebindable declaration using the "var" keyword, with no initializer.
+    ///
+    /// Reads are only valid after every control-flow path has assigned this var.
+    s_var_uninitialized: struct {
+        pattern_idx: Pattern.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// Reassignment of a previously declared var
     ///
     /// Not valid at the top level of a module
@@ -247,6 +254,17 @@ pub const Statement = union(enum) {
 
                 try env.store.getPattern(v.pattern_idx).pushToSExprTree(env, tree, v.pattern_idx);
                 try env.store.getExpr(v.expr).pushToSExprTree(env, tree, v.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_var_uninitialized => |v| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-var-uninitialized");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(v.pattern_idx).pushToSExprTree(env, tree, v.pattern_idx);
 
                 try tree.endNode(begin, attrs);
             },

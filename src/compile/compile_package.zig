@@ -35,7 +35,6 @@ const roc_target = @import("roc_target");
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
 const CheckedModules = check.TypedCIR.Modules;
-const CheckedModuleSource = CheckedModules.SourceModule;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
@@ -324,6 +323,7 @@ pub const ArtifactPublicationInputs = struct {
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
 };
 
@@ -355,6 +355,7 @@ fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool 
             .underscore_in_type_declaration,
             .module_header_deprecated,
             .deprecated_number_suffix,
+            .unreachable_string_pattern_capture,
             => {},
             else => return true,
         }
@@ -1720,6 +1721,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = null,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
+                .hoisted_roots = checker.selectedHoistedRoots(),
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
             },
@@ -1766,32 +1768,27 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) anyerror!CheckedArtifact.CheckedModuleArtifact {
-        var imported_source_count: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            imported_source_count += 1;
-        }
+        var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
+        defer typed.modules.deinit();
+        return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
+    }
 
-        var source_modules = try gpa.alloc(CheckedModuleSource, imported_source_count + 1);
-        defer gpa.free(source_modules);
-        var source_index: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            source_modules[source_index] = .{ .precompiled = @constCast(imported_env) };
-            source_index += 1;
-        }
-
-        const checked_module_idx_usize = imported_source_count;
-        const checked_module_idx: u32 = @intCast(checked_module_idx_usize);
-        source_modules[checked_module_idx_usize] = .{ .precompiled = env };
-
-        var typed_modules = try CheckedModules.init(gpa, source_modules);
-        defer typed_modules.deinit();
-
+    /// Publish from an already-built `Modules` graph. The cache-key probe builds the
+    /// root graph to compute the key; on a miss the same graph is reused here instead of
+    /// rebuilding it (the build runs `prepareRuntimeEnv` over every env, so rebuilding is
+    /// real, redundant work).
+    pub fn publishFromPrebuiltModules(
+        gpa: Allocator,
+        modules: *const CheckedModules,
+        module_idx: u32,
+        module_env_storage: CheckedArtifact.ModuleEnvStorage,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
-            &typed_modules,
-            checked_module_idx,
+            modules,
+            module_idx,
             .{
                 .module_env_storage = module_env_storage,
                 .imports = imported_artifacts,
@@ -1800,6 +1797,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
+                .hoisted_roots = publication.hoisted_roots,
                 .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
                 .problem_store = publication.problem_store,
             },

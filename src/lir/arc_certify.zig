@@ -215,11 +215,21 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, s.initialized_branch);
                     try stack.append(allocator, s.uninitialized_branch);
                 },
+                .str_match => |s| {
+                    try stack.append(allocator, s.on_match);
+                    try stack.append(allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    for (store.getStrMatchArms(s.arms)) |arm| {
+                        try stack.append(allocator, arm.on_match);
+                    }
+                    try stack.append(allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -270,7 +280,7 @@ pub fn certifyStoreOrPanic(
                 for (diag.chain[0..diag.chain_len], 0..) |link, index| {
                     extra_locals[index] = link.origin;
                 }
-                writeFailureContext(&context, store, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                writeFailureContext(&context, store, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
             }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
@@ -296,7 +306,15 @@ const FailureContext = struct {
 
 /// Writes every statement of the failing proc that mentions the implicated
 /// local, plus all join/jump structure, into the panic context buffer.
-fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, stmt_id: ?LIR.CFStmtId, local: ?LIR.LocalId, extra_locals: []const LIR.LocalId) void {
+fn writeFailureContext(
+    context: *FailureContext,
+    store: *const LirStore,
+    sigs: arc_sig.SigTable,
+    proc_id: LIR.LirProcSpecId,
+    stmt_id: ?LIR.CFStmtId,
+    local: ?LIR.LocalId,
+    extra_locals: []const LIR.LocalId,
+) void {
     const proc = store.getProcSpec(proc_id);
     context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
     if (local) |l| {
@@ -326,6 +344,19 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                         walk.append(store.allocator, branch.body) catch return;
                     }
                     walk.append(store.allocator, s.default_branch) catch return;
+                    if (s.continuation) |continuation| {
+                        walk.append(store.allocator, continuation) catch return;
+                    }
+                },
+                .str_match => |s| {
+                    walk.append(store.allocator, s.on_match) catch return;
+                    walk.append(store.allocator, s.on_miss) catch return;
+                },
+                .str_match_set => |s| {
+                    for (store.getStrMatchArms(s.arms)) |arm| {
+                        walk.append(store.allocator, arm.on_match) catch return;
+                    }
+                    walk.append(store.allocator, s.on_miss) catch return;
                 },
                 .switch_initialized_payload => |s| {
                     walk.append(store.allocator, s.initialized_branch) catch return;
@@ -335,7 +366,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -369,6 +400,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .set_local => |a| context.append(" target={d} value={d} mode={s} next={d}", .{
                 @intFromEnum(a.target), @intFromEnum(a.value), @tagName(a.mode), @intFromEnum(a.next),
             }),
+            .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .decref_if_initialized => |rc| context.append(" cond={d}/0x{x} value={d} next={d}", .{
@@ -378,9 +410,27 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                 @intFromEnum(rc.next),
             }),
             .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .assign_call => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            .assign_low_level => |a| context.append(" target={d} op={s} next={d}", .{
-                @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
+            .assign_call => |a| {
+                const sig = sigs.get(a.proc);
+                context.append(" target={d} proc={d} sig(borrowed=0x{x}, ret={s}) args=", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(a.proc),
+                    sig.borrowed_params,
+                    @tagName(sig.ret_mode),
+                });
+                appendLocalSpan(context, store, a.args);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_low_level => |a| {
+                context.append(" target={d} op={s} args=", .{ @intFromEnum(a.target), @tagName(a.op) });
+                appendLocalSpan(context, store, a.args);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
+                @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
+            }),
+            .str_match_set => |a| context.append(" source={d} arms={d} miss={d}", .{
+                @intFromEnum(a.source), a.arms.len, @intFromEnum(a.on_miss),
             }),
             .switch_stmt => |s| {
                 context.append(" cond={d} default={d}", .{ @intFromEnum(s.cond), @intFromEnum(s.default_branch) });
@@ -397,11 +447,30 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                 @intFromEnum(s.uninitialized_branch),
             }),
             .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
-            inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            .assign_list => |a| {
+                context.append(" target={d} elems=", .{@intFromEnum(a.target)});
+                appendLocalSpan(context, store, a.elems);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_struct => |a| {
+                context.append(" target={d} fields=", .{@intFromEnum(a.target)});
+                appendLocalSpan(context, store, a.fields);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
         }
         context.append("\n", .{});
     }
+}
+
+fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.LocalSpan) void {
+    context.append("[", .{});
+    for (store.getLocalSpan(span), 0..) |local, index| {
+        if (index > 0) context.append(", ", .{});
+        context.append("{d}", .{@intFromEnum(local)});
+    }
+    context.append("]", .{});
 }
 
 fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.LocalId) bool {
@@ -416,6 +485,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
         .assign_tag => |a| a.target == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
+        .init_uninitialized => |a| a.target == needle,
         .debug => |d| d.message == needle,
         .expect_err => |e| e.message == needle,
         .expect => |e| e.condition == needle,
@@ -425,6 +495,28 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
         .switch_initialized_payload => |s| s.cond == needle or s.payload == needle,
+        .str_match => |s| blk: {
+            if (s.source == needle) break :blk true;
+            for (store.getStrMatchSteps(s.steps)) |step| {
+                switch (step.capture) {
+                    .discard => {},
+                    .view => |local| if (local == needle) break :blk true,
+                }
+            }
+            break :blk false;
+        },
+        .str_match_set => |s| blk: {
+            if (s.source == needle) break :blk true;
+            for (store.getStrMatchArms(s.arms)) |arm| {
+                for (store.getStrMatchSteps(arm.steps)) |step| {
+                    switch (step.capture) {
+                        .discard => {},
+                        .view => |local| if (local == needle) break :blk true,
+                    }
+                }
+            }
+            break :blk false;
+        },
         .ret => |r| r.value == needle,
         .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
@@ -871,6 +963,9 @@ const Certifier = struct {
             if (units == 0) continue;
             const origin = self.values.items[value_index].origin;
             if (units > 0) {
+                self.diag.context_local = origin;
+                self.diag.context_proc = self.current_proc;
+                self.describeValueChain(state, @intCast(value_index));
                 return self.fail(
                     "leaked {d} ownership unit(s) of value originating at local {d}",
                     .{ units, @intFromEnum(origin) },
@@ -1060,6 +1155,10 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     try stack.append(self.allocator, assign.next);
                 },
+                .init_uninitialized => |init| {
+                    try self.noteProcLocal(init.target);
+                    try stack.append(self.allocator, init.next);
+                },
                 .assign_call => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
@@ -1142,6 +1241,30 @@ const Certifier = struct {
                     try self.noteProcLocal(switch_stmt.payload);
                     try stack.append(self.allocator, switch_stmt.initialized_branch);
                     try stack.append(self.allocator, switch_stmt.uninitialized_branch);
+                },
+                .str_match => |str_match| {
+                    try self.noteProcLocal(str_match.source);
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| try self.noteProcLocal(local),
+                        }
+                    }
+                    try stack.append(self.allocator, str_match.on_match);
+                    try stack.append(self.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    try self.noteProcLocal(str_match_set.source);
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| try self.noteProcLocal(local),
+                            }
+                        }
+                        try stack.append(self.allocator, arm.on_match);
+                    }
+                    try stack.append(self.allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     try self.noteProcLocalSpan(join_stmt.params);
@@ -1302,6 +1425,10 @@ const Certifier = struct {
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
+                .init_uninitialized => |init| {
+                    self.setReadBeforeRebindDef(&graph, node_index, init.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
+                },
                 .assign_call => |assign| {
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
@@ -1383,6 +1510,35 @@ const Certifier = struct {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, switch_stmt.cond);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.initialized_branch);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
+                },
+                .str_match => |str_match| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, str_match.source);
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            // Captures are branch-local definitions. The graph
+                            // tracks defs per statement, not per edge, so we
+                            // intentionally do not mark them as unconditional
+                            // defs here; doing so would hide reads on the miss
+                            // path. Over-reporting relevance is safe.
+                            .view => {},
+                        }
+                    }
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_match);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, str_match_set.source);
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => {},
+                            }
+                        }
+                        try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
+                    }
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
@@ -1797,6 +1953,12 @@ const Certifier = struct {
                     }
                     cursor = assign.next;
                 },
+                .init_uninitialized => |init| {
+                    if (self.isRc(init.target)) {
+                        state.bindValue(init.target, no_value);
+                    }
+                    cursor = init.next;
+                },
                 .assign_call => |assign| {
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);
                     cursor = assign.next;
@@ -1942,6 +2104,46 @@ const Certifier = struct {
                     var uninitialized_state = try state.clone();
                     errdefer uninitialized_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .str_match => |str_match| {
+                    const source_value = try self.requireLive(&state, str_match.source);
+                    var match_state = try state.clone();
+                    errdefer match_state.deinit();
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| if (self.isRc(local)) {
+                                match_state.bindValue(local, source_value);
+                            },
+                        }
+                    }
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_match, .state = match_state, .origin_join = segment.origin_join } });
+
+                    var miss_state = try state.clone();
+                    errdefer miss_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .str_match_set => |str_match_set| {
+                    const source_value = try self.requireLive(&state, str_match_set.source);
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        var match_state = try state.clone();
+                        errdefer match_state.deinit();
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| if (self.isRc(local)) {
+                                    match_state.bindValue(local, source_value);
+                                },
+                            }
+                        }
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = arm.on_match, .state = match_state, .origin_join = segment.origin_join } });
+                    }
+
+                    var miss_state = try state.clone();
+                    errdefer miss_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_set.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .join => |join_stmt| {

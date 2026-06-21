@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
+    polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
     annotation_only_value: AnnotationOnlyValue,
@@ -58,6 +59,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
 
     pub const Idx = enum(u32) { _ };
@@ -106,6 +108,13 @@ pub const HostedUnboxedFunction = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A mutable `var` whose annotation introduces an unbound type variable. A `var`
+/// is never generalized, so a free type variable in its annotation can never be
+/// bound — the variable must have a concrete type.
+pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
 };
 
@@ -286,6 +295,11 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Code that appears after an expression or statement that never returns.
+pub const UnreachableCode = struct {
+    region: base.Region,
 };
 
 // static dispatch //

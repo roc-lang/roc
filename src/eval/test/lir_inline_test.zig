@@ -12,6 +12,9 @@ const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
 const LayoutIdx = @import("layout").Idx;
 
+var shared_test_builtins: ?eval.BuiltinModules = null;
+var shared_test_builtins_mutex: std.Io.Mutex = .init;
+
 const LoweredSource = struct {
     resources: helpers.ParsedResources,
     lowered: lir.CheckedPipeline.LoweredProgram,
@@ -32,6 +35,21 @@ const LiftedSource = struct {
     }
 };
 
+fn sharedPrePublishedBuiltin() anyerror!helpers.PrePublishedBuiltin {
+    shared_test_builtins_mutex.lockUncancelable(std.testing.io);
+    defer shared_test_builtins_mutex.unlock(std.testing.io);
+
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+
+    return .{
+        .env = shared_test_builtins.?.builtin_module.env,
+        .indices = shared_test_builtins.?.builtin_indices,
+        .artifact = &shared_test_builtins.?.checked_artifact,
+    };
+}
+
 fn lowerModule(
     allocator: Allocator,
     source: []const u8,
@@ -51,7 +69,7 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) anyerror!LoweredSource {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -159,7 +177,7 @@ fn runLoweredWithHostEvents(
 fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) anyerror!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
@@ -206,14 +224,14 @@ test "optimized debug effect lowering erases inline dbg and expect" {
         \\}
     ;
 
-    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .run);
+    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .run);
     defer run_effects.deinit(allocator);
 
     const run_counts = countDebugEffectStmts(&run_effects.lowered);
     try std.testing.expect(run_counts.debug > 0);
     try std.testing.expect(run_counts.expect > 0);
 
-    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .erase);
+    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .erase);
     defer erased_effects.deinit(allocator);
 
     const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
@@ -225,7 +243,7 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) anyerror!LiftedSource {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -267,6 +285,70 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
+fn expectInlinePlanDecision(
+    source: []const u8,
+    fn_name: []const u8,
+    expected: bool,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .proc_debug_names = true },
+    );
+    var mono_owned = true;
+    errdefer if (mono_owned) mono.deinit();
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_owned = false;
+    mono = undefined;
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer solved.deinit();
+
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, &solved);
+    defer inline_plan.deinit();
+    const plan = inline_plan.view();
+
+    var found = false;
+    for (solved.lifted.fns.items, 0..) |fn_, index| {
+        const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
+        const actual_name = solved.lifted.names.exportNameText(name_id);
+        if (!std.mem.eql(u8, actual_name, fn_name)) continue;
+
+        found = true;
+        const fn_id: postcheck.MonotypeLifted.Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+        try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
+    }
+
+    try std.testing.expect(found);
+}
+
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) anyerror!LIR.LirProcSpecId {
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
     return lowered.lir_result.root_procs.items[0];
@@ -297,6 +379,7 @@ fn collectAssignCallProcs(
         switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
+            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
             .assign_call => |stmt| {
                 try calls.append(allocator, stmt.proc);
                 try work.append(allocator, stmt.next);
@@ -326,6 +409,16 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.initialized_branch);
                 try work.append(allocator, stmt.uninitialized_branch);
             },
+            .str_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
+            .str_match_set => |stmt| {
+                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                    try work.append(allocator, arm.on_match);
+                }
+                try work.append(allocator, stmt.on_miss);
+            },
             .join => |stmt| {
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
@@ -349,8 +442,11 @@ const ProcShape = struct {
     arg_count: usize,
     direct_call_count: usize = 0,
     erased_call_count: usize = 0,
+    low_level_count: usize = 0,
+    str_count_utf8_bytes_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
+    str_match_set_count: usize = 0,
     join_count: usize = 0,
     max_join_param_count: usize = 0,
     jump_count: usize = 0,
@@ -384,6 +480,7 @@ fn collectProcShape(
         switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
+            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
             .assign_call => |stmt| {
                 shape.direct_call_count += 1;
                 if (stmt.proc == proc_id) shape.self_call_count += 1;
@@ -394,7 +491,11 @@ fn collectProcShape(
                 try work.append(allocator, stmt.next);
             },
             .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
-            .assign_low_level => |stmt| try work.append(allocator, stmt.next),
+            .assign_low_level => |stmt| {
+                shape.low_level_count += 1;
+                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| {
                 shape.struct_assign_count += 1;
@@ -424,6 +525,17 @@ fn collectProcShape(
                 shape.switch_count += 1;
                 try work.append(allocator, stmt.initialized_branch);
                 try work.append(allocator, stmt.uninitialized_branch);
+            },
+            .str_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
+            .str_match_set => |stmt| {
+                shape.str_match_set_count += 1;
+                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                    try work.append(allocator, arm.on_match);
+                }
+                try work.append(allocator, stmt.on_miss);
             },
             .join => |stmt| {
                 shape.join_count += 1;
@@ -468,7 +580,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
     // as a third arg (`with_capacity` preallocation).
     return switch (wanted) {
         .specialized => shape.arg_count == 3 and
-            shape.direct_call_count >= 10 and
+            shape.direct_call_count >= 5 and
             shape.switch_count >= 10 and
             shape.join_count >= 16 and
             shape.jump_count >= 20,
@@ -652,6 +764,7 @@ fn markReachableLiftedStmt(
         .return_,
         => |expr| markReachableLiftedExpr(program, expr, reachable),
         .crash => {},
+        .uninitialized => {},
     }
 }
 
@@ -765,20 +878,25 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
 
 fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.direct_call_count == 2 and
+        shape.direct_call_count == 0 and
+        shape.low_level_count == 2 and
         shape.struct_assign_count == 0;
 }
 
 fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.direct_call_count > 2 and
+        shape.low_level_count > 2 and
         shape.struct_assign_count == 0;
+}
+
+fn hasGroupedStrMatchSet(shape: ProcShape) bool {
+    return shape.str_match_set_count == 1;
 }
 
 fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -803,7 +921,7 @@ fn rootDirectCallTarget(
     return root_calls[0];
 }
 
-fn expectRootTargetCallCount(
+fn expectRootDirectCallCount(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     expected: usize,
@@ -812,11 +930,10 @@ fn expectRootTargetCallCount(
     var lowered_source = try lowerModule(allocator, source, inline_mode);
     defer lowered_source.deinit(allocator);
 
-    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
-    defer allocator.free(target_calls);
+    const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    defer allocator.free(root_calls);
 
-    try std.testing.expectEqual(expected, target_calls.len);
+    try std.testing.expectEqual(expected, root_calls.len);
 }
 
 fn expectRootTargetHasCalls(
@@ -835,7 +952,7 @@ fn expectRootTargetHasCalls(
 }
 
 test "direct call wrapper is inlined when inline mode is enabled" {
-    try expectRootTargetCallCount(
+    try expectRootDirectCallCount(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -846,7 +963,7 @@ test "direct call wrapper is inlined when inline mode is enabled" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers, 0);
+    , .wrappers, 0);
 }
 
 test "direct call wrapper is not inlined when inline mode is none" {
@@ -865,7 +982,7 @@ test "direct call wrapper is not inlined when inline mode is none" {
 }
 
 test "zero statement block wrapper is inlined" {
-    try expectRootTargetCallCount(
+    try expectRootDirectCallCount(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -878,11 +995,26 @@ test "zero statement block wrapper is inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers, 0);
+    , .wrappers, 0);
+}
+
+test "low level wrapper is inlined when inline mode is enabled" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : Str -> U64
+        \\main = |str| Str.count_utf8_bytes(str)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
 }
 
 test "block wrapper with statements is not inlined" {
-    try expectRootTargetHasCalls(
+    try expectInlinePlanDecision(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -896,11 +1028,11 @@ test "block wrapper with statements is not inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers);
+    , "wrapper", false);
 }
 
 test "call value wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    try expectInlinePlanDecision(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -911,7 +1043,7 @@ test "call value wrapper is not inlined" {
         \\
         \\main : U64
         \\main = apply(callee, 41)
-    , .direct_call_wrappers);
+    , "apply", false);
 }
 
 test "self-recursive direct wrapper is not inlined" {
@@ -924,7 +1056,7 @@ test "self-recursive direct wrapper is not inlined" {
         \\
         \\main : U64 -> U64
         \\main = |x| wrapper(x)
-    , .direct_call_wrappers);
+    , .wrappers);
     defer lowered_source.deinit(allocator);
 
     // The root still calls the wrapper as a separate proc (not inlined). The
@@ -952,23 +1084,31 @@ test "mutually recursive direct wrappers are not inlined" {
         \\
         \\main : U64 -> U64
         \\main = |x| a(x)
-    , .direct_call_wrappers);
+    , .wrappers);
 }
 
 test "capturing direct wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
         \\module [main]
         \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
-        \\main : U64
-        \\main = {
-        \\    offset = 1
+        \\main : U64 -> U64
+        \\main = |offset| {
         \\    wrapper = |x| callee(x + offset)
         \\    wrapper(41)
         \\}
-    , .direct_call_wrappers);
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    defer allocator.free(root_calls);
+
+    try std.testing.expectEqual(@as(usize, 1), root_calls.len);
+    const target_shape = try collectProcShape(allocator, &lowered_source.lowered, root_calls[0]);
+    try std.testing.expectEqual(@as(usize, 2), target_shape.arg_count);
 }
 // ─── TRMC pass outcomes through the full pipeline ───
 
@@ -1049,8 +1189,8 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\        .collect()
         \\}
         \\
-        \\main : List(Plant)
-        \\main = starting_plants()
+        \\main : () -> List(Plant)
+        \\main = || starting_plants()
     );
 }
 
@@ -1070,7 +1210,7 @@ test "known-length List.iter collect specializes without unbound locals" {
         \\    Iter.collect(
         \\        Iter.map(List.iter([1.I64, 2, 3]), |i| i * 12),
         \\    )
-    , .direct_call_wrappers);
+    , .wrappers);
     defer optimized.deinit(allocator);
 }
 
@@ -1083,8 +1223,8 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\random_plant : I64 -> Plant
         \\random_plant = |seed| { seed: seed }
         \\
-        \\main : List(Plant)
-        \\main =
+        \\main : () -> List(Plant)
+        \\main = ||
         \\    Iter.collect(
         \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
@@ -1111,7 +1251,7 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
         \\main = read_twice({ n: 1 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
@@ -1139,7 +1279,7 @@ test "spec constr does not duplicate opaque known-match payloads" {
         \\main = read_twice({ n: 1 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
@@ -1375,7 +1515,7 @@ test "spec constr specializes recursive record state" {
         \\main = sum_record({ n: 4, acc: 0 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1412,7 +1552,7 @@ test "spec constr specializes record state carried by while loop" {
         \\main = sum_from({ n: 4 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1445,7 +1585,7 @@ test "spec constr specializes recursive tuple state" {
         \\main = sum_tuple((4, 0))
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1476,7 +1616,7 @@ test "spec constr leaves uninspected constructor arguments generic" {
         \\main = unused_state({ n: 0 }, 3)
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1513,7 +1653,7 @@ test "spec constr specializes tagged recursive state" {
         \\main = count_down(More(4), 0)
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1546,7 +1686,7 @@ test "spec constr uses fully known entry shape for multiple tuple states" {
         \\main = roman(4, (1, 2), (3, 4))
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1584,6 +1724,7 @@ test "LIR statements and procs carry resolved source locations" {
 
     const store = &lowered_source.lowered.lir_result.store;
     try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_regions.items.len);
     try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
     try std.testing.expect(store.proc_debug_names.items.len > 0);
     for (store.proc_debug_names.items) |entry| {
@@ -1592,13 +1733,50 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
-        switch (stmt) {
-            .incref, .decref, .decref_if_initialized, .free => try std.testing.expect(!loc.hasLocation()),
-            else => {},
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items, store.cf_stmts.items) |loc, region, stmt| {
+        const has_source = switch (stmt) {
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            => false,
+
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => true,
+        };
+        if (!has_source) {
+            try std.testing.expect(!loc.hasLocation());
+            try std.testing.expect(region.isEmpty());
         }
         if (loc.hasLocation()) {
             located += 1;
+            try std.testing.expect(!region.isEmpty());
             try std.testing.expect(loc.file < store.sourceFileCount());
             try std.testing.expect(loc.line >= 1);
             try std.testing.expect(loc.column >= 1);
@@ -1670,15 +1848,40 @@ test "LIR statements carry source locations under optimizing inline mode" {
         \\}
     ;
 
-    var lowered_source = try lowerModule(allocator, source, .direct_call_wrappers);
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.items) |loc| {
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items) |loc, region| {
         if (loc.hasLocation()) located += 1;
+        if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
     try std.testing.expect(located > 0);
+}
+
+test "adjacent string interpolation patterns lower to grouped LIR match set" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\classify : Str -> Str
+        \\classify = |s| match s {
+        \\    "a${x}z" => x
+        \\    "b${y}z" => y
+        \\    "${_}.txt" => "file"
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main : Str
+        \\main = classify("bOKz")
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &lowered_source.lowered, hasGroupedStrMatchSet));
 }
 
 test "LIR locals carry source-level names" {
@@ -1713,4 +1916,41 @@ test "LIR locals carry source-level names" {
     }
     try std.testing.expect(found_first);
     try std.testing.expect(found_second);
+}
+
+test "shared callees are lifted once and never gain spurious captures" {
+    // A small diamond call graph: every function calls the one below it twice.
+    // Capture collection reuses each callee's solved free set instead of
+    // re-walking shared callee bodies, so the closed chain lifts cleanly and no
+    // function gains a closure capture. The depth here keeps the surrounding
+    // monomorphization cheap while still exercising shared-callee reuse.
+    const allocator = std.testing.allocator;
+    const depth = 6;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "module [main]\n\nf0 : U64 -> U64\nf0 = |n| n + 1\n\n");
+    var level: usize = 1;
+    while (level <= depth) : (level += 1) {
+        const chunk = try std.fmt.allocPrint(
+            allocator,
+            "f{d} : U64 -> U64\nf{d} = |n| {{\n    a = f{d}(n)\n    b = f{d}(n)\n    a + b\n}}\n\n",
+            .{ level, level, level - 1, level - 1 },
+        );
+        defer allocator.free(chunk);
+        try source.appendSlice(allocator, chunk);
+    }
+    const tail = try std.fmt.allocPrint(allocator, "main : U64\nmain = f{d}(0)\n", .{depth});
+    defer allocator.free(tail);
+    try source.appendSlice(allocator, tail);
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source.items);
+    defer lifted.deinit(allocator);
+
+    // The whole chain survives lifting as distinct closed functions: the diamond
+    // is not collapsed, and no function gains spurious closure captures.
+    try std.testing.expect(lifted.lifted.fns.items.len >= depth);
+    for (lifted.lifted.fns.items) |func| {
+        try std.testing.expectEqual(@as(u32, 0), func.captures.len);
+    }
 }

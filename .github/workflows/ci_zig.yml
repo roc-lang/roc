@@ -14,6 +14,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Check no tracked plan.md files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          matches="$(git ls-files -- ':(glob)**/plan.md')"
+          if [ -n "$matches" ]; then
+            echo "Tracked plan.md files are not allowed:"
+            echo "$matches"
+            exit 1
+          fi
+
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
@@ -180,8 +193,11 @@ jobs:
 
       - name: Run eval tests with LLVM backend
         if: runner.os != 'Windows'
-        run: |
-          zig build run-test-eval -- --llvm
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "zig build run-test-eval -- --llvm"
+          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
       # test that compiles the whole program (front-end + LIR lowering) before
@@ -193,8 +209,11 @@ jobs:
       # runners where 30s is plenty. Give Windows a larger hang budget.
       - name: Run eval tests with LLVM backend (Windows)
         if: runner.os == 'Windows'
-        run: |
-          zig build run-test-eval -- --llvm --timeout 120000
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "zig build run-test-eval -- --llvm --timeout 120000"
+          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
@@ -381,9 +400,11 @@ jobs:
           use-cache: true
 
       - name: build roc + repro executables for valgrind
-        run: |
-          git clean -fdx
-          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456"
+          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          retry_count: 3
 
       - name: install valgrind
         run: |

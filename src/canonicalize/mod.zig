@@ -110,8 +110,10 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/import_store_test.zig"));
     std.testing.refAllDecls(@import("test/scope_test.zig"));
     std.testing.refAllDecls(@import("test/record_test.zig"));
+    std.testing.refAllDecls(@import("test/string_pattern_test.zig"));
     std.testing.refAllDecls(@import("test/type_decl_stmt_test.zig"));
     std.testing.refAllDecls(@import("test/local_let_scoping_test.zig"));
+    std.testing.refAllDecls(@import("test/uninitialized_var_test.zig"));
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));
 
     // Backend tests (Roc emitter)

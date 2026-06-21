@@ -1378,8 +1378,9 @@ const TypeTable = struct {
             const tag = all_tags.items[src_idx];
             const name_text = artifact.canonical_names.tagLabelText(tag.name);
 
-            const payload_ids = try self.gpa.alloc(u64, tag.args.len);
-            for (tag.args, 0..) |arg, i| {
+            const tag_args = tag.argsSlice(&artifact.checked_types);
+            const payload_ids = try self.gpa.alloc(u64, tag_args.len);
+            for (tag_args, 0..) |arg, i| {
                 payload_ids[i] = try self.getOrInsert(artifact, arg);
             }
 
@@ -2077,10 +2078,10 @@ fn checkedTypePayload(
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
     const idx = @intFromEnum(checked_type);
-    if (idx >= artifact.checked_types.payloads.items.len) {
+    if (idx >= artifact.checked_types.payloadCount()) {
         glueInvariant("checked type id {d} out of bounds", .{idx});
     }
-    return artifact.checked_types.payloads.items[idx];
+    return artifact.checked_types.payload(checked_type);
 }
 
 fn checkedTypeRootForScheme(
@@ -2317,9 +2318,10 @@ fn writeTagUnionTypeString(
     for (all_tags.items, 0..) |tag, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
         try buf.appendSlice(gpa, artifact.canonical_names.tagLabelText(tag.name));
-        if (tag.args.len > 0) {
+        const tag_args = tag.argsSlice(&artifact.checked_types);
+        if (tag_args.len > 0) {
             try buf.append(gpa, '(');
-            for (tag.args, 0..) |arg, arg_i| {
+            for (tag_args, 0..) |arg, arg_i| {
                 if (arg_i > 0) try buf.appendSlice(gpa, ", ");
                 try writeTypeString(gpa, artifact, arg, buf, active);
             }

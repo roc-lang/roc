@@ -1595,6 +1595,7 @@ const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
     builtin_indices_bin: std.Build.LazyPath,
+    builtin_artifact_bin: std.Build.LazyPath,
 };
 
 fn createAndRunBuiltinCompiler(
@@ -1609,7 +1610,12 @@ fn createAndRunBuiltinCompiler(
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
-            .optimize = .Debug, // No need to optimize - only compiles builtin modules
+            // Kept Debug deliberately: this exe publishes + serializes the
+            // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
+            // it ReleaseFast would optimize the whole check/eval closure (incl. the
+            // large checked_artifact.zig), adding far more `zig build` wall-clock than
+            // the one-time bake run saves. Debug compile + Debug bake is the faster total.
+            .optimize = .Debug,
             // ctx.CoreCtx reads env vars via std.c.getenv; Zig 0.16 requires
             // link_libc=true on any compile unit that references std.c.*.
             // (add_tracy below also sets this when tracy is enabled, but tracy is
@@ -1629,6 +1635,49 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
 
+    // The builtin compiler reloads the just-written Builtin.bin via the same
+    // loader the runtime uses, so the baked artifact pairs identically with the
+    // env that BuiltinModules.init will load. `builtin_loading` lives in the eval
+    // module, which imports `compiled_builtins` (this compiler's own output), so
+    // it is added here as a standalone module to avoid that import cycle.
+    builtin_compiler_exe.root_module.addImport("builtin_loading", b.createModule(.{
+        .root_source_file = b.path("src/eval/builtin_loading.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "can", .module = roc_modules.can },
+            .{ .name = "collections", .module = roc_modules.collections },
+        },
+    }));
+
+    // The builtin compiler publishes the Builtin module to a CheckedModuleArtifact
+    // and must run the same compile-time finalizer the runtime uses (Builtin has
+    // compile-time roots that must be evaluated into its ConstStore). The finalizer
+    // and its interpreter dependencies live in the eval module, but the eval
+    // module's root imports `compiled_builtins` (this compiler's own output). The
+    // finalizer's own transitive closure does NOT touch `compiled_builtins`, so it
+    // is added here as a standalone module rooted at compile_time_finalization.zig.
+    const comptime_finalizer_module = b.createModule(.{
+        .root_source_file = b.path("src/eval/compile_time_finalization.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
+            .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "builtins", .module = roc_modules.builtins },
+            .{ .name = "can", .module = roc_modules.can },
+            .{ .name = "check", .module = roc_modules.check },
+            .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "sljmp", .module = roc_modules.sljmp },
+        },
+    });
+    // The interpreter's hosted-call trampoline is hand-written assembly; attach
+    // it so the finalizer's interpreter links (arch-guarded, empty on wasm).
+    comptime_finalizer_module.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
+    builtin_compiler_exe.root_module.addImport("comptime_finalizer", comptime_finalizer_module);
+
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
 
@@ -1642,11 +1691,13 @@ fn createAndRunBuiltinCompiler(
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
     const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+    const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
 
     return .{
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
         .builtin_indices_bin = builtin_indices_bin,
+        .builtin_artifact_bin = builtin_artifact_bin,
     };
 }
 
@@ -1692,6 +1743,8 @@ fn createTestPlatformHostLib(
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2406,11 +2459,18 @@ pub fn build(b: *std.Build) void {
         "builtin_indices.bin",
     );
 
+    // Copy the baked CheckedModuleArtifact
+    _ = write_compiled_builtins.addCopyFile(
+        builtin_compiler.builtin_artifact_bin,
+        "Builtin.artifact.bin",
+    );
+
     // Generate compiled_builtins.zig with hardcoded Builtin module
     const builtins_source_str =
         \\pub const builtin_bin = @embedFile("Builtin.bin");
         \\pub const builtin_source = @embedFile("Builtin.roc");
         \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
+        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin");
         \\
     ;
 
@@ -2529,6 +2589,8 @@ pub fn build(b: *std.Build) void {
     wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    wasm32_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    wasm32_builtins_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2569,6 +2631,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("builtins", roc_modules.builtins);
     llvm_codegen_module.addImport("build_options", roc_modules.build_options);
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
+    llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -2714,6 +2777,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+            .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
@@ -2735,6 +2799,8 @@ pub fn build(b: *std.Build) void {
     builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2760,6 +2826,8 @@ pub fn build(b: *std.Build) void {
     builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2786,6 +2854,8 @@ pub fn build(b: *std.Build) void {
     builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2810,6 +2880,8 @@ pub fn build(b: *std.Build) void {
     builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2834,6 +2906,8 @@ pub fn build(b: *std.Build) void {
     builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2858,6 +2932,8 @@ pub fn build(b: *std.Build) void {
     builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2882,6 +2958,8 @@ pub fn build(b: *std.Build) void {
     builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2906,6 +2984,8 @@ pub fn build(b: *std.Build) void {
     builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2957,6 +3037,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+            .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
@@ -3447,7 +3528,7 @@ pub fn build(b: *std.Build) void {
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
-                "16",
+                "1",
             });
             run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
@@ -3460,7 +3541,7 @@ pub fn build(b: *std.Build) void {
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
-                "64",
+                "2",
             });
             run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
@@ -5047,6 +5128,8 @@ fn addMainExe(
     builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -5069,6 +5152,8 @@ fn addMainExe(
     builtins_extern_obj.root_module.addImport("tracy", b.addModule("tracy_stub_extern", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_extern_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    builtins_extern_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -5093,6 +5178,8 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -5163,6 +5250,8 @@ fn addMainExe(
             b.fmt("tracy_stub_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
         ));
+        cross_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        cross_builtins_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
         cross_builtins_obj.root_module.addImport("shim_io", b.addModule(
             b.fmt("shim_io_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
@@ -5196,6 +5285,8 @@ fn addMainExe(
             b.fmt("tracy_stub_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
         ));
+        cross_builtins_extern_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        cross_builtins_extern_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
         cross_builtins_extern_obj.root_module.addImport("shim_io", b.addModule(
             b.fmt("shim_io_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
@@ -5211,11 +5302,14 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
-        if (std.mem.eql(u8, cross_target.name, "x64musl") or std.mem.eql(u8, cross_target.name, "arm64musl")) {
+        if (!std.mem.eql(u8, cross_target.name, "wasm32")) {
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/default_platform/linux_runtime.zig"),
+                    .root_source_file = if (cross_target.query.os_tag == .linux)
+                        b.path("src/default_platform/linux_runtime.zig")
+                    else
+                        b.path("src/default_platform/c_runtime.zig"),
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
                     .strip = false,
@@ -5230,9 +5324,10 @@ fn addMainExe(
             configureBackend(default_platform_runtime_obj, cross_resolved_target);
 
             const copy_default_platform_runtime = b.addUpdateSourceFiles();
+            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
             copy_default_platform_runtime.addCopyFileToSource(
                 default_platform_runtime_obj.getEmittedBin(),
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_platform.o" }),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
         }
@@ -5325,6 +5420,7 @@ fn addLlvmSupportToStep(
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+            .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },

@@ -967,7 +967,7 @@ pub const Statement = union(enum) {
     decl: Decl,
     @"var": struct {
         name: Token.Idx,
-        body: Expr.Idx,
+        body: ?Expr.Idx,
         region: TokenizedRegion,
     },
     expr: struct {
@@ -1082,7 +1082,9 @@ pub const Statement = union(enum) {
                 try tree.pushStringPair("name", name_str);
                 const attrs = tree.beginNode();
 
-                try ast.store.getExpr(v.body).pushToSExprTree(gpa, env, ast, tree);
+                if (v.body) |body| {
+                    try ast.store.getExpr(body).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -1403,7 +1405,7 @@ pub const Pattern = union(enum) {
     string: struct {
         string_tok: Token.Idx,
         region: TokenizedRegion,
-        expr: Expr.Idx,
+        parts: PatternStringPart.Span,
     },
     single_quote: struct {
         token: Token.Idx,
@@ -1555,6 +1557,9 @@ pub const Pattern = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
                 try tree.pushStringPair("raw", ast.resolve(str.string_tok));
                 const attrs = tree.beginNode();
+                for (ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+                    try ast.store.getPatternStringPart(part_idx).pushToSExprTree(env, ast, tree);
+                }
                 try tree.endNode(begin, attrs);
             },
             .single_quote => |sq| {
@@ -1576,7 +1581,9 @@ pub const Pattern = union(enum) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try ast.appendRegionInfoToSexprTree(env, tree, field.region);
-                    try tree.pushStringPair("name", ast.resolve(field.name));
+                    if (field.name) |name_tok| {
+                        try tree.pushStringPair("name", ast.resolve(name_tok));
+                    }
                     try tree.pushBoolPair("rest", field.rest);
                     const attrs2 = tree.beginNode();
 
@@ -1658,6 +1665,47 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+        }
+    }
+};
+
+/// A part of a string pattern. Unlike expression strings, interpolation holes
+/// in patterns are pattern binders or discards, never expressions.
+pub const PatternStringPart = union(enum) {
+    text: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    capture: struct {
+        name: ?Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) Allocator.Error!void {
+        switch (self) {
+            .text => |text| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-text");
+                try ast.appendRegionInfoToSexprTree(env, tree, text.region);
+                try tree.pushStringPair("raw", ast.resolve(text.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .capture => |capture| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-capture");
+                try ast.appendRegionInfoToSexprTree(env, tree, capture.region);
+                if (capture.name) |name| {
+                    try tree.pushStringPair("name", ast.resolve(name));
+                } else {
+                    try tree.pushBoolPair("discard", true);
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -3409,7 +3457,8 @@ pub const Expr = union(enum) {
 
 /// TODO
 pub const PatternRecordField = struct {
-    name: Token.Idx,
+    /// The field name, or `null` for a bare rest pattern (`..`), which has no name.
+    name: ?Token.Idx,
     value: ?Pattern.Idx,
     rest: bool,
     region: TokenizedRegion,

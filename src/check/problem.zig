@@ -46,6 +46,7 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
+pub const UnreachableCode = types.UnreachableCode;
 pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
 
 // Type declaration errors
@@ -63,6 +64,7 @@ pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulExpect = types.EffectfulExpect;
 

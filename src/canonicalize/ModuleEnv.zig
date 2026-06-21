@@ -920,6 +920,13 @@ pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diag
     return castIdx(Node.Idx, RetIdx, malformed_idx);
 }
 
+/// Replaces an existing expression with a runtime error and records the diagnostic.
+pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
+    const diag_idx = try self.addDiagnostic(reason);
+    self.store.setExprRuntimeError(expr_idx, diag_idx);
+    self.debugAssertArraysInSync();
+}
+
 /// Extract the region from any diagnostic variant
 fn getDiagnosticRegion(diagnostic: CIR.Diagnostic) Region {
     return switch (diagnostic) {
@@ -1034,6 +1041,28 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addKeyword("exposing");
             try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .read_uninitialized_var => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "READING UNINITIALIZED VAR", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("This reads ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" before every path has assigned it a value.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1795,6 +1824,28 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .pattern_arg_invalid => blk: {
             var report = Report.init(allocator, "INVALID PATTERN ARGUMENT", .runtime_error);
             try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
+            break :blk report;
+        },
+        .unreachable_string_pattern_capture => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "UNREACHABLE PATTERN CAPTURE", .warning);
+            try report.document.addReflowingText("This string pattern capture is directly after another capture, so it is unreachable.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String pattern captures need literal text between them. Add a delimiter between the captures, or remove this capture.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
             break :blk report;
         },
         .shadowing_warning => |data| blk: {

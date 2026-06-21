@@ -698,15 +698,9 @@ main = {
 
 	# Chain method calls with static dispatch
 	chained = num_container
-		.map(
-			|x| x + 1,
-		)
-		.flat_map(
-			|x| Container.Value(x + 2),
-		)
-		.get_or(
-			0,
-		)
+		.map(|x| x + 1)
+		.flat_map(|x| Container.Value(x + 2))
+		.get_or(0)
 
 	# Use transform_twice with let-polymorphism
 	double_fn = |x| x + x

@@ -178,6 +178,7 @@ pub const Result = struct {
         self: *Result,
         kind: LIR.ComptimeSiteKind,
         region: base.Region,
+        checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
         branch_regions: []const base.Region,
     ) Allocator.Error!LIR.ComptimeSiteId {
@@ -187,6 +188,7 @@ pub const Result = struct {
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
             .region = region,
+            .checked_site = checked_site,
             .proc = proc,
             .branch_regions = owned_branch_regions,
         });

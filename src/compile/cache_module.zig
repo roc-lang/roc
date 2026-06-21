@@ -5,44 +5,31 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 const collections = @import("collections");
+
+const Constants = @import("cache_config.zig").Constants;
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-// Note: We use SHA256 instead of Blake3 because std.crypto.hash.Blake3 has a bug
-// that prevents comptime evaluation (integer truncation issue in fillBlockBuf).
-const Sha256 = std.crypto.hash.sha2.Sha256;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
 
-/// Compute a version hash for a struct type using SHA256 at comptime.
-/// This hash changes when the struct layout changes, enabling automatic cache invalidation.
-fn computeVersionHash(comptime StructType: type) [32]u8 {
-    @setEvalBranchQuota(100000);
-
-    const type_info = @typeInfo(StructType);
-    const layout_str = if (type_info != .@"struct")
-        "not_a_struct"
-    else blk: {
-        var result: []const u8 = @typeName(StructType);
-        for (type_info.@"struct".fields) |field| {
-            result = result ++ ";" ++ field.name ++ ":" ++ @typeName(field.type);
-        }
-        break :blk result;
-    };
-
-    var hasher = Sha256.init(.{});
-    hasher.update(layout_str);
-    var result: [32]u8 = undefined;
-    hasher.final(&result);
-    return result;
+/// The cache header's layout-version hash, computed at comptime. It changes when
+/// the struct layout changes, enabling automatic cache invalidation. Delegates to
+/// the shared `check.layoutVersionHash`, which recurses into nested aggregates and
+/// serialized element layouts, so a change nested inside a field's type also
+/// invalidates the cache. `cache_version` is a manual discriminant for semantic
+/// changes the structural walk cannot observe.
+fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [32]u8 {
+    return check.layoutVersionHash(StructType, cache_version);
 }
 
 /// Version hash of ModuleEnv.Serialized computed at comptime
-const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized);
+const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
@@ -295,3 +282,15 @@ pub const Diagnostics = struct {
     header_size: u32,
     data_size: u32,
 };
+
+test "MODULE_ENV_VERSION_HASH golden value" {
+    // Tripwire: an *accidental* change to `ModuleEnv.Serialized`'s layout silently
+    // invalidates every on-disk module cache. It flips this hash and fails here. On
+    // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
+    // golden bytes below with the ones this assertion prints.
+    const golden: [32]u8 = .{
+        0x8F, 0x85, 0xC3, 0xB8, 0x70, 0xBE, 0xD5, 0x65, 0xBE, 0x24, 0x6A, 0x5D, 0xBF, 0x65, 0x0A, 0x44,
+        0x99, 0xAA, 0xA2, 0x23, 0x0F, 0xCA, 0xDC, 0x43, 0xEE, 0x6B, 0x60, 0xD0, 0xFD, 0x9B, 0x5C, 0x49,
+    };
+    try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
+}

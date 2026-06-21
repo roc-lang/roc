@@ -19,6 +19,10 @@ const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
 const LocalId = lir_defs.LocalId;
 const LocalSpan = lir_defs.LocalSpan;
+const StrMatchArm = lir_defs.StrMatchArm;
+const StrMatchArmSpan = lir_defs.StrMatchArmSpan;
+const StrMatchStep = lir_defs.StrMatchStep;
+const StrMatchStepSpan = lir_defs.StrMatchStepSpan;
 const Symbol = lir_defs.Symbol;
 const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
@@ -35,6 +39,8 @@ const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
+str_match_steps: std.ArrayList(StrMatchStep),
+str_match_arms: std.ArrayList(StrMatchArm),
 join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
@@ -53,6 +59,9 @@ source_file_ends: std.ArrayList(u32),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: std.ArrayList(base.SourceLoc),
+/// Checked source region per statement, parallel to `cf_stmts`. Reference-count
+/// statements always record `Region.zero`; they have no source counterpart.
+cf_stmt_regions: std.ArrayList(base.Region),
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: std.ArrayList(base.SourceLoc),
 /// Source-level debug names for procs that have source names.
@@ -63,12 +72,16 @@ local_names: std.ArrayList(u32),
 /// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
 /// this on entry to each source node it lowers.
 current_loc: base.SourceLoc,
+/// Ambient checked source region recorded by `addCFStmt`.
+current_region: base.Region,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
     return .{
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .str_match_steps = std.ArrayList(StrMatchStep).empty,
+        .str_match_arms = std.ArrayList(StrMatchArm).empty,
         .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
@@ -82,10 +95,12 @@ pub fn init(allocator: Allocator) Self {
         .source_file_bytes = std.ArrayList(u8).empty,
         .source_file_ends = std.ArrayList(u32).empty,
         .cf_stmt_locs = std.ArrayList(base.SourceLoc).empty,
+        .cf_stmt_regions = std.ArrayList(base.Region).empty,
         .proc_locs = std.ArrayList(base.SourceLoc).empty,
         .proc_debug_names = std.ArrayList(ProcDebugName).empty,
         .local_names = std.ArrayList(u32).empty,
         .current_loc = base.SourceLoc.none,
+        .current_region = base.Region.zero(),
     };
 }
 
@@ -93,6 +108,8 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.str_match_steps.deinit(self.allocator);
+    self.str_match_arms.deinit(self.allocator);
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
@@ -104,6 +121,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
+    self.cf_stmt_regions.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
     self.proc_debug_names.deinit(self.allocator);
     self.local_names.deinit(self.allocator);
@@ -189,6 +207,11 @@ pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     return self.cf_stmt_locs.items[@intFromEnum(id)];
+}
+
+/// Checked source region of a statement.
+pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
+    return self.cf_stmt_regions.items[@intFromEnum(id)];
 }
 
 /// Source location of a proc.
@@ -350,11 +373,46 @@ pub fn getU64Span(self: *const Self, span: U64Span) []const u64 {
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
-    const loc = switch (stmt) {
-        .incref, .decref, .decref_if_initialized, .free => base.SourceLoc.none,
-        else => self.current_loc,
+    const has_source = switch (stmt) {
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => false,
+
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => true,
     };
+    const loc = if (has_source) self.current_loc else base.SourceLoc.none;
+    const region = if (has_source) self.current_region else base.Region.zero();
     try self.cf_stmt_locs.append(self.allocator, loc);
+    try self.cf_stmt_regions.append(self.allocator, region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -421,6 +479,69 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) []CFSwitchB
     return self.cf_switch_branches.items[span.start..][0..span.len];
 }
 
+/// Appends string-match steps and returns the corresponding flat-storage span.
+pub fn addStrMatchSteps(self: *Self, steps: []const StrMatchStep) Allocator.Error!StrMatchStepSpan {
+    if (steps.len == 0) return StrMatchStepSpan.empty();
+
+    const start = @as(u32, @intCast(self.str_match_steps.items.len));
+    try self.str_match_steps.appendSlice(self.allocator, steps);
+    return .{ .start = start, .len = @intCast(steps.len) };
+}
+
+/// Resolves a string-match-step span to its stored slice.
+pub fn getStrMatchSteps(self: *const Self, span: StrMatchStepSpan) []const StrMatchStep {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_steps.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: string-match-step span start={d} len={d} exceeds string-match-step storage len={d}",
+                .{ span.start, span.len, self.str_match_steps.items.len },
+            );
+        }
+    }
+    return self.str_match_steps.items[span.start..][0..span.len];
+}
+
+/// Appends string-match arms and returns the corresponding flat-storage span.
+pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!StrMatchArmSpan {
+    if (arms.len == 0) return StrMatchArmSpan.empty();
+
+    const start = @as(u32, @intCast(self.str_match_arms.items.len));
+    try self.str_match_arms.appendSlice(self.allocator, arms);
+    return .{ .start = start, .len = @intCast(arms.len) };
+}
+
+/// Resolves a string-match-arm span to its stored slice.
+pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) []const StrMatchArm {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_arms.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: string-match-arm span start={d} len={d} exceeds string-match-arm storage len={d}",
+                .{ span.start, span.len, self.str_match_arms.items.len },
+            );
+        }
+    }
+    return self.str_match_arms.items[span.start..][0..span.len];
+}
+
+/// Resolves a string-match-arm span to its stored mutable slice.
+pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) []StrMatchArm {
+    if (span.len == 0) return self.str_match_arms.items[0..0];
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_arms.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: mutable string-match-arm span start={d} len={d} exceeds string-match-arm storage len={d}",
+                .{ span.start, span.len, self.str_match_arms.items.len },
+            );
+        }
+    }
+    return self.str_match_arms.items[span.start..][0..span.len];
+}
+
 /// Appends join-point entries and returns the corresponding flat-storage span.
 pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
     if (join_points.len == 0) return JoinPointSpan.empty();
@@ -438,6 +559,21 @@ pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) []const JoinPoin
         if (end > self.join_points.items.len) {
             std.debug.panic(
                 "LirStore invariant violated: join-point span start={d} len={d} exceeds join-point storage len={d}",
+                .{ span.start, span.len, self.join_points.items.len },
+            );
+        }
+    }
+    return self.join_points.items[span.start..][0..span.len];
+}
+
+/// Resolves a join-point span to its stored mutable slice.
+pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) []JoinPoint {
+    if (span.len == 0) return self.join_points.items[0..0];
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.join_points.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: mutable join-point span start={d} len={d} exceeds join-point storage len={d}",
                 .{ span.start, span.len, self.join_points.items.len },
             );
         }

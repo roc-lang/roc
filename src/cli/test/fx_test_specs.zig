@@ -172,6 +172,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "String lookup",
     },
     .{
+        .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
+        .io_spec = "1>b",
+        .description = "Regression test: compiled Dict operations call the hasher builtins",
+    },
+    .{
         .roc_file = "test/fx/test_direct_string.roc",
         .io_spec = "1>Hello",
         .description = "Direct string output",

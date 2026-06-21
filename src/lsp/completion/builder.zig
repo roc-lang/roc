@@ -678,6 +678,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1035,6 +1036,7 @@ pub const CompletionBuilder = struct {
                 const pattern_idx = switch (stmt) {
                     .s_decl => |decl| decl.pattern,
                     .s_var => |var_stmt| var_stmt.pattern_idx,
+                    .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                     else => continue,
                 };
 
@@ -1308,6 +1310,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1358,6 +1361,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1690,6 +1694,7 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
     return switch (stmt) {
         .s_decl => |decl| .{ .pattern = decl.pattern, .expr = decl.expr, .expr2 = null },
         .s_var => |var_stmt| .{ .pattern = var_stmt.pattern_idx, .expr = var_stmt.expr, .expr2 = null },
+        .s_var_uninitialized => |var_stmt| .{ .pattern = var_stmt.pattern_idx, .expr = null, .expr2 = null },
         .s_reassign => |reassign| .{ .pattern = null, .expr = reassign.expr, .expr2 = null },
         .s_for => |for_stmt| .{ .pattern = for_stmt.patt, .expr = for_stmt.expr, .expr2 = for_stmt.body },
         .s_while => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },

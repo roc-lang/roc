@@ -633,7 +633,7 @@ const StaticDataBuilder = struct {
         };
         const raw = @intFromEnum(fn_id);
         if (raw >= source.store.fns.items.len) staticDataInvariant("ConstStore function id is out of range");
-        const fn_value = source.store.fns.items[raw];
+        const fn_value = source.store.getFn(@enumFromInt(raw));
         const entry = self.erasedFnEntry(set_id, fn_value);
         const target = try self.materializeErasedFn(source, fn_value, entry);
         try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);

@@ -216,6 +216,33 @@ test "check - repro - issue 9129 - control no closure" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9693 - polymorphic helper method constraints are not defaulted at def site" {
+    const src =
+        \\is_valid : Str -> U64
+        \\is_valid = |str| {
+        \\    str.to_utf8().map_with_index(char_value).len()
+        \\}
+        \\
+        \\char_value = |char, index| {
+        \\    if char >= '0' and char <= '9' {
+        \\        Ok((10 - index) * (char - '0').to_u64())
+        \\    } else {
+        \\        Err(BadChar)
+        \\    }
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    dbg is_valid("1234")
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 9129 - with explicit block" {
     // Test with explicit block - still fails
     const src =

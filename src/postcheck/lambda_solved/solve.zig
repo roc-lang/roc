@@ -579,6 +579,10 @@ const Solver = struct {
 
     fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
         switch (self.program.lifted.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat| {
+                const pat_ty = try self.lowerTypeFresh(self.program.lifted.pats.items[@intFromEnum(pat)].ty);
+                try self.bindPattern(pat, pat_ty);
+            },
             .let_ => |let_| {
                 const value_ty = try self.inferExpr(let_.value);
                 try self.bindPattern(let_.pat, value_ty);
@@ -604,6 +608,13 @@ const Solver = struct {
             .frac_f64_lit,
             .str_lit,
             => {},
+            .str_pattern => |str| {
+                for (self.program.lifted.strPatternStepSpan(str.steps)) |step| {
+                    if (step.capture) |capture| {
+                        try self.bindPattern(capture, pat_ty);
+                    }
+                }
+            },
             .as => |as| {
                 try self.unify(self.localTy(as.local), pat_ty);
                 try self.bindPattern(as.pattern, pat_ty);
@@ -621,6 +632,14 @@ const Solver = struct {
                     const item_ty = self.program.types.spanItem(item_tys, i);
                     try self.bindPattern(child, item_ty);
                 }
+            },
+            .list => |list| {
+                const elem_ty = try self.listElem(pat_ty);
+                for (self.program.lifted.patSpan(list.patterns)) |child| {
+                    try self.bindPattern(child, elem_ty);
+                }
+                // A captured rest is itself a list with the same element type.
+                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPattern(rest_pattern, pat_ty);
             },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
