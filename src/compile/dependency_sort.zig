@@ -1,7 +1,7 @@
 //! Topological sorting for module dependencies using Kahn's algorithm.
 //!
 //! This module provides a generalized topological sort that can be used by both
-//! the IPC path (roc run/build) and BuildEnv path (roc check) to ensure modules
+//! the IPC path (default `roc` command/`roc build`) and BuildEnv path (`roc check`) to ensure modules
 //! are compiled in dependency order (dependencies first, dependents last).
 
 const std = @import("std");

@@ -3588,6 +3588,8 @@ fn expandComposite(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs
 
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
+                // Padding spacers hold uninitialized bytes; never compare them.
+                if (ls.getStructFieldIsPadding(struct_idx, @intCast(field_i))) continue;
                 const field_size = try self.structFieldSizeBySortedIndexWasm(struct_idx, @intCast(field_i));
                 if (field_size == 0) continue;
                 try fields.append(ta, field_i);
@@ -8328,7 +8330,8 @@ fn structFieldOffsetByOriginalIndexWasm(self: *const Self, struct_idx: layout.St
     var offset: u32 = 0;
     for (0..fields.len) |i| {
         const field = fields.get(i);
-        const field_align = try self.layoutStorageByteAlign(field.layout);
+        // Padding spacers are alignment 1 (their value layout's alignment is ignored).
+        const field_align: u32 = if (field.is_padding) 1 else try self.layoutStorageByteAlign(field.layout);
         offset = alignUp(offset, field_align);
         if (field.index == original_idx) return offset;
         offset += try self.layoutStorageByteSize(field.layout);
@@ -8354,7 +8357,8 @@ fn structFieldOffsetBySortedIndexWasm(self: *const Self, struct_idx: layout.Stru
     var offset: u32 = 0;
     for (0..fields.len) |i| {
         const field = fields.get(i);
-        const field_align = try self.layoutStorageByteAlign(field.layout);
+        // Padding spacers are alignment 1 (their value layout's alignment is ignored).
+        const field_align: u32 = if (field.is_padding) 1 else try self.layoutStorageByteAlign(field.layout);
         offset = alignUp(offset, field_align);
         if (i == sorted_index) return offset;
         offset += try self.layoutStorageByteSize(field.layout);

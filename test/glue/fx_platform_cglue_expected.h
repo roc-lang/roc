@@ -125,7 +125,7 @@ typedef void (*HostedFn)(void);
 /**
  * Total number of hosted functions in this platform
  */
-#define HOSTED_FUNCTION_COUNT 16
+#define HOSTED_FUNCTION_COUNT 17
 
 /**
  * Index constants for each hosted function
@@ -144,9 +144,10 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 10
 #define HOSTED_IDX_HOST_STORE_BOXED 11
 #define HOSTED_IDX_HOST_STORED_BOXED_CALL 12
-#define HOSTED_IDX_STDERR_LINE 13
-#define HOSTED_IDX_STDIN_LINE 14
-#define HOSTED_IDX_STDOUT_LINE 15
+#define HOSTED_IDX_PADDED_CHECK 13
+#define HOSTED_IDX_STDERR_LINE 14
+#define HOSTED_IDX_STDIN_LINE 15
+#define HOSTED_IDX_STDOUT_LINE 16
 
 // =============================================================================
 // Argument Structures
@@ -377,6 +378,28 @@ _Static_assert(_Alignof(HostStored_boxed_callArgs) >= 1, "HostStored_boxed_callA
  */
 
 /**
+ * Arguments for Padded.check!
+ * Roc signature: Padded => Str
+ * C function name: padded_check
+ * Return type: RocStr
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    void* arg0;  // Padded
+} PaddedCheckArgs;
+
+_Static_assert(sizeof(PaddedCheckArgs) > 0, "PaddedCheckArgs must have non-zero size");
+_Static_assert(_Alignof(PaddedCheckArgs) >= 1, "PaddedCheckArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_padded_check(struct RocOps* ops, void* ret, PaddedCheckArgs* args) {
+ *     // args->arg0 is void* (Padded)
+ *     // Set return value: *((RocStr*)ret) = result;
+ * }
+ */
+
+/**
  * Arguments for Stderr.line!
  * Roc signature: Str => {}
  * C function name: stderr_line
@@ -445,9 +468,10 @@ typedef struct {
     HostedFn Host_roundtrip_boxed;  // index 10, C name: host_roundtrip_boxed
     HostedFn Host_store_boxed;  // index 11, C name: host_store_boxed
     HostedFn Host_stored_boxed_call;  // index 12, C name: host_stored_boxed_call
-    HostedFn Stderr_line;  // index 13, C name: stderr_line
-    HostedFn Stdin_line;  // index 14, C name: stdin_line
-    HostedFn Stdout_line;  // index 15, C name: stdout_line
+    HostedFn Padded_check;  // index 13, C name: padded_check
+    HostedFn Stderr_line;  // index 14, C name: stderr_line
+    HostedFn Stdin_line;  // index 15, C name: stdin_line
+    HostedFn Stdout_line;  // index 16, C name: stdout_line
 } HostedFunctions;
 
 #ifdef __cplusplus

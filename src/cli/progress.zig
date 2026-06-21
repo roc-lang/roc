@@ -1,5 +1,5 @@
 //! Live, phase-by-phase progress reporting for long-running CLI operations
-//! (`roc build`, `roc check`, `roc run`).
+//! (`roc build`, `roc check`, and the default `roc` command).
 //!
 //! The reporter records the wall-clock duration of each compilation phase as it
 //! runs. When an operation takes longer than a threshold (or `--timings` was

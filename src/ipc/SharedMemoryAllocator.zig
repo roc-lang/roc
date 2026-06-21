@@ -467,9 +467,14 @@ pub fn getBasePtr(self: *const SharedMemoryAllocator) [*]align(1) u8 {
     return self.base_ptr;
 }
 
-/// Reset the allocator to allow reuse (only safe if no allocations are still in use!)
+/// Reset the user-data region to allow reuse.
+///
+/// This preserves the shared-memory coordination header at the start of the
+/// mapping. It is only safe when no outstanding allocations from the old data
+/// region will be read again.
 pub fn reset(self: *SharedMemoryAllocator) void {
-    self.offset.store(0, .monotonic);
+    self.offset.store(@sizeOf(Header), .monotonic);
+    self.updateHeader();
 }
 
 test "shared memory allocator basic operations" {

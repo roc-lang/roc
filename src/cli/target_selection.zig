@@ -98,7 +98,7 @@ fn selectRunTargetForParsed(config: TargetsConfig, target: RocTarget, source: Se
     } };
 }
 
-/// Select a host-runnable `output: Exe` target for `roc run`.
+/// Select a host-runnable `output: Exe` target for the default `roc` command.
 pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8) SelectionResult {
     if (target_arg) |target_str| {
         const target = RocTarget.fromString(target_str) orelse {

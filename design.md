@@ -1451,6 +1451,12 @@ payloads use payload position order. Monotype lowering copies those spans
 directly. It does not sort by display text, declaration spelling, runtime
 encoding, or incidental map iteration.
 
+Nominal records additionally carry their declared field order as separate
+explicit data, because their runtime layout follows declaration order rather
+than the lexicographic row order (see Nominal Record Field Order). The
+lexicographic row order remains the identity used for field-name resolution;
+declared order feeds only layout. These stay two separate data.
+
 For named types, checking outputs:
 
 - the `TypeDef`
@@ -2194,6 +2200,66 @@ generated function tag, the builder outputs the mapping from the stage-local
 for `ConstStore` output and static data export. `LirImage` does not store
 function runtime data. It contains only ARC-inserted LIR, committed layouts,
 root proc ids, platform entrypoints, and target usize.
+
+### Nominal Record Field Order
+
+Structural record layout is order-insensitive: fields are sorted
+lexicographically by name and then stably by descending alignment, so source
+field order never affects memory. Nominal records instead lay out fields in
+*declared* order, so a nominal record can be given the exact memory layout of a
+chosen C struct and exchanged with a host with no per-field translation.
+
+The padding invariant is unchanged: a committed struct never contains internal
+alignment padding between fields. Because every layout's size is a multiple of
+its alignment, descending-alignment order always satisfies this, and it is the
+order structural records use. Declared order does not always satisfy it, so
+nominal layout commit verifies the declared order and only repairs it when it
+would introduce internal padding:
+
+- Verify: walk fields in declared order; if every field is naturally aligned at
+  its running offset, commit the declared order unchanged. This accepts
+  hand-tuned layouts — including ones, as in many C structs, where a
+  lower-alignment field validly precedes a higher-alignment one because earlier
+  fields already advanced the offset to the needed boundary — without reordering
+  them.
+- Repair: when declared order would require padding, commit the no-padding order
+  that is lexicographically closest to declared order. The longest valid
+  declared prefix is kept, and at each forced break the earliest-declared field
+  that still admits a no-padding completion is chosen. A completion always
+  exists (descending-alignment witnesses one from offset zero), so repair is
+  total and is never reported as an error: eliminating padding is the compiler's
+  responsibility, not the programmer's.
+
+Repair is a greedy walk with a memoized feasibility check. Feasibility depends
+only on the running offset modulo the maximum field alignment and on the
+multiset of remaining field shapes, of which there are few, so it is cheap and
+needs no backtracking. Reordering never changes a struct's size or alignment —
+every no-padding order shares both — so it only changes which field name lands
+at which offset.
+
+Nominal record declarations may contain unnamed fields, written `_` or
+`_`-prefixed (`_reserved`). An unnamed field reserves the size of its type but
+stores nothing, is not accessible, and imposes no alignment requirement on
+itself (its bytes are uninitialized), which lets a declaration reproduce a C
+struct's explicit padding without a dummy value to initialize. Layout treats
+unnamed fields as alignment-one spacers, so they advance the offset by their
+size yet repair may place them at any offset. They contribute their size but not
+their alignment to the struct, so pure padding never inflates a struct's
+alignment. Using an unnamed field in a structural record type is rejected during
+canonicalization.
+
+Declared field order is explicit data. Record rows are sorted lexicographically
+by name at several stages (checking, Monotype row lowering, and Monotype
+instantiation) because field-name resolution and digests depend on a single
+fixed order, so the declared order is not recoverable from the lowered record
+itself. Canonicalization preserves it — a nominal declaration's record
+annotation keeps its fields in source order — and it is carried forward as a
+datum on the nominal type, distinct from the (lexicographic) backing row, so
+later stages consume it without rescanning declarations. The struct commit
+applies it as the declared order described above; field-name resolution
+continues to use the lexicographic row order, independent of the layout offset
+map. The same datum is consumed by the interpreter's layout store, so all
+backends agree.
 
 ### Pattern Lowering
 
@@ -3115,9 +3181,9 @@ Shared:  shared library (.so, .dylib, .dll). For wasm32, a reactor module:
          into a component with wit-component.
 ```
 
-`roc run` requires the selected target's entry to be `output: Exe`; library
-and object platforms report that the output must be linked or loaded by a
-host application instead.
+The default `roc` command requires the selected target's entry to be
+`output: Exe`; library and object platforms report that the output must be
+linked or loaded by a host application instead.
 
 The output that static archives previously stood in for on wasm (a linked,
 loadable, no-entry module) is `Shared`, not `Archive`; `Archive` is never a
@@ -3175,8 +3241,8 @@ must be hidden in shared libraries — on ELF, default-visibility exports are
 preemptible, and two Roc-built libraries loaded into one process would
 otherwise interpose each other's runtime symbols.
 
-Interpreter execution (roc run, embedded interpreter builds, REPL,
-compile-time constants, glue evaluation) keeps the same host objects: a
+Interpreter execution (the default `roc` command, embedded interpreter builds,
+REPL, compile-time constants, glue evaluation) keeps the same host objects: a
 generated translation shim defines the exported entrypoints, marshals their
 natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted

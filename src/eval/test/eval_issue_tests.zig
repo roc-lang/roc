@@ -148,4 +148,74 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"ok\"" },
     },
+    .{
+        // A nominal record whose declared field order ({ id, balance }) differs
+        // from alphabetical order ({ balance, id }). It is constructed in the
+        // imported module and its fields read in the main module, so an
+        // inconsistent cross-module layout would read the wrong bytes.
+        .name = "nominal record imported across modules reads correct fields",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Acct",
+            .source =
+            \\module [Account, sample]
+            \\
+            \\Account := { id : U8, balance : U32 }
+            \\
+            \\sample : Account
+            \\sample = { id : 7, balance : 99 }
+            ,
+        }},
+        .source =
+        \\import Acct exposing [Account]
+        \\
+        \\describe : Account -> U32
+        \\describe = |{ id, balance }| id.to_u32() * 1000 + balance
+        \\
+        \\main = describe(Acct.sample)
+        ,
+        .expected = .{ .inspect_str = "7099" },
+    },
+    .{
+        // A nominal record with unnamed padding fields (mirroring a C struct's
+        // explicit padding). Construction provides only the named fields and the
+        // padding bytes stay reserved; reading the named fields back must use the
+        // offsets that account for the padding (a@0, b@4), not packed offsets.
+        .name = "nominal record with unnamed padding reads correct fields",
+        .source_kind = .module,
+        .source =
+        \\Padded := { a : U8, _ : U8, _ : U8, _ : U8, b : U32 }
+        \\
+        \\sample : Padded
+        \\sample = { a : 7, b : 99 }
+        \\
+        \\describe : Padded -> U32
+        \\describe = |{ a, b }| a.to_u32() * 1000 + b
+        \\
+        \\main = describe(sample)
+        ,
+        .expected = .{ .inspect_str = "7099" },
+    },
+    .{
+        // An unnamed padding field whose type is refcounted (`Str`). Its bytes
+        // are uninitialized garbage and must never be refcounted, compared, or
+        // inspected — only its size is reserved. If the padding spacer were
+        // treated as a live Str, dropping the value would decref garbage and
+        // crash, so this exercises the refcount/equality padding skip on every
+        // backend.
+        .name = "nominal record with refcounted-typed padding is never refcounted",
+        .source_kind = .module,
+        .source =
+        \\Padded := { a : U8, _ : Str, b : U32 }
+        \\
+        \\sample : Padded
+        \\sample = { a : 7, b : 99 }
+        \\
+        \\describe : Padded -> U32
+        \\describe = |{ a, b }| a.to_u32() * 1000 + b
+        \\
+        \\main = describe(sample)
+        ,
+        .expected = .{ .inspect_str = "7099" },
+    },
 };
