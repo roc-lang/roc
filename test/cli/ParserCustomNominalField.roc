@@ -4,16 +4,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -21,25 +21,25 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |_, state|
+	parse_record_field = |_, _, state|
 		match state {
 			Present(_) => Ok(TryField({ name: "token", rest: state }))
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str), Done]
 
 Token := { raw : Str }.{
 	parser_for : Format -> (State -> Try({ value : Token, rest : State }, [MissingRequired]))
-	parser_for = |_| |state| {
-		parsed = Format.parse_str(state)?
+	parser_for = |format| |state| {
+		parsed = Format.parse_str(format, state)?
 		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
 	}
 

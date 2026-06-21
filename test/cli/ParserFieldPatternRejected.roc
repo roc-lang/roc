@@ -1,9 +1,9 @@
 ParserFieldPatternRejected :: [].{}
 
-get_name : Field({ foo : Str }) -> Str
+get_name : Str.FieldName({ foo : Str }) -> Str
 get_name = |field|
 	match field {
-		Field({ name }) => name
+		Str.FieldName({ name }) => name
 	}
 
 main : Str

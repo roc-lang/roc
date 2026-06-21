@@ -1,8 +1,8 @@
 ParserOldTagSpecApi :: [].{}
 
 Format := [Default].{
-	parse_tag_union : ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
-	parse_tag_union = |spec, state|
+	parse_tag_union : Format, ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
+	parse_tag_union = |_, spec, state|
 		match state {
 			Present(tag_name) => {
 				value = ParseTagUnionSpec.parse(spec, tag_name, State.Present(tag_name), Str.is_eq, MissingRequired)?

@@ -8,18 +8,19 @@ Format := [Identity, Kebab].{
 			Kebab => underscores_to_dashes(name)
 		}
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, state|
 		match state {
 			KebabFooValue => Ok({ value: "foo-kebab", rest: KebabDone })
 			IdentityFooValue => Ok({ value: "foo-identity", rest: IdentityDone })
 			KebabFooName | KebabDone | IdentityFooName | IdentityDone | Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape),
+	parse_record_field : Format,
+	Str.FieldName.FieldNames(_shape),
 	State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -27,7 +28,7 @@ Format := [Identity, Kebab].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, fields, state|
 		match state {
 			KebabFooName => emit_field(fields, "foo-bar", KebabFooValue, KebabDone)
 			KebabDone => Ok(Done({ rest: Done }))
@@ -36,19 +37,19 @@ Format := [Identity, Kebab].{
 			KebabFooValue | IdentityFooValue | Done => Ok(Done({ rest: Done }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |state|
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, state|
 		match state {
 			KebabFooName => Ok(KebabDone)
 			IdentityFooName => Ok(IdentityDone)
 			KebabFooValue | KebabDone | IdentityFooValue | IdentityDone | Done => Ok(Done)
 		}
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 
-	missing_optional_field : Str, State -> [Missing]
-	missing_optional_field = |_, _| Missing
+	missing_optional_field : Format, Str, State -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 
 State := [
@@ -61,17 +62,12 @@ State := [
 	Done,
 ]
 
-Shape : {
-	foo_bar : Str,
-	maybe_token : Try(Str, [Missing]),
-}
-
-emit_field : Fields(_shape),
+emit_field : Str.FieldName.FieldNames(_shape),
 Str,
 State,
 State -> Try(
 	[
-		Field({ field : Field(_shape), rest : State }),
+		Field({ field : Str.FieldName(_shape), rest : State }),
 		TryField({ name : Str, rest : State }),
 		TryFieldCaseless({ name : Str, rest : State }),
 		Continue({ rest : State }),
@@ -82,9 +78,9 @@ State -> Try(
 emit_field = |fields, name, value_state, next_state| {
 	name_len = Str.count_utf8_bytes(name)
 
-	if name_len < Fields.shortest_name(fields) {
+	if name_len < Str.FieldName.FieldNames.shortest_name(fields) {
 		Ok(Continue({ rest: next_state }))
-	} else if name_len > Fields.longest_name(fields) {
+	} else if name_len > Str.FieldName.FieldNames.longest_name(fields) {
 		Ok(Continue({ rest: next_state }))
 	} else {
 		match find_field(fields, name) {
@@ -94,14 +90,14 @@ emit_field = |fields, name, value_state, next_state| {
 	}
 }
 
-find_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
 find_field = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
+	var $remaining = Str.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), name) {
+				if Str.is_eq(Str.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest
@@ -117,11 +113,17 @@ find_field = |fields, name| {
 	}
 }
 
-parse_stored_kebab : State -> Try({ value : Shape, rest : State }, [MissingRequired])
-parse_stored_kebab = Shape.parser_for(Format.Kebab)
+parse_stored_kebab : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [MissingRequired])
+parse_stored_kebab = {
+	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
+	Shape.parser_for(Format.Kebab)
+}
 
-parse_stored_identity : State -> Try({ value : Shape, rest : State }, [MissingRequired])
-parse_stored_identity = Shape.parser_for(Format.Identity)
+parse_stored_identity : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [MissingRequired])
+parse_stored_identity = {
+	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
+	Shape.parser_for(Format.Identity)
+}
 
 parse_with_format : Format, State -> Try(a, [MissingRequired])
 	where [
@@ -134,15 +136,15 @@ parse_with_format = |format, input| {
 	Ok(parsed.value)
 }
 
-parse_runtime : Format, State -> Try(Shape, [MissingRequired])
+parse_runtime : Format, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [MissingRequired])
 parse_runtime = |format, input| {
-	parsed : Shape
+	parsed : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	parsed = parse_with_format(format, input)?
 
 	Ok(parsed)
 }
 
-parse_runtime_from_flag : Bool, State -> Try(Shape, [MissingRequired])
+parse_runtime_from_flag : Bool, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [MissingRequired])
 parse_runtime_from_flag = |use_kebab, input| {
 	format = if use_kebab {
 		Format.Kebab
@@ -150,7 +152,7 @@ parse_runtime_from_flag = |use_kebab, input| {
 		Format.Identity
 	}
 
-	parsed : Shape
+	parsed : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	parsed = parse_with_format(format, input)?
 
 	Ok(parsed)
@@ -202,7 +204,7 @@ is_missing = |value|
 		Err(Missing) => Bool.True
 	}
 
-shape_is : Shape, Str -> Bool
+shape_is : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, Str -> Bool
 shape_is = |shape, expected_foo|
 	if shape.foo_bar == expected_foo {
 		is_missing(shape.maybe_token)

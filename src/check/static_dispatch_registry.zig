@@ -351,8 +351,8 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
-    if (type_ident.eql(common.builtin_fields)) return .fields;
-    if (type_ident.eql(common.builtin_field)) return .field;
+    if (type_ident.eql(common.builtin_str_field_names)) return .fields;
+    if (type_ident.eql(common.builtin_str_field_name)) return .field;
     if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     return null;
 }

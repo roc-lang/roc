@@ -9,16 +9,16 @@ Format := [Default].{
 			name
 		}
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -26,7 +26,7 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, fields, state|
 		match state {
 			Present(_) =>
 				match find_field(fields, "foo-bar") {
@@ -37,23 +37,23 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str), Done]
 
-find_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
 find_field = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
+	var $remaining = Str.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), name) {
+				if Str.is_eq(Str.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest

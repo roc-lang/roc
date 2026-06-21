@@ -3018,8 +3018,8 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
         .list => self.cir.idents.builtin_list,
         .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
-        .fields => self.cir.idents.builtin_fields,
-        .field => self.cir.idents.builtin_field,
+        .fields => self.cir.idents.builtin_str_field_names,
+        .field => self.cir.idents.builtin_str_field_name,
         .numeral => self.cir.idents.builtin_numeral,
         .num => |num_kind| self.builtinNumTypeIdent(num_kind),
     };
@@ -3030,8 +3030,8 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
         .list => "List",
         .box => "Box",
         .try_type => "Try",
-        .fields => "Fields",
-        .field => "Field",
+        .fields => "Str.FieldName.FieldNames",
+        .field => "Str.FieldName",
         .numeral => "Num.Numeral",
         .num => |num_kind| switch (num_kind) {
             .u8 => "Num.U8",
@@ -3358,6 +3358,8 @@ fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ide
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
+    if (type_ident.eql(common.builtin_str_field_names)) return .fields;
+    if (type_ident.eql(common.builtin_str_field_name)) return .field;
     if (type_ident.eql(common.builtin_numeral)) return .numeral;
     if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .{ .num = .u8 };
     if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .{ .num = .i8 };
@@ -3386,6 +3388,8 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
     if (raw_decl == @intFromEnum(indices.list_type)) return .list;
     if (raw_decl == @intFromEnum(indices.box_type)) return .box;
     if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
+    if (raw_decl == @intFromEnum(indices.fields_type)) return .fields;
+    if (raw_decl == @intFromEnum(indices.field_type)) return .field;
     if (raw_decl == @intFromEnum(indices.numeral_type)) return .numeral;
     if (raw_decl == @intFromEnum(indices.u8_type)) return .{ .num = .u8 };
     if (raw_decl == @intFromEnum(indices.i8_type)) return .{ .num = .i8 };
@@ -16934,14 +16938,14 @@ fn validateParseFormatMethod(
         .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
     };
     const expected_fn = switch (spec_decl) {
-        .str, .u64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region),
+        .str, .u64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
         .record_field => blk: {
             const fields_var = try self.mkFieldsVar(shape_var, env, region);
-            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ fields_var, state_var }, expected_ret), env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, fields_var, state_var }, expected_ret), env, region);
         },
         .tag_union => blk: {
             const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
-            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, state_var }, expected_ret), env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, spec_var, state_var }, expected_ret), env, region);
         },
     };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
@@ -17002,7 +17006,7 @@ fn validateMissingRecordFieldMethod(
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
     const str_var = try self.freshStr(env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, err_var), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var, state_var }, err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -17027,7 +17031,7 @@ fn validateMissingOptionalFieldMethod(
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
     const str_var = try self.freshStr(env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, optional_err_var), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var, state_var }, optional_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -17052,7 +17056,7 @@ fn validateSkipRecordFieldMethod(
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,

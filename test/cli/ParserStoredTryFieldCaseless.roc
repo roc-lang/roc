@@ -4,8 +4,8 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, state|
 		match state {
 			Value(value) => Ok({ value, rest: Done })
 			FooValue => Ok({ value: "abcdefghijklmnopqrstuvwxyz", rest: CacheName })
@@ -13,17 +13,17 @@ Format := [Default].{
 			Key(_, _) | Start | FooName | CacheName | ContentLengthName | ContentLengthValue | RequestCountName | RequestCountValue | Done => Err(MissingRequired)
 		}
 
-	parse_u64 : State -> Try({ value : U64, rest : State }, [MissingRequired])
-	parse_u64 = |state|
+	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [MissingRequired])
+	parse_u64 = |_, state|
 		match state {
 			ContentLengthValue => Ok({ value: 5, rest: RequestCountName })
 			RequestCountValue => Ok({ value: 17, rest: Done })
 			Key(_, _) | Value(_) | Start | FooName | FooValue | CacheName | CacheValue | ContentLengthName | RequestCountName | Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -31,11 +31,11 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, fields, state|
 		match state {
 			Key(name, value) => Ok(TryFieldCaseless({ name, rest: Value(value) }))
 			Start =>
-				if Fields.shortest_name(fields) == 3 and Fields.longest_name(fields) == 14 {
+				if Str.FieldName.FieldNames.shortest_name(fields) == 3 and Str.FieldName.FieldNames.longest_name(fields) == 14 {
 					Ok(Continue({ rest: FooName }))
 				} else {
 					Ok(Done({ rest: Done }))
@@ -47,14 +47,14 @@ Format := [Default].{
 			Value(_) | FooValue | CacheValue | ContentLengthValue | RequestCountValue | Done => Ok(Done({ rest: Done }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 
-	missing_optional_field : Str, State -> [Missing]
-	missing_optional_field = |_, _| Missing
+	missing_optional_field : Format, Str, State -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 
 State := [

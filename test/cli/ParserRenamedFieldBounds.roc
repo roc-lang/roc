@@ -9,16 +9,16 @@ Format := [Default].{
 			name
 		}
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -26,7 +26,7 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, fields, state|
 		match state {
 			Present(_) => {
 				has_foo = match find_any_field(fields, "foo") {
@@ -39,7 +39,7 @@ Format := [Default].{
 					1
 				}
 
-				if Fields.shortest_name(fields) == 1 and Fields.longest_name(fields) == expected_longest {
+				if Str.FieldName.FieldNames.shortest_name(fields) == 1 and Str.FieldName.FieldNames.longest_name(fields) == expected_longest {
 					match find_field(fields, "x") {
 						Ok(field) => Ok(Field({ field, rest: state }))
 						Err(NotFound) => Ok(Done({ rest: state }))
@@ -52,26 +52,26 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 
-	missing_optional_field : Str, State -> [Missing]
-	missing_optional_field = |_, _| Missing
+	missing_optional_field : Format, Str, State -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 
 State := [Present(Str), Done]
 
-find_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
 find_field = |fields, name| {
-	var $remaining = Fields.for_size(fields, Str.count_utf8_bytes(name))
+	var $remaining = Str.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), name) {
+				if Str.is_eq(Str.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest
@@ -87,14 +87,14 @@ find_field = |fields, name| {
 	}
 }
 
-find_any_field : Fields(_shape), Str -> Try(Field(_shape), [NotFound])
+find_any_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
 find_any_field = |fields, name| {
-	var $remaining = Fields.iter(fields)
+	var $remaining = Str.FieldName.FieldNames.iter(fields)
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Field.name(item), name) {
+				if Str.is_eq(Str.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest

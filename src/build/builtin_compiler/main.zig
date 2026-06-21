@@ -208,8 +208,8 @@ fn serializeBuiltinArtifact(
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
     const parse_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseTagUnionSpec");
-    const fields_type_idx = try findTypeDeclaration(gpa, env, "Fields");
-    const field_type_idx = try findTypeDeclaration(gpa, env, "Field");
+    const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName.FieldNames");
+    const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName");
     const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
     const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
     const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
@@ -268,8 +268,8 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .numeral_type = numeral_type_idx,
         .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
         .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.ParseTagUnionSpec"),
-        .fields_ident = expectBuiltinIdent(env, "Builtin.Fields"),
-        .field_ident = expectBuiltinIdent(env, "Builtin.Field"),
+        .fields_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName.FieldNames"),
+        .field_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName"),
         .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
         .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
         .set_ident = expectBuiltinIdent(env, "Builtin.Set"),

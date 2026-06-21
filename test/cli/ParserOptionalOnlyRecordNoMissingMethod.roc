@@ -4,12 +4,12 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |_| Err(MissingRequired)
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str = |_, _| Err(MissingRequired)
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -17,13 +17,13 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |_, state| Ok(Done({ rest: state }))
+	parse_record_field = |_, _, state| Ok(Done({ rest: state }))
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |state| Ok(state)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, state| Ok(state)
 
-	missing_optional_field : Str, State -> [Missing]
-	missing_optional_field = |_, _| Missing
+	missing_optional_field : Format, Str, State -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 
 State := [Present(Str)]

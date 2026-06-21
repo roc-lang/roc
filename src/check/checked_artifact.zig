@@ -5886,8 +5886,8 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
     if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
-    if (ident.eql(common.builtin_fields)) return .fields;
-    if (ident.eql(common.builtin_field)) return .field;
+    if (ident.eql(common.builtin_str_field_names)) return .fields;
+    if (ident.eql(common.builtin_str_field_name)) return .field;
     return null;
 }
 

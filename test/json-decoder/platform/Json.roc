@@ -1,6 +1,6 @@
 JsonState := [Input(Str)]
 
-JsonEncoding := [Default, CamelCase].{
+JsonEncoding :: [Default, CamelCase].{
 	rename_field : JsonEncoding, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
@@ -8,8 +8,8 @@ JsonEncoding := [Default, CamelCase].{
 			CamelCase => snake_to_camel(name)
 		}
 
-	parse_str : JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
-	parse_str = |state|
+	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
+	parse_str = |_, state|
 		match state {
 			Input(raw) => {
 				trimmed = Str.trim_start(raw)
@@ -23,9 +23,9 @@ JsonEncoding := [Default, CamelCase].{
 			}
 		}
 
-	parse_record_field : Fields(_shape), JsonState -> Try(
+	parse_record_field : JsonEncoding, Str.FieldName.FieldNames(_shape), JsonState -> Try(
 		[
-			Field({ field : Field(_shape), rest : JsonState }),
+			Field({ field : Str.FieldName(_shape), rest : JsonState }),
 			TryField({ name : Str, rest : JsonState }),
 			TryFieldCaseless({ name : Str, rest : JsonState }),
 			Continue({ rest : JsonState }),
@@ -33,25 +33,25 @@ JsonEncoding := [Default, CamelCase].{
 		],
 		Json.DecodeErr,
 	)
-	parse_record_field = |_, state|
+	parse_record_field = |_, _, state|
 		match state {
 			Input(raw) => parse_record_field_from_object(raw)
 		}
 
-	skip_record_field : JsonState -> Try(JsonState, Json.DecodeErr)
-	skip_record_field = |state| skip_json_value(state)
+	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.DecodeErr)
+	skip_record_field = |_, state| skip_json_value(state)
 
-	missing_record_field : Str, JsonState -> Json.DecodeErr
-	missing_record_field = |_, _| Json.DecodeErr.MissingRequired
+	missing_record_field : JsonEncoding, Str, JsonState -> Json.DecodeErr
+	missing_record_field = |_, _, _| Json.DecodeErr.MissingRequired
 
-	missing_optional_field : Str, JsonState -> [Missing]
-	missing_optional_field = |_, _| Missing
+	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 
-	parse_tag_union : ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
-	parse_tag_union = |spec, state|
+	parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
+	parse_tag_union = |encoding, spec, state|
 		match state {
-			Input(value) => parse_tag_union_from_json(value, spec)
-	}
+			Input(value) => parse_tag_union_from_json(value, encoding, spec)
+		}
 }
 
 Json :: [].{
@@ -59,8 +59,8 @@ Json :: [].{
 
 	Token := { raw : Str }.{
 		parser_for : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
-		parser_for = |_encoding| |state| {
-			parsed = JsonEncoding.parse_str(state)?
+		parser_for = |encoding| |state| {
+			parsed = JsonEncoding.parse_str(encoding, state)?
 			Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
 		}
 
@@ -115,7 +115,7 @@ invalid_json = Json.DecodeErr.InvalidJson
 
 parse_record_field_from_object : Str -> Try(
 	[
-		Field({ field : Field(_shape), rest : JsonState }),
+		Field({ field : Str.FieldName(_shape), rest : JsonState }),
 		TryField({ name : Str, rest : JsonState }),
 		TryFieldCaseless({ name : Str, rest : JsonState }),
 		Continue({ rest : JsonState }),
@@ -210,8 +210,8 @@ skip_json_value = |state|
 		}
 	}
 
-parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
-parse_tag_union_from_json = |raw, spec| {
+parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
+parse_tag_union_from_json = |raw, encoding, spec| {
 	remaining = Str.trim_start(raw)
 
 	if !Str.starts_with(remaining, "{") {
@@ -235,41 +235,57 @@ parse_tag_union_from_json = |raw, spec| {
 				return Err(invalid_json)
 			}
 
-			payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
+				payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
 
-			after_payload = if Str.starts_with(payload, "{") {
-				object_end = find_object_end(payload)
+				parsed = ParseTagUnionSpec.parse(spec, {
+					tag: tag_name,
+					encoding,
+					state: JsonState.Input(payload),
+					missing: Json.DecodeErr.MissingRequired,
+				})?
 
-				match object_end {
-					Ok(end_parts) => Str.trim_start(end_parts.after)
-					Err(_) => return Err(invalid_json)
+				match parsed.rest {
+					Input(after_payload) => finish_tag_payload(parsed.value, after_payload)
 				}
-			} else if Str.starts_with(payload, "\"") {
-				value_split = split_json_string_tail(Str.drop_prefix(payload, "\""))
-
-				match value_split {
-					Ok(value_parts) => Str.trim_start(value_parts.after)
-					Err(_) => return Err(invalid_json)
-				}
-			} else {
-				return Err(invalid_json)
-			}
-
-			if !Str.starts_with(after_payload, "}") {
-				return Err(invalid_json)
-			}
-
-			value = ParseTagUnionSpec.parse(spec, {
-				tag: tag_name,
-				encoding: JsonEncoding.Default,
-				state: JsonState.Input(payload),
-				missing: Json.DecodeErr.MissingRequired,
-			})?
-			after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
-
-			Ok({ value, rest: JsonState.Input(after_close) })
 		}
 		Err(_) => Err(invalid_json)
+	}
+}
+
+finish_tag_payload : a, Str -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
+finish_tag_payload = |value, raw| {
+	remaining = Str.trim_start(raw)
+
+	if Str.starts_with(remaining, "}") {
+		after_close = Str.trim_start(Str.drop_prefix(remaining, "}"))
+		return Ok({ value, rest: JsonState.Input(after_close) })
+	}
+
+	empty_payload = consume_empty_json_object(remaining)?
+	after_payload = Str.trim_start(empty_payload.after)
+
+	if Str.starts_with(after_payload, "}") {
+		after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
+		Ok({ value, rest: JsonState.Input(after_close) })
+	} else {
+		Err(invalid_json)
+	}
+}
+
+consume_empty_json_object : Str -> Try({ after : Str }, Json.DecodeErr)
+consume_empty_json_object = |raw| {
+	remaining = Str.trim_start(raw)
+
+	if !Str.starts_with(remaining, "{") {
+		return Err(invalid_json)
+	}
+
+	after_open = Str.trim_start(Str.drop_prefix(remaining, "{"))
+
+	if Str.starts_with(after_open, "}") {
+		Ok({ after: Str.drop_prefix(after_open, "}") })
+	} else {
+		Err(invalid_json)
 	}
 }
 

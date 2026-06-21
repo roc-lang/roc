@@ -28,18 +28,18 @@ Headers := { raw : Str }.{
 	}
 }
 
-HeaderEncoding := [Caseless].{
+HeaderEncoding :: [Caseless].{
 	rename_field : HeaderEncoding, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
-	parse_str : Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
-	parse_str = |state| {
+	parse_str : HeaderEncoding, Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
+	parse_str = |_, state| {
 		value_parts = take_header_value(state.raw)?
 		Ok({ value: value_parts.value, rest: { raw: value_parts.after } })
 	}
 
-	parse_u64 : Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
-	parse_u64 = |state| {
+	parse_u64 : HeaderEncoding, Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
+	parse_u64 = |_, state| {
 		value_parts = take_header_value(state.raw)?
 
 		match U64.from_str(value_parts.value) {
@@ -48,9 +48,9 @@ HeaderEncoding := [Caseless].{
 		}
 	}
 
-	parse_record_field : Fields(_shape), Headers -> Try(
+	parse_record_field : HeaderEncoding, Str.FieldName.FieldNames(_shape), Headers -> Try(
 		[
-			Field({ field : Field(_shape), rest : Headers }),
+			Field({ field : Str.FieldName(_shape), rest : Headers }),
 			TryField({ name : Str, rest : Headers }),
 			TryFieldCaseless({ name : Str, rest : Headers }),
 			Continue({ rest : Headers }),
@@ -58,37 +58,25 @@ HeaderEncoding := [Caseless].{
 		],
 		Headers.DecodeErr,
 	)
-	parse_record_field = |fields, state|
+	parse_record_field = |_, fields, state|
 		parse_record_field_from_headers(fields, state.raw)
 
-	skip_record_field : Headers -> Try(Headers, Headers.DecodeErr)
-	skip_record_field = |state| {
+	skip_record_field : HeaderEncoding, Headers -> Try(Headers, Headers.DecodeErr)
+	skip_record_field = |_, state| {
 		parts = take_header_value(state.raw)?
 		Ok({ raw: parts.after })
 	}
 
-	missing_record_field : Str, Headers -> Headers.DecodeErr
-	missing_record_field = |_, _| Headers.DecodeErr.MissingRequired
+	missing_record_field : HeaderEncoding, Str, Headers -> Headers.DecodeErr
+	missing_record_field = |_, _, _| Headers.DecodeErr.MissingRequired
 
-	missing_optional_field : Str, Headers -> [Missing]
-	missing_optional_field = |_, _| Missing
-
-	parse_tag_union : ParseTagUnionSpec(a), Headers -> Try({ value : a, rest : Headers }, Headers.DecodeErr)
-	parse_tag_union = |spec, state| {
-		value_parts = take_header_value(state.raw)?
-		value = ParseTagUnionSpec.parse(spec, {
-			tag: value_parts.value,
-			encoding: HeaderEncoding.Caseless,
-			state: { raw: value_parts.value },
-			missing: Headers.DecodeErr.MissingRequired,
-		})?
-		Ok({ value, rest: { raw: value_parts.after } })
-	}
+	missing_optional_field : HeaderEncoding, Str, Headers -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 
-parse_record_field_from_headers : Fields(_shape), Str -> Try(
+parse_record_field_from_headers : Str.FieldName.FieldNames(_shape), Str -> Try(
 	[
-		Field({ field : Field(_shape), rest : Headers }),
+		Field({ field : Str.FieldName(_shape), rest : Headers }),
 		TryField({ name : Str, rest : Headers }),
 		TryFieldCaseless({ name : Str, rest : Headers }),
 		Continue({ rest : Headers }),
@@ -116,10 +104,10 @@ parse_record_field_from_headers = |fields, headers|
 					if name_len >= line_len {
 						Err(Headers.DecodeErr.BadHeader)
 					} else {
-						if name_len < Fields.shortest_name(fields) {
+						if name_len < Str.FieldName.FieldNames.shortest_name(fields) {
 							Ok(Continue({ rest: { raw: line_parts.after } }))
 						} else {
-							if name_len > Fields.longest_name(fields) {
+							if name_len > Str.FieldName.FieldNames.longest_name(fields) {
 								Ok(Continue({ rest: { raw: line_parts.after } }))
 							} else {
 								Ok(TryFieldCaseless({

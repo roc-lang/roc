@@ -6,16 +6,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : State -> Try({ value : Str, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)
-	parse_str = |state|
+	parse_str : Format, State -> Try({ value : Str, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)
+	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
 			Done => Err(ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -23,17 +23,17 @@ Format := [Default].{
 		],
 		ParserTopLevelStoredValidatedWrapper.DecodeErr,
 	)
-	parse_record_field = |_, state|
+	parse_record_field = |_, _, state|
 		match state {
 			Present(_) => Ok(TryField({ name: "foo", rest: state }))
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : State -> Try(State, ParserTopLevelStoredValidatedWrapper.DecodeErr)
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, ParserTopLevelStoredValidatedWrapper.DecodeErr)
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> ParserTopLevelStoredValidatedWrapper.DecodeErr
-	missing_record_field = |_, _| ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired
+	missing_record_field : Format, Str, State -> ParserTopLevelStoredValidatedWrapper.DecodeErr
+	missing_record_field = |_, _, _| ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired
 }
 
 State := [Present(Str), Done]

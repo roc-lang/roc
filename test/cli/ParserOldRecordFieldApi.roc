@@ -1,7 +1,7 @@
 ParserOldRecordFieldApi :: [].{}
 
 Format := [Default].{
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
 	parse_str = |_| Err(MissingRequired)
 
 	parse_record_field : State -> Try(

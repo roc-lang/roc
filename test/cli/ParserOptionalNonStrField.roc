@@ -4,16 +4,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_u64 : State -> Try({ value : U64, rest : State }, [MissingRequired])
-	parse_u64 = |state|
+	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [MissingRequired])
+	parse_u64 = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Fields(_shape), State -> Try(
+	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Field(_shape), rest : State }),
+			Field({ field : Str.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -21,20 +21,20 @@ Format := [Default].{
 		],
 		[MissingRequired],
 	)
-	parse_record_field = |_, state|
+	parse_record_field = |_, _, state|
 		match state {
 			Present(_) => Ok(TryField({ name: "count", rest: state }))
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |_| Ok(Done)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 
-	missing_optional_field : Str, State -> [Absent]
-	missing_optional_field = |_, _| Absent
+	missing_optional_field : Format, Str, State -> [Absent]
+	missing_optional_field = |_, _, _| Absent
 }
 
 State := [Present(U64), Done]

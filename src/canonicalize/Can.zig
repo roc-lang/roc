@@ -890,8 +890,6 @@ fn populateBuiltinAutoImportedTypes(
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
         .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
-        .{ "Fields", builtin_indices.fields_type, builtin_indices.fields_ident },
-        .{ "Field", builtin_indices.field_type, builtin_indices.field_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -947,8 +945,6 @@ pub fn populateModuleEnvs(
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
         .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
-        .{ "Fields", builtin_indices.fields_type, builtin_indices.fields_ident },
-        .{ "Field", builtin_indices.field_type, builtin_indices.field_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -1015,7 +1011,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "ParseTagUnionSpec", "Fields", "Field", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "ParseTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -13134,6 +13130,32 @@ fn lookupImportedExposedTypeNode(
     return target.typeDeclNode();
 }
 
+fn lookupImportedTypeDeclNode(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    item_text: []const u8,
+) std.mem.Allocator.Error!?u32 {
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+
+    const module_qualified_text = try self.scratchQualifiedText(imported_env.module_name, item_text);
+    const qualified_ident = imported_env.common.findIdent(module_qualified_text) orelse
+        imported_env.common.findIdent(item_text) orelse
+        return null;
+
+    for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
+        const header_idx = switch (imported_env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
+            else => continue,
+        };
+        const header = imported_env.store.getTypeHeader(header_idx);
+        if (header.name.eql(qualified_ident)) return @intFromEnum(stmt_idx);
+    }
+
+    return null;
+}
+
 fn lookupExposedTargetByText(
     imported_env: *const ModuleEnv,
     type_text: []const u8,
@@ -17967,6 +17989,23 @@ fn canonicalizeTypeAnnoBasicType(
             } } } }, region);
         }
 
+        if (try self.scopeLookupTypeBinding(first_qualifier_ident)) |binding_location| {
+            switch (binding_location.binding.*) {
+                .external_nominal => |external| {
+                    if (try self.resolveNestedExternalTypeAnno(external, qualified_prefix, qualified_name_ident, region)) |anno_idx| {
+                        return anno_idx;
+                    }
+
+                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
+                        .parent_name = first_qualifier_ident,
+                        .nested_name = type_name_ident,
+                        .region = region,
+                    } });
+                },
+                else => {},
+            }
+        }
+
         // Not a local qualified type, so treat as an external type from a module
         // Get qualifiers excluding the last one for module alias
         const module_qualifiers: AST.Token.Span = if (qualifier_toks.len > 1)
@@ -18040,6 +18079,27 @@ fn canonicalizeTypeAnnoBasicType(
             .target_node_idx = target_node_idx,
         } } } }, region);
     }
+}
+
+fn resolveNestedExternalTypeAnno(
+    self: *Self,
+    external: Scope.ExternalTypeBinding,
+    type_path_text: []const u8,
+    type_path_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!?TypeAnno.Idx {
+    const import_idx = external.import_idx orelse return null;
+    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
+        self.lookupAvailableModuleEnv(external.original_ident) orelse
+        return null;
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
+        (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse
+        return null;
+
+    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
+        .module_idx = import_idx,
+        .target_node_idx = target_node_idx,
+    } } } }, region);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

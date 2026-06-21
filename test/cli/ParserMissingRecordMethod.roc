@@ -4,14 +4,14 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
 	parse_str = |_| Err(MissingRequired)
 
-	skip_record_field : State -> Try(State, [MissingRequired])
-	skip_record_field = |state| Ok(state)
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field = |_, state| Ok(state)
 
-	missing_record_field : Str, State -> [MissingRequired]
-	missing_record_field = |_, _| MissingRequired
+	missing_record_field : Format, Str, State -> [MissingRequired]
+	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str)]

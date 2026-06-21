@@ -27,12 +27,12 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
 
     const parse_intrinsics = [_][]const u8{
         "Builtin.ParseTagUnionSpec.parse",
-        "Builtin.Fields.rename_fields",
-        "Builtin.Fields.shortest_name",
-        "Builtin.Fields.longest_name",
-        "Builtin.Fields.iter",
-        "Builtin.Fields.for_size",
-        "Builtin.Field.name",
+        "Builtin.Str.FieldName.FieldNames.rename_fields",
+        "Builtin.Str.FieldName.FieldNames.shortest_name",
+        "Builtin.Str.FieldName.FieldNames.longest_name",
+        "Builtin.Str.FieldName.FieldNames.iter",
+        "Builtin.Str.FieldName.FieldNames.for_size",
+        "Builtin.Str.FieldName.name",
     };
     for (parse_intrinsics) |name| {
         if (env.common.findIdent(name)) |intrinsic| {
