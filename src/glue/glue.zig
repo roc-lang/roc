@@ -209,7 +209,21 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     const target_usize = base.target.TargetUsize.native;
 
-    var type_table = TypeTable.init(gpa, target_usize);
+    // Index every platform artifact by its own module name so a nominal type
+    // declared in one platform module can have its declared field order read
+    // from that module's CIR, even when referenced from another module.
+    var module_artifacts = ModuleArtifactMap.init(gpa);
+    defer module_artifacts.deinit();
+    for (modules) |mod| {
+        if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        // Key on the qualified module name: a nominal's `origin_module` text
+        // resolves to that qualified form, not the short module name.
+        const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.qualified_module_name);
+        try module_artifacts.put(module_name, artifact);
+    }
+
+    var type_table = TypeTable.init(gpa, target_usize, &module_artifacts);
     defer type_table.deinit();
 
     for (modules) |mod| {
@@ -897,6 +911,11 @@ const CollectedRecordField = struct {
     type_id: u64,
     size: u64,
     alignment: u64,
+    /// True for an unnamed nominal-record padding field (`_` / `_name`). The
+    /// emitters render it as a fixed-size `size`-byte array (`[size]u8` in Zig,
+    /// `uint8_t name[size]` in C) and skip it for refcount helpers. `type_id` is
+    /// unused for padding fields.
+    is_padding: bool = false,
 };
 
 const CollectedTagInfo = struct {
@@ -906,19 +925,33 @@ const CollectedTagInfo = struct {
     payload_alignment: u64,
 };
 
+/// Maps a platform module's name text to its checked artifact, so a nominal
+/// declared in one module can have its declared field order read from the CIR
+/// of the module that declares it (its `source_decl` indexes that module's
+/// statements). Populated once from the compiled module list before collection.
+const ModuleArtifactMap = std.StringHashMap(*const CheckedArtifact.CheckedModuleArtifact);
+
 /// Builds a type table from artifact-owned checked type payloads.
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
     var_map: std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64),
     target_usize: base.target.TargetUsize,
     gpa: std.mem.Allocator,
+    /// Lookup from module name text to declaring artifact, for cross-module
+    /// declared-field-order reads. Borrowed; not owned by the type table.
+    module_artifacts: *const ModuleArtifactMap,
 
-    fn init(gpa: std.mem.Allocator, target_usize: base.target.TargetUsize) TypeTable {
+    fn init(
+        gpa: std.mem.Allocator,
+        target_usize: base.target.TargetUsize,
+        module_artifacts: *const ModuleArtifactMap,
+    ) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
             .var_map = std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64).init(gpa),
             .target_usize = target_usize,
             .gpa = gpa,
+            .module_artifacts = module_artifacts,
         };
     }
 
@@ -980,6 +1013,14 @@ const TypeTable = struct {
     fn freeDuped(self: *TypeTable, slice: []const u8) void {
         if (slice.len == 0) return;
         self.gpa.free(slice);
+    }
+
+    /// Free the first `populated` field names in `fields` (each duped) and the
+    /// `fields` array itself. Used to unwind a partially-built declared-order
+    /// nominal record on an error or `null` fallback.
+    fn freeCollectedRecordFields(self: *TypeTable, fields: []const CollectedRecordField, populated: usize) void {
+        for (fields[0..populated]) |field| self.freeDuped(field.name);
+        self.gpa.free(fields);
     }
 
     /// Clear the checked-type map when switching modules (checked ids are artifact-local).
@@ -1128,13 +1169,29 @@ const TypeTable = struct {
 
         const backing_repr = try self.convertCheckedType(artifact, nominal.backing);
         return switch (backing_repr) {
-            .record => |rec| .{ .record = .{
-                .name = try self.gpa.dupe(u8, display_name),
-                .anonymous = false,
-                .fields = rec.fields,
-                .size = rec.size,
-                .alignment = rec.alignment,
-            } },
+            .record => |rec| blk: {
+                // The backing record `rec.fields` is in the structural (sorted)
+                // order. A nominal record must instead lay out in DECLARED source
+                // order, with unnamed `_` fields reinstated as padding spacers.
+                const declared = try self.nominalRecordInDeclaredOrder(artifact, nominal, rec) orelse
+                    break :blk .{ .record = .{
+                        .name = try self.gpa.dupe(u8, display_name),
+                        .anonymous = false,
+                        .fields = rec.fields,
+                        .size = rec.size,
+                        .alignment = rec.alignment,
+                    } };
+                // `declared.fields` replaces `rec.fields`, which we now own and free.
+                for (rec.fields) |field| self.freeDuped(field.name);
+                self.gpa.free(rec.fields);
+                break :blk .{ .record = .{
+                    .name = try self.gpa.dupe(u8, display_name),
+                    .anonymous = false,
+                    .fields = declared.fields,
+                    .size = declared.size,
+                    .alignment = declared.alignment,
+                } };
+            },
             .tag_union => |tu| blk: {
                 self.freeDuped(tu.name);
                 break :blk .{ .tag_union = .{
@@ -1146,6 +1203,167 @@ const TypeTable = struct {
             },
             else => backing_repr,
         };
+    }
+
+    const NominalRecordLayout = struct {
+        fields: []const CollectedRecordField,
+        size: u64,
+        alignment: u64,
+    };
+
+    /// Reconstructs a nominal record in DECLARED source order, with unnamed `_` /
+    /// `_name` fields reinstated as padding spacers, then reordered into the
+    /// runtime field order by the shared `field_order.computeNominalFieldOrder`
+    /// (the exact function the layout store uses). Returns `null` when the
+    /// declaration is unavailable (no `source_decl`, declaring module not found,
+    /// or the annotation is not a record), so the caller falls back to the
+    /// structural backing order. `backing` provides each named field's already
+    /// converted `type_id`/size/alignment, matched by field-name text.
+    fn nominalRecordInDeclaredOrder(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+        backing: anytype,
+    ) Allocator.Error!?NominalRecordLayout {
+        const source_decl = nominal.source_decl orelse return null;
+
+        // The nominal's declared field order lives in the CIR of the module that
+        // declares it. `source_decl` indexes that module's statements.
+        const origin_text = artifact.canonical_names.moduleNameText(nominal.origin_module);
+        const decl_artifact = self.module_artifacts.get(origin_text) orelse artifact;
+        const module_env = decl_artifact.moduleEnvConst();
+
+        const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
+            .s_nominal_decl => |decl| decl.anno,
+            else => return null,
+        };
+        // The backing record annotation may be wrapped in parentheses.
+        var record_anno = anno_idx;
+        const record = while (true) {
+            switch (module_env.store.getTypeAnno(record_anno)) {
+                .parens => |parens| record_anno = parens.anno,
+                .record => |record| break record,
+                else => return null,
+            }
+        };
+        const anno_fields = module_env.store.sliceAnnoRecordFields(record.fields);
+        if (anno_fields.len == 0) return null;
+
+        // The unnamed fields' resolved types live on the nominal declaration in
+        // the declaring artifact (the nominal *reference* in a signature carries
+        // an empty padding list), indexing that artifact's checked type store.
+        const padding_types = nominalDeclarationPaddingTypes(decl_artifact, source_decl) orelse return null;
+
+        // Each named declared field recovers its converted shape from the backing
+        // record (matched by name); each unnamed field becomes a padding spacer
+        // whose size is its declared type's size and whose alignment is 1.
+        const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
+        const shapes = try self.gpa.alloc(layout.field_order.FieldShape, anno_fields.len);
+        defer self.gpa.free(shapes);
+
+        var padding_cursor: usize = 0;
+        var pad_index: usize = 0;
+        var populated: usize = 0;
+        // Free the field names duped into `collected` so far plus the array on any
+        // failure or `null` fallback path. `populated` is read at unwind time.
+        errdefer self.freeCollectedRecordFields(collected, populated);
+        for (anno_fields, 0..) |field_idx, i| {
+            const field = module_env.store.getAnnoRecordField(field_idx);
+            if (field.is_unnamed) {
+                if (padding_cursor >= padding_types.len) {
+                    self.freeCollectedRecordFields(collected, populated);
+                    return null;
+                }
+                // Padding field types index the declaring artifact's type store.
+                const padding_ty = padding_types[padding_cursor];
+                padding_cursor += 1;
+                const padding_type_id = try self.getOrInsert(decl_artifact, padding_ty);
+                const sa = self.getSizeAlign(padding_type_id);
+                const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{pad_index});
+                pad_index += 1;
+                collected[i] = .{
+                    .name = name,
+                    .type_id = 0,
+                    .size = sa.size,
+                    .alignment = 1,
+                    .is_padding = true,
+                };
+                shapes[i] = .{ .size = @intCast(sa.size), .alignment = 1 };
+            } else {
+                const field_name = module_env.getIdentText(field.name);
+                const match = backingFieldByName(backing, field_name) orelse {
+                    self.freeCollectedRecordFields(collected, populated);
+                    return null;
+                };
+                collected[i] = .{
+                    .name = try self.gpa.dupe(u8, field_name),
+                    .type_id = match.type_id,
+                    .size = match.size,
+                    .alignment = match.alignment,
+                    .is_padding = false,
+                };
+                shapes[i] = .{ .size = @intCast(match.size), .alignment = @intCast(match.alignment) };
+            }
+            populated = i + 1;
+        }
+
+        // Runtime order: the shared nominal field-order permutation. This keeps
+        // declared order when it is already padding-free (the common case).
+        const order = try self.gpa.alloc(u16, anno_fields.len);
+        defer self.gpa.free(order);
+        try layout.field_order.computeNominalFieldOrder(self.gpa, shapes, order);
+
+        const ordered = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
+        for (order, 0..) |src, dst| ordered[dst] = collected[src];
+        self.gpa.free(collected);
+
+        // Size/alignment from laying the ordered fields out with no padding.
+        var max_alignment: u64 = 1;
+        var offset: u64 = 0;
+        for (ordered) |field| {
+            if (field.alignment > max_alignment) max_alignment = field.alignment;
+            if (field.alignment > 0) {
+                const rem = offset % field.alignment;
+                if (rem != 0) offset += field.alignment - rem;
+            }
+            offset += field.size;
+        }
+        var record_size = offset;
+        if (max_alignment > 0) {
+            const rem = record_size % max_alignment;
+            if (rem != 0) record_size += max_alignment - rem;
+        }
+
+        return .{ .fields = ordered, .size = record_size, .alignment = max_alignment };
+    }
+
+    /// Finds a backing record field by its name text, returning its converted
+    /// shape (`type_id`, size, alignment). The backing is a structurally-ordered
+    /// `CollectedTypeRepr.record` payload.
+    fn backingFieldByName(backing: anytype, name: []const u8) ?struct { type_id: u64, size: u64, alignment: u64 } {
+        for (backing.fields) |field| {
+            if (std.mem.eql(u8, field.name, name)) {
+                return .{ .type_id = field.type_id, .size = field.size, .alignment = field.alignment };
+            }
+        }
+        return null;
+    }
+
+    /// Resolved types of a nominal's unnamed (`_`) padding fields, in declared
+    /// order, read from the declaration in `decl_artifact` identified by its
+    /// `source_decl` statement index. The returned ids index `decl_artifact`'s
+    /// checked type store. `null` when no matching declaration is found.
+    fn nominalDeclarationPaddingTypes(
+        decl_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        source_decl: u32,
+    ) ?[]const CheckedArtifact.CheckedTypeId {
+        for (decl_artifact.checked_types.nominal_declarations.items) |declaration| {
+            const decl_source = declaration.nominal.source_decl orelse continue;
+            if (decl_source == source_decl) {
+                return declaration.paddingFieldTypes(&decl_artifact.checked_types);
+            }
+        }
+        return null;
     }
 
     fn convertRecord(
@@ -1179,30 +1397,24 @@ const TypeTable = struct {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
-        var field_indices = try self.gpa.alloc(usize, fields.len);
-        defer self.gpa.free(field_indices);
-        for (0..fields.len) |i| field_indices[i] = i;
-
-        const SortCtx = struct {
-            fields: []const CheckedArtifact.CheckedRecordField,
-            names: *const CanonicalNameStore,
-            sizes: []const SizeAlign,
-
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_align = ctx.sizes[a].alignment;
-                const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) return a_align > b_align;
-                const a_text = ctx.names.recordFieldLabelText(ctx.fields[a].name);
-                const b_text = ctx.names.recordFieldLabelText(ctx.fields[b].name);
-                return std.mem.order(u8, a_text, b_text) == .lt;
-            }
-        };
-        std.mem.sort(usize, field_indices, SortCtx{ .fields = fields, .names = &artifact.canonical_names, .sizes = field_sizes }, SortCtx.lessThan);
+        // Structural records order by descending alignment then ascending field
+        // name, computed by the shared field-order module the layout store uses.
+        const structural = try self.gpa.alloc(layout.field_order.StructuralField, fields.len);
+        defer self.gpa.free(structural);
+        for (fields, 0..) |field, i| {
+            structural[i] = .{
+                .alignment = @intCast(field_sizes[i].alignment),
+                .name = artifact.canonical_names.recordFieldLabelText(field.name),
+            };
+        }
+        const order = try self.gpa.alloc(u16, fields.len);
+        defer self.gpa.free(order);
+        layout.field_order.computeStructuralFieldOrder(structural, order);
 
         const collected_fields = try self.gpa.alloc(CollectedRecordField, fields.len);
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
-        for (field_indices, 0..) |src_idx, dst_idx| {
+        for (order, 0..) |src_idx, dst_idx| {
             const f_size = field_sizes[src_idx].size;
             const f_align = field_sizes[src_idx].alignment;
             if (f_align > max_alignment) max_alignment = f_align;
@@ -1724,6 +1936,7 @@ fn writeRecordFieldTypeRepr(
 ) void {
     writer.zeroValue(value_base, record_field_layout);
     writer.writeField(value_base, record_field_layout, "RecordField", "alignment", u64, field.alignment);
+    writer.writeField(value_base, record_field_layout, "RecordField", "is_padding", bool, field.is_padding);
     writer.writeField(value_base, record_field_layout, "RecordField", "name", RocStr, createBigRocStr(field.name, writer.roc_ops));
     writer.writeField(value_base, record_field_layout, "RecordField", "size", u64, field.size);
     writer.writeField(value_base, record_field_layout, "RecordField", "type_id", u64, field.type_id);
