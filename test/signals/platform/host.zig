@@ -969,6 +969,11 @@ const HostStructuralReplacementTarget = union(enum) {
     each_site: HostEachSite,
 };
 
+const HostStructuralPatchTargets = struct {
+    removed: HostStructuralReplacementTarget,
+    replacement: HostStructuralReplacementTarget,
+};
+
 const RecomputeApplyOutcome = struct {
     structural_render_required: bool,
 };
@@ -4840,6 +4845,182 @@ fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescripto
     }
 }
 
+fn appendUniqueU64(allocator: std.mem.Allocator, values: *std.ArrayListUnmanaged(u64), value: u64) void {
+    if (u64SliceContains(values.items, value)) return;
+    values.append(allocator, value) catch std.process.exit(1);
+}
+
+fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNodeDescriptorStream, parent_elem_id: u64) []u64 {
+    var children: std.ArrayListUnmanaged(u64) = .empty;
+    errdefer children.deinit(allocator);
+
+    for (stream.render_nodes.items) |node| {
+        if (renderNodeParentElemId(stream, node) == parent_elem_id) {
+            children.append(allocator, node.elem_id) catch std.process.exit(1);
+        }
+    }
+
+    return children.toOwnedSlice(allocator) catch std.process.exit(1);
+}
+
+fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+    const allocator = host.gpa.allocator();
+    const parent = domElementById(host, parent_elem_id);
+
+    for (next_child_ids, 0..) |child_id, new_index| {
+        const child = domElementById(host, child_id);
+        const old_parent_id = child.parent_id;
+        const old_child_index = if (old_parent_id) |id| blk: {
+            if (id >= host.dom_elements.items.len) failHost("active DOM node referenced missing parent");
+            const old_parent = &host.dom_elements.items[@intCast(id)];
+            if (!old_parent.active) failHost("active DOM node referenced inactive parent");
+            break :blk findDomChildIndex(old_parent, child_id);
+        } else null;
+
+        if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null or old_child_index.? != new_index) {
+            counts.addAppendChild();
+        }
+        child.parent_id = parent_elem_id;
+    }
+
+    parent.children.deinit(allocator);
+    parent.children = .empty;
+    parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
+}
+
+fn applyStructuralEventBindingsForSeen(host: *HostEnv, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *CommandCounts) void {
+    const allocator = host.gpa.allocator();
+    var required = allocator.alloc(HostRequiredEventBindings, seen.len) catch std.process.exit(1);
+    defer allocator.free(required);
+    @memset(required, .{});
+
+    for (stream.events.items, 0..) |desc, index| {
+        if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) continue;
+        const event_id: u64 = @intCast(index + 1);
+        const slot = requiredEventBindingSlot(&required[@intCast(desc.elem_id)], desc.kind);
+        if (slot.* != null) failHost("element has duplicate event descriptors for one event kind");
+        slot.* = event_id;
+    }
+
+    const kinds = [_]RenderEventKind{ .click, .input, .check };
+    for (host.dom_elements.items, 0..) |*elem, index| {
+        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+
+        for (kinds) |kind| {
+            const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
+            const current_event_id = domEventBindingSlot(elem, kind);
+            if (current_event_id.* == next_event_id) continue;
+
+            current_event_id.* = next_event_id;
+            counts.addEventBinding();
+        }
+    }
+}
+
+fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, targets: HostStructuralPatchTargets) CommandCounts {
+    if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
+
+    const allocator = host.gpa.allocator();
+    const max_elem_id = @max(maxRenderElemId(&host.active_stream), maxRenderElemId(stream));
+    const required_child_table_len: usize = @intCast(max_elem_id + 1);
+    const child_table_len = @max(host.dom_elements.items.len, required_child_table_len);
+
+    var seen = allocator.alloc(bool, child_table_len) catch std.process.exit(1);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    var touched_parents: std.ArrayListUnmanaged(u64) = .empty;
+    defer touched_parents.deinit(allocator);
+
+    var counts: CommandCounts = .{};
+
+    for (stream.render_nodes.items) |node| {
+        if (!host.renderNodeInReplacementTarget(stream, node, targets.replacement)) continue;
+        if (node.elem_id >= child_table_len) failHost("render node exceeded structural DOM patch table");
+
+        const parent_elem_id = renderNodeParentElemId(stream, node);
+        if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
+
+        ensureDomNode(host, node.elem_id, renderNodeTag(stream, node), &counts);
+        seen[@intCast(node.elem_id)] = true;
+        appendUniqueU64(allocator, &touched_parents, parent_elem_id);
+    }
+
+    for (host.active_stream.render_nodes.items) |node| {
+        if (!host.renderNodeInReplacementTarget(&host.active_stream, node, targets.removed)) continue;
+        if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
+        if (node.elem_id >= host.dom_elements.items.len) continue;
+
+        const elem = &host.dom_elements.items[@intCast(node.elem_id)];
+        if (!elem.active) continue;
+        elem.active = false;
+        elem.parent_id = null;
+        elem.bound_click_event = null;
+        elem.bound_input_event = null;
+        elem.bound_check_event = null;
+    }
+
+    for (touched_parents.items) |parent_elem_id| {
+        const children = streamDirectChildren(allocator, stream, parent_elem_id);
+        defer allocator.free(children);
+        replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
+    }
+
+    const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
+    const bool_fields = [_]RenderBoolField{ .checked, .disabled };
+    for (host.dom_elements.items, 0..) |*elem, index| {
+        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+
+        for (text_fields) |field| {
+            if (!streamHasTextField(stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
+                counts.addTextField(field);
+            }
+        }
+        for (bool_fields) |field| {
+            if (!streamHasBoolField(stream, elem.id, field) and clearRenderBoolField(elem, field)) {
+                counts.addBoolField(field);
+            }
+        }
+    }
+
+    for (stream.text_nodes.items) |desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+            counts.addTextField(.text);
+        }
+    }
+    for (stream.signal_text_nodes.items) |*desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addTextField(.text);
+        }
+    }
+    for (stream.static_text_attrs.items) |desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addTextField(desc.field);
+        }
+    }
+    for (stream.signal_text_attrs.items) |*desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addTextField(desc.field);
+        }
+    }
+    for (stream.static_bool_attrs.items) |desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+    for (stream.signal_bool_attrs.items) |*desc| {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+
+    applyStructuralEventBindingsForSeen(host, stream, seen, &counts);
+
+    host.rebuildActiveSignalGraphFromStream(stream);
+    host.render_metrics.patches_emitted += counts.total;
+    return counts;
+}
+
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
@@ -5253,9 +5434,8 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
         defer replacement_stream.deinit(host.gpa.allocator(), roc_host, &host.pending_roc_metrics);
         var next_stream: HostNodeDescriptorStream = .{};
         errdefer next_stream.deinit(host.gpa.allocator(), roc_host, &host.pending_roc_metrics);
-
-        switch (change.kind) {
-            .when => {
+        const patch_targets: HostStructuralPatchTargets = switch (change.kind) {
+            .when => when_target: {
                 const site = host.activeScopeSiteByNodeId(change.node_id, .when) orelse {
                     if (applied_any) continue;
                     failHost("dirty when structural site is not active");
@@ -5268,10 +5448,14 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
                 const replaced_scope_id = host.activeWhenBranchScopeId(site.scope_id, site.ordinal, active_branch.opposite()) orelse failHost("dirty when structural update had no active opposite branch scope");
                 const when_desc = host.active_stream.whens.items[when_index];
 
-                _ = host.collectActiveWhenBranchDescriptors(roc_host, &replacement_stream, site, when_desc, active_branch, dirty_source_node_ids);
+                const replacement_scope_id = host.collectActiveWhenBranchDescriptors(roc_host, &replacement_stream, site, when_desc, active_branch, dirty_source_node_ids);
                 host.copyActiveStreamReplacingScope(roc_host, &next_stream, replaced_scope_id, site.render_insert_index, &replacement_stream);
+                break :when_target .{
+                    .removed = .{ .scope = replaced_scope_id },
+                    .replacement = .{ .scope = replacement_scope_id },
+                };
             },
-            .each => {
+            .each => each_target: {
                 const site = host.activeScopeSiteByNodeId(change.node_id, .each) orelse {
                     if (applied_any) continue;
                     failHost("dirty each structural site is not active");
@@ -5281,19 +5465,24 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
                     failHost("dirty each descriptor is not active");
                 };
                 const each_desc = host.active_stream.eaches.items[each_index];
+                const target = HostStructuralReplacementTarget{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } };
 
                 host.collectActiveEachRowDescriptors(roc_host, &replacement_stream, site, each_desc, dirty_source_node_ids);
                 host.copyActiveStreamReplacingTarget(
                     roc_host,
                     &next_stream,
-                    .{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } },
+                    target,
                     site.render_insert_index,
                     &replacement_stream,
                 );
+                break :each_target .{
+                    .removed = target,
+                    .replacement = target,
+                };
             },
-        }
+        };
 
-        const counts = applyStructuralNodeDescriptorStream(host, roc_host, &next_stream);
+        const counts = applyStructuralNodeDescriptorTarget(host, roc_host, &next_stream, patch_targets);
         total_counts.addAll(counts);
 
         host.rebuildActiveEventsFromStream(&next_stream);
@@ -5383,8 +5572,10 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         defer host.gpa.allocator().free(dirty_structural_signals);
         if (dirty_structural_signals.len != 0) {
             const apply_start_ns = benchmarkNowNs();
+            const sink_counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
             const counts = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_structural_signals);
             s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
+            s.commands.addAll(sink_counts);
             s.commands.addAll(counts);
             finishHostMetrics(host);
         } else {
@@ -5403,6 +5594,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         const dirty_structural_signals = collectDirtyStructuralSignals(host, roc_host, host.gpa.allocator(), &dirty_source_node_ids, changed_record_ids, dirty_generation);
         defer host.gpa.allocator().free(dirty_structural_signals);
         if (dirty_structural_signals.len != 0) {
+            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
             _ = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_structural_signals);
             finishHostMetrics(host);
         } else {
@@ -7088,6 +7280,80 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     try std.testing.expectEqualSlices(u64, &.{ row_2_id, row_4_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 }
 
+test "signals host dirty each append patches only changed row" {
+    test_erased_callable_drop_count = 0;
+    test_row_elem_call_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const row_count = 24;
+    const state_token = newTestBinderToken(&roc_host);
+    const each = testNodeEachWithSignalAndRow(&roc_host, testNodeRefExpr(state_token), &testStatefulRowElemCallable);
+    const children = [_]abi.Elem{each};
+    const section = testElementWith(&roc_host, "section", &.{}, &children);
+
+    var initial_items: [row_count]HostValue = undefined;
+    for (&initial_items, 0..) |*item, index| {
+        item.* = testHostValueI64(@intCast(index + 1));
+    }
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64List(&roc_host, &initial_items), section);
+    defer abi.decrefElem(root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
+    host.active_stream = initial_stream;
+
+    try std.testing.expectEqual(@as(u64, row_count), test_row_elem_call_count);
+    try std.testing.expect(activeTextElementId(&host, "row-24-24") != null);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+
+    var next_items: [row_count + 1]HostValue = undefined;
+    for (&next_items, 0..) |*item, index| {
+        item.* = testHostValueI64(@intCast(index + 1));
+    }
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64List(&roc_host, &next_items);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const dirty_structural_signals = collectDirtyStructuralSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, changed_record_ids, dirty_generation);
+    defer host.gpa.allocator().free(dirty_structural_signals);
+
+    try std.testing.expectEqual(@as(usize, 1), dirty_structural_signals.len);
+    try std.testing.expectEqual(HostActiveStructuralSignalKind.each, dirty_structural_signals[0].kind);
+
+    const rows_reused_start = host.pending_roc_metrics.rows_reused;
+    const rows_created_start = host.pending_roc_metrics.rows_created;
+    const rows_removed_start = host.pending_roc_metrics.rows_removed;
+    const row_call_start = test_row_elem_call_count;
+    const patch_start = host.render_metrics.patches_emitted;
+
+    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+
+    try std.testing.expectEqual(@as(u64, row_count), host.pending_roc_metrics.rows_reused - rows_reused_start);
+    try std.testing.expectEqual(@as(u64, 1), host.pending_roc_metrics.rows_created - rows_created_start);
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.rows_removed - rows_removed_start);
+    try std.testing.expectEqual(row_call_start + 1, test_row_elem_call_count);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.create_element);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
+    try std.testing.expectEqual(@as(u64, 3), patch_counts.total);
+    try std.testing.expectEqual(patch_start + 3, host.render_metrics.patches_emitted);
+    try std.testing.expect(activeTextElementId(&host, "row-25-25") != null);
+}
+
 test "signals host updates nested when without rebuilding unchanged row" {
     test_erased_callable_drop_count = 0;
     test_row_elem_call_count = 0;
@@ -7745,7 +8011,7 @@ fn testHostValueI64List(roc_host: *abi.RocHost, items: []const HostValue) HostVa
     return host_value;
 }
 
-fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue, row_fn: abi.RocErasedCallableFn) abi.Elem {
+fn testNodeEachWithSignalAndRow(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr, row_fn: abi.RocErasedCallableFn) abi.Elem {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -7780,7 +8046,7 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue,
     return .{
         .payload = .{
             .each = .{
-                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueI64List(roc_host, items))),
+                .items = boxTestNodeSignalExpr(roc_host, signal),
                 .items_to_values = items_to_values,
                 .key_drop = key_drop,
                 .key_eq = key_eq,
@@ -7792,6 +8058,10 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue,
         },
         .tag = .Each,
     };
+}
+
+fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue, row_fn: abi.RocErasedCallableFn) abi.Elem {
+    return testNodeEachWithSignalAndRow(roc_host, testNodeConstExpr(roc_host, testHostValueI64List(roc_host, items)), row_fn);
 }
 
 fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostValue, condition_binder: HostBinderToken) abi.Elem {
