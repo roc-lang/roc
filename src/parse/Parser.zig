@@ -5183,6 +5183,22 @@ fn runExprStatementKernel(
                     last_statement = try self.addTopLevelUnexpectedStatement();
                     continue :expr_kernel .statement_complete;
                 }
+                // `{ x }` on its own is a block whose body is the expression `x`,
+                // since a single-field record would otherwise be useless. As a
+                // statement inside an enclosing block, however, `{ x }` is a punned
+                // single-field record, so that `{ { x } }` yields a record nested in
+                // a do-nothing block (and further braces add more do-nothing blocks).
+                if (isCurly and self.peekNext() == .LowerIdent and self.peekN(2) == .CloseCurly) {
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                    expr_record_state = .{
+                        .start = start,
+                        .min_bp = 0,
+                        .scratch_top = self.store.scratchRecordFieldTop(),
+                        .ext = null,
+                    };
+                    continue :expr_kernel .record_fields_next;
+                }
                 try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                 expr_state = .{ .start = start, .min_bp = 0 };
                 continue :expr_kernel .prefix;
