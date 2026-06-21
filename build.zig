@@ -4938,6 +4938,9 @@ fn addMainExe(
     builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
+    // This RocOps-ABI object is not linked into built executables (the dev
+    // backend links the extern-ABI object below, the LLVM backend merges
+    // builtins into the app object), so it does not need compiler-rt.
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
@@ -4962,7 +4965,15 @@ fn addMainExe(
     builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    builtins_extern_obj.bundle_compiler_rt = false;
+    // Bundle compiler-rt so the float math builtins are self-contained. Zig
+    // lowers @sqrt/@sin/@cos/@floor/@trunc/@log/@exp (used by acos, asin, sin,
+    // cos, pow, ...) to libm libcalls (sqrt, sin, floor, ...) that are not
+    // otherwise present when the dev backend links this object into a -nostdlib
+    // executable. compiler-rt provides them as weak symbols, and the final
+    // link's --gc-sections drops the unused ones. macOS is excluded: it always
+    // links -lSystem (which provides libm) and `-fcompiler-rt` for a macOS
+    // target crashes the Zig compiler under the build server (--listen).
+    builtins_extern_obj.bundle_compiler_rt = target.result.os.tag != .macos;
     configureBackend(builtins_extern_obj, target);
 
     const shim_host_abi_module = b.createModule(.{
@@ -5078,6 +5089,15 @@ fn addMainExe(
 
     for (cross_compile_builtins_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+        // The extern-ABI builtins object (linked by `roc build --opt=dev`)
+        // must carry compiler-rt so its float math libcalls (sqrt, sin,
+        // floor, ...) resolve into the -nostdlib executable. Excluded: wasm32
+        // (gets compiler-rt via the dedicated merged object below) and macOS
+        // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
+        // crashes the Zig compiler for macOS targets under --listen).
+        const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
+        const cross_is_macos = cross_target.query.os_tag == .macos;
+        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
 
         // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
@@ -5102,10 +5122,12 @@ fn addMainExe(
             b.fmt("shim_io_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
+        // Non-extern (RocOps-ABI) object is not linked into executables; only
+        // wasm32 merges compiler-rt below for the eval/REPL pipeline.
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
-        const cross_builtins_bin = if (std.mem.eql(u8, cross_target.name, "wasm32")) blk: {
+        const cross_builtins_bin = if (cross_is_wasm) blk: {
             const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
             const cross_wasm32_compiler_rt_obj = b.addObject(.{
                 .name = "compiler_rt_wasm32",
@@ -5161,7 +5183,7 @@ fn addMainExe(
             b.fmt("shim_io_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
-        cross_builtins_extern_obj.bundle_compiler_rt = false;
+        cross_builtins_extern_obj.bundle_compiler_rt = cross_bundle_compiler_rt;
         configureBackend(cross_builtins_extern_obj, cross_resolved_target);
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
@@ -5172,7 +5194,7 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
-        if (!std.mem.eql(u8, cross_target.name, "wasm32")) {
+        if (!cross_is_wasm) {
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
