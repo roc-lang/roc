@@ -16,6 +16,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const hoist_roots = @import("hoist_roots.zig");
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
@@ -262,6 +263,10 @@ fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void
         .expr => |idx| hashU32(hasher, @intFromEnum(idx)),
         .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
         .required_binding => |idx| hashU32(hasher, idx),
+        .hoisted => |hoisted| {
+            hashU32(hasher, hoisted.index);
+            hashU32(hasher, @intFromEnum(hoisted.expr));
+        },
     }
 }
 
@@ -393,6 +398,7 @@ pub const PublishInputs = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
+    hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
     problem_store: ?*problem.Store = null,
 };
@@ -656,11 +662,18 @@ pub const RootExposure = enum {
 };
 
 /// Public `RootSource` declaration.
+pub const HoistedRootSource = struct {
+    index: u32,
+    expr: CIR.Expr.Idx,
+};
+
+/// Source location of a checked root that must be published for later compiler stages.
 pub const RootSource = union(enum) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
     statement: CIR.Statement.Idx,
     required_binding: u32,
+    hoisted: HoistedRootSource,
 };
 
 /// Public `RootRequest` declaration.
@@ -686,6 +699,10 @@ pub const LoweringEntrypointRequest = union(enum) {
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
     runtime_requests: []RootRequest = &.{},
+    /// Compile-time requests sorted by same-module stored-constant
+    /// dependencies. This slice is the durable same-module compile-time
+    /// evaluation schedule consumed by checking finalization; temporary
+    /// dependency edges used to compute it are not stored.
     compile_time_requests: []RootRequest = &.{},
 
     pub const Serialized = extern struct {
@@ -700,6 +717,7 @@ pub const RootRequestTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypePublication,
         compile_time_roots: *const CompileTimeRootTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -708,7 +726,10 @@ pub const RootRequestTable = struct {
         provided_exports: *const ProvidedExportTable,
         checked_bodies: *const CheckedBodyStore,
         resolved_value_refs: *const ResolvedValueRefTable,
+        top_level_values: *const TopLevelValueTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        hoisted_constants: *const HoistedConstTable,
         explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
@@ -739,7 +760,16 @@ pub const RootRequestTable = struct {
             });
         }
 
-        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types, procedure_templates, provided_exports, top_level_procedure_bindings);
+        try appendPublishedEntrypointRoots(
+            &requests,
+            allocator,
+            module,
+            checked_types,
+            procedure_templates,
+            provided_exports,
+            top_level_values,
+            top_level_procedure_bindings,
+        );
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             switch (binding.value_use) {
@@ -775,7 +805,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
+                    .constant, .hoisted_constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -783,7 +813,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
+                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -796,7 +826,20 @@ pub const RootRequestTable = struct {
         const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
         errdefer allocator.free(runtime_requests);
 
-        const compile_time_requests = try collectCompileTimeRootRequests(allocator, all_requests);
+        const compile_time_requests = try collectCompileTimeRootRequests(
+            allocator,
+            all_requests,
+            module.moduleIndex(),
+            artifact_key,
+            compile_time_roots,
+            procedure_templates,
+            resolved_value_refs,
+            top_level_procedure_bindings,
+            platform_required_bindings,
+            callable_eval_templates,
+            hoisted_constants,
+        );
+        verifyCompileTimeRequestsScheduled(compile_time_requests, compile_time_roots);
 
         return .{
             .requests = all_requests,
@@ -842,19 +885,414 @@ fn collectRuntimeRootRequests(
     return try runtime_requests.toOwnedSlice(allocator);
 }
 
+const CompileTimeRequestScheduleEntry = struct {
+    request: RootRequest,
+    root_id: ComptimeRootId,
+    original_order: u32,
+};
+
 fn collectCompileTimeRootRequests(
     allocator: Allocator,
     requests: []const RootRequest,
+    module_idx: u32,
+    artifact_key: CheckedModuleArtifactKey,
+    compile_time_roots: *const CompileTimeRootTable,
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    hoisted_constants: *const HoistedConstTable,
 ) Allocator.Error![]RootRequest {
-    var compile_time_requests = std.ArrayList(RootRequest).empty;
-    errdefer compile_time_requests.deinit(allocator);
+    var entries = std.ArrayList(CompileTimeRequestScheduleEntry).empty;
+    defer entries.deinit(allocator);
 
     for (requests) |request| {
         if (request.abi != .compile_time) continue;
-        try compile_time_requests.append(allocator, request);
+        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        try entries.append(allocator, .{
+            .request = request,
+            .root_id = root_id,
+            .original_order = @intCast(entries.items.len),
+        });
     }
 
-    return try compile_time_requests.toOwnedSlice(allocator);
+    var scheduler = try CompileTimeRequestScheduler.init(
+        allocator,
+        module_idx,
+        artifact_key,
+        compile_time_roots,
+        procedure_templates,
+        resolved_value_refs,
+        top_level_procedure_bindings,
+        platform_required_bindings,
+        callable_eval_templates,
+        hoisted_constants,
+        entries.items,
+    );
+    defer scheduler.deinit();
+
+    return try scheduler.sortedRequests();
+}
+
+const CompileTimeRequestScheduler = struct {
+    allocator: Allocator,
+    module_idx: u32,
+    artifact_key: CheckedModuleArtifactKey,
+    compile_time_roots: *const CompileTimeRootTable,
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    hoisted_constants: *const HoistedConstTable,
+    entries: []const CompileTimeRequestScheduleEntry,
+    root_to_request_index: []?usize,
+    dependents: []std.ArrayList(usize),
+    indegrees: []u32,
+    emitted: []bool,
+    visited_templates: []u32,
+    seen_edges: std.AutoHashMap(u64, void),
+    visit: u32 = 0,
+    current_request_index: usize = 0,
+    current_root_id: ComptimeRootId = undefined, // Set before dependency collection for each scheduled root.
+
+    fn init(
+        allocator: Allocator,
+        module_idx: u32,
+        artifact_key: CheckedModuleArtifactKey,
+        compile_time_roots: *const CompileTimeRootTable,
+        procedure_templates: *const CheckedProcedureTemplateTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+        top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        hoisted_constants: *const HoistedConstTable,
+        entries: []const CompileTimeRequestScheduleEntry,
+    ) Allocator.Error!CompileTimeRequestScheduler {
+        const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
+        errdefer allocator.free(root_to_request_index);
+        @memset(root_to_request_index, null);
+
+        const dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
+        errdefer allocator.free(dependents);
+        for (dependents) |*list| list.* = .empty;
+
+        const indegrees = try allocator.alloc(u32, entries.len);
+        errdefer allocator.free(indegrees);
+        @memset(indegrees, 0);
+
+        const emitted = try allocator.alloc(bool, entries.len);
+        errdefer allocator.free(emitted);
+        @memset(emitted, false);
+
+        const visited_templates = try allocator.alloc(u32, procedure_templates.templates.len);
+        errdefer allocator.free(visited_templates);
+        @memset(visited_templates, 0);
+
+        for (entries, 0..) |entry, i| {
+            const root_index = @intFromEnum(entry.root_id);
+            if (root_index >= root_to_request_index.len) {
+                checkedArtifactInvariant("compile-time request root id was outside the root table", .{});
+            }
+            if (root_to_request_index[root_index] != null) {
+                checkedArtifactInvariant("compile-time root was requested more than once", .{});
+            }
+            root_to_request_index[root_index] = i;
+        }
+
+        return .{
+            .allocator = allocator,
+            .module_idx = module_idx,
+            .artifact_key = artifact_key,
+            .compile_time_roots = compile_time_roots,
+            .procedure_templates = procedure_templates,
+            .resolved_value_refs = resolved_value_refs,
+            .top_level_procedure_bindings = top_level_procedure_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .callable_eval_templates = callable_eval_templates,
+            .hoisted_constants = hoisted_constants,
+            .entries = entries,
+            .root_to_request_index = root_to_request_index,
+            .dependents = dependents,
+            .indegrees = indegrees,
+            .emitted = emitted,
+            .visited_templates = visited_templates,
+            .seen_edges = std.AutoHashMap(u64, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *CompileTimeRequestScheduler) void {
+        self.seen_edges.deinit();
+        self.allocator.free(self.visited_templates);
+        self.allocator.free(self.emitted);
+        self.allocator.free(self.indegrees);
+        for (self.dependents) |*list| list.deinit(self.allocator);
+        self.allocator.free(self.dependents);
+        self.allocator.free(self.root_to_request_index);
+        self.* = undefined;
+    }
+
+    fn sortedRequests(self: *CompileTimeRequestScheduler) Allocator.Error![]RootRequest {
+        try self.buildEdges();
+
+        var sorted = std.ArrayList(RootRequest).empty;
+        errdefer sorted.deinit(self.allocator);
+
+        while (sorted.items.len < self.entries.len) {
+            const next = self.nextReadyRequestIndex() orelse {
+                checkedArtifactInvariant("compile-time root dependency cycle reached request scheduling", .{});
+            };
+            self.emitted[next] = true;
+            try sorted.append(self.allocator, self.entries[next].request);
+
+            for (self.dependents[next].items) |dependent| {
+                if (self.indegrees[dependent] == 0) {
+                    checkedArtifactInvariant("compile-time root dependency edge underflowed during scheduling", .{});
+                }
+                self.indegrees[dependent] -= 1;
+            }
+        }
+
+        return try sorted.toOwnedSlice(self.allocator);
+    }
+
+    fn nextReadyRequestIndex(self: *const CompileTimeRequestScheduler) ?usize {
+        for (self.entries, 0..) |_, i| {
+            if (self.emitted[i]) continue;
+            if (self.indegrees[i] != 0) continue;
+            return i;
+        }
+        return null;
+    }
+
+    fn buildEdges(self: *CompileTimeRequestScheduler) Allocator.Error!void {
+        for (self.entries, 0..) |entry, i| {
+            self.current_request_index = i;
+            self.current_root_id = entry.root_id;
+            self.beginDependencyVisit();
+            const template_ref = entry.request.procedure_template orelse {
+                checkedArtifactInvariant("compile-time root request had no entry wrapper template", .{});
+            };
+            try self.collectTemplateDependencies(template_ref);
+        }
+    }
+
+    fn beginDependencyVisit(self: *CompileTimeRequestScheduler) void {
+        self.visit +%= 1;
+        if (self.visit != 0) return;
+        @memset(self.visited_templates, 0);
+        self.visit = 1;
+    }
+
+    fn collectTemplateDependencies(
+        self: *CompileTimeRequestScheduler,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return;
+        const index = @intFromEnum(template_ref.template);
+        if (index >= self.visited_templates.len) {
+            checkedArtifactInvariant("compile-time request dependency referenced an unknown local procedure template", .{});
+        }
+        if (self.visited_templates[index] == self.visit) return;
+        self.visited_templates[index] = self.visit;
+
+        const template = self.procedure_templates.get(template_ref.template);
+        try self.collectResolvedRefDependencies(template.resolved_value_refs);
+    }
+
+    fn collectResolvedRefDependencies(
+        self: *CompileTimeRequestScheduler,
+        refs: ResolvedValueRefTableRef,
+    ) Allocator.Error!void {
+        const end = refs.start + refs.len;
+        if (end > self.resolved_value_refs.template_refs.len) {
+            checkedArtifactInvariant("compile-time request dependency ref span was outside the checked table", .{});
+        }
+        for (self.resolved_value_refs.template_refs[refs.start..end]) |ref_id| {
+            const raw = @intFromEnum(ref_id);
+            if (raw >= self.resolved_value_refs.records.len) {
+                checkedArtifactInvariant("compile-time request dependency ref id was outside the checked table", .{});
+            }
+            try self.collectResolvedRefDependency(self.resolved_value_refs.records[raw].ref);
+        }
+    }
+
+    fn collectResolvedRefDependency(
+        self: *CompileTimeRequestScheduler,
+        ref: ResolvedValueRef,
+    ) Allocator.Error!void {
+        switch (ref) {
+            .top_level_const => |const_use| try self.addConstUseDependency(const_use),
+            .selected_hoisted_const => |selected| try self.addConstUseDependency(selected.const_use),
+            .top_level_proc,
+            .promoted_top_level_proc,
+            => |procedure| try self.collectProcedureUseDependencies(procedure),
+            .platform_required_const => |required| try self.addConstUseDependency(required.const_use),
+            .platform_required_proc => |required| try self.collectProcedureUseDependencies(required.procedure),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .imported_const,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            => {},
+        }
+    }
+
+    fn collectProcedureUseDependencies(
+        self: *CompileTimeRequestScheduler,
+        procedure: ProcedureUseTemplate,
+    ) Allocator.Error!void {
+        switch (procedure.binding) {
+            .top_level => |top_level| {
+                if (!checkedArtifactKeyEql(top_level.artifact, self.artifact_key)) return;
+                const binding = self.top_level_procedure_bindings.get(top_level.binding);
+                try self.collectProcedureBindingDependencies(binding.body);
+            },
+            .platform_required => |required| try self.collectPlatformRequiredProcedureDependencies(required),
+            .imported,
+            .hosted,
+            => {},
+        }
+    }
+
+    fn collectProcedureBindingDependencies(
+        self: *CompileTimeRequestScheduler,
+        body: ProcedureBindingBody,
+    ) Allocator.Error!void {
+        switch (body) {
+            .direct_template => |direct| try self.collectCallableTemplateDependencies(direct.template),
+            .callable_eval_template => |template_id| {
+                const template = self.callable_eval_templates.get(template_id);
+                try self.addRootDependency(template.root);
+            },
+        }
+    }
+
+    fn collectCallableTemplateDependencies(
+        self: *CompileTimeRequestScheduler,
+        template: canonical.CallableProcedureTemplateRef,
+    ) Allocator.Error!void {
+        switch (template) {
+            .checked => |checked_template| try self.collectTemplateDependencies(checked_template),
+            .lifted,
+            .synthetic,
+            => checkedArtifactInvariant("checked compile-time dependency referenced a post-check template", .{}),
+        }
+    }
+
+    fn collectPlatformRequiredProcedureDependencies(
+        self: *CompileTimeRequestScheduler,
+        required: RequiredAppProcedureRef,
+    ) Allocator.Error!void {
+        if (!checkedArtifactKeyEql(required.artifact, self.artifact_key)) return;
+        const binding = self.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse {
+            checkedArtifactInvariant("platform-required procedure dependency referenced a missing binding", .{});
+        };
+        switch (binding.value_use) {
+            .procedure_value => |procedure| try self.collectProcedureUseDependencies(procedure.procedure),
+            .const_value => |const_value| try self.addConstUseDependency(const_value.const_use),
+        }
+    }
+
+    fn addConstUseDependency(
+        self: *CompileTimeRequestScheduler,
+        const_use: ConstUseTemplate,
+    ) Allocator.Error!void {
+        const root_id = self.rootForConstRef(const_use.const_ref) orelse return;
+        const own_hoisted_root = switch (const_use.const_ref.owner) {
+            .hoisted_expr => true,
+            .top_level_binding => false,
+        };
+        if (root_id == self.current_root_id and own_hoisted_root) return;
+        try self.addRootDependency(root_id);
+    }
+
+    fn rootForConstRef(
+        self: *CompileTimeRequestScheduler,
+        const_ref: ConstRef,
+    ) ?ComptimeRootId {
+        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return null;
+        return switch (const_ref.owner) {
+            .top_level_binding => |top_level| blk: {
+                if (top_level.module_idx != self.module_idx) {
+                    checkedArtifactInvariant("local top-level const dependency had mismatched module index", .{});
+                }
+                break :blk self.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
+                    checkedArtifactInvariant("local const dependency had no compile-time root", .{});
+            },
+            .hoisted_expr => |hoisted| blk: {
+                if (hoisted.module_idx != self.module_idx) {
+                    checkedArtifactInvariant("local hoisted const dependency had mismatched module index", .{});
+                }
+                const entry = self.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+                    checkedArtifactInvariant("local hoisted const dependency had no hoisted const entry", .{});
+                break :blk entry.root;
+            },
+        };
+    }
+
+    fn addRootDependency(
+        self: *CompileTimeRequestScheduler,
+        dependency_root: ComptimeRootId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(dependency_root);
+        if (raw >= self.root_to_request_index.len) {
+            checkedArtifactInvariant("compile-time root dependency was outside the root table", .{});
+        }
+        const dependency_index = self.root_to_request_index[raw] orelse return;
+        const edge_key = dependencyEdgeKey(dependency_index, self.current_request_index);
+        const edge = try self.seen_edges.getOrPut(edge_key);
+        if (edge.found_existing) return;
+        edge.value_ptr.* = {};
+        try self.dependents[dependency_index].append(self.allocator, self.current_request_index);
+        self.indegrees[self.current_request_index] += 1;
+    }
+
+    fn dependencyEdgeKey(
+        dependency_index: usize,
+        dependent_index: usize,
+    ) u64 {
+        if (dependency_index > std.math.maxInt(u32) or dependent_index > std.math.maxInt(u32)) {
+            checkedArtifactInvariant("compile-time dependency edge index exceeded scheduler key capacity", .{});
+        }
+        return (@as(u64, @intCast(dependency_index)) << 32) | @as(u64, @intCast(dependent_index));
+    }
+};
+
+fn compileTimeRootIdForRequest(
+    compile_time_roots: *const CompileTimeRootTable,
+    request: RootRequest,
+) ComptimeRootId {
+    for (compile_time_roots.roots) |root| {
+        if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
+        if (!rootSourceMatches(root.source, request.source)) continue;
+        return root.id;
+    }
+    checkedArtifactInvariant("compile-time request had no matching compile-time root", .{});
+}
+
+fn verifyCompileTimeRequestsScheduled(
+    requests: []const RootRequest,
+    compile_time_roots: *const CompileTimeRootTable,
+) void {
+    if (builtin.mode != .Debug) return;
+    for (requests, 0..) |request, i| {
+        if (request.abi != .compile_time) {
+            std.debug.panic("checked artifact invariant violated: scheduled compile-time requests contained a non compile-time request", .{});
+        }
+        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        for (requests[0..i]) |previous| {
+            const previous_id = compileTimeRootIdForRequest(compile_time_roots, previous);
+            if (previous_id == root_id) {
+                std.debug.panic("checked artifact invariant violated: compile-time root was scheduled more than once", .{});
+            }
+        }
+    }
 }
 
 fn checkedTypeIsConcreteCompileTimeRoot(
@@ -968,7 +1406,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
@@ -979,17 +1417,11 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     if (builtin.mode != .Debug) return;
 
     var runtime_index: usize = 0;
-    var compile_time_index: usize = 0;
+    var compile_time_count: usize = 0;
 
     for (root_requests.requests) |request| {
         if (request.abi == .compile_time) {
-            if (compile_time_index >= root_requests.compile_time_requests.len) {
-                std.debug.panic("checked artifact invariant violated: compile-time root request subset is missing an entry", .{});
-            }
-            if (!std.meta.eql(root_requests.compile_time_requests[compile_time_index], request)) {
-                std.debug.panic("checked artifact invariant violated: compile-time root request subset is out of order", .{});
-            }
-            compile_time_index += 1;
+            compile_time_count += 1;
         } else {
             if (runtime_index >= root_requests.runtime_requests.len) {
                 std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
@@ -1004,9 +1436,24 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     if (runtime_index != root_requests.runtime_requests.len) {
         std.debug.panic("checked artifact invariant violated: runtime root request subset has extra entries", .{});
     }
-    if (compile_time_index != root_requests.compile_time_requests.len) {
+    if (compile_time_count != root_requests.compile_time_requests.len) {
         std.debug.panic("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
     }
+    for (root_requests.compile_time_requests) |request| {
+        if (request.abi != .compile_time) {
+            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains a runtime request", .{});
+        }
+        if (!rootRequestSliceContains(root_requests.requests, request)) {
+            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains an unknown request", .{});
+        }
+    }
+}
+
+fn rootRequestSliceContains(requests: []const RootRequest, needle: RootRequest) bool {
+    for (requests) |request| {
+        if (std.meta.eql(request, needle)) return true;
+    }
+    return false;
 }
 
 fn rootSourceMatches(a: RootSource, b: RootSource) bool {
@@ -1016,6 +1463,7 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
         .expr => |expr| expr == b.expr,
         .statement => |statement| statement == b.statement,
         .required_binding => |binding| binding == b.required_binding,
+        .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
     };
 }
 
@@ -1027,6 +1475,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
 ) bool {
     return switch (root.kind) {
         .constant,
+        .hoisted_constant,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
@@ -1142,11 +1591,11 @@ fn exprDependsOnUnboundPlatformRequirement(
         .dispatch_call,
         .method_eq,
         .type_dispatch_call,
+        .hosted_lambda,
         .runtime_error,
         .crash,
         .ellipsis,
         .anno_only,
-        .hosted_lambda,
         => false,
     };
 
@@ -1212,7 +1661,21 @@ fn resolvedRefIsUnboundPlatformRequirement(
     std.debug.assert(index < resolved_value_refs.records.len);
     return switch (resolved_value_refs.records[index].ref) {
         .platform_required_declaration => true,
-        else => false,
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        .selected_hoisted_const,
+        .top_level_const,
+        .imported_const,
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .platform_required_const,
+        .platform_required_proc,
+        .promoted_top_level_proc,
+        => false,
     };
 }
 
@@ -1223,6 +1686,7 @@ fn appendPublishedEntrypointRoots(
     checked_types: *const CheckedTypePublication,
     procedure_templates: *const CheckedProcedureTemplateTable,
     provided_exports: *const ProvidedExportTable,
+    top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
@@ -1266,7 +1730,63 @@ fn appendPublishedEntrypointRoots(
                 .procedure_template = requiredProcedureTemplateForRootSource(procedure_templates, .{ .def = main_def }),
             });
         },
-        else => {},
+        .app => try appendExposedAppProcedureRoots(
+            requests,
+            allocator,
+            module,
+            checked_types,
+            top_level_values,
+            top_level_procedure_bindings,
+        ),
+        .type_module,
+        .package,
+        .platform,
+        .hosted,
+        .module,
+        .malformed,
+        => {},
+    }
+}
+
+fn appendExposedAppProcedureRoots(
+    requests: *std.ArrayList(RootRequest),
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypePublication,
+    top_level_values: *const TopLevelValueTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    var exposed_iter = module_env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const raw_node_idx = entry.target.valueDefNode() orelse continue;
+        if (raw_node_idx >= module.nodeCount()) {
+            checkedArtifactInvariant(
+                "checked artifact invariant violated: app exposed item {s} points at out-of-range node {d}",
+                .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
+            );
+        }
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (module.nodeTag(node_idx) != .def) continue;
+
+        const def_idx: CIR.Def.Idx = @enumFromInt(raw_node_idx);
+        const top_level = top_level_values.lookupByDef(def_idx) orelse {
+            checkedArtifactInvariant("app exposed value definition had no top-level value entry", .{});
+        };
+        const procedure_binding = switch (top_level.value) {
+            .procedure_binding => |binding| binding,
+            .const_ref => continue,
+        };
+        try appendRoot(requests, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .runtime_entrypoint,
+            .source = .{ .def = def_idx },
+            .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = def_idx }),
+            .abi = .roc,
+            .exposure = .exported,
+            .procedure_template = procedureTemplateForTopLevelBinding(top_level_procedure_bindings, procedure_binding),
+            .procedure_binding = procedure_binding,
+        });
     }
 }
 
@@ -1276,7 +1796,11 @@ fn procedureTemplateForRootSource(
 ) ?canonical.ProcedureTemplateRef {
     return switch (source) {
         .def => |def_idx| procedure_templates.lookupByDef(def_idx),
-        else => null,
+        .expr,
+        .statement,
+        .required_binding,
+        .hoisted,
+        => null,
     };
 }
 
@@ -1340,6 +1864,7 @@ fn checkedTypeIdForRootSource(
         .def => |def_idx| module.defType(def_idx),
         .expr => |expr_idx| module.exprType(expr_idx),
         .statement => |statement_idx| ModuleEnv.varFrom(statement_idx),
+        .hoisted => checkedArtifactInvariant("internal hoisted root source reached external root source type lookup", .{}),
         .required_binding => |binding_idx| blk: {
             const module_env = module.moduleEnvConst();
             if (binding_idx >= module_env.requires_types.items.items.len) {
@@ -1492,6 +2017,7 @@ pub const CheckedBodyId = checked_ids.CheckedBodyId;
 pub const CheckedExprId = checked_ids.CheckedExprId;
 pub const CheckedPatternId = checked_ids.CheckedPatternId;
 pub const CheckedStatementId = checked_ids.CheckedStatementId;
+pub const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const ConstStore = const_store.ConstStore;
 pub const ConstNodeId = const_store.ConstNodeId;
@@ -5223,6 +5749,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     };
 
     const empty_checked_const_bodies = CheckedConstBodyTable{};
+    const empty_exhaustiveness_sites = CheckedExhaustivenessSiteTable{};
     const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
     const empty_compile_time_roots = CompileTimeRootTable{};
     const empty_entry_wrappers = EntryWrapperTable{};
@@ -5238,6 +5765,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_hoisted_constants = HoistedConstTable{};
     const empty_const_templates = ConstTemplateTable{};
     const empty_method_registry = static_dispatch.MethodRegistry{};
     const empty_interface_capabilities = ModuleInterfaceCapabilities{};
@@ -5252,6 +5780,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .exports = .{},
         .checked_types = .{},
         .checked_bodies = .{},
+        .exhaustiveness_sites = &empty_exhaustiveness_sites,
         .checked_const_bodies = &empty_checked_const_bodies,
         .checked_procedure_templates = &empty_checked_procedure_templates,
         .compile_time_roots = &empty_compile_time_roots,
@@ -5268,6 +5797,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
+        .hoisted_constants = &empty_hoisted_constants,
         .const_templates = &empty_const_templates,
         .method_registry = &empty_method_registry,
         .interface_capabilities = &empty_interface_capabilities,
@@ -5511,6 +6041,67 @@ pub const CheckedMatchBranch = struct {
     }
 };
 
+/// Kinds of checked sites that can be evaluated for comptime exhaustiveness.
+pub const CheckedComptimeSiteKind = enum {
+    match,
+    destructure,
+};
+
+/// Describes whether an exhaustiveness site remains pending, can run at runtime, or is handled at compile time.
+pub const ExhaustivenessResolutionPolicy = union(enum) {
+    compile_time_replaced_by_root: ComptimeRootId,
+    compile_time_only,
+    runtime_reachable,
+    not_pending,
+};
+
+/// Checked owner that establishes the diagnostic and dependency context for an exhaustiveness site.
+pub const CheckedExhaustivenessSiteOwner = union(enum) {
+    procedure_template: canonical.ProcedureTemplateRef,
+    root: ComptimeRootId,
+};
+
+/// Checked exhaustiveness metadata preserved for comptime evaluation and diagnostics.
+pub const CheckedExhaustivenessSite = struct {
+    id: CheckedExhaustivenessSiteId,
+    kind: CheckedComptimeSiteKind,
+    region: base.Region,
+    owner: ?CheckedExhaustivenessSiteOwner = null,
+    checked_expr: ?CheckedExprId = null,
+    checked_pattern: ?CheckedPatternId = null,
+    policy: ExhaustivenessResolutionPolicy,
+};
+
+/// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
+pub const CheckedExhaustivenessSiteTable = struct {
+    sites: []CheckedExhaustivenessSite = &.{},
+
+    pub fn lookupByMatchExpr(self: *const CheckedExhaustivenessSiteTable, expr: CheckedExprId) ?CheckedExhaustivenessSiteId {
+        for (self.sites) |site| {
+            if (site.checked_expr != null and site.checked_expr.? == expr) return site.id;
+        }
+        return null;
+    }
+
+    pub fn lookupByDestructurePattern(self: *const CheckedExhaustivenessSiteTable, pattern: CheckedPatternId) ?CheckedExhaustivenessSiteId {
+        for (self.sites) |site| {
+            if (site.checked_pattern != null and site.checked_pattern.? == pattern) return site.id;
+        }
+        return null;
+    }
+
+    pub fn get(self: *const CheckedExhaustivenessSiteTable, id: CheckedExhaustivenessSiteId) CheckedExhaustivenessSite {
+        const raw = @intFromEnum(id);
+        if (raw >= self.sites.len) checkedArtifactInvariant("checked exhaustiveness site id out of range", .{});
+        return self.sites[raw];
+    }
+
+    pub fn deinit(self: *CheckedExhaustivenessSiteTable, allocator: Allocator) void {
+        allocator.free(self.sites);
+        self.* = .{};
+    }
+};
+
 /// Public `CheckedCapture` declaration.
 pub const CheckedCapture = struct {
     pattern: CheckedPatternId,
@@ -5691,6 +6282,7 @@ pub const CheckedExprData = union(enum) {
         branches: []const CheckedMatchBranch,
         is_try_suffix: bool,
         skip_exhaustiveness: bool,
+        comptime_site_kind: CheckedComptimeSiteKind,
     },
     if_: struct {
         branches: []const CheckedIfBranch,
@@ -5878,6 +6470,7 @@ pub const StoredCheckedExprData = union(enum) {
         branches: CheckedBodyRange,
         is_try_suffix: bool,
         skip_exhaustiveness: bool,
+        comptime_site_kind: CheckedComptimeSiteKind,
     },
     if_: struct {
         branches: CheckedBodyRange,
@@ -6123,6 +6716,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .branches = reconstructMatchBranches(pool_owner, m.branches),
             .is_try_suffix = m.is_try_suffix,
             .skip_exhaustiveness = m.skip_exhaustiveness,
+            .comptime_site_kind = m.comptime_site_kind,
         } },
         .if_ => |i| .{ .if_ = .{
             .branches = pool_owner.ifBranchPool()[i.branches.start .. i.branches.start + i.branches.len],
@@ -6299,6 +6893,24 @@ pub const CheckedExpr = struct {
     ty: CheckedTypeId,
     source_region: base.Region,
     data: CheckedExprData,
+};
+
+/// Publication-only origin for checked expressions synthesized while building
+/// the checked artifact.
+pub const SyntheticExprOrigin = union(enum) {
+    pattern_extraction_result_lookup: struct {
+        selected_root_index: u32,
+        result_pattern: CheckedPatternId,
+    },
+    pattern_extraction_wrapper: struct {
+        selected_root_index: u32,
+        scrutinee_pattern: CheckedPatternId,
+    },
+};
+
+const SyntheticExprOriginRecord = struct {
+    expr: CheckedExprId,
+    origin: SyntheticExprOrigin,
 };
 
 /// Public `CheckedPattern` declaration.
@@ -7303,6 +7915,7 @@ pub const CheckedBodyStore = struct {
                 .branches = try self.appendMatchBranches(allocator, m.branches),
                 .is_try_suffix = m.is_try_suffix,
                 .skip_exhaustiveness = m.skip_exhaustiveness,
+                .comptime_site_kind = m.comptime_site_kind,
             } },
             .if_ => |i| .{ .if_ = .{
                 .branches = try self.appendIfBranches(allocator, i.branches),
@@ -7781,6 +8394,30 @@ pub const CheckedBodyStore = struct {
         return id;
     }
 
+    fn appendSyntheticExpr(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        ty: CheckedTypeId,
+        source_region: base.Region,
+        data: CheckedExprData,
+    ) Allocator.Error!CheckedExprId {
+        try self.stored_exprs.ensureUnusedCapacity(allocator, 1);
+        const stored_data = try self.commitExprData(allocator, data);
+        const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(self.stored_exprs.items.len)));
+        self.stored_exprs.appendAssumeCapacity(.{
+            .id = id,
+            .ty = ty,
+            .source_region = source_region,
+            .data = stored_data,
+            .diverges = false,
+        });
+        return id;
+    }
+
+    fn reserveSyntheticExprs(self: *CheckedBodyStore, allocator: Allocator, additional: usize) Allocator.Error!void {
+        try self.stored_exprs.ensureUnusedCapacity(allocator, additional);
+    }
+
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
         self.source_node_map.deinit(allocator);
         if (!self.serialized) {
@@ -7851,6 +8488,75 @@ pub const CheckedBodyStore = struct {
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
+};
+
+/// Builder for `CheckedBodyStore` values that also records synthetic expression origins.
+pub const CheckedBodyStoreBuilder = struct {
+    store: CheckedBodyStore = .{},
+    synthetic_expr_origins: std.ArrayList(SyntheticExprOriginRecord) = .empty,
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        checked_types: *const CheckedTypePublication,
+        source_nodes: *const CheckedSourceNodes,
+    ) Allocator.Error!CheckedBodyStoreBuilder {
+        return .{
+            .store = try CheckedBodyStore.fromModule(allocator, module, names, checked_types, source_nodes),
+            .synthetic_expr_origins = .empty,
+        };
+    }
+
+    pub fn deinit(self: *CheckedBodyStoreBuilder, allocator: Allocator) void {
+        self.synthetic_expr_origins.deinit(allocator);
+        self.store.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn storePtr(self: *CheckedBodyStoreBuilder) *CheckedBodyStore {
+        return &self.store;
+    }
+
+    pub fn syntheticOrigins(self: *const CheckedBodyStoreBuilder) []const SyntheticExprOriginRecord {
+        return self.synthetic_expr_origins.items;
+    }
+
+    pub fn reserveSyntheticExprs(self: *CheckedBodyStoreBuilder, allocator: Allocator, additional: usize) Allocator.Error!void {
+        try self.store.reserveSyntheticExprs(allocator, additional);
+        try self.synthetic_expr_origins.ensureTotalCapacity(allocator, self.synthetic_expr_origins.items.len + additional);
+    }
+
+    pub fn appendSyntheticExpr(
+        self: *CheckedBodyStoreBuilder,
+        allocator: Allocator,
+        origin: SyntheticExprOrigin,
+        ty: CheckedTypeId,
+        source_region: base.Region,
+        data: CheckedExprData,
+    ) Allocator.Error!CheckedExprId {
+        try self.synthetic_expr_origins.ensureUnusedCapacity(allocator, 1);
+        const expr = try self.store.appendSyntheticExpr(allocator, ty, source_region, data);
+        self.synthetic_expr_origins.appendAssumeCapacity(.{
+            .expr = expr,
+            .origin = origin,
+        });
+        return expr;
+    }
+
+    pub fn discardSyntheticOrigins(self: *CheckedBodyStoreBuilder, allocator: Allocator) void {
+        self.synthetic_expr_origins.deinit(allocator);
+        self.synthetic_expr_origins = .empty;
+    }
+
+    pub fn freeze(self: *CheckedBodyStoreBuilder) CheckedBodyStore {
+        if (self.synthetic_expr_origins.items.len != 0) {
+            checkedArtifactInvariant("checked body store builder froze before synthetic origins were consumed", .{});
+        }
+        const store = self.store;
+        self.store = .{};
+        return store;
+    }
 };
 
 const DivergenceVisitState = enum { fresh, active, done };
@@ -8137,6 +8843,7 @@ fn resolvedValueCanBeCalledDirectly(
         .local_value,
         .local_mutable_version,
         .pattern_binder,
+        .selected_hoisted_const,
         .top_level_const,
         .imported_const,
         .platform_required_declaration,
@@ -8326,6 +9033,7 @@ const CheckedBodyPayloadCopier = struct {
                 .branches = try self.copyMatchBranches(match.branches),
                 .is_try_suffix = match.is_try_suffix,
                 .skip_exhaustiveness = match.skip_exhaustiveness,
+                .comptime_site_kind = .match,
             } },
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
@@ -10087,6 +10795,12 @@ pub const PlatformRequiredProcedureResolvedRef = struct {
     procedure: ProcedureUseTemplate,
 };
 
+/// Public `SelectedHoistedConstUse` declaration.
+pub const SelectedHoistedConstUse = struct {
+    local: LocalBindingRef,
+    const_use: ConstUseTemplate,
+};
+
 /// Public `ResolvedValueRef` declaration.
 pub const ResolvedValueRef = union(enum) {
     local_param: LocalBindingRef,
@@ -10094,6 +10808,7 @@ pub const ResolvedValueRef = union(enum) {
     local_mutable_version: LocalBindingRef,
     pattern_binder: LocalBindingRef,
     local_proc: LocalProcedureBinding,
+    selected_hoisted_const: SelectedHoistedConstUse,
 
     top_level_const: ConstUseTemplate,
     imported_const: ConstUseTemplate,
@@ -10141,8 +10856,10 @@ pub const ResolvedValueRefTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
+        hoisted_constants: *const HoistedConstTable,
         checked_types: *const CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
+        synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
@@ -10179,6 +10896,7 @@ pub const ResolvedValueRefTable = struct {
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
+                hoisted_constants,
                 &local_pattern_roles,
                 checked_bodies,
             );
@@ -10206,6 +10924,16 @@ pub const ResolvedValueRefTable = struct {
             by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
 
+        try appendSyntheticLocalLookupRefs(
+            allocator,
+            &records,
+            by_checked_expr,
+            checked_bodies,
+            hoisted_constants,
+            synthetic_expr_origins,
+        );
+        validateAllLookupRefsResolved(checked_bodies, by_checked_expr);
+
         return .{
             .records = try records.toOwnedSlice(allocator),
             .by_checked_expr = by_checked_expr,
@@ -10228,6 +10956,149 @@ pub const ResolvedValueRefTable = struct {
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
 
+const CheckedExprDataCategory = enum {
+    local_lookup,
+    external_lookup,
+    required_lookup,
+    match_expr,
+    other,
+};
+
+fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCategory {
+    return switch (tag) {
+        .lookup_local => .local_lookup,
+        .lookup_external => .external_lookup,
+        .lookup_required => .required_lookup,
+        .match_ => .match_expr,
+        .pending,
+        .num,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .dec_small,
+        .num_from_numeral,
+        .typed_int,
+        .typed_frac,
+        .typed_num_from_numeral,
+        .str_from_quote,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .list,
+        .empty_list,
+        .tuple,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .block,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        .run_low_level,
+        => .other,
+    };
+}
+
+fn appendSyntheticLocalLookupRefs(
+    allocator: Allocator,
+    records: *std.ArrayList(ResolvedValueRefRecord),
+    by_checked_expr: []?ResolvedValueRefId,
+    checked_bodies: *const CheckedBodyStore,
+    hoisted_constants: *const HoistedConstTable,
+    synthetic_expr_origins: []const SyntheticExprOriginRecord,
+) Allocator.Error!void {
+    for (synthetic_expr_origins) |origin_record| {
+        switch (origin_record.origin) {
+            .pattern_extraction_result_lookup => |origin| {
+                const raw_expr = @intFromEnum(origin_record.expr);
+                if (raw_expr >= checked_bodies.exprCount()) {
+                    checkedArtifactInvariant("synthetic lookup origin referenced an expression out of range", .{});
+                }
+                if (by_checked_expr[raw_expr] != null) {
+                    checkedArtifactInvariant("synthetic lookup origin was resolved more than once", .{});
+                }
+
+                const expr = checked_bodies.expr(origin_record.expr);
+                if (checkedExprDataCategory(std.meta.activeTag(expr.data)) != .local_lookup) {
+                    checkedArtifactInvariant("synthetic lookup origin pointed at a non-lookup expression", .{});
+                }
+                const lookup = expr.data.lookup_local;
+                if (lookup.resolved != null) {
+                    checkedArtifactInvariant("synthetic lookup local already had a resolved ref before ref publication", .{});
+                }
+                if (lookup.pattern != origin.result_pattern) {
+                    checkedArtifactInvariant("synthetic lookup origin target did not match lookup pattern", .{});
+                }
+                const binder = checked_bodies.patternBinderForCheckedPattern(origin.result_pattern) orelse {
+                    checkedArtifactInvariant("synthetic lookup local referenced a pattern without a checked binder", .{});
+                };
+                const hoisted = hoisted_constants.lookupByPattern(origin.result_pattern) orelse {
+                    checkedArtifactInvariant("synthetic pattern-extraction lookup had no selected hoisted const entry", .{});
+                };
+
+                const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
+                try records.append(allocator, .{
+                    .expr = expr.id,
+                    .ref = selectedHoistedConstUse(hoisted, .{ .binder = binder }),
+                    .checked_ty = expr.ty,
+                    .scope_depth = 0,
+                });
+                by_checked_expr[raw_expr] = id;
+            },
+            .pattern_extraction_wrapper => {
+                const raw_expr = @intFromEnum(origin_record.expr);
+                if (raw_expr >= checked_bodies.exprCount()) {
+                    checkedArtifactInvariant("synthetic wrapper origin referenced an expression out of range", .{});
+                }
+                if (checkedExprDataCategory(std.meta.activeTag(checked_bodies.expr(origin_record.expr).data)) != .match_expr) {
+                    checkedArtifactInvariant("synthetic wrapper origin pointed at a non-match expression", .{});
+                }
+            },
+        }
+    }
+}
+
+fn validateAllLookupRefsResolved(
+    checked_bodies: *const CheckedBodyStore,
+    by_checked_expr: []const ?ResolvedValueRefId,
+) void {
+    for (0..checked_bodies.exprCount()) |raw_expr| {
+        const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+        const expr = checked_bodies.expr(expr_id);
+        const is_lookup = switch (checkedExprDataCategory(std.meta.activeTag(expr.data))) {
+            .local_lookup, .external_lookup, .required_lookup => true,
+            .match_expr, .other => false,
+        };
+        if (!is_lookup) continue;
+        if (raw_expr >= by_checked_expr.len or by_checked_expr[raw_expr] == null) {
+            checkedArtifactInvariant("checked lookup expression has no resolved value ref", .{});
+        }
+    }
+}
+
 fn categorizeValueRef(
     _: Allocator,
     module: TypedCIR.Module,
@@ -10239,6 +11110,7 @@ fn categorizeValueRef(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
+    hoisted_constants: *const HoistedConstTable,
     local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
 ) Allocator.Error!ResolvedValueRef {
@@ -10250,6 +11122,7 @@ fn categorizeValueRef(
             local.pattern_idx,
             hosted_procs,
             top_level_values,
+            hoisted_constants,
             local_pattern_roles,
             checked_bodies,
         ),
@@ -10264,7 +11137,57 @@ fn categorizeValueRef(
             platform_required_declarations,
             platform_required_bindings,
         ),
-        else => {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_block,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_return,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "checked artifact invariant violated: expression {d} is not a value reference",
@@ -10289,6 +11212,10 @@ fn attachUseTypePayload(
         .imported_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
+        },
+        .selected_hoisted_const => |*selected| {
+            selected.const_use.requested_source_ty_template = key;
+            selected.const_use.requested_source_ty_payload = checked_ty;
         },
         .platform_required_const => |*required| {
             if (required.const_use.requested_source_ty_payload == null) {
@@ -10332,6 +11259,7 @@ fn categorizeLocalValueRef(
     pattern: CIR.Pattern.Idx,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
+    hoisted_constants: *const HoistedConstTable,
     local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
@@ -10394,6 +11322,10 @@ fn categorizeLocalValueRef(
         unreachable;
     };
 
+    if (hoisted_constants.lookupByPattern(checked_pattern)) |hoisted| {
+        return selectedHoistedConstUse(hoisted, .{ .binder = binder });
+    }
+
     if (local_pattern_roles.isLambdaArg(pattern)) {
         return .{ .local_param = .{ .binder = binder } };
     }
@@ -10417,6 +11349,19 @@ fn categorizeLocalValueRef(
         );
     }
     unreachable;
+}
+
+fn selectedHoistedConstUse(
+    entry: HoistedConstEntry,
+    local: LocalBindingRef,
+) ResolvedValueRef {
+    return .{ .selected_hoisted_const = .{
+        .local = local,
+        .const_use = .{
+            .const_ref = entry.const_ref,
+            .requested_source_ty_template = .{},
+        },
+    } };
 }
 
 fn categorizeImportedValueRef(
@@ -10853,16 +11798,32 @@ fn sealConstEvalTemplatesForRoots(
     entry_wrappers: *const EntryWrapperTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     top_level_values: *const TopLevelValueTable,
+    hoisted_constants: *const HoistedConstTable,
 ) void {
     for (compile_time_roots.roots) |root| {
-        if (root.kind != .constant) continue;
-        const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
-        const top_level = top_level_values.lookupByPattern(pattern) orelse {
-            checkedArtifactInvariant("constant root has no top-level value entry", .{});
-        };
-        const const_ref = switch (top_level.value) {
-            .const_ref => |ref| ref,
-            .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+        if (!compileTimeRootHasConstBody(root.kind)) continue;
+        const const_ref = switch (root.kind) {
+            .constant => blk: {
+                const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
+                const top_level = top_level_values.lookupByPattern(pattern) orelse {
+                    checkedArtifactInvariant("constant root has no top-level value entry", .{});
+                };
+                break :blk switch (top_level.value) {
+                    .const_ref => |ref| ref,
+                    .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+                };
+            },
+            .hoisted_constant => blk: {
+                const hoisted = hoisted_constants.lookupByRoot(root.id) orelse {
+                    checkedArtifactInvariant("hoisted constant root has no hoisted const entry", .{});
+                };
+                break :blk hoisted.const_ref;
+            },
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
         };
         const body = checked_const_bodies.bodyForRoot(root.id) orelse {
             checkedArtifactInvariant("constant root has no checked const body", .{});
@@ -11523,7 +12484,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
+                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -16791,7 +17752,10 @@ pub const ComptimeRootId = enum(u32) { _ };
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
+    /// Ordinary top-level value constant.
     constant,
+    /// A selected top-level-equivalent expression inside a runtime body.
+    hoisted_constant,
     callable_binding,
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
@@ -16819,6 +17783,8 @@ pub const CompileTimeRoot = struct {
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
+    source_pattern: ?CIR.Pattern.Idx = null,
+    hoisted_body: ?hoist_roots.Body = null,
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
@@ -16826,6 +17792,14 @@ pub const CompileTimeRoot = struct {
 };
 
 /// Public `CompileTimeRootTable` declaration.
+///
+/// This is the durable compile-time root schedule and payload table. It stores
+/// root identities and selected root bodies only; it deliberately does not
+/// store dependency edges, readiness state, request membership caches, or
+/// per-expression/per-pattern hoistability facts. Ordinary top-level roots are
+/// published first in canonical order, then sparse selected hoisted roots are
+/// appended in checker-selected dependency-first order. Finalization consumes
+/// the sorted request stream and validates this order with temporary scratch.
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
 
@@ -16840,40 +17814,75 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         global_value_defs: []const CIR.Def.Idx,
+        selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *const CheckedTypePublication,
-        checked_bodies: *const CheckedBodyStore,
+        checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
+        const checked_bodies = checked_body_builder.storePtr();
         var roots = std.ArrayList(CompileTimeRoot).empty;
-        errdefer roots.deinit(allocator);
-
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const stmt = module_env.store.getStatement(statement_idx);
-            if (stmt != .s_expect) continue;
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .expect,
-                .source = .{ .statement = statement_idx },
-                .pattern = null,
-                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
-                .payload = .expect,
-            });
+        errdefer {
+            deinitCompileTimeRootSlice(allocator, roots.items);
+            roots.deinit(allocator);
         }
 
+        const module_env = module.moduleEnvConst();
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
             const source_ty = module.defType(def_idx);
-            const is_callable = sourceTypeIsFunction(module, source_ty);
+            if (sourceTypeIsFunction(module, source_ty)) {
+                try appendCompileTimeRoot(&roots, allocator, .{
+                    .module_idx = module.moduleIndex(),
+                    .kind = .callable_binding,
+                    .source = .{ .def = def_idx },
+                    .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
+                    .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                    .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                    .payload = .pending,
+                });
+            } else {
+                try appendCompileTimeRoot(&roots, allocator, .{
+                    .module_idx = module.moduleIndex(),
+                    .kind = .constant,
+                    .source = .{ .def = def_idx },
+                    .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
+                    .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                    .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                    .payload = .pending,
+                });
+            }
+        }
+
+        for (selected_hoisted_roots, 0..) |selected, selected_index| {
+            const source_ty = if (selected.pattern) |pattern|
+                ModuleEnv.varFrom(pattern)
+            else
+                module.exprType(selected.expr);
+            if (sourceTypeIsFunction(module, source_ty)) {
+                checkedArtifactInvariant("function-typed selected hoisted root reached data-constant publication", .{});
+            }
+            const checked_expr = try checkedExprIdForSelectedHoistedRoot(
+                allocator,
+                module,
+                checked_types,
+                checked_body_builder,
+                @intCast(selected_index),
+                selected,
+            );
+            const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
-                .kind = if (is_callable) .callable_binding else .constant,
-                .source = .{ .def = def_idx },
-                .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
-                .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
+                .kind = .hoisted_constant,
+                .source = .{ .hoisted = .{
+                    .index = @intCast(selected_index),
+                    .expr = selected.expr,
+                } },
+                .source_pattern = selected.pattern,
+                .hoisted_body = hoisted_body,
+                .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+                .expr = checked_expr,
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                 .payload = .pending,
             });
@@ -16929,6 +17938,20 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            const stmt = module_env.store.getStatement(statement_idx);
+            if (stmt != .s_expect) continue;
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .expect,
+                .source = .{ .statement = statement_idx },
+                .pattern = null,
+                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
+                .payload = .expect,
+            });
+        }
+
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -16950,10 +17973,18 @@ pub const CompileTimeRootTable = struct {
     /// body is the given checked expression.
     pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
         for (self.roots) |entry| {
-            switch (entry.kind) {
-                .numeral_conversion, .quote_conversion => if (entry.expr == expr) return entry,
-                else => {},
+            if (entry.expr != expr) continue;
+            if (entry.kind == .numeral_conversion or entry.kind == .quote_conversion) {
+                return entry;
             }
+        }
+        return null;
+    }
+
+    /// Look up a selected hoisted constant root by its checked source expression.
+    pub fn lookupHoistedRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
+        for (self.roots) |entry| {
+            if (entry.kind == .hoisted_constant and entry.expr == expr) return entry;
         }
         return null;
     }
@@ -16976,6 +18007,7 @@ pub const CompileTimeRootTable = struct {
     }
 
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
+        deinitCompileTimeRootSlice(allocator, self.roots);
         allocator.free(self.roots);
         self.* = .{};
     }
@@ -16984,6 +18016,8 @@ pub const CompileTimeRootTable = struct {
         module_idx: u32,
         kind: CompileTimeRootKind,
         source: RootSource,
+        source_pattern: ?CIR.Pattern.Idx = null,
+        hoisted_body: ?hoist_roots.Body = null,
         pattern: ?CheckedPatternId,
         expr: CheckedExprId,
         checked_type: CheckedTypeId,
@@ -16996,40 +18030,853 @@ pub const CompileTimeRootTable = struct {
         entry: RootWithoutId,
     ) Allocator.Error!void {
         const id: ComptimeRootId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
-        try roots.append(allocator, .{
+        roots.append(allocator, .{
             .id = id,
             .module_idx = entry.module_idx,
             .kind = entry.kind,
             .source = entry.source,
+            .source_pattern = entry.source_pattern,
+            .hoisted_body = entry.hoisted_body,
             .pattern = entry.pattern,
             .expr = entry.expr,
             .checked_type = entry.checked_type,
             .payload = entry.payload,
-        });
+        }) catch |err| {
+            if (entry.hoisted_body) |body| hoist_roots.deinitBody(allocator, body);
+            return err;
+        };
     }
 };
 
+fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
+    for (roots) |*root| {
+        if (root.hoisted_body) |body| {
+            hoist_roots.deinitBody(allocator, body);
+            root.hoisted_body = null;
+        }
+    }
+}
+
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
     const matches = switch (kind) {
-        .constant => switch (payload) {
+        .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            else => false,
+            .pending, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             .fn_value => true,
-            else => false,
+            .pending, .const_node, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            else => false,
+            .pending, .const_node, .fn_value => false,
         },
         .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
-            else => false,
+            .pending, .fn_value, .expect => false,
         },
     };
     if (matches) return;
     checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
+}
+
+fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
+    return switch (kind) {
+        .constant, .hoisted_constant => true,
+        .callable_binding, .expect, .numeral_conversion, .quote_conversion => false,
+    };
+}
+
+const ExhaustivenessTemplateReachability = struct {
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    runtime_templates: []bool,
+    compile_time_templates: []bool,
+
+    fn init(
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        procedure_templates: *const CheckedProcedureTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+    ) Allocator.Error!ExhaustivenessTemplateReachability {
+        const runtime_templates = try allocator.alloc(bool, procedure_templates.templates.len);
+        errdefer allocator.free(runtime_templates);
+        const compile_time_templates = try allocator.alloc(bool, procedure_templates.templates.len);
+        errdefer allocator.free(compile_time_templates);
+        @memset(runtime_templates, false);
+        @memset(compile_time_templates, false);
+        return .{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .procedure_templates = procedure_templates,
+            .entry_wrappers = entry_wrappers,
+            .callable_eval_templates = callable_eval_templates,
+            .top_level_procedure_bindings = top_level_procedure_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .resolved_value_refs = resolved_value_refs,
+            .runtime_templates = runtime_templates,
+            .compile_time_templates = compile_time_templates,
+        };
+    }
+
+    fn deinit(self: *ExhaustivenessTemplateReachability) void {
+        self.allocator.free(self.compile_time_templates);
+        self.allocator.free(self.runtime_templates);
+        self.* = undefined;
+    }
+
+    fn build(
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        root_requests: *const RootRequestTable,
+        procedure_templates: *const CheckedProcedureTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+    ) Allocator.Error!ExhaustivenessTemplateReachability {
+        var reachability = try ExhaustivenessTemplateReachability.init(
+            allocator,
+            artifact_key,
+            procedure_templates,
+            entry_wrappers,
+            callable_eval_templates,
+            top_level_procedure_bindings,
+            platform_required_bindings,
+            resolved_value_refs,
+        );
+        errdefer reachability.deinit();
+
+        for (root_requests.runtime_requests) |request| {
+            try reachability.markRootRequest(.runtime, request);
+        }
+        for (root_requests.compile_time_requests) |request| {
+            try reachability.markRootRequest(.compile_time, request);
+        }
+
+        return reachability;
+    }
+
+    fn templateIsRuntimeReachable(self: *const ExhaustivenessTemplateReachability, template_ref: canonical.ProcedureTemplateRef) bool {
+        const idx = self.localTemplateIndex(template_ref) orelse return false;
+        return self.runtime_templates[idx];
+    }
+
+    fn templateIsCompileTimeReachable(self: *const ExhaustivenessTemplateReachability, template_ref: canonical.ProcedureTemplateRef) bool {
+        const idx = self.localTemplateIndex(template_ref) orelse return false;
+        return self.compile_time_templates[idx];
+    }
+
+    const ReachabilityKind = enum {
+        runtime,
+        compile_time,
+    };
+
+    fn markRootRequest(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        request: RootRequest,
+    ) Allocator.Error!void {
+        switch (request.source) {
+            .required_binding => |binding_id| try self.markPlatformRequiredBindingClosure(kind, @enumFromInt(binding_id)),
+            .def,
+            .expr,
+            .statement,
+            .hoisted,
+            => {},
+        }
+        if (request.procedure_template) |template_ref| {
+            try self.markProcedureTemplate(kind, template_ref);
+        }
+        if (request.procedure_use) |procedure| {
+            try self.markProcedureUse(kind, procedure);
+        }
+        if (request.procedure_binding) |binding| {
+            try self.markTopLevelProcedureBinding(kind, .{
+                .artifact = self.artifact_key,
+                .binding = binding,
+            });
+        }
+    }
+
+    fn markProcedureTemplate(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const idx = self.localTemplateIndex(template_ref) orelse return;
+        const seen = switch (kind) {
+            .runtime => &self.runtime_templates[idx],
+            .compile_time => &self.compile_time_templates[idx],
+        };
+        if (seen.*) return;
+        seen.* = true;
+
+        const template = self.procedure_templates.templates[idx];
+        if (template.proc_base != template_ref.proc_base) {
+            checkedArtifactInvariant("reachable procedure template ref disagreed with template row", .{});
+        }
+
+        const end = template.resolved_value_refs.start + template.resolved_value_refs.len;
+        if (end > self.resolved_value_refs.template_refs.len) {
+            checkedArtifactInvariant("reachable procedure template resolved-ref span was outside table", .{});
+        }
+        for (self.resolved_value_refs.template_refs[template.resolved_value_refs.start..end]) |ref_id| {
+            const raw = @intFromEnum(ref_id);
+            if (raw >= self.resolved_value_refs.records.len) {
+                checkedArtifactInvariant("reachable procedure template resolved-ref id was outside table", .{});
+            }
+            try self.markResolvedValueRef(kind, self.resolved_value_refs.records[raw].ref);
+        }
+    }
+
+    fn markResolvedValueRef(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        ref: ResolvedValueRef,
+    ) Allocator.Error!void {
+        switch (ref) {
+            .top_level_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |procedure| try self.markProcedureUse(kind, procedure),
+            .platform_required_proc => |required| {
+                try self.markProcedureUse(kind, required.procedure);
+                try self.markPlatformRequiredBindingClosure(kind, required.binding);
+            },
+            .platform_required_const => |required| try self.markPlatformRequiredBindingClosure(kind, required.binding),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .local_proc,
+            .top_level_const,
+            .imported_const,
+            .imported_proc,
+            .platform_required_declaration,
+            => {},
+        }
+    }
+
+    fn markProcedureUse(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        procedure: ProcedureUseTemplate,
+    ) Allocator.Error!void {
+        switch (procedure.binding) {
+            .top_level => |top_level| try self.markTopLevelProcedureBinding(kind, top_level),
+            .hosted => |hosted| try self.markProcedureTemplate(kind, hosted.template),
+            .platform_required => |required| try self.markTopLevelProcedureBinding(kind, .{
+                .artifact = required.artifact,
+                .binding = required.procedure_binding,
+            }),
+            .imported => {},
+        }
+    }
+
+    fn markTopLevelProcedureBinding(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        binding_ref: ArtifactTopLevelProcedureBindingRef,
+    ) Allocator.Error!void {
+        if (!checkedArtifactKeyEql(binding_ref.artifact, self.artifact_key)) return;
+        const binding = self.top_level_procedure_bindings.get(binding_ref.binding);
+        try self.markProcedureBindingBody(kind, binding.body);
+    }
+
+    fn markProcedureBindingBody(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        body: ProcedureBindingBody,
+    ) Allocator.Error!void {
+        switch (body) {
+            .direct_template => |direct| try self.markCallableProcedureTemplate(kind, direct.template),
+            .callable_eval_template => |template_id| try self.markCallableEvalTemplate(kind, template_id),
+        }
+    }
+
+    fn markCallableEvalTemplate(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        template_id: CallableEvalTemplateId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(template_id);
+        if (raw >= self.callable_eval_templates.templates.len) {
+            checkedArtifactInvariant("reachable callable-eval template id was outside table", .{});
+        }
+        const template = self.callable_eval_templates.get(template_id);
+        try self.markProcedureTemplate(kind, entryWrapperForRoot(self.entry_wrappers, template.root).template);
+    }
+
+    fn markPlatformRequiredBindingClosure(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        binding_id: PlatformRequiredBindingId,
+    ) Allocator.Error!void {
+        const binding = self.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
+            checkedArtifactInvariant("reachable platform-required binding id was outside table", .{});
+        };
+        const closure = self.platform_required_bindings.relationClosure(binding);
+        try self.markImportedTemplateClosure(kind, closure);
+    }
+
+    fn markImportedTemplateClosure(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        closure: ImportedTemplateClosureView,
+    ) Allocator.Error!void {
+        for (closure.checked_procedure_templates) |template_ref| {
+            try self.markProcedureTemplate(kind, template_ref);
+        }
+        for (closure.callable_eval_templates) |template_ref| {
+            try self.markArtifactCallableEvalTemplate(kind, template_ref);
+        }
+    }
+
+    fn markArtifactCallableEvalTemplate(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        template_ref: ArtifactCallableEvalTemplateRef,
+    ) Allocator.Error!void {
+        if (!checkedArtifactKeyEql(template_ref.artifact, self.artifact_key)) return;
+        try self.markCallableEvalTemplate(kind, template_ref.template);
+    }
+
+    fn markCallableProcedureTemplate(
+        self: *ExhaustivenessTemplateReachability,
+        kind: ReachabilityKind,
+        template: canonical.CallableProcedureTemplateRef,
+    ) Allocator.Error!void {
+        switch (template) {
+            .checked => |checked| try self.markProcedureTemplate(kind, checked),
+            .synthetic => |synthetic| try self.markProcedureTemplate(kind, synthetic.template),
+            .lifted => checkedArtifactInvariant("reachable procedure template reached lifted procedure before post-check lowering", .{}),
+        }
+    }
+
+    fn localTemplateIndex(
+        self: *const ExhaustivenessTemplateReachability,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) ?usize {
+        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), self.artifact_key)) return null;
+        const idx = @intFromEnum(template_ref.template);
+        if (idx >= self.procedure_templates.templates.len) {
+            checkedArtifactInvariant("reachable procedure template ref was outside table", .{});
+        }
+        return idx;
+    }
+};
+
+fn publishCheckedExhaustivenessSites(
+    allocator: Allocator,
+    maybe_problem_store: ?*problem.Store,
+    checked_bodies: *const CheckedBodyStore,
+    compile_time_roots: *const CompileTimeRootTable,
+    reachability: *const ExhaustivenessTemplateReachability,
+) Allocator.Error!CheckedExhaustivenessSiteTable {
+    const problem_store = maybe_problem_store orelse return .{};
+    var sites = std.ArrayList(CheckedExhaustivenessSite).empty;
+    errdefer sites.deinit(allocator);
+
+    for (problem_store.pending_static_exhaustiveness.items) |pending| {
+        const id: CheckedExhaustivenessSiteId = @enumFromInt(@as(u32, @intCast(sites.items.len)));
+        const owner_template = exhaustivenessOwnerTemplateForSource(checked_bodies, pending.source);
+        const replacing_root = exhaustivenessReplacingRootForSource(checked_bodies, compile_time_roots, pending.source);
+        const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
+            .{ .compile_time_replaced_by_root = root.id }
+        else if (owner_template) |template_ref|
+            if (reachability.templateIsRuntimeReachable(template_ref))
+                .runtime_reachable
+            else if (reachability.templateIsCompileTimeReachable(template_ref))
+                .compile_time_only
+            else switch (pending.mode) {
+                .static => .runtime_reachable,
+                .empirical => .compile_time_only,
+            }
+        else switch (pending.mode) {
+            .empirical => .compile_time_only,
+            .static => .runtime_reachable,
+        };
+        const owner: ?CheckedExhaustivenessSiteOwner = if (replacing_root) |root|
+            .{ .root = root.id }
+        else if (owner_template) |template_ref|
+            .{ .procedure_template = template_ref }
+        else
+            null;
+        const site = switch (pending.source) {
+            .match_expr => |source_expr| blk: {
+                const checked_expr = checkedExprIdForSource(checked_bodies, source_expr);
+                break :blk CheckedExhaustivenessSite{
+                    .id = id,
+                    .kind = .match,
+                    .region = pending.region,
+                    .owner = owner,
+                    .checked_expr = checked_expr,
+                    .policy = policy,
+                };
+            },
+            .destructure_pattern => |source_pattern| blk: {
+                const checked_pattern = checkedPatternIdForSource(checked_bodies, source_pattern);
+                break :blk CheckedExhaustivenessSite{
+                    .id = id,
+                    .kind = .destructure,
+                    .region = pending.region,
+                    .owner = owner,
+                    .checked_pattern = checked_pattern,
+                    .policy = policy,
+                };
+            },
+        };
+        try sites.append(allocator, site);
+        problem_store.assignPendingStaticExhaustivenessSite(pending.source, id);
+    }
+
+    return .{ .sites = try sites.toOwnedSlice(allocator) };
+}
+
+fn exhaustivenessOwnerTemplateForSource(
+    checked_bodies: *const CheckedBodyStore,
+    source: problem.Store.ExhaustivenessSiteSource,
+) ?canonical.ProcedureTemplateRef {
+    for (checked_bodies.bodies.items) |body| {
+        const contains = switch (source) {
+            .match_expr => |source_expr| blk: {
+                const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                break :blk checkedExprContainsExpr(checked_bodies, body.root_expr, checked_expr);
+            },
+            .destructure_pattern => |source_pattern| blk: {
+                const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                break :blk checkedExprContainsPattern(checked_bodies, body.root_expr, checked_pattern);
+            },
+        };
+        if (contains) return body.owner_template;
+    }
+    return null;
+}
+
+fn exhaustivenessReplacingRootForSource(
+    checked_bodies: *const CheckedBodyStore,
+    compile_time_roots: *const CompileTimeRootTable,
+    source: problem.Store.ExhaustivenessSiteSource,
+) ?CompileTimeRoot {
+    for (compile_time_roots.roots) |root| {
+        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        const contains = switch (source) {
+            .match_expr => |source_expr| blk: {
+                const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                break :blk checkedExprContainsExpr(checked_bodies, root.expr, checked_expr);
+            },
+            .destructure_pattern => |source_pattern| blk: {
+                const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                break :blk checkedExprContainsPattern(checked_bodies, root.expr, checked_pattern);
+            },
+        };
+        if (contains) return root;
+    }
+    return null;
+}
+
+fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
+    return switch (kind) {
+        .constant,
+        .hoisted_constant,
+        .numeral_conversion,
+        .quote_conversion,
+        => true,
+        .callable_binding,
+        .expect,
+        => false,
+    };
+}
+
+fn checkedExprSpanContainsExpr(
+    checked_bodies: *const CheckedBodyStore,
+    exprs: []const CheckedExprId,
+    needle: CheckedExprId,
+) bool {
+    for (exprs) |expr| {
+        if (checkedExprContainsExpr(checked_bodies, expr, needle)) return true;
+    }
+    return false;
+}
+
+fn checkedExprContainsExpr(
+    checked_bodies: *const CheckedBodyStore,
+    haystack: CheckedExprId,
+    needle: CheckedExprId,
+) bool {
+    if (haystack == needle) return true;
+    const expr = checked_bodies.expr(haystack);
+    return switch (expr.data) {
+        .str, .list, .tuple => |items| checkedExprSpanContainsExpr(checked_bodies, items, needle),
+        .match_ => |match| blk: {
+            if (checkedExprContainsExpr(checked_bodies, match.cond, needle)) break :blk true;
+            for (match.branches) |branch| {
+                if (branch.guard) |guard| {
+                    if (checkedExprContainsExpr(checked_bodies, guard, needle)) break :blk true;
+                }
+                if (checkedExprContainsExpr(checked_bodies, branch.value, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .if_ => |if_| blk: {
+            for (if_.branches) |branch| {
+                if (checkedExprContainsExpr(checked_bodies, branch.cond, needle)) break :blk true;
+                if (checkedExprContainsExpr(checked_bodies, branch.body, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsExpr(checked_bodies, if_.final_else, needle);
+        },
+        .call => |call| checkedExprContainsExpr(checked_bodies, call.func, needle) or
+            checkedExprSpanContainsExpr(checked_bodies, call.args, needle),
+        .record => |record| blk: {
+            if (record.ext) |ext| {
+                if (checkedExprContainsExpr(checked_bodies, ext, needle)) break :blk true;
+            }
+            for (record.fields) |field| {
+                if (checkedExprContainsExpr(checked_bodies, field.value, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .block => |block| blk: {
+            for (block.statements) |statement| {
+                if (checkedStatementContainsExpr(checked_bodies, statement, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsExpr(checked_bodies, block.final_expr, needle);
+        },
+        .tag => |tag| checkedExprSpanContainsExpr(checked_bodies, tag.args, needle),
+        .nominal => |nominal| checkedExprContainsExpr(checked_bodies, nominal.backing_expr, needle),
+        .closure => |closure| checkedExprContainsExpr(checked_bodies, closure.lambda, needle),
+        .lambda => |lambda| checkedExprContainsExpr(checked_bodies, lambda.body, needle),
+        .binop => |binop| checkedExprContainsExpr(checked_bodies, binop.lhs, needle) or
+            checkedExprContainsExpr(checked_bodies, binop.rhs, needle),
+        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsExpr(checked_bodies, child, needle),
+        .tuple_access => |access| checkedExprContainsExpr(checked_bodies, access.tuple, needle),
+        .field_access => |field| checkedExprContainsExpr(checked_bodies, field.receiver, needle),
+        .interpolation => |interpolation| blk: {
+            if (checkedExprContainsExpr(checked_bodies, interpolation.first, needle)) break :blk true;
+            for (interpolation.parts) |part| {
+                if (checkedExprContainsExpr(checked_bodies, part.value, needle)) break :blk true;
+                if (checkedExprContainsExpr(checked_bodies, part.following_segment, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .structural_eq => |eq| checkedExprContainsExpr(checked_bodies, eq.lhs, needle) or
+            checkedExprContainsExpr(checked_bodies, eq.rhs, needle),
+        .expect_err => |expect_err| checkedExprContainsExpr(checked_bodies, expect_err.expr, needle),
+        .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
+        .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
+            checkedExprContainsExpr(checked_bodies, for_.body, needle),
+        .run_low_level => |run| checkedExprSpanContainsExpr(checked_bodies, run.args, needle),
+        .num,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .dec_small,
+        .num_from_numeral,
+        .typed_int,
+        .typed_frac,
+        .typed_num_from_numeral,
+        .str_from_quote,
+        .str_segment,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .dispatch_call,
+        .method_eq,
+        .type_dispatch_call,
+        .hosted_lambda,
+        .runtime_error,
+        .crash,
+        .ellipsis,
+        .anno_only,
+        .pending,
+        => false,
+    };
+}
+
+fn checkedStatementContainsExpr(
+    checked_bodies: *const CheckedBodyStore,
+    statement_id: CheckedStatementId,
+    needle: CheckedExprId,
+) bool {
+    const statement = checked_bodies.statement(statement_id);
+    return switch (statement.data) {
+        .decl => |decl| checkedExprContainsExpr(checked_bodies, decl.expr, needle),
+        .var_ => |var_| checkedExprContainsExpr(checked_bodies, var_.expr, needle),
+        .reassign => |reassign| checkedExprContainsExpr(checked_bodies, reassign.expr, needle),
+        .dbg, .expr, .expect => |expr| checkedExprContainsExpr(checked_bodies, expr, needle),
+        .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
+            checkedExprContainsExpr(checked_bodies, for_.body, needle),
+        .while_ => |while_| checkedExprContainsExpr(checked_bodies, while_.cond, needle) or
+            checkedExprContainsExpr(checked_bodies, while_.body, needle),
+        .infinite_loop => |loop| checkedExprContainsExpr(checked_bodies, loop.cond, needle) or
+            checkedExprContainsExpr(checked_bodies, loop.body, needle),
+        .breakable_loop => |loop| checkedExprContainsExpr(checked_bodies, loop.cond, needle) or
+            checkedExprContainsExpr(checked_bodies, loop.body, needle),
+        .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
+        .var_uninitialized,
+        .crash,
+        .break_,
+        .import_,
+        .alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        .runtime_error,
+        .pending,
+        => false,
+    };
+}
+
+fn checkedExprContainsPattern(
+    checked_bodies: *const CheckedBodyStore,
+    expr_id: CheckedExprId,
+    needle: CheckedPatternId,
+) bool {
+    const expr = checked_bodies.expr(expr_id);
+    return switch (expr.data) {
+        .match_ => |match| blk: {
+            for (match.branches) |branch| {
+                for (branch.patternsSlice(checked_bodies)) |branch_pattern| {
+                    if (checkedPatternContainsPattern(checked_bodies, branch_pattern.pattern, needle)) break :blk true;
+                }
+                if (branch.guard) |guard| {
+                    if (checkedExprContainsPattern(checked_bodies, guard, needle)) break :blk true;
+                }
+                if (checkedExprContainsPattern(checked_bodies, branch.value, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsPattern(checked_bodies, match.cond, needle);
+        },
+        .lambda => |lambda| blk: {
+            for (lambda.args) |arg| {
+                if (checkedPatternContainsPattern(checked_bodies, arg, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsPattern(checked_bodies, lambda.body, needle);
+        },
+        .for_ => |for_| checkedPatternContainsPattern(checked_bodies, for_.pattern, needle) or
+            checkedExprContainsPattern(checked_bodies, for_.expr, needle) or
+            checkedExprContainsPattern(checked_bodies, for_.body, needle),
+        .block => |block| blk: {
+            for (block.statements) |statement| {
+                if (checkedStatementContainsPattern(checked_bodies, statement, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsPattern(checked_bodies, block.final_expr, needle);
+        },
+        .str, .list, .tuple => |items| blk: {
+            for (items) |item| {
+                if (checkedExprContainsPattern(checked_bodies, item, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .if_ => |if_| blk: {
+            for (if_.branches) |branch| {
+                if (checkedExprContainsPattern(checked_bodies, branch.cond, needle)) break :blk true;
+                if (checkedExprContainsPattern(checked_bodies, branch.body, needle)) break :blk true;
+            }
+            break :blk checkedExprContainsPattern(checked_bodies, if_.final_else, needle);
+        },
+        .call => |call| checkedExprContainsPattern(checked_bodies, call.func, needle) or
+            checkedExprSpanContainsPattern(checked_bodies, call.args, needle),
+        .record => |record| blk: {
+            if (record.ext) |ext| {
+                if (checkedExprContainsPattern(checked_bodies, ext, needle)) break :blk true;
+            }
+            for (record.fields) |field| {
+                if (checkedExprContainsPattern(checked_bodies, field.value, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag => |tag| checkedExprSpanContainsPattern(checked_bodies, tag.args, needle),
+        .nominal => |nominal| checkedExprContainsPattern(checked_bodies, nominal.backing_expr, needle),
+        .closure => |closure| checkedExprContainsPattern(checked_bodies, closure.lambda, needle),
+        .binop => |binop| checkedExprContainsPattern(checked_bodies, binop.lhs, needle) or
+            checkedExprContainsPattern(checked_bodies, binop.rhs, needle),
+        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsPattern(checked_bodies, child, needle),
+        .tuple_access => |access| checkedExprContainsPattern(checked_bodies, access.tuple, needle),
+        .field_access => |field| checkedExprContainsPattern(checked_bodies, field.receiver, needle),
+        .interpolation => |interpolation| blk: {
+            if (checkedExprContainsPattern(checked_bodies, interpolation.first, needle)) break :blk true;
+            for (interpolation.parts) |part| {
+                if (checkedExprContainsPattern(checked_bodies, part.value, needle)) break :blk true;
+                if (checkedExprContainsPattern(checked_bodies, part.following_segment, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .structural_eq => |eq| checkedExprContainsPattern(checked_bodies, eq.lhs, needle) or
+            checkedExprContainsPattern(checked_bodies, eq.rhs, needle),
+        .expect_err => |expect_err| checkedExprContainsPattern(checked_bodies, expect_err.expr, needle),
+        .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
+        .run_low_level => |run| checkedExprSpanContainsPattern(checked_bodies, run.args, needle),
+        .hosted_lambda => |hosted| checkedPatternSpanContainsPattern(checked_bodies, hosted.args, needle),
+        .num,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .dec_small,
+        .num_from_numeral,
+        .typed_int,
+        .typed_frac,
+        .typed_num_from_numeral,
+        .str_from_quote,
+        .str_segment,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .dispatch_call,
+        .method_eq,
+        .type_dispatch_call,
+        .runtime_error,
+        .crash,
+        .ellipsis,
+        .anno_only,
+        .pending,
+        => false,
+    };
+}
+
+fn checkedExprSpanContainsPattern(
+    checked_bodies: *const CheckedBodyStore,
+    exprs: []const CheckedExprId,
+    needle: CheckedPatternId,
+) bool {
+    for (exprs) |expr| {
+        if (checkedExprContainsPattern(checked_bodies, expr, needle)) return true;
+    }
+    return false;
+}
+
+fn checkedStatementContainsPattern(
+    checked_bodies: *const CheckedBodyStore,
+    statement_id: CheckedStatementId,
+    needle: CheckedPatternId,
+) bool {
+    const statement = checked_bodies.statement(statement_id);
+    return switch (statement.data) {
+        .decl => |decl| checkedPatternContainsPattern(checked_bodies, decl.pattern, needle) or
+            checkedExprContainsPattern(checked_bodies, decl.expr, needle),
+        .var_ => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle) or
+            checkedExprContainsPattern(checked_bodies, var_.expr, needle),
+        .var_uninitialized => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle),
+        .reassign => |reassign| checkedPatternContainsPattern(checked_bodies, reassign.pattern, needle) or
+            checkedExprContainsPattern(checked_bodies, reassign.expr, needle),
+        .dbg, .expr, .expect => |expr| checkedExprContainsPattern(checked_bodies, expr, needle),
+        .for_ => |for_| checkedPatternContainsPattern(checked_bodies, for_.pattern, needle) or
+            checkedExprContainsPattern(checked_bodies, for_.expr, needle) or
+            checkedExprContainsPattern(checked_bodies, for_.body, needle),
+        .while_ => |while_| checkedExprContainsPattern(checked_bodies, while_.cond, needle) or
+            checkedExprContainsPattern(checked_bodies, while_.body, needle),
+        .infinite_loop => |loop| checkedExprContainsPattern(checked_bodies, loop.cond, needle) or
+            checkedExprContainsPattern(checked_bodies, loop.body, needle),
+        .breakable_loop => |loop| checkedExprContainsPattern(checked_bodies, loop.cond, needle) or
+            checkedExprContainsPattern(checked_bodies, loop.body, needle),
+        .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
+        .crash,
+        .break_,
+        .import_,
+        .alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        .runtime_error,
+        .pending,
+        => false,
+    };
+}
+
+fn checkedPatternContainsPattern(
+    checked_bodies: *const CheckedBodyStore,
+    haystack: CheckedPatternId,
+    needle: CheckedPatternId,
+) bool {
+    if (haystack == needle) return true;
+    const pattern = checked_bodies.pattern(haystack);
+    return switch (pattern.data) {
+        .as => |as| checkedPatternContainsPattern(checked_bodies, as.pattern, needle),
+        .applied_tag => |tag| checkedPatternSpanContainsPattern(checked_bodies, tag.args, needle),
+        .nominal => |nominal| checkedPatternContainsPattern(checked_bodies, nominal.backing_pattern, needle),
+        .record_destructure => |destructs| blk: {
+            for (destructs) |destruct| {
+                const child = switch (destruct.kind) {
+                    .required => |required| required,
+                    .sub_pattern => |sub_pattern| sub_pattern,
+                    .rest => |rest| rest,
+                };
+                if (checkedPatternContainsPattern(checked_bodies, child, needle)) break :blk true;
+            }
+            break :blk false;
+        },
+        .list => |list| blk: {
+            if (checkedPatternSpanContainsPattern(checked_bodies, list.patterns, needle)) break :blk true;
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    if (checkedPatternContainsPattern(checked_bodies, rest_pattern, needle)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .tuple => |items| checkedPatternSpanContainsPattern(checked_bodies, items, needle),
+        .str_interpolation => |str| blk: {
+            for (str.steps) |step| {
+                if (step.capture) |capture| {
+                    if (checkedPatternContainsPattern(checked_bodies, capture, needle)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .pending,
+        .assign,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => false,
+    };
+}
+
+fn checkedPatternSpanContainsPattern(
+    checked_bodies: *const CheckedBodyStore,
+    patterns: []const CheckedPatternId,
+    needle: CheckedPatternId,
+) bool {
+    for (patterns) |pattern| {
+        if (checkedPatternContainsPattern(checked_bodies, pattern, needle)) return true;
+    }
+    return false;
+}
+
+fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot) usize {
+    var count: usize = 0;
+    for (selected_hoisted_roots) |root| {
+        count += switch (root.body) {
+            .expr => 0,
+            .pattern_extraction => 2,
+        };
+    }
+    return count;
 }
 
 fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Expr.Idx) CheckedExprId {
@@ -17039,6 +18886,86 @@ fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Exp
             .{@intFromEnum(expr)},
         );
     };
+}
+
+fn checkedExprIdForSelectedHoistedRoot(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypePublication,
+    checked_body_builder: *CheckedBodyStoreBuilder,
+    selected_index: u32,
+    selected: hoist_roots.SelectedHoistedRoot,
+) Allocator.Error!CheckedExprId {
+    const checked_bodies = checked_body_builder.storePtr();
+    return switch (selected.body) {
+        .expr => checkedExprIdForSource(checked_bodies, selected.expr),
+        .pattern_extraction => |extraction| try appendCheckedPatternExtractionRootExpr(
+            allocator,
+            module,
+            checked_body_builder,
+            selected_index,
+            extraction,
+            try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern)),
+        ),
+    };
+}
+
+fn appendCheckedPatternExtractionRootExpr(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_body_builder: *CheckedBodyStoreBuilder,
+    selected_index: u32,
+    extraction: hoist_roots.PatternExtraction,
+    checked_type: CheckedTypeId,
+) Allocator.Error!CheckedExprId {
+    const checked_bodies = checked_body_builder.storePtr();
+    const scrutinee = checkedExprIdForSource(checked_bodies, extraction.base_expr);
+    const checked_result_pattern = checkedPatternIdForSource(checked_bodies, extraction.result_pattern);
+    const result_region = module.regionAt(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
+    const result_lookup = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_extraction_result_lookup = .{
+        .selected_root_index = selected_index,
+        .result_pattern = checked_result_pattern,
+    } }, checked_type, result_region, .{ .lookup_local = .{
+        .pattern = checked_result_pattern,
+        .resolved = null,
+    } });
+
+    try checked_bodies.match_branch_pattern_pool.ensureUnusedCapacity(allocator, 1);
+    const checked_scrutinee_pattern = checkedPatternIdForSource(checked_bodies, extraction.scrutinee_pattern);
+    const pattern_start: u32 = @intCast(checked_bodies.match_branch_pattern_pool.items.len);
+    checked_bodies.match_branch_pattern_pool.appendAssumeCapacity(.{
+        .pattern = checked_scrutinee_pattern,
+        .degenerate = false,
+        .bn_start = 0,
+        .bn_len = 0,
+    });
+    errdefer _ = checked_bodies.match_branch_pattern_pool.pop();
+
+    const branches = try allocator.alloc(CheckedMatchBranch, 1);
+    var branches_owned = true;
+    errdefer if (branches_owned) allocator.free(branches);
+    branches[0] = .{
+        .pt_start = pattern_start,
+        .pt_len = 1,
+        .value = result_lookup,
+        .guard = null,
+    };
+
+    var data: CheckedExprData = .{ .match_ = .{
+        .cond = scrutinee,
+        .branches = branches,
+        .is_try_suffix = false,
+        .skip_exhaustiveness = false,
+        .comptime_site_kind = .destructure,
+    } };
+    branches_owned = false;
+    defer deinitCheckedExprData(allocator, &data);
+
+    const match_region = module.regionAt(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
+    return try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_extraction_wrapper = .{
+        .selected_root_index = selected_index,
+        .scrutinee_pattern = checked_scrutinee_pattern,
+    } }, checked_type, match_region, data);
 }
 
 fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) CheckedPatternId {
@@ -17066,12 +18993,19 @@ pub fn constModuleId(ref: ConstRef) ModuleId {
 /// Public `ConstOwner` declaration.
 pub const ConstOwner = union(enum) {
     top_level_binding: ConstTopLevelOwner,
+    hoisted_expr: ConstHoistedOwner,
 };
 
 /// Public `ConstTopLevelOwner` declaration.
 pub const ConstTopLevelOwner = struct {
     module_idx: u32,
     pattern: CheckedPatternId,
+};
+
+/// Public `ConstHoistedOwner` declaration.
+pub const ConstHoistedOwner = struct {
+    module_idx: u32,
+    expr: CheckedExprId,
 };
 
 /// Public `TopLevelValueKind` declaration.
@@ -17264,6 +19198,200 @@ pub const TopLevelValueTable = struct {
     }
 };
 
+/// Public `HoistedConstId` declaration.
+pub const HoistedConstId = enum(u32) { _ };
+
+/// Public `HoistedConstEntry` declaration.
+pub const HoistedConstEntry = struct {
+    id: HoistedConstId,
+    module_idx: u32,
+    root: ComptimeRootId,
+    expr: CheckedExprId,
+    pattern: ?CheckedPatternId,
+    checked_type: CheckedTypeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    const_ref: ConstRef,
+};
+
+const HoistedConstByExprEntry = struct {
+    expr: CheckedExprId,
+    entry: HoistedConstId,
+
+    fn lessThan(_: void, lhs: HoistedConstByExprEntry, rhs: HoistedConstByExprEntry) bool {
+        return @intFromEnum(lhs.expr) < @intFromEnum(rhs.expr);
+    }
+};
+
+const HoistedConstByPatternEntry = struct {
+    pattern: CheckedPatternId,
+    entry: HoistedConstId,
+
+    fn lessThan(_: void, lhs: HoistedConstByPatternEntry, rhs: HoistedConstByPatternEntry) bool {
+        return @intFromEnum(lhs.pattern) < @intFromEnum(rhs.pattern);
+    }
+};
+
+/// Public `HoistedConstTable` declaration.
+///
+/// Sparse index for selected hoisted constants. Every entry corresponds to a
+/// published `.hoisted_constant` root. The by-expr, by-pattern, and by-root
+/// indexes are lookup accelerators for later stages; there is no data here for
+/// unselected expressions or patterns, and no scheduling/dependency metadata.
+pub const HoistedConstTable = struct {
+    entries: []HoistedConstEntry = &.{},
+    by_expr: []HoistedConstByExprEntry = &.{},
+    by_pattern: []HoistedConstByPatternEntry = &.{},
+    by_root: []?HoistedConstId = &.{},
+
+    pub const Serialized = extern struct {
+        entries: SerializedSlice(HoistedConstEntry) = .{},
+        by_expr: SerializedSlice(HoistedConstByExprEntry) = .{},
+        by_pattern: SerializedSlice(HoistedConstByPatternEntry) = .{},
+        by_root: SerializedSlice(?HoistedConstId) = .{},
+
+        const Serde = artifact_serialize.SliceStoreSerde(HoistedConstTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn fromRoots(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        artifact_key: CheckedModuleArtifactKey,
+        roots: *const CompileTimeRootTable,
+        const_templates: *ConstTemplateTable,
+    ) Allocator.Error!HoistedConstTable {
+        var entries = std.ArrayList(HoistedConstEntry).empty;
+        errdefer entries.deinit(allocator);
+
+        var by_expr = std.ArrayList(HoistedConstByExprEntry).empty;
+        errdefer by_expr.deinit(allocator);
+
+        var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
+        errdefer by_pattern.deinit(allocator);
+
+        const by_root = try allocator.alloc(?HoistedConstId, roots.roots.len);
+        errdefer allocator.free(by_root);
+        @memset(by_root, null);
+
+        for (roots.roots) |root| {
+            if (root.kind != .hoisted_constant) continue;
+            const source_expr = switch (root.source) {
+                .hoisted => |hoisted| hoisted.expr,
+                .def,
+                .expr,
+                .statement,
+                .required_binding,
+                => checkedArtifactInvariant("hoisted constant root had non-expression source", .{}),
+            };
+            const source_var = if (root.source_pattern) |pattern|
+                ModuleEnv.varFrom(pattern)
+            else
+                ModuleEnv.varFrom(source_expr);
+            const source_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                source_var,
+            );
+            const const_ref = try const_templates.reserveHoisted(
+                allocator,
+                artifact_key,
+                module.moduleIndex(),
+                root.expr,
+                source_scheme,
+            );
+            const id: HoistedConstId = @enumFromInt(@as(u32, @intCast(entries.items.len)));
+            try entries.append(allocator, .{
+                .id = id,
+                .module_idx = module.moduleIndex(),
+                .root = root.id,
+                .expr = root.expr,
+                .pattern = root.pattern,
+                .checked_type = root.checked_type,
+                .source_scheme = source_scheme,
+                .const_ref = const_ref,
+            });
+            try by_expr.append(allocator, .{
+                .expr = root.expr,
+                .entry = id,
+            });
+            if (root.pattern) |pattern| {
+                try by_pattern.append(allocator, .{
+                    .pattern = pattern,
+                    .entry = id,
+                });
+            }
+            by_root[@intFromEnum(root.id)] = id;
+        }
+
+        std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
+        std.mem.sort(HoistedConstByPatternEntry, by_pattern.items, {}, HoistedConstByPatternEntry.lessThan);
+
+        const entry_slice = try entries.toOwnedSlice(allocator);
+        errdefer allocator.free(entry_slice);
+        const by_expr_slice = try by_expr.toOwnedSlice(allocator);
+        errdefer allocator.free(by_expr_slice);
+        const by_pattern_slice = try by_pattern.toOwnedSlice(allocator);
+
+        return .{
+            .entries = entry_slice,
+            .by_expr = by_expr_slice,
+            .by_pattern = by_pattern_slice,
+            .by_root = by_root,
+        };
+    }
+
+    pub fn lookupByExpr(self: *const HoistedConstTable, expr: CheckedExprId) ?HoistedConstEntry {
+        var lo: usize = 0;
+        var hi: usize = self.by_expr.len;
+        const target = @intFromEnum(expr);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_expr[mid].expr);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_expr.len or self.by_expr[lo].expr != expr) return null;
+        return self.entries[@intFromEnum(self.by_expr[lo].entry)];
+    }
+
+    pub fn lookupByPattern(self: *const HoistedConstTable, pattern: CheckedPatternId) ?HoistedConstEntry {
+        var lo: usize = 0;
+        var hi: usize = self.by_pattern.len;
+        const target = @intFromEnum(pattern);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_pattern[mid].pattern);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_pattern.len or self.by_pattern[lo].pattern != pattern) return null;
+        return self.entries[@intFromEnum(self.by_pattern[lo].entry)];
+    }
+
+    pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
+        const idx = @intFromEnum(root);
+        if (idx >= self.by_root.len) return null;
+        const entry_id = self.by_root[idx] orelse return null;
+        return self.entries[@intFromEnum(entry_id)];
+    }
+
+    pub fn deinit(self: *HoistedConstTable, allocator: Allocator) void {
+        allocator.free(self.by_root);
+        allocator.free(self.by_pattern);
+        allocator.free(self.by_expr);
+        allocator.free(self.entries);
+        self.* = .{};
+    }
+};
+
 /// Public `CheckedCallableBodyRef` declaration.
 pub const CheckedCallableBodyRef = enum(u32) { _ };
 /// Public `CheckedConstBodyRef` declaration.
@@ -17304,7 +19432,7 @@ pub const CheckedConstBodyTable = struct {
         @memset(by_root, null);
 
         for (roots.roots) |root| {
-            if (root.kind != .constant) continue;
+            if (!compileTimeRootHasConstBody(root.kind)) continue;
             const id: CheckedConstBodyRef = @enumFromInt(@as(u32, @intCast(bodies.items.len)));
             try bodies.append(allocator, .{
                 .id = id,
@@ -18362,6 +20490,7 @@ const PublicApiClosureDependencyCollector = struct {
             .top_level_const,
             .imported_const,
             => |const_use| try self.appendConstRef(const_use.const_ref),
+            .selected_hoisted_const => |selected| try self.appendConstRef(selected.const_use.const_ref),
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -18898,7 +21027,20 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendImportedProcedureBindingDependency(binding);
                 break :blk true;
             },
-            else => false,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .top_level_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => false,
         };
     }
 
@@ -18962,7 +21104,20 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendImportedTemplateClosure(self.platform_required_bindings.relationClosure(binding));
                 break :blk true;
             },
-            else => false,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .promoted_top_level_proc,
+            => false,
         };
     }
 
@@ -19018,7 +21173,18 @@ const ImportedTemplateClosureBuilder = struct {
             .promoted_top_level_proc,
             => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,
-            else => return null,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .imported_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            => return null,
         };
         return switch (use.binding) {
             .top_level => |binding_ref| self.templateForTopLevelBinding(binding_ref),
@@ -19036,7 +21202,20 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level_proc,
             .promoted_top_level_proc,
             => |procedure| procedure,
-            else => return false,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            => return false,
         };
         const top_level = switch (use.binding) {
             .top_level => |binding| binding,
@@ -19076,9 +21255,22 @@ const ImportedTemplateClosureBuilder = struct {
         ref: ResolvedValueRef,
     ) ?ConstRef {
         return switch (ref) {
-            .top_level_const,
-            => |const_use| const_use.const_ref,
-            else => null,
+            .top_level_const => |const_use| const_use.const_ref,
+            .selected_hoisted_const => |selected| selected.const_use.const_ref,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => null,
         };
     }
 
@@ -19526,6 +21718,33 @@ pub const ConstTemplateTable = struct {
         };
     }
 
+    pub fn reserveHoisted(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        expr: CheckedExprId,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+    ) Allocator.Error!ConstRef {
+        const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+        const owner: ConstOwner = .{ .hoisted_expr = .{
+            .module_idx = module_idx,
+            .expr = expr,
+        } };
+        try self.templates.append(allocator, .{
+            .id = id,
+            .owner = owner,
+            .source_scheme = source_scheme,
+            .state = .reserved,
+        });
+        return .{
+            .artifact = artifact_key,
+            .owner = owner,
+            .template = id,
+            .source_scheme = source_scheme,
+        };
+    }
+
     pub fn fillEval(
         self: *ConstTemplateTable,
         ref: ConstRef,
@@ -19794,12 +22013,17 @@ fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
             const right = b.top_level_binding;
             break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
         },
+        .hoisted_expr => |left| blk: {
+            const right = b.hoisted_expr;
+            break :blk left.module_idx == right.module_idx and left.expr == right.expr;
+        },
     };
 }
 
 fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     return switch (ref.owner) {
         .top_level_binding => |owner| owner,
+        .hoisted_expr => null,
     };
 }
 
@@ -19826,6 +22050,7 @@ pub const CheckedModuleArtifact = struct {
     exports: ExportTable,
     checked_types: CheckedTypeStore = .{},
     checked_bodies: CheckedBodyStore = .{},
+    exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
@@ -19849,6 +22074,7 @@ pub const CheckedModuleArtifact = struct {
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
+    hoisted_constants: HoistedConstTable,
     const_templates: ConstTemplateTable,
     const_store: ConstStore,
     /// 16-byte-aligned buffer backing a relocated (frozen) artifact loaded from
@@ -19887,7 +22113,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
         const def_idx = switch (root.source) {
             .def => |def| def,
-            else => return null,
+            .expr,
+            .statement,
+            .required_binding,
+            .hoisted,
+            => return null,
         };
         const top_level = self.top_level_values.lookupByDef(def_idx) orelse return null;
         for (self.provides_requires.provides) |entry| {
@@ -19902,7 +22132,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn requiredEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
         const binding_id = switch (root.source) {
             .required_binding => |id| id,
-            else => return null,
+            .def,
+            .expr,
+            .statement,
+            .hoisted,
+            => return null,
         };
         const binding = self.platform_required_bindings.lookupByBindingId(binding_id) orelse return null;
         const declaration = self.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse return null;
@@ -19998,6 +22232,7 @@ pub const CheckedModuleArtifact = struct {
         interface_capabilities: ModuleInterfaceCapabilities.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         top_level_values: TopLevelValueTable.Serialized,
+        hoisted_constants: HoistedConstTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
         const_store: ConstStore.Serialized,
 
@@ -20008,7 +22243,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 170);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 174);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -20052,6 +22287,7 @@ pub const CheckedModuleArtifact = struct {
             try self.interface_capabilities.serialize(&artifact.interface_capabilities, gpa, writer);
             try self.compile_time_roots.serialize(&artifact.compile_time_roots, gpa, writer);
             try self.top_level_values.serialize(&artifact.top_level_values, gpa, writer);
+            try self.hoisted_constants.serialize(&artifact.hoisted_constants, gpa, writer);
             try self.const_templates.serialize(&artifact.const_templates, gpa, writer);
             try self.const_store.serialize(&artifact.const_store, gpa, writer);
         }
@@ -20117,6 +22353,7 @@ pub const CheckedModuleArtifact = struct {
                 .interface_capabilities = self.interface_capabilities.deserialize(base_addr),
                 .compile_time_roots = self.compile_time_roots.deserialize(base_addr),
                 .top_level_values = self.top_level_values.deserialize(base_addr),
+                .hoisted_constants = self.hoisted_constants.deserialize(base_addr),
                 .const_templates = self.const_templates.deserialize(base_addr),
                 .const_store = self.const_store.deserialize(base_addr, gpa),
             };
@@ -20214,6 +22451,7 @@ pub const CheckedModuleArtifact = struct {
         }
         self.const_store.deinit();
         self.const_templates.deinit(allocator);
+        self.hoisted_constants.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
         self.interface_capabilities.deinit(allocator);
@@ -20237,6 +22475,7 @@ pub const CheckedModuleArtifact = struct {
         self.exported_procedure_bindings.deinit(allocator);
         self.exported_procedure_templates.deinit(allocator);
         self.checked_const_bodies.deinit(allocator);
+        self.exhaustiveness_sites.deinit(allocator);
         self.checked_bodies.deinit(allocator);
         self.checked_types.deinit(allocator);
         self.exports.deinit(allocator);
@@ -20275,7 +22514,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(body.id) == i);
             std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(root.kind == .constant);
+            std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprCount());
@@ -20305,13 +22544,19 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprCount());
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
+                .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
-                    else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+                    .const_node,
+                    .fn_value,
+                    .expect,
+                    => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
                 .expect => switch (root.payload) {
                     .expect => {},
-                    else => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
+                    .pending,
+                    .const_node,
+                    .fn_value,
+                    => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
         }
@@ -20412,7 +22657,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(body.id) == i);
             std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(root.kind == .constant);
+            std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprCount());
@@ -20723,7 +22968,21 @@ pub const CheckedModuleArtifact = struct {
                         "checked artifact invariant violated: executable platform artifact kept a declaration-only required lookup",
                         .{},
                     ),
-                    else => {},
+                    .local_param,
+                    .local_value,
+                    .local_mutable_version,
+                    .pattern_binder,
+                    .local_proc,
+                    .selected_hoisted_const,
+                    .top_level_const,
+                    .imported_const,
+                    .top_level_proc,
+                    .imported_proc,
+                    .hosted_proc,
+                    .platform_required_const,
+                    .platform_required_proc,
+                    .promoted_top_level_proc,
+                    => {},
                 }
             }
         }
@@ -20778,6 +23037,7 @@ pub const ImportedModuleView = struct {
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
+    exhaustiveness_sites: *const CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const CheckedConstBodyTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     compile_time_roots: *const CompileTimeRootTable,
@@ -20794,6 +23054,7 @@ pub const ImportedModuleView = struct {
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
+    hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
@@ -20819,6 +23080,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .exhaustiveness_sites = &artifact.exhaustiveness_sites,
         .checked_const_bodies = &artifact.checked_const_bodies,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .compile_time_roots = &artifact.compile_time_roots,
@@ -20835,6 +23097,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
+        .hoisted_constants = &artifact.hoisted_constants,
         .const_templates = &artifact.const_templates,
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
@@ -22157,8 +24420,10 @@ pub fn publishFromTypedModule(
     );
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
-    errdefer checked_bodies.deinit(allocator);
+    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
+    errdefer checked_body_builder.deinit(allocator);
+    try checked_body_builder.reserveSyntheticExprs(allocator, syntheticExprCapacityForHoistedRoots(inputs.hoisted_roots));
+    const checked_bodies = checked_body_builder.storePtr();
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
 
@@ -22172,13 +24437,13 @@ pub fn publishFromTypedModule(
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
-        &checked_bodies,
+        checked_bodies,
         &intrinsic_wrappers,
     );
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, &checked_bodies);
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, checked_bodies);
     errdefer method_registry.deinit(allocator);
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
@@ -22186,7 +24451,7 @@ pub fn publishFromTypedModule(
         module,
         &canonical_names,
         &checked_type_publication,
-        &checked_bodies,
+        checked_bodies,
         &method_registry,
         inputs.available_artifacts,
     );
@@ -22222,7 +24487,15 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
-    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, global_value_defs, &checked_type_publication, &checked_bodies, &checked_procedure_templates);
+    var compile_time_roots = try CompileTimeRootTable.fromModule(
+        allocator,
+        module,
+        global_value_defs,
+        inputs.hoisted_roots,
+        &checked_type_publication,
+        &checked_body_builder,
+        &checked_procedure_templates,
+    );
     errdefer compile_time_roots.deinit(allocator);
 
     var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
@@ -22257,7 +24530,7 @@ pub fn publishFromTypedModule(
         module,
         global_value_defs,
         &canonical_names,
-        &checked_bodies,
+        checked_bodies,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
@@ -22266,6 +24539,16 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
     );
     errdefer top_level_values.deinit(allocator);
+
+    var hoisted_constants = try HoistedConstTable.fromRoots(
+        allocator,
+        module,
+        artifact_key,
+        &compile_time_roots,
+        &const_templates,
+    );
+    errdefer hoisted_constants.deinit(allocator);
+
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         modules,
@@ -22277,8 +24560,10 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
+        &hoisted_constants,
         &checked_type_publication,
-        &checked_bodies,
+        checked_bodies,
+        checked_body_builder.syntheticOrigins(),
     );
     errdefer resolved_value_refs.deinit(allocator);
     checked_bodies.attachResolvedValueRefs(
@@ -22287,6 +24572,15 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         inputs.imports,
         inputs.relation_artifacts,
+    );
+
+    try sealCheckedProcedureTemplateRefs(
+        allocator,
+        checked_bodies,
+        &entry_wrappers,
+        &checked_procedure_templates,
+        &static_dispatch_plans,
+        &resolved_value_refs,
     );
 
     var provided_exports = try ProvidedExportTable.fromModule(
@@ -22301,29 +24595,24 @@ pub fn publishFromTypedModule(
     var root_requests = try RootRequestTable.fromModule(
         allocator,
         module,
+        artifact_key,
         &checked_type_publication,
         &compile_time_roots,
         &checked_procedure_templates,
         &entry_wrappers,
         &platform_required_bindings,
         &provided_exports,
-        &checked_bodies,
+        checked_bodies,
         &resolved_value_refs,
+        &top_level_values,
         &top_level_procedure_bindings,
+        &callable_eval_templates,
+        &hoisted_constants,
         inputs.explicit_roots,
     );
     errdefer root_requests.deinit(allocator);
 
-    try sealCheckedProcedureTemplateRefs(
-        allocator,
-        &checked_bodies,
-        &entry_wrappers,
-        &checked_procedure_templates,
-        &static_dispatch_plans,
-        &resolved_value_refs,
-    );
-
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &static_dispatch_plans, &entry_wrappers, &checked_procedure_templates);
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, checked_bodies, &static_dispatch_plans, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
 
     sealConstEvalTemplatesForRoots(
@@ -22333,7 +24622,30 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         &checked_procedure_templates,
         &top_level_values,
+        &hoisted_constants,
     );
+
+    var exhaustiveness_reachability = try ExhaustivenessTemplateReachability.build(
+        allocator,
+        artifact_key,
+        &root_requests,
+        &checked_procedure_templates,
+        &entry_wrappers,
+        &callable_eval_templates,
+        &top_level_procedure_bindings,
+        &platform_required_bindings,
+        &resolved_value_refs,
+    );
+    defer exhaustiveness_reachability.deinit();
+
+    var exhaustiveness_sites = try publishCheckedExhaustivenessSites(
+        allocator,
+        inputs.problem_store,
+        checked_bodies,
+        &compile_time_roots,
+        &exhaustiveness_reachability,
+    );
+    errdefer exhaustiveness_sites.deinit(allocator);
 
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
@@ -22423,7 +24735,10 @@ pub fn publishFromTypedModule(
     );
     errdefer public_api_dependencies.deinit(allocator);
 
+    checked_body_builder.discardSyntheticOrigins(allocator);
     checked_bodies.discardSourceNodeMap(allocator);
+    var frozen_checked_bodies = checked_body_builder.freeze();
+    errdefer frozen_checked_bodies.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -22435,7 +24750,8 @@ pub fn publishFromTypedModule(
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,
-        .checked_bodies = checked_bodies,
+        .checked_bodies = frozen_checked_bodies,
+        .exhaustiveness_sites = exhaustiveness_sites,
         .checked_const_bodies = checked_const_bodies,
         .exported_procedure_templates = exported_procedure_templates,
         .exported_procedure_bindings = exported_procedure_bindings,
@@ -22462,9 +24778,13 @@ pub fn publishFromTypedModule(
         .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
+        .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
     };
+    checked_const_store = ConstStore.init(allocator);
+    errdefer artifact.const_store.deinit();
+
     try inputs.compile_time_finalizer.run(
         allocator,
         &artifact,
@@ -22531,6 +24851,7 @@ fn expectProvidedExportKind(
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
+    const empty_exhaustiveness_sites = CheckedExhaustivenessSiteTable{};
     const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
     const empty_compile_time_roots = CompileTimeRootTable{};
     const empty_entry_wrappers = EntryWrapperTable{};
@@ -22546,6 +24867,7 @@ fn expectProvidedExportKind(
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_hoisted_constants = HoistedConstTable{};
     const empty_const_templates = ConstTemplateTable{};
     const empty_method_registry = static_dispatch.MethodRegistry{};
     const empty_interface_capabilities = ModuleInterfaceCapabilities{};
@@ -22560,6 +24882,7 @@ fn expectProvidedExportKind(
         .exports = .{},
         .checked_types = builtin_checked_type_publication.store.view(),
         .checked_bodies = empty_checked_bodies.view(),
+        .exhaustiveness_sites = &empty_exhaustiveness_sites,
         .checked_const_bodies = &empty_checked_const_bodies,
         .checked_procedure_templates = &empty_checked_procedure_templates,
         .compile_time_roots = &empty_compile_time_roots,
@@ -22576,6 +24899,7 @@ fn expectProvidedExportKind(
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
+        .hoisted_constants = &empty_hoisted_constants,
         .const_templates = &empty_const_templates,
         .method_registry = &empty_method_registry,
         .interface_capabilities = &empty_interface_capabilities,
@@ -22617,8 +24941,9 @@ fn expectProvidedExportKind(
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
-    defer checked_bodies.deinit(allocator);
+    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
+    defer checked_body_builder.deinit(allocator);
+    const checked_bodies = checked_body_builder.storePtr();
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
 
@@ -22632,10 +24957,29 @@ fn expectProvidedExportKind(
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
-        &checked_bodies,
+        checked_bodies,
         &intrinsic_wrappers,
     );
     defer checked_procedure_templates.deinit(allocator);
+
+    const template_lookup = checked_procedure_templates.asLookup(module.moduleIndex());
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, checked_bodies);
+    defer method_registry.deinit(allocator);
+
+    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_type_publication,
+        checked_bodies,
+        &method_registry,
+        &.{},
+    );
+    defer static_dispatch_plans.deinit(allocator);
+    checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
+    checked_bodies.attachNumeralPlans(&static_dispatch_plans);
+    checked_bodies.attachQuotePlans(&static_dispatch_plans);
+    checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
     defer hosted_procs.deinit(allocator);
@@ -22667,8 +25011,9 @@ fn expectProvidedExportKind(
         allocator,
         module,
         global_value_defs,
+        &.{},
         &checked_type_publication,
-        &checked_bodies,
+        &checked_body_builder,
         &checked_procedure_templates,
     );
     defer compile_time_roots.deinit(allocator);
@@ -22699,7 +25044,7 @@ fn expectProvidedExportKind(
         module,
         global_value_defs,
         &canonical_names,
-        &checked_bodies,
+        checked_bodies,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
@@ -22708,6 +25053,15 @@ fn expectProvidedExportKind(
         &compile_time_roots,
     );
     defer top_level_values.deinit(allocator);
+
+    var hoisted_constants = try HoistedConstTable.fromRoots(
+        allocator,
+        module,
+        artifact_key,
+        &compile_time_roots,
+        &const_templates,
+    );
+    defer hoisted_constants.deinit(allocator);
 
     const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
     defer allocator.free(provides);
@@ -22723,10 +25077,28 @@ fn expectProvidedExportKind(
         &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
+        &hoisted_constants,
         &checked_type_publication,
-        &checked_bodies,
+        checked_bodies,
+        checked_body_builder.syntheticOrigins(),
     );
     defer resolved_value_refs.deinit(allocator);
+    checked_bodies.attachResolvedValueRefs(
+        &resolved_value_refs,
+        artifact_key,
+        &top_level_procedure_bindings,
+        &builtin_imports,
+        &.{},
+    );
+
+    try sealCheckedProcedureTemplateRefs(
+        allocator,
+        checked_bodies,
+        &entry_wrappers,
+        &checked_procedure_templates,
+        &static_dispatch_plans,
+        &resolved_value_refs,
+    );
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -22740,15 +25112,19 @@ fn expectProvidedExportKind(
     var root_requests = try RootRequestTable.fromModule(
         allocator,
         module,
+        artifact_key,
         &checked_type_publication,
         &compile_time_roots,
         &checked_procedure_templates,
         &entry_wrappers,
         &platform_required_bindings,
         &provided_exports,
-        &checked_bodies,
+        checked_bodies,
         &resolved_value_refs,
+        &top_level_values,
         &top_level_procedure_bindings,
+        &callable_eval_templates,
+        &hoisted_constants,
         &.{},
     );
     defer root_requests.deinit(allocator);
@@ -22866,6 +25242,70 @@ test "checked module keeps current compile-time ownership tables" {
     try std.testing.expect(@hasField(ConstStore, "fns"));
     try std.testing.expect(@hasField(ConstStore, "str_backing"));
     try std.testing.expect(@hasField(ConstStore, "str_views"));
+}
+
+test "synthetic expression capacity is exact for selected hoisted roots" {
+    const roots = [_]hoist_roots.SelectedHoistedRoot{
+        .{
+            .expr = @enumFromInt(1),
+            .body = .expr,
+        },
+        .{
+            .expr = @enumFromInt(2),
+            .body = .{ .pattern_extraction = .{
+                .base_expr = @enumFromInt(3),
+                .scrutinee_pattern = @enumFromInt(4),
+                .result_pattern = @enumFromInt(5),
+            } },
+        },
+        .{
+            .expr = @enumFromInt(6),
+            .body = .{ .pattern_extraction = .{
+                .base_expr = @enumFromInt(7),
+                .scrutinee_pattern = @enumFromInt(8),
+                .result_pattern = @enumFromInt(9),
+            } },
+        },
+    };
+
+    try std.testing.expectEqual(@as(usize, 4), syntheticExprCapacityForHoistedRoots(&roots));
+}
+
+test "checked body builder appends reserved synthetic expressions without allocation" {
+    const allocator = std.testing.allocator;
+    const synthetic_count: usize = 64;
+
+    var builder = CheckedBodyStoreBuilder{};
+    defer builder.deinit(allocator);
+    try builder.reserveSyntheticExprs(allocator, synthetic_count);
+
+    var failing_allocator = std.testing.FailingAllocator.init(allocator, .{
+        .fail_index = 0,
+        .resize_fail_index = 0,
+    });
+    const no_alloc = failing_allocator.allocator();
+
+    for (0..synthetic_count) |i| {
+        const expr = try builder.appendSyntheticExpr(
+            no_alloc,
+            .{ .pattern_extraction_wrapper = .{
+                .selected_root_index = @intCast(i),
+                .scrutinee_pattern = @enumFromInt(@as(u32, @intCast(i))),
+            } },
+            undefined, // Type is deliberately unread; this test only exercises reserved synthetic expression storage.
+            base.Region.zero(),
+            .empty_record,
+        );
+        try std.testing.expectEqual(i, @intFromEnum(expr));
+        try std.testing.expectEqual(expr, builder.store.stored_exprs.items[i].id);
+        try std.testing.expect(!builder.store.stored_exprs.items[i].diverges);
+    }
+
+    try std.testing.expectEqual(synthetic_count, builder.store.stored_exprs.items.len);
+    try std.testing.expectEqual(synthetic_count, builder.synthetic_expr_origins.items.len);
+    try std.testing.expectEqual(@as(usize, 0), failing_allocator.allocations);
+    try std.testing.expectEqual(@as(usize, 0), failing_allocator.deallocations);
+    try std.testing.expect(!failing_allocator.has_induced_failure);
 }
 
 test "provided primitive constant is a data export, not a runtime root" {
@@ -23245,6 +25685,7 @@ test "artifact views are read-only projections" {
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .hoisted_constants = .{},
         .const_templates = .{},
         .const_store = ConstStore.init(std.testing.allocator),
     };
@@ -23497,6 +25938,7 @@ test "CheckedBodyStore: POD round-trip preserves exprs, slices, match branches, 
             .branches = &branches,
             .is_try_suffix = false,
             .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
         } } },
         .{ .id = e1, .ty = ty0, .source_region = region, .data = .{ .crash = boom_id } },
     };
@@ -23596,6 +26038,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .hoisted_constants = .{},
         .const_templates = .{},
         .checked_types = checked_types_src,
         .const_store = const_store_src,
@@ -23647,8 +26090,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x41, 0x60, 0x1E, 0x63, 0x70, 0xD9, 0x31, 0xFD, 0x1E, 0xBB, 0x4F, 0x22, 0x8A, 0xBB, 0x61, 0x76,
-        0x88, 0x92, 0x02, 0x0A, 0x7A, 0x1E, 0xFB, 0x9C, 0x1E, 0x95, 0x34, 0xA4, 0x1F, 0x78, 0x2E, 0x4C,
+        0xEF, 0xAC, 0xA4, 0xAA, 0x4C, 0xFE, 0xF1, 0x9C, 0xAA, 0xCA, 0x5D, 0x0D, 0xA8, 0xD8, 0x69, 0x85,
+        0xE4, 0x91, 0xE0, 0x8A, 0x65, 0xAB, 0x4D, 0xFD, 0x62, 0xDE, 0xB5, 0xD0, 0x7C, 0xA1, 0xC6, 0x4D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
