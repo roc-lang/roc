@@ -2422,6 +2422,7 @@ pub const BuildEnv = struct {
                 &keys,
                 relation_artifact,
                 binding,
+                root_artifact.platform_required_bindings.relationClosure(binding),
             );
         }
 

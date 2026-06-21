@@ -54,6 +54,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const UnreachableCode = problem_mod.UnreachableCode;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 
 // Type declaration errors
@@ -875,6 +876,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
         }
     }
@@ -4035,6 +4037,27 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
         }, self, &report);
+
+        return report;
+    }
+
+    fn buildUnreachableCodeReport(self: *Self, data: UnreachableCode) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "UNREACHABLE CODE", .warning);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This code is unreachable because an earlier expression always exits:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
 
         return report;
     }
