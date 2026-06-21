@@ -60,8 +60,12 @@ pub fn run(
     owned.source_files = .empty;
     var expr_locs = owned.expr_locs;
     owned.expr_locs = .empty;
+    var expr_regions = owned.expr_regions;
+    owned.expr_regions = .empty;
     var stmt_locs = owned.stmt_locs;
     owned.stmt_locs = .empty;
+    var stmt_regions = owned.stmt_regions;
+    owned.stmt_regions = .empty;
     var local_names = owned.local_names;
     owned.local_names = .empty;
 
@@ -86,7 +90,9 @@ pub fn run(
         proc_debug_names,
         source_files,
         expr_locs,
+        expr_regions,
         stmt_locs,
+        stmt_regions,
         local_names,
         comptime_sites,
         owned.next_symbol,
@@ -109,7 +115,9 @@ pub fn run(
     proc_debug_names = undefined;
     source_files = undefined;
     expr_locs = undefined;
+    expr_regions = undefined;
     stmt_locs = undefined;
+    stmt_regions = undefined;
     local_names = undefined;
     comptime_sites = undefined;
     program.runtime_schema_requests = runtime_schema_requests;

@@ -933,7 +933,10 @@ const Inserter = struct {
         const stmt = self.store.getCFStmt(frame.stmt);
         const saved_loc = self.store.current_loc;
         defer self.store.current_loc = saved_loc;
+        const saved_region = self.store.current_region;
+        defer self.store.current_region = saved_region;
         self.store.current_loc = self.store.stmtLoc(frame.stmt);
+        self.store.current_region = self.store.stmtRegion(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
 
