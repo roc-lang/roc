@@ -975,19 +975,56 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     }
 }
 
-/// Generate platform host shim object file using LLVM.
+fn buildShimEntrypoints(
+    ctx: *CliCtx,
+    store: *const lir.LirStore,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    entrypoint_names: []const []const u8,
+) (Allocator.Error || CliError)![]llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint {
+    if (platform_entrypoints.len != entrypoint_names.len) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+
+    var shim_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint, platform_entrypoints.len);
+    for (platform_entrypoints) |entrypoint| {
+        const ordinal: usize = @intCast(entrypoint.ordinal);
+        if (ordinal >= entrypoint_names.len) {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+        }
+
+        const spec = store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = store.getLocalSpan(spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = store.getLocal(local_id).layout_idx;
+        }
+        shim_entrypoints[ordinal] = .{
+            .symbol_name = entrypoint_names[ordinal],
+            .entry_index = entrypoint.ordinal,
+            .arg_layouts = arg_layouts,
+            .ret_layout = spec.ret_layout,
+        };
+    }
+
+    return shim_entrypoints;
+}
+
+/// Generate platform host shim object file using LLVM from already-lowered LIR data.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-/// If `lir_image` is present, embed the already-lowered LIR image
+/// If `embedded_lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(
+fn generatePlatformHostShimFromLirData(
     ctx: *CliCtx,
     cache_dir: []const u8,
     entrypoint_names: []const []const u8,
     checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
-    lir_image: []const u8,
-    embed_image: bool,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    embedded_lir_image: ?[]const u8,
+    image_cache_len: usize,
     default_run_start: bool,
     debug: bool,
 ) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
@@ -1004,50 +1041,27 @@ fn generatePlatformHostShim(
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
-    // View the LIR image to derive the entrypoint ABI, the hosted dispatch
-    // table, and the layout store the C-ABI lowering needs.
-    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-    };
-
-    if (view.platform_entrypoints.len != entrypoint_names.len) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-
-    var shim_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint, view.platform_entrypoints.len);
-    for (view.platform_entrypoints) |entrypoint| {
-        const spec = view.store.getProcSpec(entrypoint.root_proc);
-        const arg_locals = view.store.getLocalSpan(spec.args);
-        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
-            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
-        }
-        shim_entrypoints[entrypoint.ordinal] = .{
-            .symbol_name = entrypoint_names[entrypoint.ordinal],
-            .entry_index = entrypoint.ordinal,
-            .arg_layouts = arg_layouts,
-            .ret_layout = spec.ret_layout,
-        };
-    }
+    const shim_entrypoints = try buildShimEntrypoints(
+        ctx,
+        store,
+        platform_entrypoints,
+        entrypoint_names,
+    );
 
     // Hosted dispatch table symbols, ordered by dispatch index. Multiple proc
     // specs may share a dispatch index (specializations of the same hosted
     // function); they all carry the same symbol.
-    const hosted_symbols = checked_hosted_symbols orelse try hostedSymbolsFromLirDispatch(ctx.arena, &view.store);
+    const hosted_symbols = checked_hosted_symbols orelse try hostedSymbolsFromLirDispatch(ctx.arena, store);
 
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, &view.store, std_target);
-    codegen.layout_store = &view.layouts;
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, store, std_target);
+    codegen.layout_store = layouts;
     defer codegen.deinit();
 
     var bitcode_result = codegen.generateInterpreterShimModule(
         "roc_platform_shim",
         shim_entrypoints,
         hosted_symbols,
-        if (embed_image) lir_image else null,
+        embedded_lir_image,
         default_run_start,
     ) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
@@ -1059,16 +1073,16 @@ fn generatePlatformHostShim(
     // hash the derived entrypoint ABI, the hosted table, and the image length
     // instead of the bytes themselves.
     var hash = std.hash.Crc32.init();
-    const abi_digest = try entrypointAbiDigest(ctx, lir_image, target);
+    const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
     for (hosted_symbols) |symbol| {
         hash.update(symbol);
         hash.update(&[_]u8{0});
     }
     var image_len_bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &image_len_bytes, lir_image.len, .little);
+    std.mem.writeInt(u64, &image_len_bytes, @intCast(image_cache_len), .little);
     hash.update(&image_len_bytes);
-    hash.update(if (embed_image) "embed" else "dispatch");
+    hash.update(if (embedded_lir_image != null) "embed" else "dispatch");
     hash.update(if (default_run_start) "default-run-start" else "host-provided-start");
     for (entrypoint_names) |name| {
         hash.update(name);
@@ -1131,6 +1145,54 @@ fn generatePlatformHostShim(
     std.log.debug("Generated platform host shim: {s}", .{object_path});
 
     return object_path;
+}
+
+/// Generate platform host shim object file using LLVM.
+/// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
+/// If `lir_image` is present, embed the already-lowered LIR image
+/// and call the interpreter shim entrypoint that views the image directly.
+/// If debug is true, include debug information in the generated object file.
+fn generatePlatformHostShim(
+    ctx: *CliCtx,
+    cache_dir: []const u8,
+    entrypoint_names: []const []const u8,
+    checked_hosted_symbols: ?[]const []const u8,
+    target: RocTarget,
+    lir_image: []const u8,
+    embed_image: bool,
+    default_run_start: bool,
+    debug: bool,
+) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
+    // Check if LLVM is available before viewing the image.
+    if (!llvm_available) {
+        std.log.debug("LLVM not available, skipping platform host shim generation", .{});
+        return null;
+    }
+
+    // View the LIR image to derive the entrypoint ABI, the hosted dispatch
+    // table, and the layout store the C-ABI lowering needs.
+    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    };
+
+    return generatePlatformHostShimFromLirData(
+        ctx,
+        cache_dir,
+        entrypoint_names,
+        checked_hosted_symbols,
+        target,
+        &view.store,
+        &view.layouts,
+        view.platform_entrypoints,
+        if (embed_image) lir_image else null,
+        lir_image.len,
+        default_run_start,
+        debug,
+    );
 }
 
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void {
@@ -1300,7 +1362,7 @@ fn findHostedSectionEnv(
 fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) void {
     if (entries.len != map.keys.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("roc run invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
+            std.debug.panic("default roc command invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
         }
         unreachable;
     }
@@ -1311,7 +1373,7 @@ fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) voi
                 if (std.mem.eql(u8, key, entry.order_key)) break :blk index;
             }
             if (builtin.mode == .Debug) {
-                std.debug.panic("roc run invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
+                std.debug.panic("default roc command invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
             }
             unreachable;
         };
@@ -1458,15 +1520,13 @@ fn updateInterpreterExeAppLinkInput(
 /// Digest of the entrypoint C ABI and hosted dispatch table baked into the
 /// generated interpreter shim. Part of the interpreter executable cache key:
 /// the cached exe's marshalling code must match the program's entrypoint ABI.
-fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (Allocator.Error || CliError)![32]u8 {
-    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-    };
-
+fn entrypointAbiDigestFromLirData(
+    ctx: *CliCtx,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    target: RocTarget,
+) (Allocator.Error || CliError)![32]u8 {
     const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
         .aarch64 => .aarch64,
         .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
@@ -1495,15 +1555,15 @@ fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (
         }
     }.go;
 
-    updateHashU32(&hasher, @intCast(view.platform_entrypoints.len));
-    for (view.platform_entrypoints) |entrypoint| {
-        const spec = view.store.getProcSpec(entrypoint.root_proc);
-        const arg_locals = view.store.getLocalSpan(spec.args);
+    updateHashU32(&hasher, @intCast(platform_entrypoints.len));
+    for (platform_entrypoints) |entrypoint| {
+        const spec = store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = store.getLocalSpan(spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
         for (arg_locals, 0..) |local_id, i| {
-            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
+            arg_layouts[i] = store.getLocal(local_id).layout_idx;
         }
-        const lowered = layout.abi.lower(ctx.arena, &view.layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+        const lowered = layout.abi.lower(ctx.arena, layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
         updateHashU32(&hasher, entrypoint.ordinal);
         hashPlacement(&hasher, lowered.ret);
         updateHashU32(&hasher, @intCast(lowered.args.len));
@@ -1512,10 +1572,10 @@ fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (
         }
     }
 
-    for (view.store.getProcSpecs()) |spec| {
+    for (store.getProcSpecs()) |spec| {
         const hosted = spec.hosted orelse continue;
         updateHashU32(&hasher, hosted.dispatch_index);
-        updateHashBytes(&hasher, view.store.getString(hosted.symbol));
+        updateHashBytes(&hasher, store.getString(hosted.symbol));
     }
 
     return hasher.finalResult();
@@ -1724,7 +1784,7 @@ test "interpreter executable cache digest changes for platform host shim entrypo
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
     const native_target = RocTarget.detectNative();
     try ctx.io.stderr().print(
-        "Error: unsupported target for roc run: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
+        "Error: unsupported target for the default roc command: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
         .{ @tagName(target), @tagName(native_target), @tagName(target) },
     );
     return error.UnsupportedTarget;
@@ -1860,28 +1920,73 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         return error.PlatformNotSupported;
     };
 
-    // Build the viewable LIR image in shared memory before linking the
-    // host executable. The same lowered root metadata supplies the platform
-    // entrypoint names used by the shim, so `roc run` does not rediscover roots
-    // from platform source syntax after checking.
-    var reporter = makeReporter(ctx, "roc run", args.timings);
+    // Lower before linking so the host shim uses checked entrypoint metadata
+    // rather than rediscovering roots from platform source syntax after checking.
+    var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
-    var shm_handle = shm_result.handle;
-    defer closeSharedMemoryHandle(shm_handle);
 
-    if (shm_result.error_count > 0) {
+    var lowered_result: ?LoweredCoordinatorResult = null;
+    defer if (lowered_result) |*result| result.deinit();
+
+    var shm_handle_opt: ?SharedMemoryHandle = null;
+    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
+
+    var entrypoint_names: []const []const u8 = &.{};
+    var hosted_symbols: []const []const u8 = &.{};
+    var checked_host_identity_opt: ?[32]u8 = null;
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    switch (args.opt) {
+        .dev => {
+            lowered_result = try lowerLirWithCoordinator(
+                ctx,
+                ctx.gpa,
+                args.path,
+                null,
+                args.max_threads,
+                debugEffectsForOpt(args.opt),
+                resolutionConfigFromLimits(args.resolve_limits),
+                &reporter,
+            );
+            const result = if (lowered_result) |*value| value else unreachable;
+            entrypoint_names = result.entrypoint_names;
+            hosted_symbols = result.hosted_symbols;
+            checked_host_identity_opt = result.checked_host_identity;
+            error_count = result.counts.errors;
+            warning_count = result.counts.warnings;
+        },
+        .interpreter => {
+            const shm_result = try buildLirImageWithCoordinator(
+                ctx,
+                args.path,
+                null,
+                args.max_threads,
+                debugEffectsForOpt(args.opt),
+                resolutionConfigFromLimits(args.resolve_limits),
+                &reporter,
+            );
+            shm_handle_opt = shm_result.handle;
+            entrypoint_names = shm_result.entrypoint_names;
+            hosted_symbols = shm_result.hosted_symbols;
+            checked_host_identity_opt = shm_result.checked_host_identity;
+            error_count = shm_result.error_count;
+            warning_count = shm_result.warning_count;
+        },
+        .size, .speed => unreachable,
+    }
+
+    if (error_count > 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
     reporter.finish();
 
-    const entrypoint_names = shm_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("roc run invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+            std.debug.panic("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
         }
         unreachable;
     }
@@ -1894,9 +1999,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         .size, .speed => unreachable,
     };
 
-    const checked_host_identity = shm_result.checked_host_identity orelse {
+    const checked_host_identity = checked_host_identity_opt orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("roc run invariant violated: missing checked host identity after successful LIR image build", .{});
+            std.debug.panic("default roc command invariant violated: missing checked host identity after successful LIR image build", .{});
         }
         unreachable;
     };
@@ -1979,9 +2084,50 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
 
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
-        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, shm_result.hosted_symbols, selected_target, shm_image_bytes, false, false, enable_debug);
+        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
+        const platform_shim_path = switch (args.opt) {
+            .dev => blk: {
+                const result = if (lowered_result) |*value| value else unreachable;
+                const lowered = successfulLoweredProgram(result, "default roc command");
+                const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+                defer ctx.gpa.free(platform_entrypoints);
+                break :blk try generatePlatformHostShimFromLirData(
+                    ctx,
+                    temp_dir_path,
+                    entrypoint_names,
+                    hosted_symbols,
+                    selected_target,
+                    &lowered.lir_result.store,
+                    &lowered.lir_result.layouts,
+                    platform_entrypoints,
+                    null,
+                    0,
+                    false,
+                    enable_debug,
+                );
+            },
+            .interpreter => blk: {
+                const shm_handle = shm_handle_opt orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                    }
+                    unreachable;
+                };
+                const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+                break :blk try generatePlatformHostShim(
+                    ctx,
+                    temp_dir_path,
+                    entrypoint_names,
+                    hosted_symbols,
+                    selected_target,
+                    shm_image_bytes,
+                    false,
+                    false,
+                    enable_debug,
+                );
+            },
+            .size, .speed => unreachable,
+        };
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
@@ -2060,11 +2206,28 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         // runtime symbols compiled output would; the host inputs must define
         // them all.
         {
-            const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+            const referenced_hosted_symbols = switch (args.opt) {
+                .dev => blk: {
+                    const result = if (lowered_result) |*value| value else unreachable;
+                    const lowered = successfulLoweredProgram(result, "default roc command");
+                    break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+                },
+                .interpreter => blk: {
+                    const shm_handle = shm_handle_opt orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                        }
+                        unreachable;
+                    };
+                    const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+                    break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
+                },
+                .size, .speed => unreachable,
+            };
             try verifyHostInputSymbols(
                 ctx,
                 host_input_paths.items,
-                try hostedSymbolsFromLir(ctx.arena, &view.store),
+                referenced_hosted_symbols,
                 target_name,
                 false,
             );
@@ -2108,8 +2271,17 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 
     if (args.opt == .dev) {
-        try publishDevRunImage(ctx, &shm_handle, selected_target, entrypoint_names);
+        const result = if (lowered_result) |*value| value else unreachable;
+        const lowered = successfulLoweredProgram(result, "default roc command");
+        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
     }
+
+    const shm_handle = shm_handle_opt orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
+        }
+        unreachable;
+    };
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
     if (comptime is_windows) {
@@ -2124,7 +2296,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     std.log.debug("Interpreter execution completed", .{});
 
     // Exit with code 2 if there were warnings (but no errors)
-    if (shm_result.warning_count > 0) {
+    if (warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -2382,7 +2554,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    var reporter = makeReporter(ctx, "roc run", args.timings);
+    var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
     const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
@@ -2425,7 +2597,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const default_target = defaultRunShimTarget(native_target);
     const selected_target = if (args.target) |target_str| blk: {
         const requested = RocTarget.fromString(target_str) orelse {
-            try ctx.io.stderr().print("Error: invalid target for roc run: {s}\n", .{target_str});
+            try ctx.io.stderr().print("Error: invalid target for roc: {s}\n", .{target_str});
             return error.InvalidTarget;
         };
         if (!devShimTargetCompatible(requested, native_target)) {
@@ -2495,21 +2667,29 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    var reporter = makeReporter(ctx, "roc run", args.timings);
+    var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
-    var shm_handle = shm_result.handle;
-    defer closeSharedMemoryHandle(shm_handle);
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        ctx.gpa,
+        app_path,
+        original_source_dir,
+        args.max_threads,
+        debugEffectsForOpt(args.opt),
+        resolutionConfigFromLimits(args.resolve_limits),
+        &reporter,
+    );
+    defer lowered_result.deinit();
 
-    if (shm_result.error_count > 0) {
+    if (lowered_result.counts.errors > 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
     reporter.finish();
 
-    const entrypoint_names = shm_result.entrypoint_names;
+    const entrypoint_names = lowered_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("default app run invariant violated: no platform entrypoints", .{});
@@ -2517,8 +2697,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         unreachable;
     }
 
+    const lowered = successfulLoweredProgram(&lowered_result, "default app run");
     const enable_debug = builtin.mode == .Debug;
-    const checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, shm_result.hosted_symbols);
+    const checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
     const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
         libc_finder.findLibc(ctx) catch |err| {
             try ctx.io.stderr().print(
@@ -2569,15 +2750,19 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
-        const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-        const platform_shim_path = (try generatePlatformHostShim(
+        const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+        defer ctx.gpa.free(platform_entrypoints);
+        const platform_shim_path = (try generatePlatformHostShimFromLirData(
             ctx,
             temp_dir,
             entrypoint_names,
-            shm_result.hosted_symbols,
+            lowered_result.hosted_symbols,
             selected_target,
-            shm_image_bytes,
-            false,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            platform_entrypoints,
+            null,
+            0,
             true,
             enable_debug,
         )) orelse return ctx.fail(.{ .shim_generation_failed = .{ .err = error.LLVMCompilationFailed } });
@@ -2631,7 +2816,8 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    try publishDevRunImage(ctx, &shm_handle, selected_target, entrypoint_names);
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+    defer closeSharedMemoryHandle(shm_handle);
 
     if (comptime is_windows) {
         try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
@@ -2640,7 +2826,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     }
     cleanup_temp_dir = false;
 
-    if (shm_result.warning_count > 0) {
+    if (lowered_result.counts.warnings > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -2990,6 +3176,29 @@ const CoordinatorReportCounts = struct {
     warnings: usize,
 };
 
+const LoweredCoordinatorResult = struct {
+    lowered: ?lir.CheckedPipeline.LoweredProgram,
+    entrypoint_names: []const []const u8,
+    hosted_symbols: []const []const u8,
+    checked_host_identity: ?[32]u8,
+    counts: CoordinatorReportCounts,
+
+    fn deinit(self: *LoweredCoordinatorResult) void {
+        if (self.lowered) |*lowered| {
+            lowered.deinit();
+        }
+    }
+};
+
+fn successfulLoweredProgram(result: *LoweredCoordinatorResult, label: []const u8) *lir.CheckedPipeline.LoweredProgram {
+    return if (result.lowered) |*lowered| lowered else {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("{s} invariant violated: successful coordinator lowering produced no lowered program", .{label});
+        }
+        unreachable;
+    };
+}
+
 fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []const u8) CoordinatorReportCounts {
     var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
 
@@ -3071,17 +3280,6 @@ fn viewLirImageFromHandle(handle: SharedMemoryHandle, arena: std.mem.Allocator) 
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, arena);
 }
 
-fn sharedMemoryAllocatorFromHandle(handle: SharedMemoryHandle, page_size: usize) SharedMemoryAllocator {
-    return .{
-        .handle = handle.fd,
-        .base_ptr = @ptrCast(@alignCast(handle.ptr)),
-        .total_size = handle.mapped_size,
-        .offset = std.atomic.Value(usize).init(handle.size),
-        .is_owner = false,
-        .page_size = page_size,
-    };
-}
-
 fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
     return selected.toCpuArch() == native.toCpuArch() and
         selected.toOsTag() == native.toOsTag() and
@@ -3109,10 +3307,10 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
 
 fn publishDevRunImage(
     ctx: *CliCtx,
-    shm_handle: *SharedMemoryHandle,
     selected_target: RocTarget,
     entrypoint_names: []const []const u8,
-) anyerror!void {
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror!SharedMemoryHandle {
     if (comptime !backend.host_lir_codegen_available) {
         try ctx.io.stderr().print(
             "Error: The dev backend cannot run in memory on this host architecture.\n",
@@ -3122,29 +3320,34 @@ fn publishDevRunImage(
     } else {
         const native_target = backend.HostLirCodeGen.roc_target;
         if (!devShimTargetCompatible(selected_target, native_target)) {
-            return rejectRunTargetNotExecutable(ctx, selected_target);
+            try rejectRunTargetNotExecutable(ctx, selected_target);
+            unreachable;
         }
 
-        const view = try viewLirImageFromHandle(shm_handle.*, ctx.arena);
+        const store = &lowered.lir_result.store;
+        const layouts = &lowered.lir_result.layouts;
 
-        var static_strings = try backend.StaticStringData.build(ctx.gpa, &view.store, native_target);
+        var static_strings = try backend.StaticStringData.build(ctx.gpa, store, native_target);
         defer static_strings.deinit();
 
         var codegen = try backend.HostLirCodeGen.init(
             ctx.gpa,
-            &view.store,
-            &view.layouts,
+            store,
+            layouts,
             static_strings.entries,
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
 
-        try codegen.compileAllProcSpecs(view.store.getProcSpecs());
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
 
-        const entrypoints = try ctx.gpa.alloc(backend.RunImage.EntrypointInput, view.platform_entrypoints.len);
+        const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+        defer ctx.gpa.free(platform_entrypoints);
+
+        const entrypoints = try ctx.gpa.alloc(backend.RunImage.EntrypointInput, platform_entrypoints.len);
         defer ctx.gpa.free(entrypoints);
 
-        for (view.platform_entrypoints, 0..) |platform_entrypoint, i| {
+        for (platform_entrypoints, 0..) |platform_entrypoint, i| {
             const ordinal: usize = @intCast(platform_entrypoint.ordinal);
             if (ordinal >= entrypoint_names.len) {
                 if (builtin.mode == .Debug) {
@@ -3153,8 +3356,8 @@ fn publishDevRunImage(
                 unreachable;
             }
 
-            const proc = view.store.getProcSpec(platform_entrypoint.root_proc);
-            const arg_layouts = try argLayoutsForProc(ctx.gpa, &view.store, platform_entrypoint.root_proc);
+            const proc = store.getProcSpec(platform_entrypoint.root_proc);
+            const arg_layouts = try argLayoutsForProc(ctx.gpa, store, platform_entrypoint.root_proc);
             defer ctx.gpa.free(arg_layouts);
 
             const exported = try codegen.generateEntrypointWrapper(
@@ -3170,8 +3373,8 @@ fn publishDevRunImage(
         }
 
         const page_size = try SharedMemoryAllocator.getSystemPageSize();
-        var shm = sharedMemoryAllocatorFromHandle(shm_handle.*, page_size);
-        shm.reset();
+        var shm = try createSharedMemory(ctx.io.std_io, page_size);
+        errdefer shm.deinit(ctx.gpa);
 
         _ = try backend.RunImage.writeToSharedMemory(
             ctx.gpa,
@@ -3183,7 +3386,12 @@ fn publishDevRunImage(
             static_strings.exports,
         );
         shm.updateHeader();
-        shm_handle.size = shm.getUsedSize();
+        return .{
+            .fd = shm.handle,
+            .ptr = shm.base_ptr,
+            .size = shm.getUsedSize(),
+            .mapped_size = shm.total_size,
+        };
     }
 }
 
@@ -3243,31 +3451,17 @@ fn evaluateLirImageEntrypoint(
     };
 }
 
-/// Build shared memory containing a viewable ARC-inserted LIR image.
-///
-/// The parent process owns parse, canonicalization, checking, checked module
-/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
-/// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
-/// modules, or post-check IRs.
-pub fn buildLirImageWithCoordinator(
+fn lowerLirWithCoordinator(
     ctx: *CliCtx,
+    lir_allocator: Allocator,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
-) anyerror!SharedMemoryResult {
+) anyerror!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
-
-    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
-    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(ctx.io.std_io, page_size);
-    // Don't defer deinit here - we need to keep the shared memory alive
-
-    const shm_allocator = shm.allocator();
-    const image_header = try shm_allocator.create(lir.LirImage.Header);
 
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
     defer builtin_modules.deinit();
@@ -3405,16 +3599,26 @@ pub fn buildLirImageWithCoordinator(
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
         if (reporter) |r| r.fail();
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, counts, &.{}, &.{}, null);
+        return .{
+            .lowered = null,
+            .entrypoint_names = &.{},
+            .hosted_symbols = &.{},
+            .checked_host_identity = null,
+            .counts = counts,
+        };
     }
 
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (finalized_counts.errors > 0) {
         if (reporter) |r| r.fail();
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, finalized_counts, &.{}, &.{}, null);
+        return .{
+            .lowered = null,
+            .entrypoint_names = &.{},
+            .hosted_symbols = &.{},
+            .checked_host_identity = null,
+            .counts = finalized_counts,
+        };
     }
     if (reporter) |r| {
         r.endWithBreakdown(&.{
@@ -3434,8 +3638,8 @@ pub fn buildLirImageWithCoordinator(
     defer ctx.gpa.free(lir_roots);
 
     if (reporter) |r| r.begin("Specializing");
-    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        shm_allocator,
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        lir_allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
@@ -3446,9 +3650,9 @@ pub fn buildLirImageWithCoordinator(
             .debug_effects = debug_effects,
         },
     );
+    errdefer lowered.deinit();
     if (reporter) |r| r.end();
 
-    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     const hosted_table = try checkedHostedTable(
         ctx.arena,
@@ -3463,6 +3667,62 @@ pub fn buildLirImageWithCoordinator(
         hosted_table,
     );
 
+    return .{
+        .lowered = lowered,
+        .entrypoint_names = entrypoint_names,
+        .hosted_symbols = hosted_table.symbols,
+        .checked_host_identity = checked_host_identity,
+        .counts = finalized_counts,
+    };
+}
+
+/// Build shared memory containing a viewable ARC-inserted LIR image.
+///
+/// The parent process owns parse, canonicalization, checking, checked module
+/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
+/// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
+/// modules, or post-check IRs.
+pub fn buildLirImageWithCoordinator(
+    ctx: *CliCtx,
+    roc_file_path: []const u8,
+    source_dir_override: ?[]const u8,
+    max_threads: ?usize,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+    resolution_config: compile.package_resolution.Config,
+    reporter: ?*progress.Reporter,
+) anyerror!SharedMemoryResult {
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const shm_allocator = shm.allocator();
+    const image_header = try shm_allocator.create(lir.LirImage.Header);
+
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        shm_allocator,
+        roc_file_path,
+        source_dir_override,
+        max_threads,
+        debug_effects,
+        resolution_config,
+        reporter,
+    );
+
+    if (lowered_result.counts.errors > 0) {
+        shm.updateHeader();
+        return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
+    }
+
+    const lowered = if (lowered_result.lowered) |*program| program else {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LIR image invariant violated: successful coordinator lowering produced no lowered program", .{});
+        }
+        unreachable;
+    };
+    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     try lir.LirImage.fillHeaderInSharedMemory(
         image_header,
         shm.base_ptr,
@@ -3473,7 +3733,13 @@ pub fn buildLirImageWithCoordinator(
     );
 
     shm.updateHeader();
-    return sharedMemoryResult(&shm, finalized_counts, entrypoint_names, hosted_table.symbols, checked_host_identity);
+    return sharedMemoryResult(
+        &shm,
+        lowered_result.counts,
+        lowered_result.entrypoint_names,
+        lowered_result.hosted_symbols,
+        lowered_result.checked_host_identity,
+    );
 }
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
