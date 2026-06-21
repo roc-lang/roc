@@ -1,16 +1,24 @@
-//! Nominal record field ordering.
+//! Record field ordering, shared by the layout store and the `roc glue`
+//! generator so the two can never disagree on how a record lays out in memory.
 //!
-//! Structural records lay their fields out by descending alignment, so source
-//! order never reaches memory. Nominal records instead keep declared order so a
-//! Roc type can mirror a chosen C struct exactly. The one invariant both share
-//! is that a committed struct has no internal alignment padding between fields.
+//! Two ordering disciplines live here:
 //!
-//! This module turns a nominal record's declared field order into a no-padding
-//! order that stays as close to declared order as that invariant allows. When
-//! the declared order is already padding-free it is kept verbatim; otherwise it
-//! is repaired into the no-padding order that is lexicographically closest to
-//! declared order. A repaired order always exists because descending alignment
-//! witnesses one from offset zero, so this is total and never an error.
+//! - Structural (anonymous) records lay their fields out by descending
+//!   alignment, then ascending field name, so source order never reaches memory.
+//!   `computeStructuralFieldOrder` produces that permutation.
+//! - Nominal records (`:=` / `::`) instead keep declared source order so a Roc
+//!   type can mirror a chosen C struct exactly, including unnamed `_` padding
+//!   fields. `computeNominalFieldOrder` produces that permutation.
+//!
+//! The one invariant both disciplines share is that a committed struct has no
+//! internal alignment padding between fields.
+//!
+//! For nominal records this module turns the declared field order into a
+//! no-padding order that stays as close to declared order as that invariant
+//! allows. When the declared order is already padding-free it is kept verbatim;
+//! otherwise it is repaired into the no-padding order that is lexicographically
+//! closest to declared order. A repaired order always exists because descending
+//! alignment witnesses one from offset zero, so this is total and never an error.
 //!
 //! See design.md "Nominal Record Field Order".
 
@@ -25,6 +33,47 @@ pub const FieldShape = struct {
     /// their bytes are uninitialized and impose no alignment requirement.
     alignment: u32,
 };
+
+/// The alignment and name of one structural-record field.
+pub const StructuralField = struct {
+    /// Alignment in bytes; a power of two. Padding fields pass 1.
+    alignment: u32,
+    /// Field name, used only as the tie-break among equal-alignment fields.
+    /// Pass `""` to fall back to a pure stable alignment sort (the layout
+    /// store's pair-struct path, whose callers presort by name elsewhere).
+    name: []const u8,
+};
+
+/// Stable sort of structural-record fields: alignment descending, then field
+/// name ascending. Empty names degrade to a pure stable alignment sort,
+/// preserving input order for equal alignment (matching the layout store's
+/// existing pair-struct behavior).
+///
+/// `out_order` is filled with a permutation of `0..fields.len`: `out_order[k]`
+/// is the index into `fields` of the field that occupies memory slot `k`. No
+/// allocation is required (the block sort works in place).
+pub fn computeStructuralFieldOrder(
+    fields: []const StructuralField,
+    out_order: []u16,
+) void {
+    std.debug.assert(out_order.len == fields.len);
+
+    for (out_order, 0..) |*slot, i| slot.* = @intCast(i);
+
+    const Ctx = struct {
+        fields: []const StructuralField,
+
+        pub fn lessThan(ctx: @This(), a: u16, b: u16) bool {
+            const fa = ctx.fields[a];
+            const fb = ctx.fields[b];
+            if (fa.alignment != fb.alignment) return fa.alignment > fb.alignment;
+            return std.mem.order(u8, fa.name, fb.name) == .lt;
+        }
+    };
+
+    // `std.sort.block` is a stable sort, so equal-key fields keep input order.
+    std.sort.block(u16, out_order, Ctx{ .fields = fields }, Ctx.lessThan);
+}
 
 /// Computes the in-memory field order for a nominal record.
 ///
@@ -302,4 +351,59 @@ test "repair result is always padding-free for a larger shuffled record" {
         try testing.expect(!seen[i]);
         seen[i] = true;
     }
+}
+
+fn expectStructuralOrder(fields: []const StructuralField, expected: []const u16) anyerror!void {
+    var order: [64]u16 = undefined;
+    computeStructuralFieldOrder(fields, order[0..fields.len]);
+    try testing.expectEqualSlices(u16, expected, order[0..fields.len]);
+}
+
+test "structural order sorts by descending alignment" {
+    // Declared [u8, u64, u16] sorts to [u64, u16, u8] by descending alignment.
+    const fields = [_]StructuralField{
+        .{ .alignment = 1, .name = "a" },
+        .{ .alignment = 8, .name = "b" },
+        .{ .alignment = 2, .name = "c" },
+    };
+    try expectStructuralOrder(&fields, &.{ 1, 2, 0 });
+}
+
+test "structural order tie-breaks by ascending field name" {
+    // All same alignment, so the order is purely by ascending name: c, m, z.
+    const fields = [_]StructuralField{
+        .{ .alignment = 4, .name = "z" },
+        .{ .alignment = 4, .name = "m" },
+        .{ .alignment = 4, .name = "c" },
+    };
+    try expectStructuralOrder(&fields, &.{ 2, 1, 0 });
+}
+
+test "structural order tie-breaks by name within each alignment band" {
+    // align-8 band {y, a} sorts to a, y; align-4 band {x, b} sorts to b, x;
+    // the align-8 band precedes the align-4 band.
+    const fields = [_]StructuralField{
+        .{ .alignment = 8, .name = "y" },
+        .{ .alignment = 4, .name = "x" },
+        .{ .alignment = 8, .name = "a" },
+        .{ .alignment = 4, .name = "b" },
+    };
+    try expectStructuralOrder(&fields, &.{ 2, 0, 3, 1 });
+}
+
+test "structural order with empty names is a stable alignment sort" {
+    // Empty names degrade to a pure stable alignment sort: equal-alignment
+    // fields keep their input order (matching the layout store's pair structs).
+    const fields = [_]StructuralField{
+        .{ .alignment = 4, .name = "" },
+        .{ .alignment = 8, .name = "" },
+        .{ .alignment = 4, .name = "" },
+        .{ .alignment = 8, .name = "" },
+    };
+    try expectStructuralOrder(&fields, &.{ 1, 3, 0, 2 });
+}
+
+test "structural order of a single field is trivial" {
+    const fields = [_]StructuralField{.{ .alignment = 16, .name = "only" }};
+    try expectStructuralOrder(&fields, &.{0});
 }
