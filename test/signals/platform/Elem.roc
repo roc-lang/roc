@@ -1,5 +1,5 @@
 import Node
-import NodeValue exposing [NodeValue]
+import HostValue exposing [HostValue]
 
 ## UI element descriptor tree. Markup nodes (`Element`, `Text`, `TextSignal`)
 ## carry no identity. Scope/binder nodes are the identity-bearing positions the
@@ -10,21 +10,24 @@ import NodeValue exposing [NodeValue]
 ## - `When`: a conditional with two arm subtrees; the live arm is its own scope
 ##   (`Branch` step). Advances the scope ordinal (its site ordinal).
 ## - `Each`: a keyed list; each row is its own scope keyed by the typed key
-##   payload, with a boxed key `is_eq` thunk. The row thunk receives the erased
+##   payload, with a boxed key `is_eq` thunk. The row thunk receives the host-owned
 ##   key and item value. Advances the scope ordinal.
 Elem := [
 	Element({ tag : Str, attrs : List(Node.Attr), children : List(Elem) }),
 	Text(Str),
-	TextSignal(Box(Node.SignalExpr)),
-	State({ binder : Node.BinderRef, initial : Box((NodeValue -> NodeValue)), eq : Box((NodeValue, NodeValue -> Bool)), child : Box(Elem) }),
-	When({ condition : Box(Node.SignalExpr), when_true : Box(Elem), when_false : Box(Elem) }),
+	TextSignal({ signal : Box(Node.SignalExpr), read : Box((HostValue -> Str)) }),
+	State({ binder : Node.BinderRef, initial : Box(({} -> HostValue)), eq : Box((HostValue, HostValue -> Bool)), drop : Box((HostValue -> {})), child : Box(Elem) }),
+	When({ condition : Box(Node.SignalExpr), read : Box((HostValue -> Bool)), when_true : Box(Elem), when_false : Box(Elem) }),
 	Each(
 		{
 			items : Box(Node.SignalExpr),
-			key_of : Box((NodeValue -> NodeValue)),
-			key_eq : Box((NodeValue, NodeValue -> Bool)),
-			item_eq : Box((NodeValue, NodeValue -> Bool)),
-			row : Box((NodeValue, NodeValue -> Elem)),
+			items_to_values : Box((HostValue -> List(HostValue))),
+			key_of : Box((HostValue -> HostValue)),
+			key_eq : Box((HostValue, HostValue -> Bool)),
+			key_drop : Box((HostValue -> {})),
+			item_eq : Box((HostValue, HostValue -> Bool)),
+			item_drop : Box((HostValue -> {})),
+			row : Box((HostValue, HostValue -> Elem)),
 		},
 	),
 ]

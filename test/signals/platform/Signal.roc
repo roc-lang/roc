@@ -1,10 +1,10 @@
-import NodeValue exposing [NodeValue]
+import HostValue exposing [HostValue]
 import Node
 
-## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor referencing
-## state/source binders. The `a` lives only in Roc's type system; the wire payload
-## is the descriptor. Transforms are captured as boxed thunks (confined erasure),
-## pinned to the surrounding `Signal(a)`'s value type.
+## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor
+## referencing state/source binders. The `a` lives only in Roc's type system.
+## Runtime values are opaque host-owned cells; each edge carries the exact typed
+## thunks that can read, compare, transform, and release that cell.
 Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	clone_expr : Box(Node.SignalExpr) -> Box(Node.SignalExpr)
 	clone_expr = |expr| Box.box(Box.unbox(expr))
@@ -18,176 +18,130 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	## A constant signal.
 	const : a -> Signal(a)
 		where [
-			a.encode : a, NodeValue -> Try(NodeValue, []),
-			a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			a.is_eq : a, a -> Bool,
 		]
 	const = |value| {
 		token = Box.box(0)
-		init : NodeValue -> NodeValue
-		init = |_unit| {
-			match value.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
-		}
-		eq : NodeValue, NodeValue -> Bool
-		eq = |left_nv, right_nv| {
-			A : a
+		init : {} -> HostValue
+		init = |_| HostValue.store(Box.box(value))
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
 			left : a
-			left =
-				match A.decode(left_nv, NodeValue.format) {
-					(Ok(decoded), _) => decoded
-					(Err(_), _) => {
-						crash "Signal.const equality received a left value that does not match the output type"
-					}
-				}
+			left = Box.unbox(HostValue.get(left_hv))
 			right : a
-			right =
-				match A.decode(right_nv, NodeValue.format) {
-					(Ok(decoded), _) => decoded
-					(Err(_), _) => {
-						crash "Signal.const equality received a right value that does not match the output type"
-					}
-				}
+			right = Box.unbox(HostValue.get(right_hv))
 			left.is_eq(right)
 		}
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(a)
+			boxed = HostValue.take(host_value)
+			_ = boxed
+			{}
+		}
 		{
-			expr: Box.box(Node.SignalExpr.ConstValue(
-				token,
-				Box.box(init),
-				Box.box(eq),
-			)),
+			expr: Box.box(
+				Node.SignalExpr.ConstValue(
+					token,
+					Box.box(init),
+					Box.box(eq),
+					Box.box(drop),
+				),
+			),
 		}
 	}
 
-	## Derived signal. The transform is a typed `a -> b`; we wrap it to decode the
-	## input payload and encode the output, pinning both to the call site's types.
+	## Derived signal. The transform is a typed `a -> b`; the host passes opaque
+	## cells and this thunk is the only place that can read the `a` input and
+	## construct the `b` output cell.
 	map :
 		Signal(a), (a -> b) -> Signal(b)
 			where [
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-				b.encode : b, NodeValue -> Try(NodeValue, []),
-				b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
 				b.is_eq : b, b -> Bool,
 			]
 	map = |signal, f| {
 		token = Box.box(0)
-		wrapped : NodeValue -> NodeValue
-		wrapped = |input_nv| {
-			A : a
+		wrapped : HostValue -> HostValue
+		wrapped = |input_hv| {
 			typed_input : a
-			typed_input =
-				match A.decode(input_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map received a value that does not match the source signal type"
-					}
-				}
+			typed_input = Box.unbox(HostValue.get(input_hv))
 			typed_output : b
 			typed_output = f(typed_input)
-			match typed_output.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+			HostValue.store(Box.box(typed_output))
 		}
-		eq : NodeValue, NodeValue -> Bool
-		eq = |left_nv, right_nv| {
-			B : b
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
 			left : b
-			left =
-				match B.decode(left_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map equality received a left value that does not match the output type"
-					}
-				}
+			left = Box.unbox(HostValue.get(left_hv))
 			right : b
-			right =
-				match B.decode(right_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map equality received a right value that does not match the output type"
-					}
-				}
+			right = Box.unbox(HostValue.get(right_hv))
 			left.is_eq(right)
+		}
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(b)
+			boxed = HostValue.take(host_value)
+			_ = boxed
+			{}
 		}
 
 		{
-			expr: Box.box(Node.SignalExpr.Map(
-				token,
-				Signal.clone_expr(signal.expr),
-				Box.box(wrapped),
-				Box.box(eq),
-			)),
+			expr: Box.box(
+				Node.SignalExpr.Map(
+					token,
+					Signal.clone_expr(signal.expr),
+					Box.box(wrapped),
+					Box.box(eq),
+					Box.box(drop),
+				),
+			),
 		}
 	}
 
 	map2 :
 		Signal(a), Signal(b), (a, b -> c) -> Signal(c)
 			where [
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-				b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
-				c.encode : c, NodeValue -> Try(NodeValue, []),
-				c.decode : NodeValue, NodeValue -> (Try(c, [TypeMismatch]), NodeValue),
 				c.is_eq : c, c -> Bool,
 			]
 	map2 = |left, right, f| {
 		token = Box.box(0)
-		wrapped : NodeValue, NodeValue -> NodeValue
-		wrapped = |left_nv, right_nv| {
-			A : a
+		wrapped : HostValue, HostValue -> HostValue
+		wrapped = |left_hv, right_hv| {
 			left_v : a
-			left_v =
-				match A.decode(left_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map2 received a value that does not match the left source signal type"
-					}
-				}
-			B : b
+			left_v = Box.unbox(HostValue.get(left_hv))
 			right_v : b
-			right_v =
-				match B.decode(right_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map2 received a value that does not match the right source signal type"
-					}
-				}
+			right_v = Box.unbox(HostValue.get(right_hv))
 			output : c
 			output = f(left_v, right_v)
-			match output.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+			HostValue.store(Box.box(output))
 		}
-		eq : NodeValue, NodeValue -> Bool
-		eq = |left_nv, right_nv| {
-			C : c
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
 			left_v : c
-			left_v =
-				match C.decode(left_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map2 equality received a left value that does not match the output type"
-					}
-				}
+			left_v = Box.unbox(HostValue.get(left_hv))
 			right_v : c
-			right_v =
-				match C.decode(right_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Signal.map2 equality received a right value that does not match the output type"
-					}
-				}
+			right_v = Box.unbox(HostValue.get(right_hv))
 			left_v.is_eq(right_v)
+		}
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(c)
+			boxed = HostValue.take(host_value)
+			_ = boxed
+			{}
 		}
 
 		{
-			expr: Box.box(Node.SignalExpr.Map2(
-				token,
-				Signal.clone_expr(left.expr),
-				Signal.clone_expr(right.expr),
-				Box.box(wrapped),
-				Box.box(eq),
-			)),
+			expr: Box.box(
+				Node.SignalExpr.Map2(
+					token,
+					Signal.clone_expr(left.expr),
+					Signal.clone_expr(right.expr),
+					Box.box(wrapped),
+					Box.box(eq),
+					Box.box(drop),
+				),
+			),
 		}
 	}
 
@@ -195,41 +149,32 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	combine :
 		List(Signal(a)) -> Signal(List(a))
 			where [
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 				a.is_eq : a, a -> Bool,
 			]
 	combine = |signals| {
 		token = Box.box(0)
 		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
-		transform : NodeValue -> NodeValue
-		transform = |items| items
-		eq : NodeValue, NodeValue -> Bool
-		eq = |left_nv, right_nv| {
-			A : a
-			decode_one = |nv, fmt| A.decode(nv, fmt)
-			(left_result, _) = NodeValue.decode_list(NodeValue.format, left_nv, decode_one)
-			(right_result, _) = NodeValue.decode_list(NodeValue.format, right_nv, decode_one)
-			match left_result {
-				Ok(left_items) => {
-					left_list : List(a)
-					left_list = left_items
-					match right_result {
-						Ok(right_items) => {
-							right_list : List(a)
-							right_list = right_items
-							left_list.is_eq(right_list)
-						}
-						Err(_) => {
-							crash "Signal.combine equality received a right value that does not match the output type"
-						}
-					}
-				}
-
-				Err(_) => {
-					crash "Signal.combine equality received a left value that does not match the output type"
-				}
-			}
+		transform : List(HostValue) -> HostValue
+		transform = |items| {
+			values : List(a)
+			values = List.map(items, |host_value| Box.unbox(HostValue.get(host_value)))
+			HostValue.store(Box.box(values))
 		}
-		{ expr: Box.box(Node.SignalExpr.Combine(token, exprs, Box.box(transform), Box.box(eq))) }
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
+			left_items : List(a)
+			left_items = Box.unbox(HostValue.get(left_hv))
+			right_items : List(a)
+			right_items = Box.unbox(HostValue.get(right_hv))
+			left_items.is_eq(right_items)
+		}
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(List(a))
+			boxed = HostValue.take(host_value)
+			_ = boxed
+			{}
+		}
+		{ expr: Box.box(Node.SignalExpr.Combine(token, exprs, Box.box(transform), Box.box(eq), Box.box(drop))) }
 	}
 }

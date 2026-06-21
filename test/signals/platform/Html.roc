@@ -1,4 +1,5 @@
 import Elem exposing [Elem]
+import HostValue exposing [HostValue]
 import Node
 import Signal exposing [Signal]
 
@@ -6,6 +7,12 @@ import Signal exposing [Signal]
 ## and attributes reference signals, and event handlers carry reducer messages.
 Html := [].{
 	Attr : Node.Attr
+
+	read_str : HostValue -> Str
+	read_str = |value| Box.unbox(HostValue.get(value))
+
+	read_bool : HostValue -> Bool
+	read_bool = |value| Box.unbox(HostValue.get(value))
 
 	div : List(Node.Attr), List(Elem) -> Elem
 	div = |attrs, children| Elem.Element({ tag: "div", attrs, children })
@@ -49,7 +56,7 @@ Html := [].{
 
 	## Signal-backed text content.
 	text_s : Signal(Str) -> Elem
-	text_s = |signal| Elem.TextSignal(Signal.to_expr(signal))
+	text_s = |signal| Elem.TextSignal({ signal: Signal.to_expr(signal), read: Box.box(Html.read_str) })
 
 	## A button whose label is static text and whose click fires `msg`.
 	button : Str, Node.Msg -> Elem
@@ -73,7 +80,7 @@ Html := [].{
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(Html.read_str) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -88,8 +95,8 @@ Html := [].{
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label) }),
-					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(Html.read_str) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read: Box.box(Html.read_bool) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -107,7 +114,7 @@ Html := [].{
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "textbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value) }),
+					Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read: Box.box(Html.read_str) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_input, msg }),
 				],
 				children: [],
@@ -125,7 +132,7 @@ Html := [].{
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "checkbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read: Box.box(Html.read_bool) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_check, msg }),
 				],
 				children: [],

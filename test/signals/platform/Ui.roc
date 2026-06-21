@@ -1,5 +1,5 @@
 import Elem exposing [Elem]
-import NodeValue exposing [NodeValue]
+import HostValue exposing [HostValue]
 import Node
 import Signal exposing [Signal]
 
@@ -7,9 +7,12 @@ import Signal exposing [Signal]
 ## closure binder (`Ui.state`): the binder is the construction site, which is the
 ## only way to give per-instance state a stable identity in pure Roc. The host
 ## assigns construction-order identity by walking the descriptor tree; binders are
-## referenced de-Bruijn style (distance out to the enclosing `Ui.state`), so the
-## same helper composes correctly wherever it is mounted.
+## referenced by their scoped token, so the same helper composes correctly
+## wherever it is mounted.
 Ui := [].{
+	read_bool : HostValue -> Bool
+	read_bool = |value| Box.unbox(HostValue.get(value))
+
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -18,82 +21,54 @@ Ui := [].{
 		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref))
 
 		## Build a unit-triggered reducer message: `f` maps the current value to the
-		## next value, ignoring the (unit) payload.
+		## next value, ignoring the unit payload.
 		on_unit : State(a), (a -> a) -> Node.Msg
-			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-			]
 		on_unit = |st, f| {
-			wrapped : NodeValue, NodeValue -> NodeValue
-			wrapped = |current_nv, _payload| {
-				A : a
+			wrapped : HostValue, HostValue -> HostValue
+			wrapped = |current_hv, _payload_hv| {
 				current : a
-				current =
-					match A.decode(current_nv, NodeValue.format) {
-						(Ok(value), _) => value
-						(Err(_), _) => {
-							crash "Ui.state reducer received a value that does not match the state type"
-						}
-					}
+				current = Box.unbox(HostValue.get(current_hv))
 				next : a
 				next = f(current)
-				match next.encode(NodeValue.format) {
-					Ok(encoded) => encoded
-				}
+				HostValue.store(Box.box(next))
 			}
-			{ binder: st.ref, payload_kind: Node.unit_payload_kind, transform: Box.box(wrapped) }
+			payload_drop : HostValue -> {}
+			payload_drop = |payload_hv| {
+				boxed : Box({})
+				boxed = HostValue.take(payload_hv)
+				_ = boxed
+				{}
+			}
+			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 
 		## Build a payload-carrying reducer: `f` maps (current, payload) to next.
 		on_value : State(a), U64, (a, p -> a) -> Node.Msg
-			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-				p.decode : NodeValue, NodeValue -> (Try(p, [TypeMismatch]), NodeValue),
-			]
 		on_value = |st, payload_kind, f| {
-			wrapped : NodeValue, NodeValue -> NodeValue
-			wrapped = |current_nv, payload_nv| {
-				A : a
+			wrapped : HostValue, HostValue -> HostValue
+			wrapped = |current_hv, payload_hv| {
 				current : a
-				current =
-					match A.decode(current_nv, NodeValue.format) {
-						(Ok(value), _) => value
-						(Err(_), _) => {
-							crash "Ui.state reducer received a value that does not match the state type"
-						}
-					}
-				P : p
+				current = Box.unbox(HostValue.get(current_hv))
 				payload : p
-				payload =
-					match P.decode(payload_nv, NodeValue.format) {
-						(Ok(value), _) => value
-						(Err(_), _) => {
-							crash "Ui.state reducer received a payload that does not match the event type"
-						}
-					}
+				payload = Box.unbox(HostValue.get(payload_hv))
 				next : a
 				next = f(current, payload)
-				match next.encode(NodeValue.format) {
-					Ok(encoded) => encoded
-				}
+				HostValue.store(Box.box(next))
 			}
-			{ binder: st.ref, payload_kind, transform: Box.box(wrapped) }
+			payload_drop : HostValue -> {}
+			payload_drop = |payload_hv| {
+				boxed : Box(p)
+				boxed = HostValue.take(payload_hv)
+				_ = boxed
+				{}
+			}
+			{ binder: st.ref, payload_kind, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
-			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-			]
 		on_str = |st, f| st.on_value(Node.str_payload_kind, f)
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
-			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-			]
 		on_bool = |st, f| st.on_value(Node.bool_payload_kind, f)
 	}
 
@@ -104,42 +79,30 @@ Ui := [].{
 		a, (State(a) -> Elem) -> Elem
 			where [
 				a.is_eq : a, a -> Bool,
-				a.encode : a, NodeValue -> Try(NodeValue, []),
-				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 	state = |init, body| {
-		initial : NodeValue -> NodeValue
-		initial = |_unit| {
-			match init.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
-		}
-		eq : NodeValue, NodeValue -> Bool
-		eq = |left, right| {
-			A : a
+		initial : {} -> HostValue
+		initial = |_| HostValue.store(Box.box(init))
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
 			left_v : a
-			left_v =
-				match A.decode(left, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.state equality received a left value that does not match the state type"
-					}
-				}
+			left_v = Box.unbox(HostValue.get(left_hv))
 			right_v : a
-			right_v =
-				match A.decode(right, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.state equality received a right value that does not match the state type"
-					}
-				}
+			right_v = Box.unbox(HostValue.get(right_hv))
 			left_v.is_eq(right_v)
+		}
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(a)
+			boxed = HostValue.take(host_value)
+			_ = boxed
+			{}
 		}
 		token = Box.box(0)
 		handle : State(a)
 		handle = { ref: Node.BinderRef.BinderRef(token) }
 		child = body(handle)
-		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), child: Box.box(child) })
+		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), drop: Box.box(drop), child: Box.box(child) })
 	}
 
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
@@ -148,6 +111,7 @@ Ui := [].{
 		Elem.When(
 			{
 				condition: Signal.to_expr(condition),
+				read: Box.box(Ui.read_bool),
 				when_true: Box.box(when_true({})),
 				when_false: Box.box(when_false({})),
 			},
@@ -161,103 +125,82 @@ Ui := [].{
 	each :
 		Signal(List(item)), (item -> k), (k, Signal(item) -> Elem) -> Elem
 			where [
-				item.decode : NodeValue, NodeValue -> (Try(item, [TypeMismatch]), NodeValue),
 				item.is_eq : item, item -> Bool,
-				k.encode : k, NodeValue -> Try(NodeValue, []),
-				k.decode : NodeValue, NodeValue -> (Try(k, [TypeMismatch]), NodeValue),
-				k.to_hash : k, Hasher -> Hasher,
 				k.is_eq : k, k -> Bool,
 			]
 	each = |items, key_of, row| {
-		decode_item : NodeValue -> item
-		decode_item = |nv| {
-			Item : item
-			match Item.decode(nv, NodeValue.format) {
-				(Ok(value), _) => value
-				(Err(_), _) => {
-					crash "Ui.each received an item value that does not match the row type"
-				}
-			}
+		items_to_values : HostValue -> List(HostValue)
+		items_to_values = |items_hv| {
+			typed_items : List(item)
+			typed_items = Box.unbox(HostValue.get(items_hv))
+			List.map(typed_items, |item| HostValue.store(Box.box(item)))
 		}
-		key_of_nv : NodeValue -> NodeValue
-		key_of_nv = |nv| {
-			key = key_of(decode_item(nv))
-			match key.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+		key_of_hv : HostValue -> HostValue
+		key_of_hv = |item_hv| {
+			item : item
+			item = Box.unbox(HostValue.get(item_hv))
+			key = key_of(item)
+			HostValue.store(Box.box(key))
 		}
-		key_eq_nv : NodeValue, NodeValue -> Bool
-		key_eq_nv = |left, right| {
-			K : k
+		key_eq_hv : HostValue, HostValue -> Bool
+		key_eq_hv = |left_hv, right_hv| {
 			left_k : k
-			left_k =
-				match K.decode(left, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.each key equality received a left key that does not match the key type"
-					}
-				}
+			left_k = Box.unbox(HostValue.get(left_hv))
 			right_k : k
-			right_k =
-				match K.decode(right, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.each key equality received a right key that does not match the key type"
-					}
-			}
+			right_k = Box.unbox(HostValue.get(right_hv))
 			left_k.is_eq(right_k)
 		}
-		item_eq_nv : NodeValue, NodeValue -> Bool
-		item_eq_nv = |left, right| {
-			Item : item
+		key_drop_hv : HostValue -> {}
+		key_drop_hv = |key_hv| {
+			boxed : Box(k)
+			boxed = HostValue.take(key_hv)
+			_ = boxed
+			{}
+		}
+		item_eq_hv : HostValue, HostValue -> Bool
+		item_eq_hv = |left_hv, right_hv| {
 			left_item : item
-			left_item =
-				match Item.decode(left, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.each item equality received a left item that does not match the item type"
-					}
-				}
+			left_item = Box.unbox(HostValue.get(left_hv))
 			right_item : item
-			right_item =
-				match Item.decode(right, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.each item equality received a right item that does not match the item type"
-					}
-				}
+			right_item = Box.unbox(HostValue.get(right_hv))
 			left_item.is_eq(right_item)
 		}
-		row_nv : NodeValue, NodeValue -> Elem
-		row_nv = |key_nv, item_nv| {
-			K : k
+		item_drop_hv : HostValue -> {}
+		item_drop_hv = |item_hv| {
+			boxed : Box(item)
+			boxed = HostValue.take(item_hv)
+			_ = boxed
+			{}
+		}
+		row_hv : HostValue, HostValue -> Elem
+		row_hv = |key_hv, item_hv| {
 			key : k
-			key =
-				match K.decode(key_nv, NodeValue.format) {
-					(Ok(value), _) => value
-					(Err(_), _) => {
-						crash "Ui.each received a key value that does not match the key type"
-					}
-			}
-			row_item : NodeValue -> NodeValue
-			row_item = |_unit| item_nv
+			key = Box.unbox(HostValue.get(key_hv))
+			row_item : {} -> HostValue
+			row_item = |_| HostValue.clone(item_hv)
 			row_signal_token = Box.box(0)
 			row(
 				key,
-				Signal.from_expr(Node.SignalExpr.ConstValue(
-					row_signal_token,
-					Box.box(row_item),
-					Box.box(item_eq_nv),
-				)),
+				Signal.from_expr(
+					Node.SignalExpr.ConstValue(
+						row_signal_token,
+						Box.box(row_item),
+						Box.box(item_eq_hv),
+						Box.box(item_drop_hv),
+					),
+				),
 			)
 		}
 		Elem.Each(
 			{
 				items: Signal.to_expr(items),
-				key_of: Box.box(key_of_nv),
-				key_eq: Box.box(key_eq_nv),
-				item_eq: Box.box(item_eq_nv),
-				row: Box.box(row_nv),
+				items_to_values: Box.box(items_to_values),
+				key_of: Box.box(key_of_hv),
+				key_eq: Box.box(key_eq_hv),
+				key_drop: Box.box(key_drop_hv),
+				item_eq: Box.box(item_eq_hv),
+				item_drop: Box.box(item_drop_hv),
+				row: Box.box(row_hv),
 			},
 		)
 	}

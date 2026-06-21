@@ -1,4 +1,4 @@
-import NodeValue exposing [NodeValue]
+import HostValue exposing [HostValue]
 
 ## Pure UI descriptor tree produced by `build`. This is the explicit data the
 ## host ingests. Identity is NOT threaded in Roc: the tree is immutable and pure,
@@ -10,6 +10,7 @@ import NodeValue exposing [NodeValue]
 ## ref (a path-relative index assigned during the host walk). Declaration of a
 ## binder (via `Ui.state`) mints identity; a use (`map`, sink) does not.
 Node := [].{
+
 	## Reference to a state/source binder. The token is minted by `Ui.state` and
 	## copied into both the state declaration and all signal/message references to
 	## that declaration. The host maps tokens to construction-order node ids during
@@ -23,7 +24,8 @@ Node := [].{
 	Msg : {
 		binder : BinderRef,
 		payload_kind : U64,
-		transform : Box((NodeValue, NodeValue -> NodeValue)),
+		payload_drop : Box((HostValue -> {})),
+		transform : Box((HostValue, HostValue -> HostValue)),
 	}
 
 	## Signal expression. `Ref` reads a binder's current value. Other variants
@@ -34,10 +36,10 @@ Node := [].{
 	## erasure) and a boxed `is_eq` thunk for change pruning.
 	SignalExpr := [
 		Ref(BinderRef),
-		ConstValue(Box(U64), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Map(Box(U64), Box(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((NodeValue, NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
-		Combine(Box(U64), List(SignalExpr), Box((NodeValue -> NodeValue)), Box((NodeValue, NodeValue -> Bool))),
+		ConstValue(Box(U64), Box(({} -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
+		Map(Box(U64), Box(SignalExpr), Box((HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
+		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
+		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 	]
 
 	## Text/attr sink fields, matching the host's render field discriminants.
@@ -84,9 +86,9 @@ Node := [].{
 	## `SignalExpr`; event handlers carry a `Msg`.
 	Attr := [
 		StaticText({ field : U64, value : Str }),
-		SignalText({ field : U64, signal : Box(SignalExpr) }),
+		SignalText({ field : U64, signal : Box(SignalExpr), read : Box((HostValue -> Str)) }),
 		StaticBool({ field : U64, value : Bool }),
-		SignalBool({ field : U64, signal : Box(SignalExpr) }),
+		SignalBool({ field : U64, signal : Box(SignalExpr), read : Box((HostValue -> Bool)) }),
 		OnEvent({ kind : U64, msg : Msg }),
 	]
 }

@@ -11,6 +11,9 @@ const abi = @import("roc_platform_abi.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
+const HostValue = u64;
+const HostValueList = abi.RocListWith(HostValue, false);
+const I64List = abi.RocListWith(i64, false);
 
 const RuntimeMetrics = struct {
     closure_releases: u64,
@@ -27,16 +30,6 @@ const RuntimeMetrics = struct {
     rows_reused: u64,
     scopes_created: u64,
     scopes_disposed: u64,
-};
-
-const SignalValueDesc = struct {
-    signal_id: u64,
-    value: abi.NodeValue,
-};
-
-const StateValueDesc = struct {
-    state_id: u64,
-    value: abi.NodeValue,
 };
 
 const EventPayloadKind = enum(u64) {
@@ -78,6 +71,7 @@ const HostEventDescriptor = struct {
 const HostActiveEventDesc = struct {
     target_node_id: u64,
     payload_kind: EventPayloadKind,
+    payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
 };
 
@@ -87,35 +81,43 @@ const HostSignalEventRoute = struct {
 };
 
 const HostValueCell = struct {
-    value: abi.NodeValue,
+    value: HostValue,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
 
-    fn initRetained(value: abi.NodeValue, eq: abi.RocErasedCallable, metrics: *RuntimeMetrics) HostValueCell {
+    fn initRetained(value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable, metrics: *RuntimeMetrics) HostValueCell {
         abi.increfErasedCallable(eq, 1);
-        metrics.closure_retains += 1;
-        return .{ .value = value, .eq = eq };
+        abi.increfErasedCallable(drop, 1);
+        metrics.closure_retains += 2;
+        return .{ .value = value, .eq = eq, .drop = drop };
     }
 
-    fn cloneRetained(self: HostValueCell, metrics: *RuntimeMetrics) HostValueCell {
-        abi.increfNodeValue(self.value, 1);
+    fn cloneRetained(self: HostValueCell, host: *HostEnv, metrics: *RuntimeMetrics) HostValueCell {
+        const value = host.cloneHostValue(self.value);
         abi.increfErasedCallable(self.eq, 1);
-        metrics.closure_retains += 1;
-        return self;
+        abi.increfErasedCallable(self.drop, 1);
+        metrics.closure_retains += 2;
+        return .{ .value = value, .eq = self.eq, .drop = self.drop };
     }
 
     fn deinit(self: *HostValueCell, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
-        abi.decrefNodeValue(self.value, roc_host);
+        callErasedHostValueToUnit(roc_host, self.drop, self.value);
         abi.decrefErasedCallable(self.eq, roc_host);
-        metrics.closure_releases += 1;
+        abi.decrefErasedCallable(self.drop, roc_host);
+        metrics.closure_releases += 2;
         self.* = undefined;
     }
 
-    fn valueEquals(self: *const HostValueCell, roc_host: *abi.RocHost, value: abi.NodeValue) bool {
-        return callErasedNodeValueNodeValueToBool(roc_host, self.eq, self.value, value);
+    fn valueEquals(self: *const HostValueCell, roc_host: *abi.RocHost, value: HostValue) bool {
+        return callErasedHostValueHostValueToBool(roc_host, self.eq, self.value, value);
     }
 
-    fn replaceValue(self: *HostValueCell, roc_host: *abi.RocHost, value: abi.NodeValue) void {
-        abi.decrefNodeValue(self.value, roc_host);
+    fn dropIncoming(self: *const HostValueCell, roc_host: *abi.RocHost, value: HostValue) void {
+        callErasedHostValueToUnit(roc_host, self.drop, value);
+    }
+
+    fn replaceValue(self: *HostValueCell, roc_host: *abi.RocHost, value: HostValue) void {
+        callErasedHostValueToUnit(roc_host, self.drop, self.value);
         self.value = value;
     }
 };
@@ -158,22 +160,22 @@ const HostSignalCacheSlot = union(enum) {
         self.* = .absent;
     }
 
-    fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: abi.NodeValue, eq: abi.RocErasedCallable) void {
+    fn replace(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) void {
         self.deinit(roc_host, metrics);
-        self.* = .{ .present = HostValueCell.initRetained(value, eq, metrics) };
+        self.* = .{ .present = HostValueCell.initRetained(value, eq, drop, metrics) };
     }
 
-    fn replaceValue(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: abi.NodeValue) void {
+    fn replaceValue(self: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue) void {
         switch (self.*) {
             .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
             .present => |*cached| cached.replaceValue(roc_host, value),
         }
     }
 
-    fn cloneRetained(self: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
+    fn cloneRetained(self: HostSignalCacheSlot, host: *HostEnv, metrics: *RuntimeMetrics) HostSignalCacheSlot {
         return switch (self) {
             .absent => .absent,
-            .present => |cached| .{ .present = cached.cloneRetained(metrics) },
+            .present => |cached| .{ .present = cached.cloneRetained(host, metrics) },
         };
     }
 };
@@ -278,6 +280,7 @@ const HostSignalConstRecord = struct {
     token: HostSignalToken,
     init: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -286,6 +289,7 @@ const HostSignalMapRecord = struct {
     input: *HostSignalRecord,
     transform: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -295,6 +299,7 @@ const HostSignalMap2Record = struct {
     right: *HostSignalRecord,
     transform: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -303,6 +308,7 @@ const HostSignalCombineRecord = struct {
     children: []*HostSignalRecord,
     transform: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -357,7 +363,8 @@ const HostSignalRecord = struct {
                 abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.init, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
-                metrics.closure_releases += 2;
+                abi.decrefErasedCallable(payload.drop, roc_host);
+                metrics.closure_releases += 3;
             },
             .map => |payload| {
                 payload.input.release(allocator, roc_host, metrics);
@@ -366,7 +373,8 @@ const HostSignalRecord = struct {
                 abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
-                metrics.closure_releases += 2;
+                abi.decrefErasedCallable(payload.drop, roc_host);
+                metrics.closure_releases += 3;
             },
             .map2 => |payload| {
                 payload.left.release(allocator, roc_host, metrics);
@@ -376,7 +384,8 @@ const HostSignalRecord = struct {
                 abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
-                metrics.closure_releases += 2;
+                abi.decrefErasedCallable(payload.drop, roc_host);
+                metrics.closure_releases += 3;
             },
             .combine => |payload| {
                 for (payload.children) |child| {
@@ -388,7 +397,8 @@ const HostSignalRecord = struct {
                 abi.decrefBox(@ptrCast(payload.token), roc_host);
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
-                metrics.closure_releases += 2;
+                abi.decrefErasedCallable(payload.drop, roc_host);
+                metrics.closure_releases += 3;
             },
         }
 
@@ -442,6 +452,7 @@ const HostNodeSignalTextNodeDesc = struct {
     parent_elem_id: u64,
     scope_id: u64,
     signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -455,6 +466,7 @@ const HostNodeSignalTextAttrDesc = struct {
     elem_id: u64,
     field: RenderTextField,
     signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -468,6 +480,7 @@ const HostNodeSignalBoolAttrDesc = struct {
     elem_id: u64,
     field: RenderBoolField,
     signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -477,7 +490,9 @@ const HostNodeEventDesc = struct {
     binder_token: HostBinderToken,
     target_node_id: u64,
     payload_kind: EventPayloadKind,
+    payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
+    owns_payload_drop: bool = true,
     owns_transform: bool = true,
 };
 
@@ -485,20 +500,25 @@ const HostNodeStateDesc = struct {
     node_id: u64,
     initial: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
 };
 
 const HostNodeWhenDesc = struct {
     node_id: u64,
     condition: HostSignalBinding,
+    read: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
 const HostNodeEachDesc = struct {
     node_id: u64,
     items: HostSignalBinding,
+    items_to_values: abi.RocErasedCallable,
     key_of: abi.RocErasedCallable,
     key_eq: abi.RocErasedCallable,
+    key_drop: abi.RocErasedCallable,
     item_eq: abi.RocErasedCallable,
+    item_drop: abi.RocErasedCallable,
     row: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
 };
@@ -541,6 +561,8 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_text_nodes.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_text_nodes.deinit(allocator);
 
@@ -552,6 +574,8 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_text_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_text_attrs.deinit(allocator);
 
@@ -560,10 +584,16 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_bool_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_bool_attrs.deinit(allocator);
 
         for (self.events.items) |desc| {
+            if (desc.owns_payload_drop) {
+                metrics.closure_releases += 1;
+                abi.decrefErasedCallable(desc.payload_drop, roc_host);
+            }
             if (desc.owns_transform) {
                 metrics.closure_releases += 1;
                 abi.decrefErasedCallable(desc.transform, roc_host);
@@ -577,25 +607,31 @@ const HostNodeDescriptorStream = struct {
         self.scope_sites.deinit(allocator);
 
         for (self.states.items) |desc| {
-            metrics.closure_releases += 2;
+            metrics.closure_releases += 3;
             abi.decrefErasedCallable(desc.initial, roc_host);
             abi.decrefErasedCallable(desc.eq, roc_host);
+            abi.decrefErasedCallable(desc.drop, roc_host);
         }
         self.states.deinit(allocator);
 
         for (self.whens.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.condition.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.whens.deinit(allocator);
 
         for (self.eaches.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.items.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 4;
+            metrics.closure_releases += 7;
+            abi.decrefErasedCallable(desc.items_to_values, roc_host);
             abi.decrefErasedCallable(desc.key_of, roc_host);
             abi.decrefErasedCallable(desc.key_eq, roc_host);
+            abi.decrefErasedCallable(desc.key_drop, roc_host);
             abi.decrefErasedCallable(desc.item_eq, roc_host);
+            abi.decrefErasedCallable(desc.item_drop, roc_host);
             abi.decrefErasedCallable(desc.row, roc_host);
         }
         self.eaches.deinit(allocator);
@@ -680,13 +716,17 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendSignalTextNode(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, parent_elem_id: u64, scope_id: u64, signal: HostSignalBinding) void {
+    fn appendSignalTextNode(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, parent_elem_id: u64, scope_id: u64, signal: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.next_elem_id += 1;
         self.rememberSignalRecordTree(allocator, signal.record);
+        abi.increfErasedCallable(read, 1);
+        metrics.closure_retains += 1;
 
         self.render_nodes.append(allocator, .{ .elem_id = elem_id, .kind = .signal_text }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
         self.signal_text_nodes.append(allocator, .{
@@ -694,9 +734,12 @@ const HostNodeDescriptorStream = struct {
             .parent_elem_id = parent_elem_id,
             .scope_id = scope_id,
             .signal = signal,
+            .read = read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
     }
@@ -713,15 +756,20 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderTextField, signal: HostSignalBinding) void {
+    fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderTextField, signal: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, signal.record);
+        abi.increfErasedCallable(read, 1);
+        metrics.closure_retains += 1;
         self.signal_text_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
+            .read = read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
     }
@@ -734,31 +782,39 @@ const HostNodeDescriptorStream = struct {
         }) catch std.process.exit(1);
     }
 
-    fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderBoolField, signal: HostSignalBinding) void {
+    fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderBoolField, signal: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, signal.record);
+        abi.increfErasedCallable(read, 1);
+        metrics.closure_retains += 1;
         self.signal_bool_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
+            .read = read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
     }
 
-    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, transform: abi.RocErasedCallable) void {
+    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+        abi.increfErasedCallable(payload_drop, 1);
         abi.increfErasedCallable(transform, 1);
-        metrics.closure_retains += 1;
+        metrics.closure_retains += 2;
         self.events.append(allocator, .{
             .elem_id = elem_id,
             .kind = kind,
             .binder_token = binder_token,
             .target_node_id = target_node_id,
             .payload_kind = payload_kind,
+            .payload_drop = payload_drop,
             .transform = transform,
         }) catch {
-            metrics.closure_releases += 1;
+            metrics.closure_releases += 2;
+            abi.decrefErasedCallable(payload_drop, roc_host);
             abi.decrefErasedCallable(transform, roc_host);
             std.process.exit(1);
         };
@@ -779,55 +835,72 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, initial: abi.RocErasedCallable, eq: abi.RocErasedCallable) void {
+    fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, initial: abi.RocErasedCallable, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) void {
         abi.increfErasedCallable(initial, 1);
         abi.increfErasedCallable(eq, 1);
-        metrics.closure_retains += 2;
+        abi.increfErasedCallable(drop, 1);
+        metrics.closure_retains += 3;
         self.states.append(allocator, .{
             .node_id = node_id,
             .initial = initial,
             .eq = eq,
+            .drop = drop,
         }) catch {
-            metrics.closure_releases += 2;
+            metrics.closure_releases += 3;
             abi.decrefErasedCallable(initial, roc_host);
             abi.decrefErasedCallable(eq, roc_host);
+            abi.decrefErasedCallable(drop, roc_host);
             std.process.exit(1);
         };
     }
 
-    fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, condition: HostSignalBinding) void {
+    fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, condition: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, condition.record);
+        abi.increfErasedCallable(read, 1);
+        metrics.closure_retains += 1;
         self.whens.append(allocator, .{
             .node_id = node_id,
             .condition = condition,
+            .read = read,
         }) catch {
             var owned_condition = condition;
             owned_condition.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
     }
 
-    fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, items: HostSignalBinding, key_of: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, row: abi.RocErasedCallable) void {
+    fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, items: HostSignalBinding, items_to_values: abi.RocErasedCallable, key_of: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable, row: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, items.record);
+        abi.increfErasedCallable(items_to_values, 1);
         abi.increfErasedCallable(key_of, 1);
         abi.increfErasedCallable(key_eq, 1);
+        abi.increfErasedCallable(key_drop, 1);
         abi.increfErasedCallable(item_eq, 1);
+        abi.increfErasedCallable(item_drop, 1);
         abi.increfErasedCallable(row, 1);
-        metrics.closure_retains += 4;
+        metrics.closure_retains += 7;
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
+            .items_to_values = items_to_values,
             .key_of = key_of,
             .key_eq = key_eq,
+            .key_drop = key_drop,
             .item_eq = item_eq,
+            .item_drop = item_drop,
             .row = row,
         }) catch {
             var owned_items = items;
             owned_items.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 4;
+            metrics.closure_releases += 7;
+            abi.decrefErasedCallable(items_to_values, roc_host);
             abi.decrefErasedCallable(key_of, roc_host);
             abi.decrefErasedCallable(key_eq, roc_host);
+            abi.decrefErasedCallable(key_drop, roc_host);
             abi.decrefErasedCallable(item_eq, roc_host);
+            abi.decrefErasedCallable(item_drop, roc_host);
             abi.decrefErasedCallable(row, roc_host);
             std.process.exit(1);
         };
@@ -906,13 +979,6 @@ fn printStdout(comptime fmt: []const u8, args: anytype) void {
 fn benchmarkNowNs() u64 {
     const ns = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds;
     return @intCast(@max(ns, 0));
-}
-
-fn traceEnabled() bool {
-    if (current_host) |host| {
-        return host.test_state.verbose;
-    }
-    return false;
 }
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
@@ -1320,10 +1386,25 @@ const RocAllocation = struct {
     alignment: std.mem.Alignment,
 };
 
+const HostValueRegistrySlot = union(enum) {
+    vacant,
+    occupied: abi.RocBox,
+};
+
+const TestHostValueKind = enum {
+    unit,
+    i64,
+    bool,
+    str,
+    i64_list,
+};
+
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
+    host_values: std.ArrayListUnmanaged(HostValueRegistrySlot) = .empty,
+    test_host_value_kinds: std.ArrayListUnmanaged(?TestHostValueKind) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
@@ -1358,6 +1439,77 @@ const HostEnv = struct {
         };
     }
 
+    fn storeHostValue(self: *HostEnv, box: abi.RocBox) HostValue {
+        const allocator = self.gpa.allocator();
+        for (self.host_values.items, 0..) |*slot, index| {
+            switch (slot.*) {
+                .vacant => {
+                    slot.* = .{ .occupied = box };
+                    if (builtin.is_test) self.test_host_value_kinds.items[index] = null;
+                    return @intCast(index + 1);
+                },
+                .occupied => {},
+            }
+        }
+        self.host_values.append(allocator, .{ .occupied = box }) catch std.process.exit(1);
+        if (builtin.is_test) {
+            self.test_host_value_kinds.append(allocator, null) catch std.process.exit(1);
+        }
+        return @intCast(self.host_values.items.len);
+    }
+
+    fn setTestHostValueKind(self: *HostEnv, value: HostValue, kind: TestHostValueKind) void {
+        if (!builtin.is_test) @compileError("setTestHostValueKind is test-only");
+        const index = value - 1;
+        if (index >= self.test_host_value_kinds.items.len) failHost("test HostValue kind referenced an unknown value");
+        self.test_host_value_kinds.items[@intCast(index)] = kind;
+    }
+
+    fn testHostValueKind(self: *HostEnv, value: HostValue) TestHostValueKind {
+        if (!builtin.is_test) @compileError("testHostValueKind is test-only");
+        const index = value - 1;
+        if (index >= self.test_host_value_kinds.items.len) failHost("test HostValue kind referenced an unknown value");
+        return self.test_host_value_kinds.items[@intCast(index)] orelse @panic("test HostValue kind was not recorded");
+    }
+
+    fn hostValueSlot(self: *HostEnv, value: HostValue) *HostValueRegistrySlot {
+        if (value == 0) failHost("HostValue handle 0 is invalid");
+        const index = value - 1;
+        if (index >= self.host_values.items.len) failHost("HostValue handle referenced an unknown value");
+        return &self.host_values.items[@intCast(index)];
+    }
+
+    fn getHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
+        const slot = self.hostValueSlot(value);
+        return switch (slot.*) {
+            .vacant => failHost("HostValue handle referenced a released value"),
+            .occupied => |box| blk: {
+                abi.increfBox(box, 1);
+                break :blk box;
+            },
+        };
+    }
+
+    fn takeHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
+        const slot = self.hostValueSlot(value);
+        return switch (slot.*) {
+            .vacant => failHost("HostValue handle referenced a released value"),
+            .occupied => |box| blk: {
+                slot.* = .vacant;
+                if (builtin.is_test) self.test_host_value_kinds.items[@intCast(value - 1)] = null;
+                break :blk box;
+            },
+        };
+    }
+
+    fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
+        const cloned = self.storeHostValue(self.getHostValue(value));
+        if (builtin.is_test) {
+            self.setTestHostValueKind(cloned, self.testHostValueKind(value));
+        }
+        return cloned;
+    }
+
     fn nextDirtySignalGeneration(self: *HostEnv) u64 {
         if (self.dirty_signal_generation == std.math.maxInt(u64)) {
             failHost("host dirty signal generation overflowed");
@@ -1381,8 +1533,9 @@ const HostEnv = struct {
 
     fn clearActiveEvents(self: *HostEnv) void {
         for (self.active_events.items) |desc| {
+            abi.decrefErasedCallable(desc.payload_drop, self.roc_host.?);
             abi.decrefErasedCallable(desc.transform, self.roc_host.?);
-            self.pending_roc_metrics.closure_releases += 1;
+            self.pending_roc_metrics.closure_releases += 2;
         }
         self.active_events.items.len = 0;
     }
@@ -1392,12 +1545,15 @@ const HostEnv = struct {
         self.clearActiveEvents();
 
         for (stream.events.items) |*desc| {
+            if (!desc.owns_payload_drop) failHost("event descriptor payload drop ownership was already transferred");
             if (!desc.owns_transform) failHost("event descriptor transform ownership was already transferred");
             self.active_events.append(allocator, .{
                 .target_node_id = desc.target_node_id,
                 .payload_kind = desc.payload_kind,
+                .payload_drop = desc.payload_drop,
                 .transform = desc.transform,
             }) catch std.process.exit(1);
+            desc.owns_payload_drop = false;
             desc.owns_transform = false;
         }
     }
@@ -1915,16 +2071,16 @@ const HostEnv = struct {
         return null;
     }
 
-    fn stateValueByNodeId(self: *HostEnv, node_id: u64) abi.NodeValue {
+    fn stateValueByNodeId(self: *HostEnv, node_id: u64) HostValue {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("signal referenced an unknown active state node");
-        return self.states.items[state_index].cell.value;
+        return self.cloneHostValue(self.states.items[state_index].cell.value);
     }
 
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
         if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
         const initial = callValueInitThunk(roc_host, desc.initial);
-        var cell = HostValueCell.initRetained(initial, desc.eq, &self.pending_roc_metrics);
+        var cell = HostValueCell.initRetained(initial, desc.eq, desc.drop, &self.pending_roc_metrics);
         self.states.append(self.gpa.allocator(), .{
             .state_id = desc.node_id,
             .cell = cell,
@@ -1942,11 +2098,11 @@ const HostEnv = struct {
         }
     }
 
-    fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: abi.NodeValue) bool {
+    fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: HostValue) bool {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
         const state = &self.states.items[state_index];
         if (state.cell.valueEquals(roc_host, value)) {
-            abi.decrefNodeValue(value, roc_host);
+            state.cell.dropIncoming(roc_host, value);
             return false;
         }
 
@@ -1965,6 +2121,11 @@ const HostEnv = struct {
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
         const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
         return self.states.items[state_index].cell.eq;
+    }
+
+    fn stateDropCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
+        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no drop callable");
+        return self.states.items[state_index].cell.drop;
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
@@ -2031,11 +2192,11 @@ const HostEnv = struct {
         return scope_id;
     }
 
-    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: abi.NodeValue, item: abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
+    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
         self.validateScopeId(parent_scope_id);
 
-        const key_cell = HostValueCell.initRetained(key, key_eq, &self.pending_roc_metrics);
-        const item_cell = HostValueCell.initRetained(item, item_eq, &self.pending_roc_metrics);
+        const key_cell = HostValueCell.initRetained(key, key_eq, key_drop, &self.pending_roc_metrics);
+        const item_cell = HostValueCell.initRetained(item, item_eq, item_drop, &self.pending_roc_metrics);
 
         const scope_id: u64 = @intCast(self.scopes.items.len);
         self.scopes.append(self.gpa.allocator(), .{
@@ -2153,7 +2314,7 @@ const HostEnv = struct {
         return ids.toOwnedSlice(allocator) catch std.process.exit(1);
     }
 
-    fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: abi.NodeValue) bool {
+    fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
         self.validateScopeId(scope_id);
         const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
@@ -2162,7 +2323,7 @@ const HostEnv = struct {
         };
     }
 
-    fn eachRowScopeItemEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: abi.NodeValue) bool {
+    fn eachRowScopeItemEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
         self.validateScopeId(scope_id);
         const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
@@ -2171,7 +2332,7 @@ const HostEnv = struct {
         };
     }
 
-    fn replaceEachRowScopeItem(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: abi.NodeValue) void {
+    fn replaceEachRowScopeItem(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) void {
         self.validateScopeId(scope_id);
         const scope = &self.scopes.items[@intCast(scope_id)];
         switch (scope.step) {
@@ -2182,17 +2343,26 @@ const HostEnv = struct {
         scope.step.each_row.item.replaceValue(roc_host, item);
     }
 
-    fn nextKeyIsDuplicate(roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, keys: []const abi.NodeValue, key_index: usize) bool {
+    fn eachRowScopeValues(self: *HostEnv, scope_id: u64) struct { key: HostValue, item: HostValue } {
+        self.validateScopeId(scope_id);
+        const scope = &self.scopes.items[@intCast(scope_id)];
+        return switch (scope.step) {
+            .each_row => |row| .{ .key = row.key.value, .item = row.item.value },
+            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+        };
+    }
+
+    fn nextKeyIsDuplicate(roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, keys: []const HostValue, key_index: usize) bool {
         const key = keys[key_index];
         for (keys[0..key_index]) |previous| {
-            if (callErasedNodeValueNodeValueToBool(roc_host, key_eq, previous, key)) {
+            if (callErasedHostValueHostValueToBool(roc_host, key_eq, previous, key)) {
                 return true;
             }
         }
         return false;
     }
 
-    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const abi.NodeValue, items: []const abi.NodeValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {
+    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
         self.validateScopeId(parent_scope_id);
         if (keys.len != items.len) failHost("Ui.each keyed scope received mismatched key and item lists");
 
@@ -2214,11 +2384,13 @@ const HostEnv = struct {
         var row_items_unchanged: u64 = 0;
         var row_items_updated: u64 = 0;
 
-        for (keys, items, 0..) |key, item, key_index| {
+        for (keys, 0..) |_, key_index| {
             if (HostEnv.nextKeyIsDuplicate(roc_host, key_eq, keys, key_index)) {
                 failHost("Ui.each keyed scope received duplicate keys");
             }
+        }
 
+        for (keys, items, 0..) |key, item, key_index| {
             var matched_scope_id: ?u64 = null;
             for (existing_scope_ids, 0..) |scope_id, existing_index| {
                 if (matched_existing[existing_index]) continue;
@@ -2232,7 +2404,9 @@ const HostEnv = struct {
             if (matched_scope_id) |scope_id| {
                 next_scope_ids[key_index] = scope_id;
                 rows_reused += 1;
+                callErasedHostValueToUnit(roc_host, key_drop, key);
                 if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
+                    callErasedHostValueToUnit(roc_host, item_drop, item);
                     row_items_changed[key_index] = false;
                     row_items_unchanged += 1;
                 } else {
@@ -2241,7 +2415,7 @@ const HostEnv = struct {
                     row_items_updated += 1;
                 }
             } else {
-                next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, item_eq);
+                next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
                 row_items_changed[key_index] = true;
                 rows_created += 1;
             }
@@ -2343,6 +2517,7 @@ const HostEnv = struct {
                     .token = retainHostSignalToken(token),
                     .init = retainHostCallable(expr.payload.const_value._1, &self.pending_roc_metrics),
                     .eq = retainHostCallable(expr.payload.const_value._2, &self.pending_roc_metrics),
+                    .drop = retainHostCallable(expr.payload.const_value._3, &self.pending_roc_metrics),
                 } });
                 stream.rememberSignalRecord(allocator, record);
                 break :blk record;
@@ -2360,6 +2535,7 @@ const HostEnv = struct {
                     .input = input,
                     .transform = retainHostCallable(expr.payload.map._2, &self.pending_roc_metrics),
                     .eq = retainHostCallable(expr.payload.map._3, &self.pending_roc_metrics),
+                    .drop = retainHostCallable(expr.payload.map._4, &self.pending_roc_metrics),
                 } });
                 stream.rememberSignalRecord(allocator, record);
                 break :blk record;
@@ -2379,6 +2555,7 @@ const HostEnv = struct {
                     .right = right,
                     .transform = retainHostCallable(expr.payload.map2._3, &self.pending_roc_metrics),
                     .eq = retainHostCallable(expr.payload.map2._4, &self.pending_roc_metrics),
+                    .drop = retainHostCallable(expr.payload.map2._5, &self.pending_roc_metrics),
                 } });
                 stream.rememberSignalRecord(allocator, record);
                 break :blk record;
@@ -2400,6 +2577,7 @@ const HostEnv = struct {
                     .children = children,
                     .transform = retainHostCallable(expr.payload.combine._2, &self.pending_roc_metrics),
                     .eq = retainHostCallable(expr.payload.combine._3, &self.pending_roc_metrics),
+                    .drop = retainHostCallable(expr.payload.combine._4, &self.pending_roc_metrics),
                 } });
                 stream.rememberSignalRecord(allocator, record);
                 break :blk record;
@@ -2450,7 +2628,7 @@ const HostEnv = struct {
                 const payload = attr.payload.signal_text;
                 const field = HostEnv.renderTextFieldFromAbi(payload.field);
                 const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal);
+                stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
             },
             .StaticBool => {
                 const payload = attr.payload.static_bool;
@@ -2461,7 +2639,7 @@ const HostEnv = struct {
                 const payload = attr.payload.signal_bool;
                 const field = HostEnv.renderBoolFieldFromAbi(payload.field);
                 const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal);
+                stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
             },
             .OnEvent => {
                 const payload = attr.payload.on_event;
@@ -2469,7 +2647,7 @@ const HostEnv = struct {
                 const kind = HostEnv.renderEventKindFromAbi(payload.kind);
                 const payload_kind = HostEnv.eventPayloadKindFromAbi(msg.payload_kind);
                 const target_node_id = HostEnv.resolveNodeBinderRef(binder_stack, msg.binder);
-                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, msg.transform);
+                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, msg.payload_drop, msg.transform);
             },
         }
     }
@@ -2499,15 +2677,16 @@ const HostEnv = struct {
             .TextSignal => {
                 const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
                 dom_ordinal.* += 1;
-                const signal = self.bindNodeSignal(allocator, stream, elem.payload.text_signal.*, binder_stack.items);
-                stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal);
+                const text_signal = elem.payload.text_signal;
+                const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
+                stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
             },
             .State => {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
                 ordinal.* += 1;
                 stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
-                stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq);
+                stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq, elem.payload.state.drop);
                 binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
                 self.collectElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack);
                 _ = binder_stack.pop() orelse unreachable;
@@ -2518,7 +2697,7 @@ const HostEnv = struct {
                 ordinal.* += 1;
                 stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
                 const condition = self.bindNodeSignal(allocator, stream, elem.payload.when.condition.*, binder_stack.items);
-                stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition);
+                stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition, elem.payload.when.read);
             },
             .Each => {
                 const site_ordinal = ordinal.*;
@@ -2532,9 +2711,12 @@ const HostEnv = struct {
                     &self.pending_roc_metrics,
                     node_id,
                     items,
+                    elem.payload.each.items_to_values,
                     elem.payload.each.key_of,
                     elem.payload.each.key_eq,
+                    elem.payload.each.key_drop,
                     elem.payload.each.item_eq,
+                    elem.payload.each.item_drop,
                     elem.payload.each.row,
                 );
             },
@@ -2600,7 +2782,7 @@ const HostEnv = struct {
         return self.collectElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
     }
 
-    fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const abi.NodeValue) HostKeyedRowDiffResult {
+    fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const HostValue) HostKeyedRowDiffResult {
         if (site.kind != .each) {
             failHost("Elem row collection requires an each scope site");
         }
@@ -2609,28 +2791,22 @@ const HostEnv = struct {
         }
 
         const allocator = self.gpa.allocator();
-        const keys = allocator.alloc(abi.NodeValue, items.len) catch std.process.exit(1);
-        var initialized_keys: usize = 0;
-        defer {
-            for (keys[0..initialized_keys]) |key| {
-                abi.decrefNodeValue(key, roc_host);
-            }
-            allocator.free(keys);
-        }
+        const keys = allocator.alloc(HostValue, items.len) catch std.process.exit(1);
+        defer allocator.free(keys);
 
         for (items, 0..) |item, index| {
-            keys[index] = callErasedNodeValueToNodeValue(roc_host, each.key_of, item);
-            initialized_keys += 1;
+            keys[index] = callErasedHostValueToHostValue(roc_host, each.key_of, item);
         }
 
-        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, items, each.key_eq, each.item_eq);
+        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, items, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
 
         var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
         binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
 
-        for (items, keys, diff.scope_ids) |item, key, row_scope_id| {
-            const row_elem = callErasedNodeValueNodeValueToElem(roc_host, each.row, key, item);
+        for (diff.scope_ids) |row_scope_id| {
+            const row_values = self.eachRowScopeValues(row_scope_id);
+            const row_elem = callErasedHostValueHostValueToElem(roc_host, each.row, row_values.key, row_values.item);
             defer abi.decrefElem(row_elem, roc_host);
 
             var ordinal: u64 = 0;
@@ -2680,16 +2856,18 @@ const HostEnv = struct {
         return false;
     }
 
-    fn cloneHostSignalCacheSlot(slot: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
-        return switch (slot) {
-            .absent => .absent,
-            .present => |cached| .{ .present = cached.cloneRetained(metrics) },
-        };
+    fn cloneHostSignalCacheSlot(self: *HostEnv, slot: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
+        return slot.cloneRetained(self, metrics);
     }
 
     fn activeEventTransformByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
         if (event_index >= self.active_events.items.len) failHost("active event table is missing a retained transform");
         return self.active_events.items[event_index].transform;
+    }
+
+    fn activeEventPayloadDropByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
+        if (event_index >= self.active_events.items.len) failHost("active event table is missing a retained payload drop");
+        return self.active_events.items[event_index].payload_drop;
     }
 
     fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
@@ -2715,8 +2893,8 @@ const HostEnv = struct {
                 .signal_text => {
                     const desc = findSignalTextNodeDesc(previous, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
                     const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-                    stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal);
-                    stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+                    stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read);
+                    stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
                 },
             }
         }
@@ -2728,8 +2906,8 @@ const HostEnv = struct {
         for (previous.signal_text_attrs.items) |desc| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
             const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-            stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal);
-            stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+            stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
+            stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
         for (previous.static_bool_attrs.items) |desc| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
@@ -2738,13 +2916,14 @@ const HostEnv = struct {
         for (previous.signal_bool_attrs.items) |desc| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
             const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-            stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal);
-            stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+            stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
+            stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
         for (previous.events.items, 0..) |desc, event_index| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+            const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
             const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
-            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, transform);
+            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_drop, transform);
         }
 
         for (previous.scope_sites.items) |desc| {
@@ -2753,19 +2932,19 @@ const HostEnv = struct {
         }
         for (previous.states.items) |desc| {
             if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            stream.appendState(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.initial, desc.eq);
+            stream.appendState(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.initial, desc.eq, desc.drop);
         }
         for (previous.whens.items) |desc| {
             if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
             const condition = desc.condition.cloneRetained(allocator, &self.pending_roc_metrics);
-            stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, condition);
-            stream.whens.items[stream.whens.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+            stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, condition, desc.read);
+            stream.whens.items[stream.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
         for (previous.eaches.items) |desc| {
             if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
             const items = desc.items.cloneRetained(allocator, &self.pending_roc_metrics);
-            stream.appendEach(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, items, desc.key_of, desc.key_eq, desc.item_eq, desc.row);
-            stream.eaches.items[stream.eaches.items.len - 1].cached_value = HostEnv.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+            stream.appendEach(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.key_of, desc.key_eq, desc.key_drop, desc.item_eq, desc.item_drop, desc.row);
+            stream.eaches.items[stream.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
     }
 
@@ -2794,15 +2973,16 @@ const HostEnv = struct {
             .TextSignal => {
                 const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
                 dom_ordinal.* += 1;
-                const signal = self.bindNodeSignal(allocator, stream, elem.payload.text_signal.*, binder_stack.items);
-                stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal);
+                const text_signal = elem.payload.text_signal;
+                const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
+                stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
             },
             .State => {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
                 ordinal.* += 1;
                 stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
-                stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq);
+                stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq, elem.payload.state.drop);
                 self.ensureStateFromDesc(roc_host, stream.states.items[stream.states.items.len - 1]);
                 binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
                 self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
@@ -2814,12 +2994,13 @@ const HostEnv = struct {
                 ordinal.* += 1;
                 stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
                 const condition_binding = self.bindNodeSignal(allocator, stream, elem.payload.when.condition.*, binder_stack.items);
-                stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition_binding);
+                stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition_binding, elem.payload.when.read);
 
                 const when_index = stream.whens.items.len - 1;
-                const condition = evalHostSignalBinding(self, roc_host, &stream.whens.items[when_index].condition);
-                stream.whens.items[when_index].cached_value.replace(roc_host, &self.pending_roc_metrics, condition, hostSignalBindingEqCallable(self, &stream.whens.items[when_index].condition));
-                const active_branch: HostScopeBranch = if (nodeValueBoolValue(condition)) .true_branch else .false_branch;
+                const when_desc = &stream.whens.items[when_index];
+                const condition = evalHostSignalBinding(self, roc_host, &when_desc.condition);
+                const active_branch: HostScopeBranch = if (callErasedHostValueToBool(roc_host, when_desc.read, condition)) .true_branch else .false_branch;
+                when_desc.cached_value.replace(roc_host, &self.pending_roc_metrics, condition, hostSignalBindingEqCallable(self, &when_desc.condition), hostSignalBindingDropCallable(self, &when_desc.condition));
                 if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite())) |inactive_scope_id| {
                     self.disposeScopeSubtree(roc_host, inactive_scope_id);
                 }
@@ -2844,45 +3025,44 @@ const HostEnv = struct {
                     &self.pending_roc_metrics,
                     node_id,
                     items_binding,
+                    elem.payload.each.items_to_values,
                     elem.payload.each.key_of,
                     elem.payload.each.key_eq,
+                    elem.payload.each.key_drop,
                     elem.payload.each.item_eq,
+                    elem.payload.each.item_drop,
                     elem.payload.each.row,
                 );
                 const each_index = stream.eaches.items.len - 1;
                 const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
 
                 const items_value = evalHostSignalBinding(self, roc_host, &stream.eaches.items[each_index].items);
-                stream.eaches.items[each_index].cached_value.replace(roc_host, &self.pending_roc_metrics, items_value, hostSignalBindingEqCallable(self, &stream.eaches.items[each_index].items));
-                const items = nodeValueListItems(items_value);
+                const items = callErasedHostValueToHostValueList(roc_host, each_desc.items_to_values, items_value);
+                defer items.decref(roc_host);
+                stream.eaches.items[each_index].cached_value.replace(roc_host, &self.pending_roc_metrics, items_value, hostSignalBindingEqCallable(self, &stream.eaches.items[each_index].items), hostSignalBindingDropCallable(self, &stream.eaches.items[each_index].items));
+                const item_values = items.items();
 
-                const keys = allocator.alloc(abi.NodeValue, items.len) catch std.process.exit(1);
-                var initialized_keys: usize = 0;
-                defer {
-                    for (keys[0..initialized_keys]) |key| {
-                        abi.decrefNodeValue(key, roc_host);
-                    }
-                    allocator.free(keys);
+                const keys = allocator.alloc(HostValue, item_values.len) catch std.process.exit(1);
+                defer allocator.free(keys);
+
+                for (item_values, 0..) |item, index| {
+                    keys[index] = callErasedHostValueToHostValue(roc_host, each_desc.key_of, item);
                 }
 
-                for (items, 0..) |item, index| {
-                    keys[index] = callErasedNodeValueToNodeValue(roc_host, each_desc.key_of, item);
-                    initialized_keys += 1;
-                }
-
-                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, items, each_desc.key_eq, each_desc.item_eq);
+                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, item_values, each_desc.key_eq, each_desc.key_drop, each_desc.item_eq, each_desc.item_drop);
                 defer {
                     allocator.free(diff.scope_ids);
                     allocator.free(diff.row_items_changed);
                 }
 
-                for (items, keys, diff.scope_ids, diff.row_items_changed) |item, key, row_scope_id, row_item_changed| {
+                for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
                     if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
                         self.copyActiveScopeSubtreeDescriptors(roc_host, stream, row_scope_id);
                         continue;
                     }
 
-                    const row_elem = callErasedNodeValueNodeValueToElem(roc_host, each_desc.row, key, item);
+                    const row_values = self.eachRowScopeValues(row_scope_id);
+                    const row_elem = callErasedHostValueHostValueToElem(roc_host, each_desc.row, row_values.key, row_values.item);
                     defer abi.decrefElem(row_elem, roc_host);
 
                     var row_ordinal: u64 = 0;
@@ -2955,6 +3135,15 @@ const HostEnv = struct {
         self.active_structural_signal_routes.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
+
+        for (self.host_values.items) |slot| {
+            switch (slot) {
+                .vacant => {},
+                .occupied => failHost("host value registry still owned a typed cell at shutdown"),
+            }
+        }
+        self.host_values.deinit(allocator);
+        self.test_host_value_kinds.deinit(allocator);
 
         for (self.roc_allocations.items) |alloc| {
             allocator.rawFree(alloc.ptr[0..alloc.total_size], alloc.alignment, @returnAddress());
@@ -3215,6 +3404,26 @@ fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     rocCrashedFn(currentRocHost(), bytes, len);
 }
 
+fn currentHost() *HostEnv {
+    return current_host orelse @panic("signals HostEnv is not initialized");
+}
+
+fn hostValueClone(value: HostValue) callconv(.c) HostValue {
+    return currentHost().cloneHostValue(value);
+}
+
+fn hostValueGet(value: HostValue) callconv(.c) abi.RocBox {
+    return currentHost().getHostValue(value);
+}
+
+fn hostValueStore(box: abi.RocBox) callconv(.c) HostValue {
+    return currentHost().storeHostValue(box);
+}
+
+fn hostValueTake(value: HostValue) callconv(.c) abi.RocBox {
+    return currentHost().takeHostValue(value);
+}
+
 fn failHost(message: []const u8) noreturn {
     writeStderr("HOST ERROR: ");
     writeStderr(message);
@@ -3465,25 +3674,6 @@ fn clearRenderBoolField(elem: *DomElement, field: RenderBoolField) bool {
     };
 }
 
-fn nodeValueText(value: *const abi.NodeValue) []const u8 {
-    return switch (value.tag) {
-        .NvStr => value.payload.nv_str.asSlice(),
-        else => failHost("render text sink expected a Str signal value"),
-    };
-}
-
-fn nodeValueBoolValue(value: abi.NodeValue) bool {
-    return switch (value.tag) {
-        .NvBool => value.payload.nv_bool,
-        else => failHost("render bool sink expected a Bool signal value"),
-    };
-}
-
-fn traceHostDomReset() void {
-    if (!traceEnabled()) return;
-    writeStderr("[HOST CMD] ResetDom\n");
-}
-
 fn appendDetachedDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
     if (elem_id != host.dom_elements.items.len) failHost("descriptor stream elements must be dense and ordered by elem id");
 
@@ -3600,20 +3790,8 @@ fn ensureDomNode(host: *HostEnv, elem_id: u64, tag: []const u8, counts: *Command
     counts.addCreateElement();
 }
 
-fn cloneNodeValue(value: abi.NodeValue) abi.NodeValue {
-    abi.increfNodeValue(value, 1);
-    return value;
-}
-
-fn nodeValueListItems(value: abi.NodeValue) []const abi.NodeValue {
-    return switch (value.tag) {
-        .NvList => value.payload.nv_list.items(),
-        else => failHost("structural list signal expected a List value"),
-    };
-}
-
 const HostSignalEvalResult = struct {
-    value: abi.NodeValue,
+    value: HostValue,
     changed: bool,
 };
 
@@ -3623,54 +3801,54 @@ fn recordDerivedCall(host: *HostEnv) void {
     host.pending_roc_metrics = metrics;
 }
 
-fn cloneCachedSignalValue(cache_slot: *const HostSignalCacheSlot) abi.NodeValue {
+fn cloneCachedSignalValue(host: *HostEnv, cache_slot: *const HostSignalCacheSlot) HostValue {
     return switch (cache_slot.*) {
         .absent => failHost("cached signal expression value was requested before initialization"),
-        .present => |cached| cloneNodeValue(cached.value),
+        .present => |cached| host.cloneHostValue(cached.value),
     };
 }
 
-fn replaceSignalExprCacheAndClone(cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: abi.NodeValue, eq: abi.RocErasedCallable) abi.NodeValue {
-    cache_slot.replace(roc_host, metrics, value, eq);
-    return cloneCachedSignalValue(cache_slot);
+fn replaceSignalExprCacheAndClone(host: *HostEnv, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
+    cache_slot.replace(roc_host, metrics, value, eq, drop);
+    return cloneCachedSignalValue(host, cache_slot);
 }
 
-fn updateDirtySignalExprCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: abi.NodeValue) HostSignalEvalResult {
+fn updateDirtySignalExprCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) HostSignalEvalResult {
     switch (cache_slot.*) {
         .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
         .present => |*cached| {
             const values_equal = cached.valueEquals(roc_host, value);
             if (values_equal) {
-                abi.decrefNodeValue(value, roc_host);
+                cached.dropIncoming(roc_host, value);
                 recordSignalPrune(host);
-                return .{ .value = cloneNodeValue(cached.value), .changed = false };
+                return .{ .value = host.cloneHostValue(cached.value), .changed = false };
             }
 
             cached.replaceValue(roc_host, value);
-            return .{ .value = cloneNodeValue(cached.value), .changed = true };
+            return .{ .value = host.cloneHostValue(cached.value), .changed = true };
         },
     }
 }
 
-fn cloneMemoizedDirtySignalResult(record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
+fn cloneMemoizedDirtySignalResult(host: *HostEnv, record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
     if (record.last_dirty_generation != dirty_generation) return null;
 
     return switch (record.payload) {
         .ref => null,
         .const_value => |*payload| .{
-            .value = cloneCachedSignalValue(&payload.cached_value),
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = record.last_dirty_changed,
         },
         .map => |*payload| .{
-            .value = cloneCachedSignalValue(&payload.cached_value),
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = record.last_dirty_changed,
         },
         .map2 => |*payload| .{
-            .value = cloneCachedSignalValue(&payload.cached_value),
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = record.last_dirty_changed,
         },
         .combine => |*payload| .{
-            .value = cloneCachedSignalValue(&payload.cached_value),
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = record.last_dirty_changed,
         },
     };
@@ -3682,93 +3860,109 @@ fn rememberDirtySignalResult(record: *HostSignalRecord, dirty_generation: u64, r
     return result;
 }
 
-fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord) abi.NodeValue {
+fn hostSignalRecordDropCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
+    return switch (record.payload) {
+        .ref => |node_id| host.stateDropCallable(node_id),
+        .const_value => |payload| payload.drop,
+        .map => |payload| payload.drop,
+        .map2 => |payload| payload.drop,
+        .combine => |payload| payload.drop,
+    };
+}
+
+fn dropHostSignalRecordValue(host: *HostEnv, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
+    callErasedHostValueToUnit(roc_host, hostSignalRecordDropCallable(host, record), value);
+}
+
+fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord) HostValue {
     switch (record.payload) {
-        .ref => |node_id| return cloneNodeValue(host.stateValueByNodeId(node_id)),
+        .ref => |node_id| return host.stateValueByNodeId(node_id),
         .const_value => |*payload| {
             const value = callValueInitThunk(roc_host, payload.init);
-            return replaceSignalExprCacheAndClone(&payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq);
+            return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
         },
         .map => |*payload| {
             const input = evalHostSignalRecord(host, roc_host, payload.input);
-            defer abi.decrefNodeValue(input, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.input, input);
             recordDerivedCall(host);
-            const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, input);
-            return replaceSignalExprCacheAndClone(&payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq);
+            const value = callErasedHostValueToHostValue(roc_host, payload.transform, input);
+            return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
         },
         .map2 => |*payload| {
             const left = evalHostSignalRecord(host, roc_host, payload.left);
-            defer abi.decrefNodeValue(left, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.left, left);
             const right = evalHostSignalRecord(host, roc_host, payload.right);
-            defer abi.decrefNodeValue(right, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.right, right);
             recordDerivedCall(host);
-            const value = callErasedNodeValueNodeValueToNodeValue(roc_host, payload.transform, left, right);
-            return replaceSignalExprCacheAndClone(&payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq);
+            const value = callErasedHostValueHostValueToHostValue(roc_host, payload.transform, left, right);
+            return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
         },
         .combine => |*payload| {
-            var values: std.ArrayListUnmanaged(abi.NodeValue) = .empty;
+            var values: std.ArrayListUnmanaged(HostValue) = .empty;
             errdefer {
-                for (values.items) |value| {
-                    abi.decrefNodeValue(value, roc_host);
+                for (payload.children, values.items) |child, value| {
+                    dropHostSignalRecordValue(host, roc_host, child, value);
                 }
                 values.deinit(host.gpa.allocator());
             }
             for (payload.children) |child| {
                 values.append(host.gpa.allocator(), evalHostSignalRecord(host, roc_host, child)) catch std.process.exit(1);
             }
-            const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
-            values.deinit(host.gpa.allocator());
-            const list_value: abi.NodeValue = .{ .payload = .{ .nv_list = list }, .tag = .NvList };
-            defer abi.decrefNodeValue(list_value, roc_host);
+            const list = HostValueList.fromSlice(values.items, roc_host);
+            defer list.decref(roc_host);
             recordDerivedCall(host);
-            const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, list_value);
-            return replaceSignalExprCacheAndClone(&payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq);
+            const value = callErasedHostValueListToHostValue(roc_host, payload.transform, list);
+            for (payload.children, values.items) |child, child_value| {
+                dropHostSignalRecordValue(host, roc_host, child, child_value);
+            }
+            values.deinit(host.gpa.allocator());
+            return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
         },
     }
 }
 
 fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
     if (dirty_generation == 0) failHost("dirty signal evaluation used generation 0");
-    if (cloneMemoizedDirtySignalResult(record, dirty_generation)) |result| return result;
+    if (cloneMemoizedDirtySignalResult(host, record, dirty_generation)) |result| return result;
 
     switch (record.payload) {
         .ref => |node_id| return .{
-            .value = cloneNodeValue(host.stateValueByNodeId(node_id)),
+            .value = host.stateValueByNodeId(node_id),
             .changed = u64SliceContains(dirty_source_node_ids, node_id),
         },
         .const_value => |*payload| return rememberDirtySignalResult(record, dirty_generation, .{
-            .value = cloneCachedSignalValue(&payload.cached_value),
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = false,
         }),
         .map => |*payload| {
             const input = evalDirtyHostSignalRecord(host, roc_host, payload.input, dirty_source_node_ids, dirty_generation);
-            defer abi.decrefNodeValue(input.value, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.input, input.value);
             if (!input.changed) {
-                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(host, &payload.cached_value), .changed = false });
             }
 
             recordDerivedCall(host);
-            const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, input.value);
+            const value = callErasedHostValueToHostValue(roc_host, payload.transform, input.value);
             return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
         .map2 => |*payload| {
             const left = evalDirtyHostSignalRecord(host, roc_host, payload.left, dirty_source_node_ids, dirty_generation);
-            defer abi.decrefNodeValue(left.value, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.left, left.value);
             const right = evalDirtyHostSignalRecord(host, roc_host, payload.right, dirty_source_node_ids, dirty_generation);
-            defer abi.decrefNodeValue(right.value, roc_host);
+            defer dropHostSignalRecordValue(host, roc_host, payload.right, right.value);
             if (!left.changed and !right.changed) {
-                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(host, &payload.cached_value), .changed = false });
             }
 
             recordDerivedCall(host);
-            const value = callErasedNodeValueNodeValueToNodeValue(roc_host, payload.transform, left.value, right.value);
+            const value = callErasedHostValueHostValueToHostValue(roc_host, payload.transform, left.value, right.value);
             return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
         .combine => |*payload| {
-            var values: std.ArrayListUnmanaged(abi.NodeValue) = .empty;
+            var values: std.ArrayListUnmanaged(HostValue) = .empty;
             errdefer {
-                for (values.items) |value| {
-                    abi.decrefNodeValue(value, roc_host);
+                for (payload.children[0..values.items.len], values.items) |child, value| {
+                    dropHostSignalRecordValue(host, roc_host, child, value);
                 }
                 values.deinit(host.gpa.allocator());
             }
@@ -3781,25 +3975,27 @@ fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
             }
 
             if (!any_changed) {
-                for (values.items) |value| {
-                    abi.decrefNodeValue(value, roc_host);
+                for (payload.children, values.items) |child, value| {
+                    dropHostSignalRecordValue(host, roc_host, child, value);
                 }
                 values.deinit(host.gpa.allocator());
-                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(&payload.cached_value), .changed = false });
+                return rememberDirtySignalResult(record, dirty_generation, .{ .value = cloneCachedSignalValue(host, &payload.cached_value), .changed = false });
             }
 
-            const list = abi.RocList(abi.NodeValue).fromSlice(values.items, roc_host);
-            values.deinit(host.gpa.allocator());
-            const list_value: abi.NodeValue = .{ .payload = .{ .nv_list = list }, .tag = .NvList };
-            defer abi.decrefNodeValue(list_value, roc_host);
+            const list = HostValueList.fromSlice(values.items, roc_host);
+            defer list.decref(roc_host);
             recordDerivedCall(host);
-            const value = callErasedNodeValueToNodeValue(roc_host, payload.transform, list_value);
+            const value = callErasedHostValueListToHostValue(roc_host, payload.transform, list);
+            for (payload.children, values.items) |child, child_value| {
+                dropHostSignalRecordValue(host, roc_host, child, child_value);
+            }
+            values.deinit(host.gpa.allocator());
             return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
     }
 }
 
-fn evalHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding) abi.NodeValue {
+fn evalHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding) HostValue {
     return evalHostSignalRecord(host, roc_host, signal.record);
 }
 
@@ -3821,19 +4017,23 @@ fn hostSignalBindingEqCallable(host: *HostEnv, signal: *const HostSignalBinding)
     return hostSignalRecordEqCallable(host, signal.record);
 }
 
+fn hostSignalBindingDropCallable(host: *HostEnv, signal: *const HostSignalBinding) abi.RocErasedCallable {
+    return hostSignalRecordDropCallable(host, signal.record);
+}
+
 fn recordSignalPrune(host: *HostEnv) void {
     var metrics = host.pending_roc_metrics;
     metrics.propagation_prunes += 1;
     host.pending_roc_metrics = metrics;
 }
 
-fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: abi.NodeValue) bool {
+fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
     switch (cache_slot.*) {
         .absent => failHost("dirty signal expression was evaluated before its initial value was cached"),
-        .present => |cached| {
+        .present => |*cached| {
             const values_equal = cached.valueEquals(roc_host, value);
             if (values_equal) {
-                abi.decrefNodeValue(value, roc_host);
+                cached.dropIncoming(roc_host, value);
                 recordSignalPrune(host);
                 return false;
             }
@@ -3844,38 +4044,43 @@ fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *H
     }
 }
 
-fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot) bool {
+fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
     const value = evalHostSignalBinding(host, roc_host, signal);
-    const changed = applyRenderTextField(host, elem_id, field, nodeValueText(&value));
-    cache_slot.replace(roc_host, &host.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal));
+    const text = callErasedHostValueToStr(roc_host, read, value);
+    defer text.decref(roc_host);
+    const changed = applyRenderTextField(host, elem_id, field, text.asSlice());
+    cache_slot.replace(roc_host, &host.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
 
-fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot) bool {
+fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
     const value = evalHostSignalBinding(host, roc_host, signal);
-    const changed = applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(value));
-    cache_slot.replace(roc_host, &host.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal));
+    const bool_value = callErasedHostValueToBool(roc_host, read, value);
+    const changed = applyRenderBoolField(host, elem_id, field, bool_value);
+    cache_slot.replace(roc_host, &host.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
 
-fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
     const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids, dirty_generation);
     if (!result.changed) {
-        abi.decrefNodeValue(result.value, roc_host);
+        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, signal), result.value);
         return false;
     }
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
-    return applyRenderTextField(host, elem_id, field, nodeValueText(&result.value));
+    const text = callErasedHostValueToStr(roc_host, read, result.value);
+    defer text.decref(roc_host);
+    return applyRenderTextField(host, elem_id, field, text.asSlice());
 }
 
-fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
     const result = evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids, dirty_generation);
     if (!result.changed) {
-        abi.decrefNodeValue(result.value, roc_host);
+        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, signal), result.value);
         return false;
     }
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
-    return applyRenderBoolField(host, elem_id, field, nodeValueBoolValue(result.value));
+    return applyRenderBoolField(host, elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
 }
 
 fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
@@ -3898,7 +4103,7 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
                     const desc = &host.active_stream.whens.items[route.index];
                     const result = evalDirtyHostSignalBinding(host, roc_host, &desc.condition, dirty_source_node_ids, dirty_generation);
                     if (!result.changed) {
-                        abi.decrefNodeValue(result.value, roc_host);
+                        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, &desc.condition), result.value);
                         continue;
                     }
                     if (updateDirtySignalCache(host, roc_host, &desc.cached_value, result.value)) return true;
@@ -3907,7 +4112,7 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
                     const desc = &host.active_stream.eaches.items[route.index];
                     const result = evalDirtyHostSignalBinding(host, roc_host, &desc.items, dirty_source_node_ids, dirty_generation);
                     if (!result.changed) {
-                        abi.decrefNodeValue(result.value, roc_host);
+                        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, &desc.items), result.value);
                         continue;
                     }
                     if (updateDirtySignalCache(host, roc_host, &desc.cached_value, result.value)) return true;
@@ -3928,13 +4133,13 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
                 switch (route.kind) {
                     .text_node => {
                         const desc = &host.active_stream.signal_text_nodes.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                             counts.addTextField(.text);
                         }
                     },
                     .text_attr => {
                         const desc = &host.active_stream.signal_text_attrs.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                             counts.addTextField(desc.field);
                         }
                     },
@@ -3945,7 +4150,7 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
         if (route_index < host.active_bool_signal_routes.items.len) {
             for (host.active_bool_signal_routes.items[route_index].items) |route| {
                 const desc = &host.active_stream.signal_bool_attrs.items[route.index];
-                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                     counts.addBoolField(desc.field);
                 }
             }
@@ -4021,7 +4226,6 @@ fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescripto
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
-    traceHostDomReset();
     resetSimulatedDom(host);
 
     for (stream.render_nodes.items) |node| {
@@ -4046,7 +4250,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
                 appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
-                if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value)) {
+                if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(.text);
                 }
             },
@@ -4059,7 +4263,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         }
     }
     for (stream.signal_text_attrs.items) |*desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -4069,7 +4273,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         }
     }
     for (stream.signal_bool_attrs.items) |*desc| {
-        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -4186,7 +4390,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.signal_text_nodes.items) |*desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, &desc.cached_value)) {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addTextField(.text);
         }
     }
@@ -4196,7 +4400,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.signal_text_attrs.items) |*desc| {
-        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -4206,7 +4410,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.signal_bool_attrs.items) |*desc| {
-        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, &desc.cached_value)) {
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -4220,41 +4424,50 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
 
 fn dropMovedElemPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
-fn nodeValueUnit() abi.NodeValue {
-    return .{
-        .payload = .{ .nv_unit = .{} },
-        .tag = .NvUnit,
-    };
+fn hostValueUnit(host: *HostEnv, roc_host: *abi.RocHost) HostValue {
+    const payload = abi.allocateBox(0, @alignOf(u8), false, roc_host);
+    const value = host.storeHostValue(@ptrCast(payload));
+    if (builtin.is_test) host.setTestHostValueKind(value, .unit);
+    return value;
 }
 
-fn nodeValueStr(roc_host: *abi.RocHost, value: []const u8) abi.NodeValue {
-    return .{
-        .payload = .{ .nv_str = RocStr.fromSlice(value, roc_host) },
-        .tag = .NvStr,
-    };
+fn hostValueStr(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8) HostValue {
+    const payload: *RocStr = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(RocStr), @alignOf(RocStr), true, roc_host)));
+    payload.* = RocStr.fromSlice(value, roc_host);
+    const host_value = host.storeHostValue(@ptrCast(payload));
+    if (builtin.is_test) host.setTestHostValueKind(host_value, .str);
+    return host_value;
 }
 
-fn nodeValueBool(value: bool) abi.NodeValue {
-    return .{
-        .payload = .{ .nv_bool = value },
-        .tag = .NvBool,
-    };
+fn hostValueBool(host: *HostEnv, roc_host: *abi.RocHost, value: bool) HostValue {
+    const payload: *bool = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(bool), @alignOf(bool), false, roc_host)));
+    payload.* = value;
+    const host_value = host.storeHostValue(@ptrCast(payload));
+    if (builtin.is_test) host.setTestHostValueKind(host_value, .bool);
+    return host_value;
 }
 
-fn nodeValueI64(value: i64) abi.NodeValue {
-    return .{
-        .payload = .{ .nv_i64 = value },
-        .tag = .NvI64,
-    };
+fn hostValueI64(host: *HostEnv, roc_host: *abi.RocHost, value: i64) HostValue {
+    const payload: *i64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(i64), @alignOf(i64), false, roc_host)));
+    payload.* = value;
+    const host_value = host.storeHostValue(@ptrCast(payload));
+    if (builtin.is_test) host.setTestHostValueKind(host_value, .i64);
+    return host_value;
 }
 
-const ErasedNodeValueUnaryArgs = extern struct {
-    arg0: abi.NodeValue,
+const ErasedUnitArgs = extern struct {};
+
+const ErasedHostValueUnaryArgs = extern struct {
+    arg0: HostValue,
 };
 
-const ErasedNodeValueBinaryArgs = extern struct {
-    arg0: abi.NodeValue,
-    arg1: abi.NodeValue,
+const ErasedHostValueBinaryArgs = extern struct {
+    arg0: HostValue,
+    arg1: HostValue,
+};
+
+const ErasedHostValueListUnaryArgs = extern struct {
+    arg0: HostValueList,
 };
 
 fn erasedCallablePayload(callable: abi.RocErasedCallable) *abi.RocErasedCallablePayload {
@@ -4262,11 +4475,10 @@ fn erasedCallablePayload(callable: abi.RocErasedCallable) *abi.RocErasedCallable
     return abi.rocErasedCallablePayloadPtr(callable);
 }
 
-fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue) abi.NodeValue {
+fn callValueInitThunk(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) HostValue {
     const payload = erasedCallablePayload(callable);
-    abi.increfNodeValue(arg0, 1);
-    var call_args = ErasedNodeValueUnaryArgs{ .arg0 = arg0 };
-    var result: abi.NodeValue = undefined;
+    var call_args = ErasedUnitArgs{};
+    var result: HostValue = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),
@@ -4276,16 +4488,10 @@ fn callErasedNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErase
     return result;
 }
 
-fn callValueInitThunk(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) abi.NodeValue {
-    return callErasedNodeValueToNodeValue(roc_host, callable, nodeValueUnit());
-}
-
-fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.NodeValue {
+fn callErasedHostValueToHostValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) HostValue {
     const payload = erasedCallablePayload(callable);
-    abi.increfNodeValue(arg0, 1);
-    abi.increfNodeValue(arg1, 1);
-    var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
-    var result: abi.NodeValue = undefined;
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: HostValue = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),
@@ -4295,11 +4501,22 @@ fn callErasedNodeValueNodeValueToNodeValue(roc_host: *abi.RocHost, callable: abi
     return result;
 }
 
-fn callErasedNodeValueNodeValueToElem(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) abi.Elem {
+fn callErasedHostValueHostValueToHostValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) HostValue {
     const payload = erasedCallablePayload(callable);
-    abi.increfNodeValue(arg0, 1);
-    abi.increfNodeValue(arg1, 1);
-    var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
+    var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
+    var result: HostValue = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedHostValueHostValueToElem(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) abi.Elem {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
     var result: abi.Elem = undefined;
     payload.callable_fn_ptr(
         roc_host,
@@ -4310,12 +4527,75 @@ fn callErasedNodeValueNodeValueToElem(roc_host: *abi.RocHost, callable: abi.RocE
     return result;
 }
 
-fn callErasedNodeValueNodeValueToBool(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: abi.NodeValue, arg1: abi.NodeValue) bool {
+fn callErasedHostValueHostValueToBool(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) bool {
     const payload = erasedCallablePayload(callable);
-    abi.increfNodeValue(arg0, 1);
-    abi.increfNodeValue(arg1, 1);
-    var call_args = ErasedNodeValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
-    var result: bool = undefined;
+    var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
+    var result: usize = 0;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return (result & 0xff) != 0;
+}
+
+fn callErasedHostValueToUnit(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) void {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: usize = 0;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+}
+
+fn callErasedHostValueToStr(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) RocStr {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: RocStr = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedHostValueToBool(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) bool {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: usize = 0;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return (result & 0xff) != 0;
+}
+
+fn callErasedHostValueToHostValueList(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) HostValueList {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: HostValueList = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedHostValueListToHostValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValueList) HostValue {
+    const payload = erasedCallablePayload(callable);
+    arg0.incref(1);
+    var call_args = ErasedHostValueListUnaryArgs{ .arg0 = arg0 };
+    var result: HostValue = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),
@@ -4332,11 +4612,9 @@ fn hostEventById(host: *HostEnv, event_id: u64) HostActiveEventDesc {
     return host.active_events.items[@intCast(event_id - 1)];
 }
 
-fn validateNodeEventPayload(desc: HostActiveEventDesc, payload: abi.NodeValue) void {
-    switch (desc.payload_kind) {
-        .unit => if (payload.tag != .NvUnit) failHost("click event received a non-unit payload"),
-        .str => if (payload.tag != .NvStr) failHost("input event received a non-str payload"),
-        .bool => if (payload.tag != .NvBool) failHost("check event received a non-bool payload"),
+fn validateEventPayloadKind(desc: HostActiveEventDesc, actual_payload_kind: EventPayloadKind) void {
+    if (desc.payload_kind != actual_payload_kind) {
+        failHost("DOM event payload kind does not match Roc event descriptor");
     }
 }
 
@@ -4383,11 +4661,11 @@ fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) voi
     acceptInitElemMeasured(host, roc_host, root_box, null, null);
 }
 
-fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload: abi.NodeValue, stats: ?*BenchmarkStats) void {
-    defer abi.decrefNodeValue(payload, roc_host);
-
+fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
     const desc = hostEventById(host, event_id);
-    validateNodeEventPayload(desc, payload);
+    validateEventPayloadKind(desc, payload_kind);
+    defer callErasedHostValueToUnit(roc_host, desc.payload_drop, payload);
+
     host.recordDispatch();
 
     var metrics = host.pending_roc_metrics;
@@ -4397,7 +4675,8 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 
     const start_ns = benchmarkNowNs();
     const current = host.stateValueByNodeId(desc.target_node_id);
-    const next = callErasedNodeValueNodeValueToNodeValue(roc_host, desc.transform, current, payload);
+    defer callErasedHostValueToUnit(roc_host, host.stateDropCallable(desc.target_node_id), current);
+    const next = callErasedHostValueHostValueToHostValue(roc_host, desc.transform, current, payload);
     if (stats) |s| s.dispatch_roc_ns += benchmarkNowNs() - start_ns;
 
     const changed = host.updateStateValue(roc_host, desc.target_node_id, next);
@@ -4435,11 +4714,12 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     }
 }
 
-fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload: abi.NodeValue) void {
-    dispatchRocEventMeasured(host, roc_host, event_id, payload, null);
+fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue) void {
+    dispatchRocEventMeasured(host, roc_host, event_id, payload_kind, payload, null);
 }
 
 fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
+    if (builtin.is_test) current_host = host;
     return .{
         .env = @ptrCast(host),
         .roc_alloc = &rocAllocFn,
@@ -4464,7 +4744,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, roc_host, event_id, nodeValueUnit(), stats);
+            dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
         },
 
         .fill => {
@@ -4472,7 +4752,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
             if (elem.disabled) failHost("benchmark fill target is disabled");
             if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, event_id, nodeValueStr(roc_host, value), stats);
+                dispatchRocEventMeasured(host, roc_host, event_id, .str, hostValueStr(host, roc_host, value), stats);
             } else {
                 _ = setElementValueIfChanged(host, elem, value);
             }
@@ -4483,7 +4763,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
             if (elem.disabled) failHost("benchmark check target is disabled");
             if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, event_id, nodeValueBool(checked), stats);
+                dispatchRocEventMeasured(host, roc_host, event_id, .bool, hostValueBool(host, roc_host, checked), stats);
             } else {
                 _ = setElementCheckedIfChanged(elem, checked);
             }
@@ -4619,6 +4899,10 @@ comptime {
         @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
         @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
         @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+        @export(&hostValueClone, .{ .name = "roc_host_value_clone", .visibility = .hidden });
+        @export(&hostValueGet, .{ .name = "roc_host_value_get", .visibility = .hidden });
+        @export(&hostValueStore, .{ .name = "roc_host_value_store", .visibility = .hidden });
+        @export(&hostValueTake, .{ .name = "roc_host_value_take", .visibility = .hidden });
 
         @export(&main, .{ .name = "main" });
         if (@import("builtin").os.tag == .windows) {
@@ -4769,7 +5053,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
                     return 1;
                 };
-                dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueUnit());
+                dispatchRocEvent(&host_env, &roc_host, event_id, .unit, hostValueUnit(&host_env, &roc_host));
             },
 
             .fill => {
@@ -4783,7 +5067,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_input_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueStr(&roc_host, value));
+                    dispatchRocEvent(&host_env, &roc_host, event_id, .str, hostValueStr(&host_env, &roc_host, value));
                 } else {
                     _ = setElementValueIfChanged(&host_env, elem, value);
                 }
@@ -4800,7 +5084,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_check_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, event_id, nodeValueBool(checked));
+                    dispatchRocEvent(&host_env, &roc_host, event_id, .bool, hostValueBool(&host_env, &roc_host, checked));
                 } else {
                     _ = setElementCheckedIfChanged(elem, checked);
                 }
@@ -5008,6 +5292,14 @@ fn deinitTestHostIdentity(host: *HostEnv) void {
     host.scopes.deinit(allocator);
     host.node_identities.deinit(allocator);
     host.dom_identities.deinit(allocator);
+    for (host.host_values.items) |slot| {
+        switch (slot) {
+            .vacant => {},
+            .occupied => failHost("test host value registry still owned a typed cell at shutdown"),
+        }
+    }
+    host.host_values.deinit(allocator);
+    host.test_host_value_kinds.deinit(allocator);
     host.roc_allocations.deinit(allocator);
 }
 
@@ -5077,8 +5369,8 @@ const TestErasedBinderCapture = extern struct {
     condition_binder: HostBinderToken,
 };
 
-const TestErasedNodeValueCapture = extern struct {
-    value: abi.NodeValue,
+const TestErasedHostValueCapture = extern struct {
+    value: HostValue,
 };
 
 var test_erased_callable_drop_count: u64 = 0;
@@ -5113,69 +5405,176 @@ fn writeTestErasedCallable(
     return callable;
 }
 
-fn testUnaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
-    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueUnaryArgs, args);
-    const input = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test unary NodeValue callable expected NvI64"),
-    };
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(input + capture.amount));
+fn testCurrentRocHost() *abi.RocHost {
+    return currentHost().roc_host orelse failHost("test HostValue helper requires an active Roc host");
 }
 
-fn testUnaryIdentityNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
-    _ = capture_ptr;
-    const call_args = testErasedArgsAs(ErasedNodeValueUnaryArgs, args);
-    abi.increfNodeValue(call_args.arg0, 1);
-    writeTestErasedResult(abi.NodeValue, ret, call_args.arg0);
+fn testHostValueUnit() HostValue {
+    const host = currentHost();
+    return hostValueUnit(host, testCurrentRocHost());
 }
 
-fn testBinaryNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
-    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const left = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test binary NodeValue callable expected left NvI64"),
-    };
-    const right = switch (call_args.arg1.tag) {
-        .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test binary NodeValue callable expected right NvI64"),
-    };
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(left + right + capture.amount));
+fn testHostValueStr(roc_host: *abi.RocHost, value: []const u8) HostValue {
+    return hostValueStr(hostFromRocHost(roc_host), roc_host, value);
 }
 
-fn testUnitIncrementNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
-    _ = capture_ptr;
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const current = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test unit event callable expected current NvI64"),
-    };
-    switch (call_args.arg1.tag) {
-        .NvUnit => {},
-        else => @panic("test unit event callable expected unit payload"),
+fn testHostValueBool(value: bool) HostValue {
+    const host = currentHost();
+    return hostValueBool(host, testCurrentRocHost(), value);
+}
+
+fn testHostValueI64(value: i64) HostValue {
+    const host = currentHost();
+    return hostValueI64(host, testCurrentRocHost(), value);
+}
+
+fn testReadHostValueI64(roc_host: *abi.RocHost, value: HostValue) i64 {
+    const host = hostFromRocHost(roc_host);
+    if (host.testHostValueKind(value) != .i64) @panic("test HostValue expected I64");
+    const box = host.getHostValue(value);
+    defer abi.decrefBox(box, roc_host);
+    const payload: *const i64 = @ptrCast(@alignCast(box orelse unreachable));
+    return payload.*;
+}
+
+fn testReadHostValueBool(roc_host: *abi.RocHost, value: HostValue) bool {
+    const host = hostFromRocHost(roc_host);
+    if (host.testHostValueKind(value) != .bool) @panic("test HostValue expected Bool");
+    const box = host.getHostValue(value);
+    defer abi.decrefBox(box, roc_host);
+    const payload: *const bool = @ptrCast(@alignCast(box orelse unreachable));
+    return payload.*;
+}
+
+fn testReadHostValueStr(roc_host: *abi.RocHost, value: HostValue) RocStr {
+    const host = hostFromRocHost(roc_host);
+    if (host.testHostValueKind(value) != .str) @panic("test HostValue expected Str");
+    const box = host.getHostValue(value);
+    defer abi.decrefBox(box, roc_host);
+    const payload: *const RocStr = @ptrCast(@alignCast(box orelse unreachable));
+    return payload.*;
+}
+
+fn testReadHostValueI64List(roc_host: *abi.RocHost, value: HostValue) I64List {
+    const host = hostFromRocHost(roc_host);
+    if (host.testHostValueKind(value) != .i64_list) @panic("test HostValue expected List(I64)");
+    const box = host.getHostValue(value);
+    defer abi.decrefBox(box, roc_host);
+    const payload: *const I64List = @ptrCast(@alignCast(box orelse unreachable));
+    return payload.*;
+}
+
+fn testDropRocStrBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callconv(.c) void {
+    const payload: *RocStr = @ptrCast(@alignCast(data_ptr orelse return));
+    payload.*.decref(roc_host);
+}
+
+fn testDropI64ListBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callconv(.c) void {
+    const payload: *I64List = @ptrCast(@alignCast(data_ptr orelse return));
+    payload.*.decref(roc_host);
+}
+
+fn testDropHostValue(roc_host: *abi.RocHost, value: HostValue) void {
+    const host = hostFromRocHost(roc_host);
+    const kind = host.testHostValueKind(value);
+    const box = host.takeHostValue(value);
+    switch (kind) {
+        .unit, .i64, .bool => abi.decrefBox(box, roc_host),
+        .str => abi.decrefBoxWith(box, @alignOf(RocStr), &testDropRocStrBoxPayload, roc_host),
+        .i64_list => abi.decrefBoxWith(box, @alignOf(I64List), &testDropI64ListBoxPayload, roc_host),
     }
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(current + 1));
 }
 
-fn testInitialNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testHostValueDropCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testDropHostValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+}
+
+fn testHostValueEqCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testHostValueEqErasedCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+}
+
+fn testReadStrCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testReadStrHostValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+}
+
+fn testReadBoolCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testReadBoolHostValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+}
+
+fn testItemsToValuesCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testI64ListToHostValuesCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+}
+
+fn testUnaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    const input = testReadHostValueI64(roc_host, call_args.arg0);
+    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, input + capture.amount));
+}
+
+fn testUnaryIdentityHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    writeTestErasedResult(HostValue, ret, hostFromRocHost(roc_host).cloneHostValue(call_args.arg0));
+}
+
+fn testBinaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const left = testReadHostValueI64(roc_host, call_args.arg0);
+    const right = testReadHostValueI64(roc_host, call_args.arg1);
+    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, left + right + capture.amount));
+}
+
+fn testUnitIncrementHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const current = testReadHostValueI64(roc_host, call_args.arg0);
+    if (hostFromRocHost(roc_host).testHostValueKind(call_args.arg1) != .unit) @panic("test unit event callable expected unit payload");
+    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, current + 1));
+}
+
+fn testInitialHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
-    const capture = testCapturePtrAs(TestErasedNodeValueCapture, capture_ptr);
-    abi.increfNodeValue(capture.value, 1);
-    writeTestErasedResult(abi.NodeValue, ret, capture.value);
+    const capture = testCapturePtrAs(TestErasedHostValueCapture, capture_ptr);
+    writeTestErasedResult(HostValue, ret, hostFromRocHost(roc_host).cloneHostValue(capture.value));
 }
 
 fn testBinaryElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const left = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test row Elem callable expected left NvI64"),
-    };
-    const right = switch (call_args.arg1.tag) {
-        .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test row Elem callable expected right NvI64"),
-    };
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const left = testReadHostValueI64(roc_host, call_args.arg0);
+    const right = testReadHostValueI64(roc_host, call_args.arg1);
     var text_buffer: [64]u8 = undefined;
     const text = std.fmt.bufPrint(&text_buffer, "row-{d}", .{left + right + capture.amount}) catch @panic("test row Elem callable could not format text");
     writeTestErasedResult(abi.Elem, ret, testNodeText(roc_host, text));
@@ -5184,15 +5583,9 @@ fn testBinaryElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u
 fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     test_row_elem_call_count += 1;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const key = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test stateful row Elem callable expected key NvI64"),
-    };
-    const item = switch (call_args.arg1.tag) {
-        .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test stateful row Elem callable expected item NvI64"),
-    };
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const key = testReadHostValueI64(roc_host, call_args.arg0);
+    const item = testReadHostValueI64(roc_host, call_args.arg1);
     var text_buffer: [64]u8 = undefined;
     const text = std.fmt.bufPrint(&text_buffer, "row-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row Elem callable could not format text");
     writeTestErasedResult(abi.Elem, ret, testNodeState(roc_host, testNodeText(roc_host, text)));
@@ -5201,15 +5594,9 @@ fn testStatefulRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]co
 fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     test_row_elem_call_count += 1;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const key = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test stateful row button Elem callable expected key NvI64"),
-    };
-    const item = switch (call_args.arg1.tag) {
-        .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test stateful row button Elem callable expected item NvI64"),
-    };
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const key = testReadHostValueI64(roc_host, call_args.arg0);
+    const item = testReadHostValueI64(roc_host, call_args.arg1);
     var text_buffer: [64]u8 = undefined;
     const text = std.fmt.bufPrint(&text_buffer, "row-action-{d}-{d}", .{ key, item + capture.amount }) catch @panic("test stateful row button Elem callable could not format text");
     const token = newTestBinderToken(roc_host);
@@ -5224,15 +5611,9 @@ fn testStatefulRowButtonElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: 
 fn testNestedWhenRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     test_row_elem_call_count += 1;
     const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const key = switch (call_args.arg0.tag) {
-        .NvI64 => call_args.arg0.payload.nv_i64,
-        else => @panic("test nested when row Elem callable expected key NvI64"),
-    };
-    const item = switch (call_args.arg1.tag) {
-        .NvI64 => call_args.arg1.payload.nv_i64,
-        else => @panic("test nested when row Elem callable expected item NvI64"),
-    };
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const key = testReadHostValueI64(roc_host, call_args.arg0);
+    const item = testReadHostValueI64(roc_host, call_args.arg1);
 
     var true_text_buffer: [64]u8 = undefined;
     var false_text_buffer: [64]u8 = undefined;
@@ -5242,6 +5623,7 @@ fn testNestedWhenRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(roc_host, testNodeRefExpr(capture.condition_binder)),
+                .read = testReadBoolCallable(roc_host),
                 .when_false = boxTestElem(roc_host, testNodeText(roc_host, false_text)),
                 .when_true = boxTestElem(roc_host, testNodeText(roc_host, true_text)),
             },
@@ -5251,50 +5633,55 @@ fn testNestedWhenRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]
     writeTestErasedResult(abi.Elem, ret, row);
 }
 
-fn testNodeValueEqCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testHostValueEqErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = capture_ptr;
-    const call_args = testErasedArgsAs(ErasedNodeValueBinaryArgs, args);
-    const is_equal = if (call_args.arg0.tag != call_args.arg1.tag)
-        false
-    else switch (call_args.arg0.tag) {
-        .NvBool => call_args.arg0.payload.nv_bool == call_args.arg1.payload.nv_bool,
-        .NvI64 => call_args.arg0.payload.nv_i64 == call_args.arg1.payload.nv_i64,
-        .NvStr => blk: {
-            const left = call_args.arg0.payload.nv_str;
-            const right = call_args.arg1.payload.nv_str;
+    const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
+    const host = hostFromRocHost(roc_host);
+    const left_kind = host.testHostValueKind(call_args.arg0);
+    const right_kind = host.testHostValueKind(call_args.arg1);
+    const is_equal = if (left_kind != right_kind) false else switch (left_kind) {
+        .unit => true,
+        .i64 => testReadHostValueI64(roc_host, call_args.arg0) == testReadHostValueI64(roc_host, call_args.arg1),
+        .bool => testReadHostValueBool(roc_host, call_args.arg0) == testReadHostValueBool(roc_host, call_args.arg1),
+        .str => blk: {
+            const left = testReadHostValueStr(roc_host, call_args.arg0);
+            const right = testReadHostValueStr(roc_host, call_args.arg1);
             break :blk std.mem.eql(u8, left.asSlice(), right.asSlice());
         },
-        .NvUnit => true,
-        .NvList => false,
+        .i64_list => blk: {
+            const left = testReadHostValueI64List(roc_host, call_args.arg0);
+            const right = testReadHostValueI64List(roc_host, call_args.arg1);
+            break :blk std.mem.eql(i64, left.items(), right.items());
+        },
     };
     writeTestErasedResult(bool, ret, is_equal);
 }
 
-fn testStableStrNodeValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testStableStrHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueStr(roc_host, "stable"));
+    writeTestErasedResult(HostValue, ret, hostValueStr(hostFromRocHost(roc_host), roc_host, "stable"));
 }
 
-fn testStableI64NodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testStableI64HostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueI64(capture.amount));
+    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, capture.amount));
 }
 
-fn testStableBoolNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testStableBoolHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
-    writeTestErasedResult(abi.NodeValue, ret, nodeValueBool(true));
+    writeTestErasedResult(HostValue, ret, hostValueBool(hostFromRocHost(roc_host), roc_host, true));
 }
 
-fn testAlwaysEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testAlwaysEqualHostValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
     writeTestErasedResult(bool, ret, true);
 }
 
-fn testNeverEqualNodeValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testNeverEqualHostValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
     writeTestErasedResult(bool, ret, false);
@@ -5310,25 +5697,63 @@ fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv
     abi.decrefBox(@ptrCast(capture.condition_binder), roc_host);
 }
 
-fn testNodeValueCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
+fn testDropHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = ret;
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    testDropHostValue(roc_host, call_args.arg0);
+}
+
+fn testReadStrHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    var value = testReadHostValueStr(roc_host, call_args.arg0);
+    value.incref(1);
+    writeTestErasedResult(RocStr, ret, value);
+}
+
+fn testReadBoolHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    writeTestErasedResult(bool, ret, testReadHostValueBool(roc_host, call_args.arg0));
+}
+
+fn testI64ListToHostValuesCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const host = hostFromRocHost(roc_host);
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    const source = testReadHostValueI64List(roc_host, call_args.arg0);
+    const source_items = source.items();
+    const result = HostValueList.allocate(source_items.len, roc_host);
+    if (source_items.len > 0) {
+        const dest = result.elements_ptr orelse unreachable;
+        for (source_items, 0..) |item, index| {
+            dest[index] = hostValueI64(host, roc_host, item);
+        }
+    }
+    writeTestErasedResult(HostValueList, ret, result);
+}
+
+fn testHostValueCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
-    const capture = testCapturePtrAs(TestErasedNodeValueCapture, capture_ptr);
-    abi.decrefNodeValue(capture.value, roc_host);
+    const capture = testCapturePtrAs(TestErasedHostValueCapture, capture_ptr);
+    testDropHostValue(roc_host, capture.value);
 }
 
-fn expectNodeValueI64(value: abi.NodeValue, expected: i64) !void {
-    try std.testing.expectEqual(abi.NodeValueTag.NvI64, value.tag);
-    try std.testing.expectEqual(expected, value.payload.nv_i64);
+fn expectHostValueI64(value: HostValue, expected: i64) !void {
+    const roc_host = testCurrentRocHost();
+    try std.testing.expectEqual(expected, testReadHostValueI64(roc_host, value));
+    testDropHostValue(roc_host, value);
 }
 
-test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
+test "signals host invokes erased HostValue thunks with ABI argument layouts" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
     var roc_host = makeSignalsRocHost(&host);
     host.roc_host = &roc_host;
     defer {
-        host.roc_allocations.deinit(host.gpa.allocator());
+        host.deinit();
         _ = host.gpa.deinit();
     }
 
@@ -5336,28 +5761,34 @@ test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
         const unary = writeTestErasedCallable(
             TestErasedI64Capture,
             &roc_host,
-            &testUnaryNodeValueCallable,
+            &testUnaryHostValueCallable,
             &testErasedCallableOnDrop,
             .{ .amount = 5 },
         );
         defer abi.decrefErasedCallable(unary, &roc_host);
 
-        const result = callErasedNodeValueToNodeValue(&roc_host, unary, nodeValueI64(37));
-        try expectNodeValueI64(result, 42);
+        const input = testHostValueI64(37);
+        defer testDropHostValue(&roc_host, input);
+        const result = callErasedHostValueToHostValue(&roc_host, unary, input);
+        try expectHostValueI64(result, 42);
     }
 
     {
         const binary = writeTestErasedCallable(
             TestErasedI64Capture,
             &roc_host,
-            &testBinaryNodeValueCallable,
+            &testBinaryHostValueCallable,
             &testErasedCallableOnDrop,
             .{ .amount = 3 },
         );
         defer abi.decrefErasedCallable(binary, &roc_host);
 
-        const result = callErasedNodeValueNodeValueToNodeValue(&roc_host, binary, nodeValueI64(10), nodeValueI64(29));
-        try expectNodeValueI64(result, 42);
+        const left = testHostValueI64(10);
+        defer testDropHostValue(&roc_host, left);
+        const right = testHostValueI64(29);
+        defer testDropHostValue(&roc_host, right);
+        const result = callErasedHostValueHostValueToHostValue(&roc_host, binary, left, right);
+        try expectHostValueI64(result, 42);
     }
 
     {
@@ -5370,7 +5801,11 @@ test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
         );
         defer abi.decrefErasedCallable(row, &roc_host);
 
-        const result = callErasedNodeValueNodeValueToElem(&roc_host, row, nodeValueI64(10), nodeValueI64(29));
+        const left = testHostValueI64(10);
+        defer testDropHostValue(&roc_host, left);
+        const right = testHostValueI64(29);
+        defer testDropHostValue(&roc_host, right);
+        const result = callErasedHostValueHostValueToElem(&roc_host, row, left, right);
         defer abi.decrefElem(result, &roc_host);
 
         try std.testing.expectEqual(abi.ElemTag.Text, result.tag);
@@ -5381,14 +5816,23 @@ test "signals host invokes erased NodeValue thunks with ABI argument layouts" {
         const eq = writeTestErasedCallable(
             TestErasedI64Capture,
             &roc_host,
-            &testNodeValueEqCallable,
+            &testHostValueEqErasedCallable,
             &testErasedCallableOnDrop,
             .{ .amount = 0 },
         );
         defer abi.decrefErasedCallable(eq, &roc_host);
 
-        try std.testing.expect(callErasedNodeValueNodeValueToBool(&roc_host, eq, nodeValueI64(42), nodeValueI64(42)));
-        try std.testing.expect(!callErasedNodeValueNodeValueToBool(&roc_host, eq, nodeValueI64(41), nodeValueI64(42)));
+        const equal_left = testHostValueI64(42);
+        defer testDropHostValue(&roc_host, equal_left);
+        const equal_right = testHostValueI64(42);
+        defer testDropHostValue(&roc_host, equal_right);
+        try std.testing.expect(callErasedHostValueHostValueToBool(&roc_host, eq, equal_left, equal_right));
+
+        const unequal_left = testHostValueI64(41);
+        defer testDropHostValue(&roc_host, unequal_left);
+        const unequal_right = testHostValueI64(42);
+        defer testDropHostValue(&roc_host, unequal_right);
+        try std.testing.expect(!callErasedHostValueHostValueToBool(&roc_host, eq, unequal_left, unequal_right));
     }
 
     try std.testing.expectEqual(@as(u64, 4), test_erased_callable_drop_count);
@@ -5421,25 +5865,26 @@ test "signals host interns scopes and node identities from explicit paths" {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
-    const initial_keys = [_]abi.NodeValue{ nodeValueI64(10), nodeValueI64(11) };
-    const initial_rows = host.syncEachRowScopes(&roc_host, root, 7, &initial_keys, &initial_keys, key_eq, key_eq);
+    const initial_keys = [_]HostValue{ testHostValueI64(10), testHostValueI64(11) };
+    const initial_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &initial_keys, &initial_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, initial_rows);
     const row_a = initial_rows.scope_ids[0];
     const row_b = initial_rows.scope_ids[1];
     try std.testing.expect(row_b != row_a);
 
-    const same_keys = [_]abi.NodeValue{nodeValueI64(10)};
-    const same_rows = host.syncEachRowScopes(&roc_host, root, 7, &same_keys, &same_keys, key_eq, key_eq);
+    const same_keys = [_]HostValue{testHostValueI64(10)};
+    const same_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &same_keys, &same_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, same_rows);
     try std.testing.expectEqual(row_a, same_rows.scope_ids[0]);
 
-    const other_site_rows = host.syncEachRowScopes(&roc_host, root, 8, &same_keys, &same_keys, key_eq, key_eq);
+    const other_site_keys = [_]HostValue{testHostValueI64(10)};
+    const other_site_rows = syncTestEachRowScopes(&host, &roc_host, root, 8, &other_site_keys, &other_site_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, other_site_rows);
     const same_key_other_site = other_site_rows.scope_ids[0];
     try std.testing.expect(same_key_other_site != row_a);
@@ -5468,14 +5913,14 @@ test "signals host disposal retires scope subtree identities" {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     defer abi.decrefErasedCallable(key_eq, &roc_host);
 
     const root = host.internRootScope();
-    const row = host.createEachRowScope(root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
+    const row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_eq, key_eq);
     const branch = host.internWhenBranchScope(row, 4, .true_branch);
     const row_state = host.internNodeIdentity(row, 0);
     const branch_state = host.internNodeIdentity(branch, 0);
@@ -5487,7 +5932,7 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(!host.node_identities.items[@intCast(row_state)].active);
     try std.testing.expect(!host.node_identities.items[@intCast(branch_state)].active);
 
-    const recreated_row = host.createEachRowScope(root, 3, nodeValueI64(10), nodeValueI64(10), key_eq, key_eq);
+    const recreated_row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_eq, key_eq);
     try std.testing.expect(recreated_row != row);
 
     const recreated_state = host.internNodeIdentity(recreated_row, 0);
@@ -5509,7 +5954,7 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     const root = testNodeStateWithTokenAndInitial(
         &roc_host,
         state_token,
-        nodeValueStr(&roc_host, "first"),
+        testHostValueStr(&roc_host, "first"),
         testNodeTextSignal(&roc_host, testNodeRefExpr(state_token)),
     );
     defer abi.decrefElem(root, &roc_host);
@@ -5526,8 +5971,8 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueStr(&roc_host, "second");
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueStr(&roc_host, "second");
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5566,7 +6011,7 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
     const root = testNodeStateWithTokenAndInitial(
         &roc_host,
         state_token,
-        nodeValueI64(1),
+        testHostValueI64(1),
         testNodeTextSignal(&roc_host, stable_label),
     );
     defer abi.decrefElem(root, &roc_host);
@@ -5581,8 +6026,8 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueI64(2);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5616,7 +6061,7 @@ test "signals host evaluates shared dirty record once per batch" {
     const root = testNodeStateWithTokenAndInitial(
         &roc_host,
         state_token,
-        nodeValueI64(1),
+        testHostValueI64(1),
         testElement(&roc_host, &children),
     );
     defer abi.decrefElem(root, &roc_host);
@@ -5633,8 +6078,8 @@ test "signals host evaluates shared dirty record once per batch" {
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueI64(2);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5665,7 +6110,7 @@ test "signals host skips parent transform when dirty child output is unchanged" 
     const root = testNodeStateWithTokenAndInitial(
         &roc_host,
         state_token,
-        nodeValueI64(1),
+        testHostValueI64(1),
         testNodeTextSignal(&roc_host, parent_label),
     );
     defer abi.decrefElem(root, &roc_host);
@@ -5680,8 +6125,8 @@ test "signals host skips parent transform when dirty child output is unchanged" 
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueI64(2);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5707,20 +6152,20 @@ test "signals host prunes dirty combine output through cache-owned equality" {
         _ = host.gpa.deinit();
     }
 
-    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2) };
+    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2) };
     const combine = testNodeCombineExpr(&roc_host, &.{});
     var stream: HostNodeDescriptorStream = .{};
     defer stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     var binding = host.bindNodeSignal(host.gpa.allocator(), &stream, combine, &.{});
     defer binding.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     var cache: HostSignalCacheSlot = .absent;
-    cache.replace(&roc_host, &host.pending_roc_metrics, nodeValueList(&roc_host, &initial_items), hostSignalBindingEqCallable(&host, &binding));
+    cache.replace(&roc_host, &host.pending_roc_metrics, testHostValueI64List(&roc_host, &initial_items), hostSignalBindingEqCallable(&host, &binding), hostSignalBindingDropCallable(&host, &binding));
     defer cache.deinit(&roc_host, &host.pending_roc_metrics);
     abi.decrefNodeSignalExpr(combine, &roc_host);
 
-    const dirty_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(4) };
+    const dirty_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(4) };
     const prune_start = host.pending_roc_metrics.propagation_prunes;
-    try std.testing.expect(!updateDirtySignalCache(&host, &roc_host, &cache, nodeValueList(&roc_host, &dirty_items)));
+    try std.testing.expect(!updateDirtySignalCache(&host, &roc_host, &cache, testHostValueI64List(&roc_host, &dirty_items)));
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
 }
 
@@ -5740,13 +6185,14 @@ test "signals host marks dirty structural sources for structural patching" {
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(&roc_host, testNodeRefExpr(state_token)),
+                .read = testReadBoolCallable(&roc_host),
                 .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
                 .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
             },
         },
         .tag = .When,
     };
-    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueBool(true), when_elem);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueBool(true), when_elem);
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
@@ -5757,8 +6203,8 @@ test "signals host marks dirty structural sources for structural patching" {
     try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueBool(false);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueBool(false);
     host.states.items[state_index].version += 1;
     const dirty_source_node_ids = [_]u64{state_id};
     const dirty_generation = host.nextDirtySignalGeneration();
@@ -5794,13 +6240,14 @@ test "signals host prunes structural render when retained condition equality is 
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(&roc_host, condition),
+                .read = testReadBoolCallable(&roc_host),
                 .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
                 .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
             },
         },
         .tag = .When,
     };
-    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(1), when_elem);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64(1), when_elem);
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
@@ -5812,8 +6259,8 @@ test "signals host prunes structural render when retained condition equality is 
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueI64(2);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64(2);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -5838,7 +6285,7 @@ test "signals host structural patch reorders keyed row DOM without recreating su
         _ = host.gpa.deinit();
     }
 
-    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
+    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
     const initial_children = [_]abi.Elem{
         testNodeEachWithItems(&roc_host, &initial_items),
     };
@@ -5861,7 +6308,7 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     const row_3_id = activeTextElementId(&host, "row-3-3") orelse unreachable;
     try std.testing.expectEqualSlices(u64, &.{ row_1_id, row_2_id, row_3_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 
-    const reordered_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
+    const reordered_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
     const reordered_children = [_]abi.Elem{
         testNodeEachWithItems(&roc_host, &reordered_items),
     };
@@ -5884,7 +6331,7 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     try std.testing.expectEqual(row_3_id, activeTextElementId(&host, "row-3-3") orelse unreachable);
     try std.testing.expectEqualSlices(u64, &.{ row_3_id, row_1_id, row_2_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 
-    const changed_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
+    const changed_items = [_]HostValue{ testHostValueI64(2), testHostValueI64(4) };
     const changed_children = [_]abi.Elem{
         testNodeEachWithItems(&roc_host, &changed_items),
     };
@@ -5920,12 +6367,12 @@ test "signals host rebuilds unchanged row when nested structural source is dirty
     }
 
     const state_token = newTestBinderToken(&roc_host);
-    const items = [_]abi.NodeValue{nodeValueI64(1)};
+    const items = [_]HostValue{testHostValueI64(1)};
     const children = [_]abi.Elem{
         testNodeEachWithNestedWhenRows(&roc_host, &items, state_token),
     };
     const section = testElementWith(&roc_host, "section", &.{}, &children);
-    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueBool(true), section);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueBool(true), section);
     defer abi.decrefElem(root, &roc_host);
 
     var initial_stream: HostNodeDescriptorStream = .{};
@@ -5939,8 +6386,8 @@ test "signals host rebuilds unchanged row when nested structural source is dirty
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
-    abi.decrefNodeValue(host.states.items[state_index].cell.value, &roc_host);
-    host.states.items[state_index].cell.value = nodeValueBool(false);
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueBool(false);
     host.states.items[state_index].version += 1;
 
     const dirty_source_node_ids = [_]u64{state_id};
@@ -6085,7 +6532,7 @@ test "signals host structural patch shifts moved row event ids only" {
         _ = host.gpa.deinit();
     }
 
-    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2) };
+    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2) };
     const initial_children = [_]abi.Elem{
         testNodeEachWithItemsAndRow(&roc_host, &initial_items, &testStatefulRowButtonElemCallable),
     };
@@ -6103,7 +6550,7 @@ test "signals host structural patch shifts moved row event ids only" {
     try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(row_1_button_id)].bound_click_event);
     try std.testing.expectEqual(@as(?u64, 2), host.dom_elements.items[@intCast(row_2_button_id)].bound_click_event);
 
-    const reordered_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(1) };
+    const reordered_items = [_]HostValue{ testHostValueI64(2), testHostValueI64(1) };
     const reordered_children = [_]abi.Elem{
         testNodeEachWithItemsAndRow(&roc_host, &reordered_items, &testStatefulRowButtonElemCallable),
     };
@@ -6123,8 +6570,9 @@ test "signals host structural patch shifts moved row event ids only" {
     try std.testing.expectEqual(@as(?u64, 2), host.dom_elements.items[@intCast(row_1_button_id)].bound_click_event);
     try std.testing.expectEqual(@as(?u64, 1), host.dom_elements.items[@intCast(row_2_button_id)].bound_click_event);
 
+    const same_reordered_items = [_]HostValue{ testHostValueI64(2), testHostValueI64(1) };
     const same_reordered_children = [_]abi.Elem{
-        testNodeEachWithItemsAndRow(&roc_host, &reordered_items, &testStatefulRowButtonElemCallable),
+        testNodeEachWithItemsAndRow(&roc_host, &same_reordered_items, &testStatefulRowButtonElemCallable),
     };
     const same_reordered_root = testElementWith(&roc_host, "section", &.{}, &same_reordered_children);
     defer abi.decrefElem(same_reordered_root, &roc_host);
@@ -6144,6 +6592,43 @@ test "signals host structural patch shifts moved row event ids only" {
 fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     host.gpa.allocator().free(diff.scope_ids);
     host.gpa.allocator().free(diff.row_items_changed);
+}
+
+fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {
+    const allocator = host.gpa.allocator();
+    const key_values = allocator.alloc(HostValue, keys.len) catch std.process.exit(1);
+    defer allocator.free(key_values);
+    const item_values = allocator.alloc(HostValue, items.len) catch std.process.exit(1);
+    defer allocator.free(item_values);
+
+    for (keys, key_values) |key, *dest| {
+        dest.* = host.cloneHostValue(key);
+    }
+    for (items, item_values) |item, *dest| {
+        dest.* = host.cloneHostValue(item);
+    }
+    for (keys) |key| {
+        testDropHostValue(roc_host, key);
+    }
+    if (keys.ptr != items.ptr) {
+        for (items) |item| {
+            testDropHostValue(roc_host, item);
+        }
+    }
+
+    const key_drop = testHostValueDropCallable(roc_host);
+    defer abi.decrefErasedCallable(key_drop, roc_host);
+    const item_drop = testHostValueDropCallable(roc_host);
+    defer abi.decrefErasedCallable(item_drop, roc_host);
+    return host.syncEachRowScopes(roc_host, parent_scope_id, site_ordinal, key_values, item_values, key_eq, key_drop, item_eq, item_drop);
+}
+
+fn createTestEachRowScope(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
+    const key_drop = testHostValueDropCallable(roc_host);
+    defer abi.decrefErasedCallable(key_drop, roc_host);
+    const item_drop = testHostValueDropCallable(roc_host);
+    defer abi.decrefErasedCallable(item_drop, roc_host);
+    return host.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
 }
 
 fn boxTestElem(roc_host: *abi.RocHost, elem: abi.Elem) *abi.Elem {
@@ -6177,19 +6662,15 @@ fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
     return token;
 }
 
-fn testNodeConstExpr(roc_host: *abi.RocHost, value: abi.NodeValue) abi.NodeSignalExpr {
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+fn testNodeConstExpr(roc_host: *abi.RocHost, value: HostValue) abi.NodeSignalExpr {
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{ .const_value = .{
             ._0 = newTestSignalToken(roc_host),
-            ._1 = testNodeValueInitialThunk(roc_host, value),
+            ._1 = testHostValueInitialThunk(roc_host, value),
             ._2 = eq,
+            ._3 = drop,
         } },
         .tag = .ConstValue,
     };
@@ -6206,17 +6687,12 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testUnaryNodeValueCallable,
+        &testUnaryHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 1 },
     );
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .map = .{
@@ -6224,6 +6700,7 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = eq,
+                ._4 = drop,
             },
         },
         .tag = .Map,
@@ -6234,17 +6711,12 @@ fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) a
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testStableStrNodeValueCallable,
+        &testStableStrHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .map = .{
@@ -6252,6 +6724,7 @@ fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) a
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = eq,
+                ._4 = drop,
             },
         },
         .tag = .Map,
@@ -6262,17 +6735,12 @@ fn testNodeStableI64MapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr, v
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testStableI64NodeValueCallable,
+        &testStableI64HostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = value },
     );
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .map = .{
@@ -6280,6 +6748,7 @@ fn testNodeStableI64MapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr, v
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = eq,
+                ._4 = drop,
             },
         },
         .tag = .Map,
@@ -6290,17 +6759,12 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testStableBoolNodeValueCallable,
+        &testStableBoolHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .map = .{
@@ -6308,6 +6772,7 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = eq,
+                ._4 = drop,
             },
         },
         .tag = .Map,
@@ -6318,17 +6783,18 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testUnaryIdentityNodeValueCallable,
+        &testUnaryIdentityHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testAlwaysEqualNodeValueCallable,
+        &testAlwaysEqualHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .combine = .{
@@ -6336,6 +6802,7 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
                 ._1 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
                 ._2 = transform,
                 ._3 = eq,
+                ._4 = drop,
             },
         },
         .tag = .Combine,
@@ -6351,7 +6818,10 @@ fn testNodeText(roc_host: *abi.RocHost, text: []const u8) abi.Elem {
 
 fn testNodeTextSignal(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr) abi.Elem {
     return .{
-        .payload = .{ .text_signal = boxTestNodeSignalExpr(roc_host, signal) },
+        .payload = .{ .text_signal = .{
+            .read = testReadStrCallable(roc_host),
+            .signal = boxTestNodeSignalExpr(roc_host, signal),
+        } },
         .tag = .TextSignal,
     };
 }
@@ -6373,6 +6843,7 @@ fn testNodeSignalTextAttr(roc_host: *abi.RocHost, field: RenderTextField, signal
         .payload = .{
             .signal_text = .{
                 .field = @intFromEnum(field),
+                .read = testReadStrCallable(roc_host),
                 .signal = boxTestNodeSignalExpr(roc_host, signal),
             },
         },
@@ -6397,6 +6868,7 @@ fn testNodeSignalBoolAttr(roc_host: *abi.RocHost, field: RenderBoolField, signal
         .payload = .{
             .signal_bool = .{
                 .field = @intFromEnum(field),
+                .read = testReadBoolCallable(roc_host),
                 .signal = boxTestNodeSignalExpr(roc_host, signal),
             },
         },
@@ -6408,16 +6880,18 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testBinaryNodeValueCallable,
+        &testBinaryHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const payload_drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .on_event = .{
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
+                    .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(payload_kind),
                     .transform = transform,
                 },
@@ -6431,16 +6905,18 @@ fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind,
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testUnitIncrementNodeValueCallable,
+        &testUnitIncrementHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const payload_drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .on_event = .{
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
+                    .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(EventPayloadKind.unit),
                     .transform = transform,
                 },
@@ -6467,30 +6943,26 @@ fn testElement(roc_host: *abi.RocHost, children: []const abi.Elem) abi.Elem {
     return testElementWith(roc_host, "div", &.{}, children);
 }
 
-fn testNodeValueInitialThunk(roc_host: *abi.RocHost, initial: abi.NodeValue) abi.RocErasedCallable {
+fn testHostValueInitialThunk(roc_host: *abi.RocHost, initial: HostValue) abi.RocErasedCallable {
     return writeTestErasedCallable(
-        TestErasedNodeValueCapture,
+        TestErasedHostValueCapture,
         roc_host,
-        &testInitialNodeValueCallable,
-        &testNodeValueCaptureOnDrop,
+        &testInitialHostValueCallable,
+        &testHostValueCaptureOnDrop,
         .{ .value = initial },
     );
 }
 
-fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBinderToken, initial: abi.NodeValue, child: abi.Elem) abi.Elem {
-    const initial_thunk = testNodeValueInitialThunk(roc_host, initial);
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testNodeValueEqCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBinderToken, initial: HostValue, child: abi.Elem) abi.Elem {
+    const initial_thunk = testHostValueInitialThunk(roc_host, initial);
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
     return .{
         .payload = .{
             .state = .{
                 .binder = binder_token,
                 .child = boxTestElem(roc_host, child),
+                .drop = drop,
                 .eq = eq,
                 .initial = initial_thunk,
             },
@@ -6500,7 +6972,7 @@ fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBi
 }
 
 fn testNodeStateWithToken(roc_host: *abi.RocHost, binder_token: HostBinderToken, child: abi.Elem) abi.Elem {
-    return testNodeStateWithTokenAndInitial(roc_host, binder_token, nodeValueI64(0), child);
+    return testNodeStateWithTokenAndInitial(roc_host, binder_token, testHostValueI64(0), child);
 }
 
 fn testNodeState(roc_host: *abi.RocHost, child: abi.Elem) abi.Elem {
@@ -6511,7 +6983,8 @@ fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.Elem, when_false: abi.Ele
     return .{
         .payload = .{
             .when = .{
-                .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueBool(true))),
+                .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueBool(true))),
+                .read = testReadBoolCallable(roc_host),
                 .when_false = boxTestElem(roc_host, when_false),
                 .when_true = boxTestElem(roc_host, when_true),
             },
@@ -6520,35 +6993,48 @@ fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.Elem, when_false: abi.Ele
     };
 }
 
-fn nodeValueList(roc_host: *abi.RocHost, items: []const abi.NodeValue) abi.NodeValue {
-    return .{
-        .payload = .{ .nv_list = abi.RocList(abi.NodeValue).fromSlice(items, roc_host) },
-        .tag = .NvList,
-    };
+fn testHostValueI64List(roc_host: *abi.RocHost, items: []const HostValue) HostValue {
+    const host = hostFromRocHost(roc_host);
+    const values = I64List.allocate(items.len, roc_host);
+    if (items.len > 0) {
+        const dest = values.elements_ptr orelse unreachable;
+        for (items, 0..) |item, index| {
+            dest[index] = testReadHostValueI64(roc_host, item);
+            testDropHostValue(roc_host, item);
+        }
+    }
+    const payload: *I64List = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(I64List), @alignOf(I64List), true, roc_host)));
+    payload.* = values;
+    const host_value = host.storeHostValue(@ptrCast(payload));
+    host.setTestHostValueKind(host_value, .i64_list);
+    return host_value;
 }
 
-fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeValue, row_fn: abi.RocErasedCallableFn) abi.Elem {
+fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue, row_fn: abi.RocErasedCallableFn) abi.Elem {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const key_of = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testUnaryNodeValueCallable,
+        &testUnaryHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const item_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const key_drop = testHostValueDropCallable(roc_host);
+    const item_drop = testHostValueDropCallable(roc_host);
+    const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -6559,9 +7045,12 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
     return .{
         .payload = .{
             .each = .{
-                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueList(roc_host, items))),
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueI64List(roc_host, items))),
+                .items_to_values = items_to_values,
+                .key_drop = key_drop,
                 .key_eq = key_eq,
                 .key_of = key_of,
+                .item_drop = item_drop,
                 .item_eq = item_eq,
                 .row = row,
             },
@@ -6570,28 +7059,31 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const abi.NodeVa
     };
 }
 
-fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const abi.NodeValue, condition_binder: HostBinderToken) abi.Elem {
+fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostValue, condition_binder: HostBinderToken) abi.Elem {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const key_of = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testUnaryNodeValueCallable,
+        &testUnaryHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const item_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+    const key_drop = testHostValueDropCallable(roc_host);
+    const item_drop = testHostValueDropCallable(roc_host);
+    const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
         TestErasedBinderCapture,
         roc_host,
@@ -6602,9 +7094,12 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const abi.Nod
     return .{
         .payload = .{
             .each = .{
-                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, nodeValueList(roc_host, items))),
+                .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueI64List(roc_host, items))),
+                .items_to_values = items_to_values,
+                .key_drop = key_drop,
                 .key_eq = key_eq,
                 .key_of = key_of,
+                .item_drop = item_drop,
                 .item_eq = item_eq,
                 .row = row,
             },
@@ -6613,7 +7108,7 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const abi.Nod
     };
 }
 
-fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const abi.NodeValue) abi.Elem {
+fn testNodeEachWithItems(roc_host: *abi.RocHost, items: []const HostValue) abi.Elem {
     return testNodeEachWithItemsAndRow(roc_host, items, &testStatefulRowElemCallable);
 }
 
@@ -6644,7 +7139,7 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -6652,8 +7147,8 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
 
     const root = host.internRootScope();
 
-    const initial_keys = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
-    const initial = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_keys, key_eq, key_eq);
+    const initial_keys = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
+    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
     try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
@@ -6663,8 +7158,8 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
 
     const state_for_key_2 = host.internNodeIdentity(initial.scope_ids[1], 0);
 
-    const reordered_keys = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
-    const reordered = host.syncEachRowScopes(&roc_host, root, 5, &reordered_keys, &reordered_keys, key_eq, key_eq);
+    const reordered_keys = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
+    const reordered = syncTestEachRowScopes(&host, &roc_host, root, 5, &reordered_keys, &reordered_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, reordered);
     try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
@@ -6676,9 +7171,9 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expectEqual(initial.scope_ids[1], reordered.scope_ids[2]);
     try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(reordered.scope_ids[2], 0));
 
-    const changed_keys = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
-    const changed_items = [_]abi.NodeValue{ nodeValueI64(22), nodeValueI64(4) };
-    const changed = host.syncEachRowScopes(&roc_host, root, 5, &changed_keys, &changed_items, key_eq, key_eq);
+    const changed_keys = [_]HostValue{ testHostValueI64(2), testHostValueI64(4) };
+    const changed_items = [_]HostValue{ testHostValueI64(22), testHostValueI64(4) };
+    const changed = syncTestEachRowScopes(&host, &roc_host, root, 5, &changed_keys, &changed_items, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, changed);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
@@ -6689,8 +7184,8 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[0]);
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
 
-    const reappeared_keys = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(4) };
-    const reappeared = host.syncEachRowScopes(&roc_host, root, 5, &reappeared_keys, &reappeared_keys, key_eq, key_eq);
+    const reappeared_keys = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(4) };
+    const reappeared = syncTestEachRowScopes(&host, &roc_host, root, 5, &reappeared_keys, &reappeared_keys, key_eq, key_eq);
     defer freeKeyedRowDiff(&host, reappeared);
     try std.testing.expectEqual(@as(u64, 2), reappeared.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), reappeared.rows_created);
@@ -6720,22 +7215,22 @@ test "signals host row scopes retain key and item equality thunks" {
     const key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     const item_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNodeValueEqCallable,
+        &testHostValueEqErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
 
     const root = host.internRootScope();
-    const initial_keys = [_]abi.NodeValue{nodeValueI64(1)};
-    const initial_items = [_]abi.NodeValue{nodeValueI64(10)};
-    const initial = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_items, key_eq, item_eq);
+    const initial_keys = [_]HostValue{testHostValueI64(1)};
+    const initial_items = [_]HostValue{testHostValueI64(10)};
+    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_items, key_eq, item_eq);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, 1), initial.rows_created);
     const row_scope_id = initial.scope_ids[0];
@@ -6747,7 +7242,7 @@ test "signals host row scopes retain key and item equality thunks" {
     const incoming_key_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNeverEqualNodeValueCallable,
+        &testNeverEqualHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -6755,13 +7250,15 @@ test "signals host row scopes retain key and item equality thunks" {
     const incoming_item_eq = writeTestErasedCallable(
         TestErasedI64Capture,
         &roc_host,
-        &testNeverEqualNodeValueCallable,
+        &testNeverEqualHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
     defer abi.decrefErasedCallable(incoming_item_eq, &roc_host);
 
-    const next = host.syncEachRowScopes(&roc_host, root, 5, &initial_keys, &initial_items, incoming_key_eq, incoming_item_eq);
+    const next_keys = [_]HostValue{testHostValueI64(1)};
+    const next_items = [_]HostValue{testHostValueI64(10)};
+    const next = syncTestEachRowScopes(&host, &roc_host, root, 5, &next_keys, &next_items, incoming_key_eq, incoming_item_eq);
     defer freeKeyedRowDiff(&host, next);
     try std.testing.expectEqual(@as(u64, 1), next.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), next.rows_created);
@@ -6844,9 +7341,9 @@ test "signals host collects Elem descriptor stream" {
     const root_attrs = [_]abi.NodeAttr{
         testNodeStaticTextAttr(&roc_host, .role, "region"),
         testNodeStaticTextAttr(&roc_host, .label, "Dashboard"),
-        testNodeSignalTextAttr(&roc_host, .value, testNodeConstExpr(&roc_host, nodeValueStr(&roc_host, "search"))),
+        testNodeSignalTextAttr(&roc_host, .value, testNodeConstExpr(&roc_host, testHostValueStr(&roc_host, "search"))),
         testNodeStaticBoolAttr(.disabled, true),
-        testNodeSignalBoolAttr(&roc_host, .checked, testNodeConstExpr(&roc_host, nodeValueBool(false))),
+        testNodeSignalBoolAttr(&roc_host, .checked, testNodeConstExpr(&roc_host, testHostValueBool(false))),
     };
     const state_token = newTestBinderToken(&roc_host);
     const state_child_attrs = [_]abi.NodeAttr{
@@ -6864,7 +7361,7 @@ test "signals host collects Elem descriptor stream" {
     const each_elem = testNodeEach(&roc_host);
     const root_children = [_]abi.Elem{
         testNodeText(&roc_host, "intro"),
-        testNodeTextSignal(&roc_host, testNodeConstExpr(&roc_host, nodeValueStr(&roc_host, "dynamic text"))),
+        testNodeTextSignal(&roc_host, testNodeConstExpr(&roc_host, testHostValueStr(&roc_host, "dynamic text"))),
         state,
         when_elem,
         each_elem,
@@ -6979,14 +7476,14 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     const state_token = newTestBinderToken(&roc_host);
     const root_attrs = [_]abi.NodeAttr{
-        testNodeSignalTextAttr(&roc_host, .value, testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, nodeValueI64(41)))),
+        testNodeSignalTextAttr(&roc_host, .value, testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, testHostValueI64(41)))),
     };
     const state_child_attrs = [_]abi.NodeAttr{
         testNodeEventAttr(&roc_host, .click, state_token, .unit),
     };
     const state_child = testElementWith(&roc_host, "button", &state_child_attrs, &.{});
     const state = testNodeStateWithToken(&roc_host, state_token, state_child);
-    const items = [_]abi.NodeValue{nodeValueI64(1)};
+    const items = [_]HostValue{testHostValueI64(1)};
     const each = testNodeEachWithItems(&roc_host, &items);
     const root_children = [_]abi.Elem{ state, each };
     const root = testElementWith(&roc_host, "section", &root_attrs, &root_children);
@@ -6994,13 +7491,13 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
 
     host.collectElemRootDescriptors(&roc_host, &stream, root);
 
-    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 22), host.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 13), host.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 22), host.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 22), host.pending_roc_metrics.closure_releases);
 }
 
 test "signals host preserves explicit signal tokens across cloned descriptors" {
@@ -7017,7 +7514,7 @@ test "signals host preserves explicit signal tokens across cloned descriptors" {
     var stream: HostNodeDescriptorStream = .{};
     defer stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
 
-    const signal = testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, nodeValueI64(41)));
+    const signal = testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, testHostValueI64(41)));
     abi.increfNodeSignalExpr(signal, 1);
     const root_children = [_]abi.Elem{
         testNodeTextSignal(&roc_host, signal),
@@ -7049,7 +7546,7 @@ test "signals host retains state equality outside descriptor stream" {
     }
 
     const state_token = newTestBinderToken(&roc_host);
-    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(0), testNodeText(&roc_host, "state"));
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64(0), testNodeText(&roc_host, "state"));
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
@@ -7060,8 +7557,8 @@ test "signals host retains state equality outside descriptor stream" {
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = .{};
 
-    try std.testing.expect(!host.updateStateValue(&roc_host, state_id, nodeValueI64(0)));
-    try std.testing.expect(host.updateStateValue(&roc_host, state_id, nodeValueI64(1)));
+    try std.testing.expect(!host.updateStateValue(&roc_host, state_id, testHostValueI64(0)));
+    try std.testing.expect(host.updateStateValue(&roc_host, state_id, testHostValueI64(1)));
 }
 
 test "signals host dispatches through active event records outside descriptor stream" {
@@ -7080,7 +7577,7 @@ test "signals host dispatches through active event records outside descriptor st
         testNodeUnitIncrementEventAttr(&roc_host, .click, state_token),
     };
     const button = testElementWith(&roc_host, "button", &attrs, &.{});
-    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, nodeValueI64(0), button);
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64(0), button);
     defer abi.decrefElem(root, &roc_host);
 
     var stream: HostNodeDescriptorStream = .{};
@@ -7096,8 +7593,8 @@ test "signals host dispatches through active event records outside descriptor st
     host.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.active_stream = .{};
 
-    dispatchRocEvent(&host, &roc_host, event_id, nodeValueUnit());
-    try expectNodeValueI64(host.stateValueByNodeId(state_id), 1);
+    dispatchRocEvent(&host, &roc_host, event_id, .unit, testHostValueUnit());
+    try expectHostValueI64(host.stateValueByNodeId(state_id), 1);
 }
 
 test "signals host carries binder context into Elem when branch collection" {
@@ -7233,7 +7730,7 @@ test "signals host collects Elem each row bodies by keyed scope" {
     try std.testing.expectEqual(HostNodeScopeSiteKind.each, initial_stream.scope_sites.items[0].kind);
     try std.testing.expectEqual(@as(usize, 1), initial_stream.eaches.items.len);
 
-    const initial_items = [_]abi.NodeValue{ nodeValueI64(1), nodeValueI64(2), nodeValueI64(3) };
+    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
     const initial = host.collectElemEachRowDescriptors(&roc_host, &initial_stream, initial_stream.scope_sites.items[0], initial_stream.eaches.items[0], &initial_items);
     defer freeKeyedRowDiff(&host, initial);
 
@@ -7262,7 +7759,7 @@ test "signals host collects Elem each row bodies by keyed scope" {
     defer reordered_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.collectElemRootDescriptors(&roc_host, &reordered_stream, root);
 
-    const reordered_items = [_]abi.NodeValue{ nodeValueI64(3), nodeValueI64(1), nodeValueI64(2) };
+    const reordered_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
     const reordered = host.collectElemEachRowDescriptors(&roc_host, &reordered_stream, reordered_stream.scope_sites.items[0], reordered_stream.eaches.items[0], &reordered_items);
     defer freeKeyedRowDiff(&host, reordered);
 
@@ -7281,7 +7778,7 @@ test "signals host collects Elem each row bodies by keyed scope" {
     defer changed_stream.deinit(host.gpa.allocator(), &roc_host, &host.pending_roc_metrics);
     host.collectElemRootDescriptors(&roc_host, &changed_stream, root);
 
-    const changed_items = [_]abi.NodeValue{ nodeValueI64(2), nodeValueI64(4) };
+    const changed_items = [_]HostValue{ testHostValueI64(2), testHostValueI64(4) };
     const changed = host.collectElemEachRowDescriptors(&roc_host, &changed_stream, changed_stream.scope_sites.items[0], changed_stream.eaches.items[0], &changed_items);
     defer freeKeyedRowDiff(&host, changed);
 

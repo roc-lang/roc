@@ -1,9 +1,15 @@
 platform ""
-	requires {} { main : {} -> Elem }
+	requires {
+		main : {} -> Elem
+	}
 	exposes [Elem, Signal, Html, Ui]
 	packages {}
-	provides {
-		"roc_ui_init": ui_init,
+	provides { "roc_ui_init": ui_init }
+	hosted {
+		"roc_host_value_clone": HostValue.clone,
+		"roc_host_value_get": HostValue.get,
+		"roc_host_value_store": HostValue.store,
+		"roc_host_value_take": HostValue.take,
 	}
 	targets: {
 		inputs: "targets/",
@@ -12,6 +18,7 @@ platform ""
 	}
 
 import Elem exposing [Elem]
+import HostValue
 import Signal
 import Html
 import Ui
