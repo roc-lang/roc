@@ -2407,7 +2407,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .warning);
+            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .runtime_error);
 
             // Format the message to match origin/main
             try report.document.addText("You cannot define a ");
@@ -2432,7 +2432,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .open_ext_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .runtime_error);
 
             // Format the message to match origin/main
             try report.document.addText("You cannot use a ");

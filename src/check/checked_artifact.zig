@@ -13862,10 +13862,10 @@ fn applyPlatformForClauseSubstitutions(
                 checkedArtifactInvariant("platform for-clause substitution missing platform alias checked root", .{});
             };
             const alias_name = module_env.getIdent(alias.alias_name);
-            const app_alias = (try appAliasCheckedRootForName(allocator, app_view, alias_name)) orelse {
-                checkedArtifactInvariant("platform for-clause substitution missing matching app alias", .{});
+            const app_type = (try appTypeDeclCheckedRootForName(allocator, app_view, alias_name)) orelse {
+                checkedArtifactInvariant("platform for-clause substitution missing matching app type declaration", .{});
             };
-            const actual = try projector.project(app_alias);
+            const actual = try projector.project(app_type);
             try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal, actual);
         }
     }
@@ -13916,7 +13916,7 @@ fn relationArtifactByKey(
     return null;
 }
 
-fn appAliasCheckedRootForName(
+fn appTypeDeclCheckedRootForName(
     allocator: Allocator,
     app_view: ImportedModuleView,
     alias_name: []const u8,
@@ -13924,11 +13924,15 @@ fn appAliasCheckedRootForName(
     const app_env = app_view.module_env;
     for (app_env.store.sliceStatements(app_env.all_statements)) |statement_idx| {
         const statement = app_env.store.getStatement(statement_idx);
-        const alias = switch (statement) {
-            .s_alias_decl => |alias| alias,
+        // A platform for-clause type (`[Model : model]`) may be satisfied by either a plain
+        // alias (`Model : {}`) or a nominal declaration (`Model := {}`); both publish a checked
+        // root keyed on the statement's var, so resolve the header from either form.
+        const header_idx = switch (statement) {
+            .s_alias_decl => |decl| decl.header,
+            .s_nominal_decl => |decl| decl.header,
             else => continue,
         };
-        const header = app_env.store.getTypeHeader(alias.header);
+        const header = app_env.store.getTypeHeader(header_idx);
         if (!Ident.textEql(app_env.getIdent(header.relative_name), alias_name)) continue;
 
         const key = try canonical_type_keys.fromVar(
@@ -13940,7 +13944,7 @@ fn appAliasCheckedRootForName(
         for (app_view.checked_types.roots) |root| {
             if (canonicalTypeKeyEql(root.key, key)) return root.id;
         }
-        checkedArtifactInvariant("platform for-clause substitution app alias was not published in app checked types", .{});
+        checkedArtifactInvariant("platform for-clause substitution app type was not published in app checked types", .{});
     }
     return null;
 }
@@ -14304,6 +14308,22 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
 
         const expected_payload = self.payload(expected);
         const actual_payload = self.payload(actual);
+
+        // A variable pinned to a numeric default (a number literal or numeric
+        // expression that defaults to `Dec`) can never be a structural aggregate
+        // (tag union, record, tuple). Treating it as a free wildcard would let a
+        // number silently satisfy such a requirement — e.g. `Err(a1 + a2)` / `Err(1)`
+        // satisfying a platform's `[Exit(I8), ..]` error row, which then reaches
+        // monotype lowering as an ownerless dispatcher (issues 9734, 9735). Reject it
+        // so the normal TYPE MISMATCH is reported. This stays narrow: a numeric var
+        // still matches a concrete numeric requirement (e.g. `Exit(1)` vs `Exit(I8)`),
+        // because a numeric type is not a structural aggregate.
+        if ((checkedTypePayloadIsNumericPinnedVar(expected_payload) and checkedTypePayloadIsStructuralAggregate(actual_payload)) or
+            (checkedTypePayloadIsNumericPinnedVar(actual_payload) and checkedTypePayloadIsStructuralAggregate(expected_payload)))
+        {
+            return false;
+        }
+
         if (checkedTypePayloadIsIdentity(expected_payload) or checkedTypePayloadIsIdentity(actual_payload)) {
             return true;
         }
@@ -17070,6 +17090,25 @@ const PlatformAppRelationTypeDigestBuilder = struct {
 fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
     return switch (payload) {
         .flex, .rigid => true,
+        else => false,
+    };
+}
+
+/// A structural aggregate type: a tag union, record, or tuple. A value pinned to a
+/// numeric default can never have one of these shapes.
+fn checkedTypePayloadIsStructuralAggregate(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .empty_record, .record, .record_unbound, .tuple, .empty_tag_union, .tag_union => true,
+        else => false,
+    };
+}
+
+/// A flex/rigid variable pinned to a numeric default — i.e. a number literal or a
+/// numeric expression that defaults to `Dec`. Such a variable can unify with a
+/// concrete numeric type, but never with a structural aggregate.
+fn checkedTypePayloadIsNumericPinnedVar(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid => |v| v.numeric_default_phase != null,
         else => false,
     };
 }
@@ -24239,11 +24278,21 @@ const CheckedTypeStoreImportProjector = struct {
                 .declaration = declaration,
             } },
             .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
-            .local_box_payload_capability => |capability| .{ .imported_box_payload_capability = .{
-                .artifact = self.imported.key,
-                .capability = capability.capability,
-                .opaque_atomic_proof = capability.opaque_atomic_proof,
-            } },
+            .local_box_payload_capability => |capability| blk: {
+                // Project the capability's backing-type root into the target store so
+                // its key is registered there. Lowering resolves an imported
+                // box-payload capability's backing via `checkedTypeInCurrentView` (a
+                // key lookup); without this projection that lookup fails for a
+                // for-clause-substituted nominal app type whose declaration backing
+                // root is distinct from the projected nominal usage backing (issue
+                // 9731). The returned id is unused — the registration is the point.
+                _ = try self.project(self.imported.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty);
+                break :blk .{ .imported_box_payload_capability = .{
+                    .artifact = self.imported.key,
+                    .capability = capability.capability,
+                    .opaque_atomic_proof = capability.opaque_atomic_proof,
+                } };
+            },
             .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
             .opaque_without_backing => .opaque_without_backing,
         };

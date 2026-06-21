@@ -48,6 +48,12 @@ const InterpolationConstraintId = enum(u32) { _ };
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
+    /// The interpolated-part expression vars (the even-indexed entries of the
+    /// `e_interpolation` `parts`). Captured here, and remapped through the
+    /// instantiation var-map in `copyConstraintMetadata`, so that per-instantiation
+    /// re-checking unifies the dispatch item type against the *instantiated* part
+    /// vars rather than the shared original CIR vars. Owned; freed in `deinit`.
+    interpolated_vars: []Var,
     checked_parts: bool = false,
 };
 
@@ -1185,6 +1191,9 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
+    for (self.interpolation_constraint_metadata.items) |meta| {
+        self.gpa.free(meta.interpolated_vars);
+    }
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
@@ -5446,12 +5455,25 @@ fn recordInterpolationConstraintMetadata(
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
 ) std.mem.Allocator.Error!void {
+    // Capture the interpolated-part vars now so per-instantiation re-checking can unify the
+    // item type against the instantiated copies of these vars (see `copyConstraintMetadata`).
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    const interpolated_vars = try self.gpa.alloc(Var, parts.len / 2);
+    errdefer self.gpa.free(interpolated_vars);
+    var part_i: usize = 0;
+    while (part_i < parts.len) : (part_i += 2) {
+        interpolated_vars[part_i / 2] = ModuleEnv.varFrom(parts[part_i]);
+    }
+
     const id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
+    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
     try self.interpolation_constraint_metadata.append(self.gpa, .{
         .expr_idx = expr_idx,
         .item_var = item_var,
+        .interpolated_vars = interpolated_vars,
     });
-    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
 }
 
 fn linkConstraintMetadata(
@@ -5531,15 +5553,25 @@ fn copyConstraintMetadata(
 
     if (maybe_interpolation_id) |old_id| {
         const old_metadata = self.interpolation_constraint_metadata.items[@intFromEnum(old_id)];
+        // Remap each interpolated-part var through the instantiation var-map, exactly as
+        // `item_var` is remapped, so the re-check unifies instantiated item type against
+        // instantiated part vars (the original CIR part vars belong to the generalized copy).
+        const new_interpolated_vars = try self.gpa.alloc(Var, old_metadata.interpolated_vars.len);
+        errdefer self.gpa.free(new_interpolated_vars);
+        for (old_metadata.interpolated_vars, 0..) |old_part_var, i| {
+            new_interpolated_vars[i] = self.instantiatedMetadataVar(old_part_var);
+        }
+        const new_item_var = self.instantiatedMetadataVar(old_metadata.item_var);
         const new_id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
-        try self.interpolation_constraint_metadata.append(self.gpa, .{
-            .expr_idx = old_metadata.expr_idx,
-            .item_var = self.instantiatedMetadataVar(old_metadata.item_var),
-        });
         try self.recordInterpolationConstraintIdForFnVar(fresh_var, new_id);
         if (resolved_fresh != fresh_var) {
             try self.recordInterpolationConstraintIdForFnVar(resolved_fresh, new_id);
         }
+        try self.interpolation_constraint_metadata.append(self.gpa, .{
+            .expr_idx = old_metadata.expr_idx,
+            .item_var = new_item_var,
+            .interpolated_vars = new_interpolated_vars,
+        });
     }
 }
 
@@ -15667,16 +15699,13 @@ fn ensureCustomInterpolationPartsChecked(
     if (self.interpolation_constraint_metadata.items[metadata_index].checked_parts) return;
     self.interpolation_constraint_metadata.items[metadata_index].checked_parts = true;
 
-    const expr_idx = self.interpolation_constraint_metadata.items[metadata_index].expr_idx;
     const item_var = self.interpolation_constraint_metadata.items[metadata_index].item_var;
-    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
-    const parts = self.cir.store.sliceExpr(interpolation.parts);
-    std.debug.assert(parts.len % 2 == 0);
+    // Use the captured part vars (remapped per instantiation), not the original CIR `parts`,
+    // so an instantiated call site unifies the item type against its instantiated arguments.
+    const interpolated_vars = self.interpolation_constraint_metadata.items[metadata_index].interpolated_vars;
 
     var did_err = false;
-    var part_i: usize = 0;
-    while (part_i < parts.len) : (part_i += 2) {
-        const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
+    for (interpolated_vars) |interpolated_var| {
         const result = try self.unify(item_var, interpolated_var, env);
         did_err = did_err or result.isProblem() or self.types.resolveVar(interpolated_var).desc.content == .err;
     }

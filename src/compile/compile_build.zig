@@ -1484,11 +1484,10 @@ pub const BuildEnv = struct {
         defer self.gpa.free(joined);
 
         const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        errdefer self.gpa.free(with_ext);
+        defer self.gpa.free(with_ext);
 
         // Canonicalize and sandbox
         const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
-        self.gpa.free(with_ext);
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
@@ -2858,3 +2857,20 @@ pub const OrderedSink = struct {
         return out;
     }
 };
+
+test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
+    const gpa = std.testing.allocator;
+
+    // dottedToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
+    // with just those fields set is enough to exercise it.
+    var env: BuildEnv = undefined;
+    env.gpa = gpa;
+    env.workspace_roots = std.array_list.Managed([]const u8).init(gpa);
+    defer env.workspace_roots.deinit();
+
+    // No workspace roots are registered, so the resolved "<root>/Mod.roc" is
+    // outside the workspace and dottedToPath takes its error path. On that path
+    // it must free its `with_ext` scratch allocation exactly once; freeing it a
+    // second time is a double free that the testing allocator detects.
+    try std.testing.expectError(error.PathOutsideWorkspace, env.dottedToPath("/tmp/roc-issue-9737", "Mod"));
+}
