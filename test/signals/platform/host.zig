@@ -12,8 +12,14 @@ const abi = @import("roc_platform_abi.zig");
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
 const HostValue = u64;
+const HostValueTypeTag = *anyopaque;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
+
+const host_value_type_tags_enabled = switch (builtin.mode) {
+    .Debug, .ReleaseSafe => true,
+    .ReleaseFast, .ReleaseSmall => false,
+};
 
 const RuntimeMetrics = struct {
     closure_releases: u64,
@@ -71,6 +77,7 @@ const HostEventDescriptor = struct {
 const HostActiveEventDesc = struct {
     target_node_id: u64,
     payload_kind: EventPayloadKind,
+    payload_tag: HostValueTypeTag,
     payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
 };
@@ -491,8 +498,10 @@ const HostNodeEventDesc = struct {
     binder_token: HostBinderToken,
     target_node_id: u64,
     payload_kind: EventPayloadKind,
+    payload_tag: HostValueTypeTag,
     payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
+    owns_payload_tag: bool = true,
     owns_payload_drop: bool = true,
     owns_transform: bool = true,
 };
@@ -599,6 +608,9 @@ const HostNodeDescriptorStream = struct {
         self.signal_bool_attrs.deinit(allocator);
 
         for (self.events.items) |desc| {
+            if (desc.owns_payload_tag) {
+                abi.decrefBox(@ptrCast(desc.payload_tag), roc_host);
+            }
             if (desc.owns_payload_drop) {
                 metrics.closure_releases += 1;
                 abi.decrefErasedCallable(desc.payload_drop, roc_host);
@@ -811,7 +823,7 @@ const HostNodeDescriptorStream = struct {
         };
     }
 
-    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+    fn appendEventWithOwnedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
         abi.increfErasedCallable(payload_drop, 1);
         abi.increfErasedCallable(transform, 1);
         metrics.closure_retains += 2;
@@ -821,9 +833,11 @@ const HostNodeDescriptorStream = struct {
             .binder_token = binder_token,
             .target_node_id = target_node_id,
             .payload_kind = payload_kind,
+            .payload_tag = payload_tag,
             .payload_drop = payload_drop,
             .transform = transform,
         }) catch {
+            abi.decrefBox(@ptrCast(payload_tag), roc_host);
             metrics.closure_releases += 2;
             abi.decrefErasedCallable(payload_drop, roc_host);
             abi.decrefErasedCallable(transform, roc_host);
@@ -868,6 +882,15 @@ const HostNodeDescriptorStream = struct {
             abi.decrefErasedCallable(drop, roc_host);
             std.process.exit(1);
         };
+    }
+
+    fn appendEventWithBorrowedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+        abi.increfBox(@ptrCast(payload_tag), 1);
+        self.appendEventWithOwnedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_tag, payload_drop, transform);
+    }
+
+    fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+        self.appendEventWithBorrowedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_tag, payload_drop, transform);
     }
 
     fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, node_id: u64, condition: HostSignalBinding, read: abi.RocErasedCallable, when_false: abi.Elem, when_true: abi.Elem) void {
@@ -1429,9 +1452,16 @@ const RocAllocation = struct {
     alignment: std.mem.Alignment,
 };
 
+const HostValueRegistryCell = if (host_value_type_tags_enabled) struct {
+    box: abi.RocBox,
+    tag: ?HostValueTypeTag,
+} else struct {
+    box: abi.RocBox,
+};
+
 const HostValueRegistrySlot = union(enum) {
     vacant,
-    occupied: abi.RocBox,
+    occupied: HostValueRegistryCell,
 };
 
 const TestHostValueKind = enum {
@@ -1484,23 +1514,81 @@ const HostEnv = struct {
         };
     }
 
-    fn storeHostValue(self: *HostEnv, box: abi.RocBox) HostValue {
+    fn activeRocHost(self: *HostEnv) *abi.RocHost {
+        return self.roc_host orelse failHost("HostValue type tag release requires an active Roc host");
+    }
+
+    fn hostValueRegistryCell(box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValueRegistryCell {
+        if (comptime host_value_type_tags_enabled) {
+            return .{ .box = box, .tag = owned_tag };
+        } else {
+            return .{ .box = box };
+        }
+    }
+
+    fn releaseOwnedHostValueTypeTag(self: *HostEnv, tag: HostValueTypeTag) void {
+        abi.decrefBox(@ptrCast(tag), self.activeRocHost());
+    }
+
+    fn releaseRegistryHostValueTag(self: *HostEnv, cell: HostValueRegistryCell) void {
+        if (comptime host_value_type_tags_enabled) {
+            if (cell.tag) |tag| self.releaseOwnedHostValueTypeTag(tag);
+        }
+    }
+
+    fn retainHostValueTypeTag(tag: HostValueTypeTag) void {
+        abi.increfBox(@ptrCast(tag), 1);
+    }
+
+    fn hostValueTypeTagId(tag: HostValueTypeTag) u64 {
+        const payload: *const u64 = @ptrCast(@alignCast(tag));
+        return payload.*;
+    }
+
+    fn hostValueTypeTagsMatch(actual_tag: HostValueTypeTag, expected_tag: HostValueTypeTag) bool {
+        if (actual_tag == expected_tag) return true;
+        const actual_id = HostEnv.hostValueTypeTagId(actual_tag);
+        return actual_id != 0 and actual_id == HostEnv.hostValueTypeTagId(expected_tag);
+    }
+
+    fn storeHostValueWithOwnedTag(self: *HostEnv, box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValue {
         const allocator = self.gpa.allocator();
+        const registry_tag: ?HostValueTypeTag = if (comptime host_value_type_tags_enabled) owned_tag else blk: {
+            if (owned_tag) |tag| self.releaseOwnedHostValueTypeTag(tag);
+            break :blk null;
+        };
         for (self.host_values.items, 0..) |*slot, index| {
             switch (slot.*) {
                 .vacant => {
-                    slot.* = .{ .occupied = box };
+                    slot.* = .{ .occupied = HostEnv.hostValueRegistryCell(box, registry_tag) };
                     if (builtin.is_test) self.test_host_value_kinds.items[index] = null;
                     return @intCast(index + 1);
                 },
                 .occupied => {},
             }
         }
-        self.host_values.append(allocator, .{ .occupied = box }) catch std.process.exit(1);
+        self.host_values.append(allocator, .{ .occupied = HostEnv.hostValueRegistryCell(box, registry_tag) }) catch std.process.exit(1);
         if (builtin.is_test) {
             self.test_host_value_kinds.append(allocator, null) catch std.process.exit(1);
         }
         return @intCast(self.host_values.items.len);
+    }
+
+    fn storeHostValueWithRetainedTag(self: *HostEnv, box: abi.RocBox, borrowed_tag: ?HostValueTypeTag) HostValue {
+        if (comptime host_value_type_tags_enabled) {
+            if (borrowed_tag) |tag| HostEnv.retainHostValueTypeTag(tag);
+            return self.storeHostValueWithOwnedTag(box, borrowed_tag);
+        } else {
+            return self.storeHostValueWithOwnedTag(box, null);
+        }
+    }
+
+    fn storeHostValue(self: *HostEnv, box: abi.RocBox) HostValue {
+        return self.storeHostValueWithOwnedTag(box, null);
+    }
+
+    fn storeTaggedHostValue(self: *HostEnv, box: abi.RocBox, owned_tag: HostValueTypeTag) HostValue {
+        return self.storeHostValueWithOwnedTag(box, owned_tag);
     }
 
     fn setTestHostValueKind(self: *HostEnv, value: HostValue, kind: TestHostValueKind) void {
@@ -1528,27 +1616,84 @@ const HostEnv = struct {
         const slot = self.hostValueSlot(value);
         return switch (slot.*) {
             .vacant => failHost("HostValue handle referenced a released value"),
-            .occupied => |box| blk: {
-                abi.increfBox(box, 1);
-                break :blk box;
+            .occupied => |cell| blk: {
+                abi.increfBox(cell.box, 1);
+                break :blk cell.box;
             },
         };
+    }
+
+    fn hostValueTypeTag(self: *HostEnv, value: HostValue) ?HostValueTypeTag {
+        if (comptime host_value_type_tags_enabled) {
+            const slot = self.hostValueSlot(value);
+            return switch (slot.*) {
+                .vacant => failHost("HostValue handle referenced a released value"),
+                .occupied => |cell| cell.tag,
+            };
+        } else {
+            return null;
+        }
+    }
+
+    fn assertHostValueTypeTag(self: *HostEnv, value: HostValue, expected_tag: HostValueTypeTag) void {
+        if (comptime host_value_type_tags_enabled) {
+            const actual_tag = self.hostValueTypeTag(value) orelse failHost("HostValue read crossed erasure boundary without a type tag");
+            if (!HostEnv.hostValueTypeTagsMatch(actual_tag, expected_tag)) {
+                var buf: [192]u8 = undefined;
+                const message = std.fmt.bufPrint(
+                    &buf,
+                    "HostValue read crossed erasure boundary with the wrong type tag: value={} actual=0x{x} expected=0x{x}",
+                    .{ value, @intFromPtr(actual_tag), @intFromPtr(expected_tag) },
+                ) catch "HostValue read crossed erasure boundary with the wrong type tag";
+                failHost(message);
+            }
+        }
+    }
+
+    fn setHostValueTypeTag(self: *HostEnv, value: HostValue, borrowed_tag: HostValueTypeTag) void {
+        if (comptime host_value_type_tags_enabled) {
+            const slot = self.hostValueSlot(value);
+            switch (slot.*) {
+                .vacant => failHost("HostValue handle referenced a released value"),
+                .occupied => |*cell| {
+                    if (cell.tag) |actual_tag| {
+                        if (!HostEnv.hostValueTypeTagsMatch(actual_tag, borrowed_tag)) failHost("HostValue was tagged with a conflicting type tag");
+                        return;
+                    }
+                    HostEnv.retainHostValueTypeTag(borrowed_tag);
+                    cell.tag = borrowed_tag;
+                },
+            }
+        }
+    }
+
+    fn getTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
+        self.assertHostValueTypeTag(value, tag);
+        return self.getHostValue(value);
     }
 
     fn takeHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
         const slot = self.hostValueSlot(value);
         return switch (slot.*) {
             .vacant => failHost("HostValue handle referenced a released value"),
-            .occupied => |box| blk: {
+            .occupied => |cell| blk: {
                 slot.* = .vacant;
+                self.releaseRegistryHostValueTag(cell);
                 if (builtin.is_test) self.test_host_value_kinds.items[@intCast(value - 1)] = null;
-                break :blk box;
+                break :blk cell.box;
             },
         };
     }
 
+    fn takeTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
+        self.assertHostValueTypeTag(value, tag);
+        return self.takeHostValue(value);
+    }
+
     fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
-        const cloned = self.storeHostValue(self.getHostValue(value));
+        const tag = self.hostValueTypeTag(value);
+        const box = self.getHostValue(value);
+        const cloned = self.storeHostValueWithRetainedTag(box, tag);
         if (builtin.is_test) {
             self.setTestHostValueKind(cloned, self.testHostValueKind(value));
         }
@@ -1578,6 +1723,7 @@ const HostEnv = struct {
 
     fn clearActiveEvents(self: *HostEnv) void {
         for (self.active_events.items) |desc| {
+            abi.decrefBox(@ptrCast(desc.payload_tag), self.roc_host.?);
             abi.decrefErasedCallable(desc.payload_drop, self.roc_host.?);
             abi.decrefErasedCallable(desc.transform, self.roc_host.?);
             self.pending_roc_metrics.closure_releases += 2;
@@ -1590,14 +1736,17 @@ const HostEnv = struct {
         self.clearActiveEvents();
 
         for (stream.events.items) |*desc| {
+            if (!desc.owns_payload_tag) failHost("event descriptor payload tag ownership was already transferred");
             if (!desc.owns_payload_drop) failHost("event descriptor payload drop ownership was already transferred");
             if (!desc.owns_transform) failHost("event descriptor transform ownership was already transferred");
             self.active_events.append(allocator, .{
                 .target_node_id = desc.target_node_id,
                 .payload_kind = desc.payload_kind,
+                .payload_tag = desc.payload_tag,
                 .payload_drop = desc.payload_drop,
                 .transform = desc.transform,
             }) catch std.process.exit(1);
+            desc.owns_payload_tag = false;
             desc.owns_payload_drop = false;
             desc.owns_transform = false;
         }
@@ -2891,7 +3040,12 @@ const HostEnv = struct {
                 const kind = HostEnv.renderEventKindFromAbi(payload.kind);
                 const payload_kind = HostEnv.eventPayloadKindFromAbi(msg.payload_kind);
                 const target_node_id = HostEnv.resolveNodeBinderRef(binder_stack, msg.binder);
-                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, msg.payload_drop, msg.transform);
+                const payload_tag: HostValueTypeTag = switch (payload_kind) {
+                    .unit => @ptrCast(msg.payload_unit_tag),
+                    .str => @ptrCast(msg.payload_str_tag),
+                    .bool => @ptrCast(msg.payload_bool_tag),
+                };
+                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_tag, msg.payload_drop, msg.transform);
             },
         }
     }
@@ -3191,6 +3345,11 @@ const HostEnv = struct {
         return self.active_events.items[event_index].payload_drop;
     }
 
+    fn activeEventPayloadTagByIndex(self: *HostEnv, event_index: usize) HostValueTypeTag {
+        if (event_index >= self.active_events.items.len) failHost("active event table is missing a retained payload tag");
+        return self.active_events.items[event_index].payload_tag;
+    }
+
     fn activeScopeSiteByNodeId(self: *HostEnv, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
         for (self.active_stream.scope_sites.items) |site| {
             if (site.node_id == node_id and site.kind == kind) return site;
@@ -3315,9 +3474,10 @@ const HostEnv = struct {
 
     fn appendEventDescriptorFromStream(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, desc: HostNodeEventDesc, event_index: usize) void {
         const allocator = self.gpa.allocator();
+        const payload_tag = if (desc.owns_payload_tag) desc.payload_tag else self.activeEventPayloadTagByIndex(event_index);
         const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
         const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
-        dest.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_drop, transform);
+        dest.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
     }
 
     fn appendPreviousNonRenderDescriptorsExcludingTarget(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, target: HostStructuralReplacementTarget, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
@@ -3503,7 +3663,8 @@ const HostEnv = struct {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
             const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
             const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
-            stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_drop, transform);
+            const payload_tag = if (desc.owns_payload_tag) desc.payload_tag else self.activeEventPayloadTagByIndex(event_index);
+            stream.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
         }
 
         for (previous.scope_sites.items) |desc| {
@@ -4003,12 +4164,28 @@ fn hostValueGet(value: HostValue) callconv(.c) abi.RocBox {
     return currentHost().getHostValue(value);
 }
 
+fn hostValueGetTagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
+    const host = currentHost();
+    defer host.releaseOwnedHostValueTypeTag(tag);
+    return host.getTaggedHostValue(value, tag);
+}
+
 fn hostValueStore(box: abi.RocBox) callconv(.c) HostValue {
     return currentHost().storeHostValue(box);
 }
 
+fn hostValueStoreTagged(box: abi.RocBox, tag: HostValueTypeTag) callconv(.c) HostValue {
+    return currentHost().storeTaggedHostValue(box, tag);
+}
+
 fn hostValueTake(value: HostValue) callconv(.c) abi.RocBox {
     return currentHost().takeHostValue(value);
+}
+
+fn hostValueTakeTagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
+    const host = currentHost();
+    defer host.releaseOwnedHostValueTypeTag(tag);
+    return host.takeTaggedHostValue(value, tag);
 }
 
 fn failHost(message: []const u8) noreturn {
@@ -5538,6 +5715,7 @@ fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) voi
 fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
     const desc = hostEventById(host, event_id);
     validateEventPayloadKind(desc, payload_kind);
+    host.setHostValueTypeTag(payload, desc.payload_tag);
     defer callErasedHostValueToUnit(roc_host, desc.payload_drop, payload);
 
     host.recordDispatch();
@@ -5791,8 +5969,11 @@ comptime {
         @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
         @export(&hostValueClone, .{ .name = "roc_host_value_clone", .visibility = .hidden });
         @export(&hostValueGet, .{ .name = "roc_host_value_get", .visibility = .hidden });
+        @export(&hostValueGetTagged, .{ .name = "roc_host_value_get_tagged", .visibility = .hidden });
         @export(&hostValueStore, .{ .name = "roc_host_value_store", .visibility = .hidden });
+        @export(&hostValueStoreTagged, .{ .name = "roc_host_value_store_tagged", .visibility = .hidden });
         @export(&hostValueTake, .{ .name = "roc_host_value_take", .visibility = .hidden });
+        @export(&hostValueTakeTagged, .{ .name = "roc_host_value_take_tagged", .visibility = .hidden });
 
         @export(&main, .{ .name = "main" });
         if (@import("builtin").os.tag == .windows) {
@@ -7663,6 +7844,12 @@ fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
     return token;
 }
 
+fn newTestHostValueTypeTag(roc_host: *abi.RocHost) *u64 {
+    const tag: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
+    tag.* = 0;
+    return tag;
+}
+
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: HostValue) abi.NodeSignalExpr {
     const eq = testHostValueEqCallable(roc_host);
     const drop = testHostValueDropCallable(roc_host);
@@ -7892,8 +8079,11 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
+                    .payload_bool_tag = newTestHostValueTypeTag(roc_host),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(payload_kind),
+                    .payload_str_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_unit_tag = newTestHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },
@@ -7917,8 +8107,11 @@ fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind,
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
+                    .payload_bool_tag = newTestHostValueTypeTag(roc_host),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(EventPayloadKind.unit),
+                    .payload_str_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_unit_tag = newTestHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },

@@ -8,8 +8,11 @@ platform ""
 	hosted {
 		"roc_host_value_clone": HostValue.clone,
 		"roc_host_value_get": HostValue.get,
+		"roc_host_value_get_tagged": HostValue.get_tagged,
 		"roc_host_value_store": HostValue.store,
+		"roc_host_value_store_tagged": HostValue.store_tagged,
 		"roc_host_value_take": HostValue.take,
+		"roc_host_value_take_tagged": HostValue.take_tagged,
 	}
 	targets: {
 		inputs: "targets/",

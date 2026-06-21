@@ -8,12 +8,6 @@ import Signal exposing [Signal]
 Html := [].{
 	Attr : Node.Attr
 
-	read_str : HostValue -> Str
-	read_str = |value| Box.unbox(HostValue.get(value))
-
-	read_bool : HostValue -> Bool
-	read_bool = |value| Box.unbox(HostValue.get(value))
-
 	div : List(Node.Attr), List(Elem) -> Elem
 	div = |attrs, children| Elem.Element({ tag: "div", attrs, children })
 
@@ -56,7 +50,12 @@ Html := [].{
 
 	## Signal-backed text content.
 	text_s : Signal(Str) -> Elem
-	text_s = |signal| Elem.TextSignal({ signal: Signal.to_expr(signal), read: Box.box(Html.read_str) })
+	text_s = |signal| {
+		tag = signal.tag
+		read : HostValue -> Str
+		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		Elem.TextSignal({ signal: Signal.to_expr(signal), read: Box.box(read) })
+	}
 
 	## A button whose label is static text and whose click fires `msg`.
 	button : Str, Node.Msg -> Elem
@@ -76,11 +75,14 @@ Html := [].{
 	## A button whose label is signal-backed.
 	button_s : Signal(Str), Node.Msg -> Elem
 	button_s = |label, msg| {
+		label_tag = label.tag
+		read_label : HostValue -> Str
+		read_label = |value| Box.unbox(HostValue.get_tagged(value, label_tag))
 		Elem.Element(
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(Html.read_str) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(read_label) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -91,12 +93,18 @@ Html := [].{
 	## A button whose label and disabled state are signal-backed.
 	action_button : Signal(Str), Signal(Bool), Node.Msg -> Elem
 	action_button = |label, disabled, msg| {
+		label_tag = label.tag
+		disabled_tag = disabled.tag
+		read_label : HostValue -> Str
+		read_label = |value| Box.unbox(HostValue.get_tagged(value, label_tag))
+		read_disabled : HostValue -> Bool
+		read_disabled = |value| Box.unbox(HostValue.get_tagged(value, disabled_tag))
 		Elem.Element(
 			{
 				tag: "button",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(Html.read_str) }),
-					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read: Box.box(Html.read_bool) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: Box.box(read_label) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read: Box.box(read_disabled) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 				],
 				children: [],
@@ -108,13 +116,16 @@ Html := [].{
 	## on input.
 	text_input : Str, Signal(Str), Node.Msg -> Elem
 	text_input = |label, value, msg| {
+		value_tag = value.tag
+		read_value : HostValue -> Str
+		read_value = |host_value| Box.unbox(HostValue.get_tagged(host_value, value_tag))
 		Elem.Element(
 			{
 				tag: "input",
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "textbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read: Box.box(Html.read_str) }),
+					Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read: Box.box(read_value) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_input, msg }),
 				],
 				children: [],
@@ -126,13 +137,16 @@ Html := [].{
 	## change.
 	checkbox : Str, Signal(Bool), Node.Msg -> Elem
 	checkbox = |label, checked, msg| {
+		checked_tag = checked.tag
+		read_checked : HostValue -> Bool
+		read_checked = |value| Box.unbox(HostValue.get_tagged(value, checked_tag))
 		Elem.Element(
 			{
 				tag: "input",
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_role, value: "checkbox" }),
 					Node.Attr.StaticText({ field: Node.field_label, value: label }),
-					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read: Box.box(Html.read_bool) }),
+					Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read: Box.box(read_checked) }),
 					Node.Attr.OnEvent({ kind: Node.event_kind_check, msg }),
 				],
 				children: [],

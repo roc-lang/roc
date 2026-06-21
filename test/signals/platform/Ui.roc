@@ -10,66 +10,99 @@ import Signal exposing [Signal]
 ## referenced by their scoped token, so the same helper composes correctly
 ## wherever it is mounted.
 Ui := [].{
-	read_bool : HostValue -> Bool
-	read_bool = |value| Box.unbox(HostValue.get(value))
-
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
-	State(a) := { ref : Node.BinderRef }.{
+	State(a) := { ref : Node.BinderRef, tag : Box(HostValue.TypeTag(a)) }.{
 		signal : State(a) -> Signal(a)
-		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref))
+		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref), st.tag)
 
 		## Build a unit-triggered reducer message: `f` maps the current value to the
 		## next value, ignoring the unit payload.
 		on_unit : State(a), (a -> a) -> Node.Msg
 		on_unit = |st, f| {
+			current_tag = st.tag
+			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag = HostValue.new_unit_payload_tag({})
+			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag = HostValue.new_str_payload_tag({})
+			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag = HostValue.new_bool_payload_tag({})
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, _payload_hv| {
 				current : a
-				current = Box.unbox(HostValue.get(current_hv))
+				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
 				next : a
 				next = f(current)
-				HostValue.store(Box.box(next))
+				HostValue.store_tagged(Box.box(next), current_tag)
 			}
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box({})
-				boxed = HostValue.take(payload_hv)
+				boxed = HostValue.take_tagged(payload_hv, payload_unit_tag)
 				_ = boxed
 				{}
 			}
-			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
-		}
-
-		## Build a payload-carrying reducer: `f` maps (current, payload) to next.
-		on_value : State(a), U64, (a, p -> a) -> Node.Msg
-		on_value = |st, payload_kind, f| {
-			wrapped : HostValue, HostValue -> HostValue
-			wrapped = |current_hv, payload_hv| {
-				current : a
-				current = Box.unbox(HostValue.get(current_hv))
-				payload : p
-				payload = Box.unbox(HostValue.get(payload_hv))
-				next : a
-				next = f(current, payload)
-				HostValue.store(Box.box(next))
-			}
-			payload_drop : HostValue -> {}
-			payload_drop = |payload_hv| {
-				boxed : Box(p)
-				boxed = HostValue.take(payload_hv)
-				_ = boxed
-				{}
-			}
-			{ binder: st.ref, payload_kind, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
-		on_str = |st, f| st.on_value(Node.str_payload_kind, f)
+		on_str = |st, f| {
+			current_tag = st.tag
+			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag = HostValue.new_unit_payload_tag({})
+			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag = HostValue.new_str_payload_tag({})
+			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag = HostValue.new_bool_payload_tag({})
+			wrapped : HostValue, HostValue -> HostValue
+			wrapped = |current_hv, payload_hv| {
+				current : a
+				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
+				payload : Str
+				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_str_tag))
+				next : a
+				next = f(current, payload)
+				HostValue.store_tagged(Box.box(next), current_tag)
+			}
+			payload_drop : HostValue -> {}
+			payload_drop = |payload_hv| {
+				boxed : Box(Str)
+				boxed = HostValue.take_tagged(payload_hv, payload_str_tag)
+				_ = boxed
+				{}
+			}
+			{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+		}
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
-		on_bool = |st, f| st.on_value(Node.bool_payload_kind, f)
+		on_bool = |st, f| {
+			current_tag = st.tag
+			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag = HostValue.new_unit_payload_tag({})
+			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag = HostValue.new_str_payload_tag({})
+			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag = HostValue.new_bool_payload_tag({})
+			wrapped : HostValue, HostValue -> HostValue
+			wrapped = |current_hv, payload_hv| {
+				current : a
+				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
+				payload : Bool
+				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_bool_tag))
+				next : a
+				next = f(current, payload)
+				HostValue.store_tagged(Box.box(next), current_tag)
+			}
+			payload_drop : HostValue -> {}
+			payload_drop = |payload_hv| {
+				boxed : Box(Bool)
+				boxed = HostValue.take_tagged(payload_hv, payload_bool_tag)
+				_ = boxed
+				{}
+			}
+			{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+		}
 	}
 
 	## Introduce a state binder. `init` is the initial value; `body` receives a
@@ -81,26 +114,27 @@ Ui := [].{
 				a.is_eq : a, a -> Bool,
 			]
 	state = |init, body| {
+		tag = HostValue.new_tag({})
 		initial : {} -> HostValue
-		initial = |_| HostValue.store(Box.box(init))
+		initial = |_| HostValue.store_tagged(Box.box(init), tag)
 		eq : HostValue, HostValue -> Bool
 		eq = |left_hv, right_hv| {
 			left_v : a
-			left_v = Box.unbox(HostValue.get(left_hv))
+			left_v = Box.unbox(HostValue.get_tagged(left_hv, tag))
 			right_v : a
-			right_v = Box.unbox(HostValue.get(right_hv))
+			right_v = Box.unbox(HostValue.get_tagged(right_hv, tag))
 			left_v.is_eq(right_v)
 		}
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(a)
-			boxed = HostValue.take(host_value)
+			boxed = HostValue.take_tagged(host_value, tag)
 			_ = boxed
 			{}
 		}
 		token = Box.box(0)
 		handle : State(a)
-		handle = { ref: Node.BinderRef.BinderRef(token) }
+		handle = { ref: Node.BinderRef.BinderRef(token), tag }
 		child = body(handle)
 		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), drop: Box.box(drop), child: Box.box(child) })
 	}
@@ -108,10 +142,13 @@ Ui := [].{
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
 	when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 	when = |condition, when_true, when_false| {
+		condition_tag = condition.tag
+		read_condition : HostValue -> Bool
+		read_condition = |value| Box.unbox(HostValue.get_tagged(value, condition_tag))
 		Elem.When(
 			{
 				condition: Signal.to_expr(condition),
-				read: Box.box(Ui.read_bool),
+				read: Box.box(read_condition),
 				when_true: Box.box(when_true({})),
 				when_false: Box.box(when_false({})),
 			},
@@ -129,53 +166,56 @@ Ui := [].{
 				k.is_eq : k, k -> Bool,
 			]
 	each = |items, key_of, row| {
+		items_tag = items.tag
+		item_tag = HostValue.new_tag({})
+		key_tag = HostValue.new_tag({})
 		items_to_values : HostValue -> List(HostValue)
 		items_to_values = |items_hv| {
 			typed_items : List(item)
-			typed_items = Box.unbox(HostValue.get(items_hv))
-			List.map(typed_items, |item| HostValue.store(Box.box(item)))
+			typed_items = Box.unbox(HostValue.get_tagged(items_hv, items_tag))
+			List.map(typed_items, |item| HostValue.store_tagged(Box.box(item), item_tag))
 		}
 		key_of_hv : HostValue -> HostValue
 		key_of_hv = |item_hv| {
 			item : item
-			item = Box.unbox(HostValue.get(item_hv))
+			item = Box.unbox(HostValue.get_tagged(item_hv, item_tag))
 			key = key_of(item)
-			HostValue.store(Box.box(key))
+			HostValue.store_tagged(Box.box(key), key_tag)
 		}
 		key_eq_hv : HostValue, HostValue -> Bool
 		key_eq_hv = |left_hv, right_hv| {
 			left_k : k
-			left_k = Box.unbox(HostValue.get(left_hv))
+			left_k = Box.unbox(HostValue.get_tagged(left_hv, key_tag))
 			right_k : k
-			right_k = Box.unbox(HostValue.get(right_hv))
+			right_k = Box.unbox(HostValue.get_tagged(right_hv, key_tag))
 			left_k.is_eq(right_k)
 		}
 		key_drop_hv : HostValue -> {}
 		key_drop_hv = |key_hv| {
 			boxed : Box(k)
-			boxed = HostValue.take(key_hv)
+			boxed = HostValue.take_tagged(key_hv, key_tag)
 			_ = boxed
 			{}
 		}
 		item_eq_hv : HostValue, HostValue -> Bool
 		item_eq_hv = |left_hv, right_hv| {
 			left_item : item
-			left_item = Box.unbox(HostValue.get(left_hv))
+			left_item = Box.unbox(HostValue.get_tagged(left_hv, item_tag))
 			right_item : item
-			right_item = Box.unbox(HostValue.get(right_hv))
+			right_item = Box.unbox(HostValue.get_tagged(right_hv, item_tag))
 			left_item.is_eq(right_item)
 		}
 		item_drop_hv : HostValue -> {}
 		item_drop_hv = |item_hv| {
 			boxed : Box(item)
-			boxed = HostValue.take(item_hv)
+			boxed = HostValue.take_tagged(item_hv, item_tag)
 			_ = boxed
 			{}
 		}
 		row_hv : HostValue, HostValue -> Elem
 		row_hv = |key_hv, item_hv| {
 			key : k
-			key = Box.unbox(HostValue.get(key_hv))
+			key = Box.unbox(HostValue.get_tagged(key_hv, key_tag))
 			row_item : {} -> HostValue
 			row_item = |_| HostValue.clone(item_hv)
 			row_signal_token = Box.box(0)
@@ -188,6 +228,7 @@ Ui := [].{
 						Box.box(item_eq_hv),
 						Box.box(item_drop_hv),
 					),
+					item_tag,
 				),
 			)
 		}

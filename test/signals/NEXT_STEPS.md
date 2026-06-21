@@ -16,6 +16,9 @@ history.
   structural conditions, and keyed row key/item slots use opaque `HostValue`
   handles with retained typed equality/drop/read thunks owned by the exact
   descriptor edge.
+- Debug and safe builds attach carrier type tags to every `HostValue` stored in
+  the host registry and assert those tags at typed read/take boundaries. Release
+  builds compile out the registry tag field and assertions.
 - `SignalExpr.Ref` binds to explicit host source node ids. Non-`Ref`
   `SignalExpr` variants carry explicit signal tokens, and the host consumes
   those tokens into shared retained `HostSignalRecord`s within the active
@@ -55,17 +58,10 @@ These map one-to-one to the Definition of Done in `DESIGN.md`. The platform is
 2. **`Ui.component` is unimplemented (DoD 2).** Named scopes for local state
    across helper functions returning `Elem` do not exist yet. Needed to prove
    local state composes without identity leaks across multiple instantiations.
-3. **Erasure-boundary type tags are not checked (DoD 3).** The confined-erasure
-   invariant is argued, not asserted. Add a debug-only carrier type tag set where
-   each `HostValue` is produced and asserted in the thunk trampoline, gated on
-   `builtin.mode` so it strips from release builds.
-4. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
+3. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
    `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` wait until structural
    site ownership (gap 1) is stable enough to avoid cleanup tied to whole-stream
    rebuilds.
-5. **Optimized benchmark validation is blocked.** `zig build run-signals-bench`
-   still hits roc-lang/roc#9717 in the optimized ops-dashboard build. Keep the
-   benchmark case visible; do not skip it or silently downgrade it to dev mode.
 
 ## Next Green Slices
 
@@ -77,12 +73,9 @@ highest-risk scaling property closes first and effects land last.
    scopes instead of applying structural patches against a full updated active
    stream. Prove with a list-churn spec asserting `nodes_recomputed`,
    `patches_emitted`, and `rows_*` track changed rows, not list size.
-2. **Debug carrier type tags (closes gap 3).** Cheap and independent of the
-   others; do it early. Run the full spec suite in a safe build clean, confirm
-   the tag compiles out of release.
-3. **`Ui.component` named scopes (closes gap 2).** Add the scope primitive and a
+2. **`Ui.component` named scopes (closes gap 2).** Add the scope primitive and a
    small composition app instantiating a stateful component more than once.
-4. **Effect lifecycle scaffold (closes gap 4).** Once structural updates no
+3. **Effect lifecycle scaffold (closes gap 4).** Once structural updates no
    longer rebuild the whole active descriptor stream, add the smallest host-owned
    subscription lifecycle for one cleanup-safe effect source.
 
