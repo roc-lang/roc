@@ -29,7 +29,8 @@ pub const Constants = struct {
     /// 5: nominal record declared-field-order and unnamed padding fields added
     ///    node, diagnostic, and type-annotation payloads.
     /// 6: merge with typed node/static-dispatch payload layout changes.
-    pub const CACHE_VERSION = 6;
+    /// 7: field-order layout metadata moved from nominal-only to general field-order.
+    pub const CACHE_VERSION = 7;
 };
 
 /// Configuration for the Roc cache system.
