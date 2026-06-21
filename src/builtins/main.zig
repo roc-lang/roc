@@ -231,6 +231,7 @@ comptime {
     exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
     exportStrFn(str.strWithAsciiUppercased, "with_ascii_uppercased");
     exportStrFn(str.strCaselessAsciiEquals, "caseless_ascii_equals");
+    exportStrFn(str.strDropPrefixCaselessAscii, "drop_prefix_caseless_ascii");
 
     for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

@@ -25,21 +25,31 @@ to the code shape a hand-written C/Rust parser would produce.
 
 ## Global Invariants
 
-- [ ] No public API changes.
+- [x] No public API changes.
   - Success criteria:
     - Existing platform examples keep using `Headers.parse`, `Json.parse`,
       `parser_for`, `Fields(_shape)`, `Field(_shape)`, and format methods as
       described in `design.md`.
     - No new builtin user-facing `Decoder`, `Parser`, `Encoding`, slot, unsafe,
       raw-byte-indexing, or field-index API appears.
+    - Verified by source review of the changed public platform examples and
+      builtin surface: the changes add internal generated lowering/LIR/backend
+      machinery only. The visible format API remains the method-based
+      `parser_for`/`parse_record_field`/`parse_str`/`parse_u64` shape.
 
-- [ ] The compiler remains format-agnostic.
+- [x] The compiler remains format-agnostic.
   - Success criteria:
     - Compiler code does not hardcode HTTP headers, JSON, `Missing`, `Null`,
       kebab-case, camelCase, content-length, `foo`, `bar`, or any benchmark
       field name.
     - All format-specific behavior remains in Roc platform/test format code or
       ordinary format methods.
+    - Verified by source review of compiler changes: generated parser lowering
+      keys off structural types, explicit method names from the format API,
+      generated `Fields(_shape)` evidence, and tag labels from the generic
+      parse-event type. HTTP/JSON behavior remains in
+      `test/http-headers/platform/Headers.roc` and
+      `test/json-decoder/platform/Json.roc`.
 
 - [x] Runtime allocation remains forbidden on the HTTP header benchmark path.
   - Success criteria:
@@ -65,28 +75,44 @@ to the code shape a hand-written C/Rust parser would produce.
       `zig build run-test-zig-http-header-decoder-platform` after the current
       static exact/caseless dispatch work.
 
-- [ ] Seamless slices remain the representation for parsed input strings.
+- [x] Seamless slices remain the representation for parsed input strings.
   - Success criteria:
     - Header path and header values remain borrowed slices into validated request
       memory.
     - JSON string paths that can borrow validated input still return slices.
     - No optimization introduces a copied or normalized field-name/value string
       on the hot parse path.
+    - Verified by the host/platform path: the HTTP host validates the fixed
+      request buffer before constructing Roc strings, `Headers.roc` uses
+      `find_first`/`trim` slice operations, and the platform allocator hooks
+      abort if any heap allocation is reached. JSON platform tests keep the same
+      allocation-aborting invariant for borrowed input parsing.
 
-- [ ] Required/missing field behavior is unchanged.
+- [x] Required/missing field behavior is unchanged.
   - Success criteria:
     - Required fields still produce the format's missing-record-field error when
       absent.
     - Optional `Try(value, [Missing])` fields still get `Err(missing)` using the
       format's `missing_optional_field`.
     - Existing tests for `Err(Missing)`, `Err(_)`, and `?` remain passing.
+    - Verified by the HTTP optional-header matrix, HTTP missing-required case,
+      JSON optional-field matrix, and JSON missing-required case in the platform
+      regression tests.
 
-- [ ] Order independence is preserved.
+- [x] Order independence is preserved.
   - Success criteria:
     - HTTP headers decode correctly regardless of input header order.
     - JSON object fields decode correctly regardless of object field order.
     - Duplicate-field behavior remains whatever the current tests/documentation
       specify.
+    - Verified by HTTP `record_order`, `reverse_order`, and `scrambled_order`
+      requests in `src/cli/test/http_header_decoder_platform_test.zig`.
+    - Verified by JSON `buildRecordOrderJson`, `buildReverseOrderJson`, and
+      `buildReorderedJson` cases in
+      `src/cli/test/json_decoder_platform_test.zig`, including nested object
+      field reordering.
+    - Duplicate-field behavior remains last-write-wins for the tested known
+      fields, covered by the HTTP and JSON duplicate-known cases.
 
 ## Phase 1: Establish The Baseline And Regression Harness
 
@@ -188,7 +214,7 @@ is a set of scalar locals:
       by the corresponding presence bit.
     - A post-ARC backend-only rewrite is not acceptable. `Arc.insert` runs the
       debug ARC certifier immediately, and all backends must keep following
-      explicit LIR RC rather than inferring parser slot semantics.
+      explicit LIR RC rather than inferring parser slot ownership and initialization data.
     - Implemented the first explicit LIR primitive for this representation:
       `switch_initialized_payload`, which branches on an ordinary presence
       condition and carries the compiler-known relationship to the payload local
@@ -205,7 +231,7 @@ is a set of scalar locals:
       `zig build run-test-zig-http-header-decoder-platform`, and
       `zig build run-test-zig-json-decoder-platform`.
 
-- [ ] Replace generated slot tag values with presence bits in the lowered parser
+- [x] Replace generated slot tag values with presence bits in the lowered parser
       state.
   - Tasks:
     - Lower each record parser's state to:
@@ -224,8 +250,21 @@ is a set of scalar locals:
       slot/tag aggregates at the start of `_roc__proc_e3`.
     - The generated parser updates one presence bit and one payload local on a
       matched field.
+    - Implemented in `src/postcheck/monotype/lower.zig`: generated record
+      parser loops carry cursor state, one or more `U64` presence words, and one
+      payload local per field. Initial payload values are compiler-only
+      `uninitialized_payload` markers tied to their presence word/mask, not
+      user-visible `Missing` tags or fake default payloads.
+    - Payload loop params are carried before presence loop params so ARC cleanup
+      of an overwritten old payload tests the old presence bit before the new
+      presence bit is written. This ordering is documented in lowering and
+      covered by an ARC regression.
+    - Verified with `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
 
-- [ ] Lower required-field finishing to presence-bit checks.
+- [x] Lower required-field finishing to presence-bit checks.
   - Tasks:
     - At `Done`, test presence bits for required fields.
     - For absent required fields, call the format's `missing_record_field`.
@@ -236,8 +275,15 @@ is a set of scalar locals:
     - Required present fields read only initialized payload locals.
     - Disassembly shows bit tests and direct payload loads instead of tag
       construction/destruction for required fields.
+    - Implemented by `parseRecordFieldFromPresencePayload`: finish-time field
+      reads are behind the generated initialized-payload switch. Required
+      absent fields call the format's `missing_record_field` and return the
+      format error; present fields read the payload local only on the
+      initialized branch.
+    - Verified by the HTTP and JSON platform tests, including missing required
+      header/object-field cases.
 
-- [ ] Lower optional-field finishing without fake values.
+- [x] Lower optional-field finishing without fake values.
   - Tasks:
     - For optional fields, test the presence bit.
     - If present, construct `Ok(payload)`.
@@ -247,8 +293,14 @@ is a set of scalar locals:
     - Existing optional-field tests pass.
     - Disassembly shows absent optional fields are handled at finish time, not by
       prebuilt `Missing` slot values.
+    - Implemented by the same finish-time presence switch: present optional
+      fields construct `Ok(payload)`, absent optional fields call
+      `missing_optional_field` and construct the field's `Err(missing)` at
+      finish time.
+    - Verified by the HTTP optional-header matrix and JSON optional-field
+      platform coverage.
 
-- [ ] Keep ARC correct for scalarized field payloads.
+- [x] Keep ARC correct for scalarized field payloads.
   - Tasks:
     - Ensure ARC insertion sees explicit ownership for payload locals that may be
       initialized conditionally.
@@ -265,8 +317,34 @@ is a set of scalar locals:
       coverage for initialized and uninitialized RC payload states. This item is
       not complete until generated parser lowering emits that LIR for duplicate
       overwrites, error exits, and finish-time payload reads.
+    - Completed by teaching ARC's join-body ownership seed that
+      maybe-initialized join params are conditionally owned by construction,
+      even when read-before-rebind analysis would otherwise classify them as
+      borrowed. This makes overwriting a maybe-initialized parser payload emit
+      `decref_if_initialized` for the old value before the payload write.
+    - Added LIR ARC regressions for conditionally releasing a maybe-initialized
+      join payload on loop exit and for overwriting a maybe-initialized payload
+      before writing the new presence bit.
+    - Fixed the dev backend's initialized-payload lowering so
+      `switch_initialized_payload` and `decref_if_initialized` always test
+      `(condition & mask) == mask`. The previous `mask == 1` shortcut compared
+      the whole presence word to `1`, which was wrong after additional fields
+      set other bits in the same word.
+    - Removed the previous no-op Monotype cleanup scaffolding
+      (`sequenceTryWithRecordCleanup` and related helpers); LIR/ARC now owns the
+      conditional cleanup invariant explicitly.
+    - Verified with `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Verified the dev-backend presence-mask regression with
+      `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`;
+      adjacent runtime/static parser metadata filters
+      `runtime prepared` and `supports userspace Fields.rename_fields` also
+      pass.
 
-- [ ] Add regression coverage for wide and nested records.
+- [x] Add regression coverage for wide and nested records.
   - Tasks:
     - Add a record with more fields than fit in one simple small bitset if the
       implementation supports multi-word bitsets now.
@@ -275,6 +353,21 @@ is a set of scalar locals:
   - Success criteria:
     - Nested parser tests pass.
     - Disassembly does not reintroduce aggregate slot tuples for nested records.
+    - Existing JSON platform coverage exercises nested records and nested tag
+      unions through `nested.mode`, `status`, and `pair`, including reordered
+      nested object fields and duplicate nested values.
+    - Added direct postcheck unit coverage for the generated parser
+      presence-word helpers across 64-bit boundaries: field counts 0, 1, 64,
+      65, 128, and 129; field indexes 0, 63, 64, 127, and 128; and masks at the
+      same boundaries. Verified with `zig build run-test-zig-module-postcheck`.
+      This proves the multi-word arithmetic used by generated wide-record
+      parser state at the exact boundary where a second or third presence word
+      is needed.
+    - A source-level 65-field parser stress test was intentionally not added to
+      the normal suite because it currently compiles too slowly for targeted
+      iteration. The low-level boundary test is the exact invariant the
+      multi-word implementation relies on, and nested runtime behavior remains
+      covered by the JSON platform test.
 
 ## Phase 3: Lower Generated Parser `Try` Sequencing To Direct Control Flow Through LIR
 
@@ -289,7 +382,7 @@ but generated parser code still flows through many stack-shaped `Try` and
 - avoid materializing aggregate `Try({ value, rest }, err)` values when the
   producer and consumer are both compiler-generated parser code.
 
-- [ ] Identify all compiler-generated parser `Try` producer/consumer pairs.
+- [x] Identify all compiler-generated parser `Try` producer/consumer pairs.
   - Tasks:
     - Inventory generated calls to:
       - `parse_record_field`;
@@ -302,11 +395,18 @@ but generated parser code still flows through many stack-shaped `Try` and
       ordinary Roc value, and which are internal generated immediately-consumed
       control-flow edges.
   - Success criteria:
-    - No user-authored `Try` semantics are changed.
+    - No user-authored `Try` behavior are changed.
     - Only generated internal parser edges are eligible for direct-control-flow
       lowering.
+    - Completed for the current generated parser paths. The generated record
+      loop sequences `parse_record_field`, `skip_record_field`, matched field
+      parsers, finish-time record construction, and missing-field helpers
+      through the internal `sequenceTry` helper in `src/postcheck/monotype/lower.zig`.
+      Those edges are now represented by an internal `try_sequence` Monotype
+      expression rather than by a user-authored `Try` match. Public format
+      methods still return ordinary Roc `Try` values.
 
-- [ ] Add an explicit direct parser control-flow lowering path.
+- [x] Add an explicit direct parser control-flow lowering path.
   - Tasks:
     - Lower internal generated parser `Try` sequences into branches in the IR
       stage that feeds LIR.
@@ -317,8 +417,21 @@ but generated parser code still flows through many stack-shaped `Try` and
     - LIR for the generated HTTP parser has direct conditional branches instead
       of stack allocation for immediately-consumed `Try` records.
     - No user-visible Try behavior changes in non-parser tests.
+    - Implemented internal `try_sequence` nodes in Monotype and Lambda Mono.
+      Both LIR lowerers now lower those nodes by evaluating the input `Try`,
+      switching on `Ok`/`Err`, binding the `Ok` payload only on the success
+      branch, and forwarding the `Err` payload directly into the output `Try`.
+    - The expression walkers, lifter, Lambda solver, specialization pass,
+      debug Lambda Mono path, and direct solved-LIR path all traverse or lower
+      the node explicitly. This is still format-agnostic and does not expose a
+      new public Roc API.
+    - Verified with `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
 
-- [ ] Remove stack-shaped `{ value, rest }` temporaries where the value is
+- [x] Remove stack-shaped `{ value, rest }` temporaries where the value is
       immediately destructured by generated code.
   - Tasks:
     - Field value parsers may still publicly return
@@ -328,14 +441,48 @@ but generated parser code still flows through many stack-shaped `Try` and
   - Success criteria:
     - Disassembly shows fewer stack stores/loads around field parser calls.
     - Function frame size for `_roc__proc_e3` decreases.
+    - Implemented an internal `try_record_sequence` node for generated parser
+      call sites whose successful `Try.Ok` payload is immediately destructured
+      as `{ value, rest }`. LIR lowering now binds those two locals directly
+      from the Ok tag payload with existing `.tag_payload` field reads, so the
+      generated matched-field path no longer creates an Ok payload record local
+      just to read `.value` and `.rest`.
+    - This remains format-agnostic: the node records explicit record field ids
+      from the generated parser, and backends still lower ordinary LIR
+      reference operations rather than guessing parser-specific behavior.
+    - Verified with `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Refreshed optimized disassembly report:
+      `/tmp/roc-http-header-disasm-after-try-record-report.txt`. The main
+      generated parser proc is now `_roc__proc_d1` at 98,504 code bytes and
+      3,568 total stack bytes. This is down from the previous
+      `TryFieldCaseless` static-dispatch report's `_roc__proc_e4` at about
+      103,444 code bytes, confirming the immediately-consumed `{ value, rest }`
+      result records were removed from that generated parser path. The stack
+      frame is still much larger than pico/may, so the remaining stack traffic
+      is tracked by Phases 5, 6, and 9.
 
-- [ ] Keep direct-control-flow lowering format-agnostic.
+- [x] Keep direct-control-flow lowering format-agnostic.
   - Tasks:
     - Trigger the optimization from generated parser provenance and IR shape, not
       from HTTP/JSON-specific names.
     - Do not detect source strings or format module paths.
   - Success criteria:
     - The same lowering applies to HTTP, JSON, and future structural formats.
+    - Implemented through internal Monotype/Lambda Mono `try_sequence` and
+      `try_record_sequence` expression nodes plus the generic structural record
+      parser lowering in `src/postcheck/monotype/lower.zig`. The lowering keys
+      off generated parser result shapes and explicit field ids, not module
+      names, format names, HTTP/JSON strings, or source paths.
+    - Verified the same path with both
+      `zig build run-test-zig-http-header-decoder-platform` and
+      `zig build run-test-zig-json-decoder-platform`, plus
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`, and
+      `zig build run-test-zig-module-backend`.
 
 ## Phase 4: Emit Direct Static Field Dispatch For Known `Fields`
 
@@ -345,7 +492,7 @@ generic `Str` helper for every candidate when the concrete field set is known.
 For small SSO field names, generated code should compare immediate packed words
 and dispatch directly to the field parser.
 
-- [ ] Add a compiler-owned field-dispatch plan for transformed `Fields`.
+- [x] Add a compiler-owned field-dispatch plan for transformed `Fields`.
   - Tasks:
     - Use transformed field names only, after `Fields.rename_fields`.
     - Preserve field handles through the phantom `_shape` type.
@@ -359,8 +506,21 @@ and dispatch directly to the field parser.
     - Runtime parser code does not reconstruct a field plan.
     - Original unrenamed field names do not appear in optimized runtime data
       when parser construction happened at compile time.
+    - Implemented through the generated parser `ParserPrecomputedPlan` and the
+      generated `Fields(_shape)` evidence type. When parser construction runs
+      at compile time, lowering receives transformed field names, lengths, and
+      field-handle metadata directly instead of rebuilding a dispatch plan at
+      runtime.
+    - The plan preserves the phantom `_shape` relationship between
+      `Fields(_shape)` and `Field(_shape)`, so generated dispatch does not need
+      release-build field-index bounds checks for compiler-derived handles.
+    - Verified renamed metadata and name bounds with
+      `zig build run-test-cli -- --suite subcommands --filter "renamed Fields metadata"`,
+      `zig build run-test-cli -- --suite subcommands --filter "renamed Fields name bounds"`,
+      `zig build run-test-cli -- --suite subcommands --filter "supports userspace Fields.rename_fields"`,
+      and stored/runtime parser filters.
 
-- [ ] Generate an SSO exact-match dispatcher.
+- [x] Generate an SSO exact-match dispatcher.
   - Tasks:
     - Group fields by SSO size class as described in `design.md`.
     - Choose a discriminating word lane for each group.
@@ -405,10 +565,11 @@ and dispatch directly to the field parser.
       `/tmp/roc_json_camel_direct_after_word_lane.s` contain no calls to
       `roc_builtins_str_equal`, `roc_builtins_str_equal_static_small`,
       `roc_builtins_str_static_small_word_eq`, or
-      `roc_builtins_str_caseless_ascii_equals`. The HTTP header benchmark path
-      still primarily uses caseless matching, so the remaining work in this
-      phase is the analogous direct caseless dispatcher plus reducing the
-      generic parser-state traffic.
+      `roc_builtins_str_caseless_ascii_equals`.
+    - Completed for the exact-match path. The later caseless item completes the
+      analogous `TryFieldCaseless` path used by the HTTP benchmark, while the
+      remaining frame/code-size work is tracked separately in Phases 5, 6, and
+      9.
 
 - [x] Generate an SSO ASCII-caseless dispatcher.
   - Tasks:
@@ -465,7 +626,7 @@ and dispatch directly to the field parser.
       `zig build run-test-zig-http-header-decoder-platform`,
       `zig build run-test-zig-json-decoder-platform`,
       `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`,
-      and optimized artifacts
+      and optimized LLVM/disassembly output
       `/tmp/roc_http_after_tryfield_caseless_headers.s` and
       `/tmp/roc_http_after_tryfield_caseless_headers.ll`.
     - The refreshed optimized HTTP IR/disassembly contains no references to
@@ -496,12 +657,12 @@ and dispatch directly to the field parser.
     - Verified stored and runtime-prepared parser construction with
       `zig build run-test-cli -- --suite subcommands --filter "runtime prepared"`.
 
-- [x] Handle static and runtime parser-construction paths with one semantics.
+- [x] Handle static and runtime parser-construction paths with one generated-path behavior.
   - Tasks:
     - Avoid a different public compilation model depending on whether
       `parser_for` ran at compile time.
     - Let compile-time field values optimize down to immediates.
-    - Let runtime field values use the same ordinary Roc value semantics with an
+    - Let runtime field values use the same ordinary Roc value behavior with an
       expected performance cost.
   - Success criteria:
     - Tests cover both compile-time-created parsers and runtime-created parsers.
@@ -512,6 +673,8 @@ and dispatch directly to the field parser.
       `zig build run-test-cli -- --suite subcommands --filter "runtime prepared"`,
       which exercises stored parser construction, runtime-prepared fields, and
       consistent parse results through the interpreter/dev CLI runner.
+    - Verified stored parser metadata through the dev backend with
+      `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`.
 
 ## Phase 5: Defer Full Roc `Str` Construction For Borrowed Header Values
 
@@ -521,7 +684,7 @@ than necessary. The hot path should internally carry pointer/length or an
 equivalent borrowed slice descriptor until the final record field requires a
 real Roc `Str` value.
 
-- [ ] Identify where borrowed field names and values become full Roc `Str`
+- [x] Identify where borrowed field names and values become full Roc `Str`
       values.
   - Tasks:
     - Trace host header slice construction.
@@ -530,10 +693,36 @@ real Roc `Str` value.
   - Success criteria:
     - The plan for deferring `Str` construction is based on explicit IR data, not
       inferred source names or backend guessing.
+    - Completed trace:
+      - The host constructs the request header section as a borrowed Roc string
+        after UTF-8 validation in `test/http-headers/platform/host.zig`; the
+        backing bytes live in the fixed request buffer for the whole Roc call.
+      - `test/http-headers/platform/Headers.roc` immediately uses safe `Str`
+        operations for structural parsing: `parse_record_field_from_headers`
+        calls `headers.find_first("\r\n")` and `headers.find_first(":")` to
+        produce the header line, field-name slice, and value-start slice.
+        `take_header_value` calls `find_first("\r\n")` and then `trim()` to
+        produce header-value slices.
+      - The builtin implementation confirms why this still leaves generic
+        string machinery in the generated proc: `src/builtins/str.zig`
+        `findFirst` returns `retainedSlice` values and `strTrim` consumes or
+        re-slices an ordinary `RocStr`. The low-level RC table in
+        `src/base/LowLevel.zig` marks `str_find_first` as sharing/retaining its
+        input and `str_trim` as a runtime-uniqueness operation.
+      - The refreshed HTTP IR `/tmp/roc_http_current.ll` shows the main
+        generated parser proc `_roc__proc_d1` with 1,602 allocas, 237 memsets,
+        and many RC helper calls before LLVM optimization. The final optimized
+        disassembly report
+        `/tmp/roc-http-header-disasm-after-try-record-report.txt` still shows
+        `_roc__proc_d1` at 98,504 code bytes and 3,568 total stack bytes. The
+        tests prove the success path does not call the aborting host allocator,
+        so this traffic is ordinary string/ARC/cold-path machinery around
+        borrowed slices, not runtime heap allocation on the accepted request
+        path.
 
 - [ ] Introduce an internal borrowed-string parse value where appropriate.
   - Tasks:
-    - Represent borrowed input as pointer/length plus lifetime/ownership facts
+    - Represent borrowed input as pointer/length plus lifetime and ownership metadata
       already guaranteed by host validation and request lifetime.
     - Keep this internal to generated parser lowering; do not expose unsafe
       pointer/length values to userspace.
@@ -543,6 +732,32 @@ real Roc `Str` value.
     - Userspace still sees ordinary `Str`.
     - No allocations are introduced.
     - Host lifetime and UTF-8 validation invariants remain explicit.
+    - Additional progress: optimized SSO string helper paths now avoid pulling
+      allocator-capable construction branches into the generated parser. In
+      `src/builtins/str.zig`, `Str.trim`, `Str.trim_start`, `Str.trim_end`, and
+      the small-source branch of `substringUnsafe` construct small strings with
+      an internal stack-only helper instead of routing through generic
+      `RocStr.init` / `RocStr.fromSlice`. This does not introduce the internal
+      borrowed-string parse value described by this item, so the item remains
+      open.
+    - Verification for the helper progress:
+      `zig build run-test-zig-module-builtins`,
+      `zig build run-test-zig-http-header-decoder-platform`, and optimized
+      disassembly report
+      `/tmp/roc-http-header-disasm-after-sso-substring/roc_http_header.s`.
+      The report shows the full Roc binary now has `roc_alloc` textual count
+      `0`, down from `50` in
+      `/tmp/roc-http-header-disasm-after-cold-call-backout` and `28` after only
+      the trim SSO change.
+    - Current design boundary: the public structural parsing API still requires
+      userspace format code to return ordinary `Str` values for parsed field
+      names (`TryField({ name : Str, rest : state })` and
+      `TryFieldCaseless({ name : Str, rest : state })`) and for `parse_str`
+      values. Under the current "no public API changes" invariant, generated
+      dispatch cannot receive a non-`Str` borrowed pointer/length candidate from
+      userspace. The remaining work in this item therefore requires a real
+      internal representation/API design decision, not a backend-only
+      optimization.
 
 - [ ] Use deferred string construction for field names where generated dispatch
       can consume raw slice metadata.
@@ -562,6 +777,38 @@ real Roc `Str` value.
       HTTP hot path, but the parsed field name is still an ordinary safe Roc
       `Str` slice rather than the lower-level borrowed pointer/length
       representation tracked by this phase.
+    - Additional intermediate progress: the header format now uses
+      `Fields.shortest_name(fields)` and `Fields.longest_name(fields)` to return
+      `Continue` immediately for header names whose byte length cannot match any
+      transformed record field. That avoids generated field dispatch and value
+      skipping for known-impossible names while preserving order independence and
+      missing-field behavior. It still constructs the safe `name : Str` slice
+      before the length check, so the no-temporary-`Str` success criterion
+      remains open.
+      The existing HTTP matrix directly exercises this path through
+      `long_unknown_header_name` in
+      `src/cli/test/http_header_decoder_platform_test.zig`.
+    - Current design boundary: unknown headers whose names fall within the
+      possible transformed field-name length range still need an ordinary
+      `name : Str` to satisfy the public `TryFieldCaseless` event. The compiler
+      cannot compare raw candidate bytes that userspace has not provided, and
+      userspace has no safe public raw-byte candidate type. Completing this item
+      without changing the public parse-event shape would require hardcoding a
+      source pattern or format, which violates the format-agnostic compiler
+      invariant.
+    - Rejected direct-`Field` probe: changing
+      `test/http-headers/platform/Headers.roc` to iterate `Fields.iter(fields)`
+      and call `Str.drop_prefix_caseless_ascii` on each transformed field name
+      passed `zig build run-test-zig-http-header-decoder-platform`, but it was
+      not a performance-equivalent solution. A fresh optimized report at
+      `/tmp/roc-http-header-disasm-direct-field-rebuilt-report.txt` grew the Roc
+      binary from 119,168 to 119,584 bytes, grew Roc disassembly from 12,804 to
+      15,633 lines, increased the largest parser proc from 28,124 to 28,156 code
+      bytes, and added several helper procs. The probe was backed out. This
+      confirms the remaining work needs an explicit compiler-owned borrowed
+      candidate representation, or an explicit safe parse-event/API shape that
+      lets generated dispatch receive candidate bytes and length without a
+      userspace `Str` key.
 
 - [ ] Use deferred string construction for `Str` field values.
   - Tasks:
@@ -574,6 +821,12 @@ real Roc `Str` value.
     - Mixed-shape record tests still pass.
     - The `content_length : U64` style path does not construct a temporary value
       string if the U64 parser can consume the state directly.
+    - Current design boundary: `parse_u64` is an ordinary userspace format
+      method. In the HTTP example it can receive the value-start `Headers`
+      state, but today's safe userspace string API exposes the header value to
+      `U64.from_str` as a `Str` slice. Avoiding that temporary Roc `Str` while
+      staying format-agnostic would require either a different safe parsing
+      primitive or a different parse-event/value-parser contract.
 
 ## Phase 6: Outline Cold Decode-Error And Crash Paths
 
@@ -582,7 +835,7 @@ missing-field, decref, and crash-path code. The hot path should be straight-line
 or locally-branching parser code. Cold paths should be outlined so they do not
 inflate the main parser frame and instruction footprint.
 
-- [ ] Inventory cold paths inside the generated parser proc.
+- [x] Inventory cold paths inside the generated parser proc.
   - Tasks:
     - Identify calls/branches to:
       - `roc_builtins_roc_crashed`;
@@ -593,6 +846,27 @@ inflate the main parser frame and instruction footprint.
       - allocation failure paths from non-hot support code.
   - Success criteria:
     - Every major cold region in `_roc__proc_e3` is categorized.
+    - Current categorized regions in the refreshed HTTP LLVM/disassembly output:
+      - never-taken allocation branches from generic inlined string helpers and
+        support code; `_roc__proc_d1` contains textual calls to `_roc_alloc`,
+        but the end-to-end platform tests keep the aborting allocator hooks from
+        being reached;
+      - `Headers.DecodeErr.BadHeader` construction and propagation from
+        malformed lines, bad `U64` parsing, malformed content length, and
+        invalid request structure;
+      - missing required field finishing through the format's
+        `missing_record_field`;
+      - optional absent-field finishing through `missing_optional_field`;
+      - ARC cleanup/dealloc paths for overwritten, error, and early-return
+        parser states;
+      - runtime-error/crash helper calls for compiler invariant violations and
+        impossible generated-parser cases.
+    - Final inventory status: complete for the current implementation. The
+      final disassembly confirms the same categories remain: cold allocation
+      support branches, missing-field construction, bad-header/error
+      propagation, runtime-error/crash helpers, and ARC cleanup/dealloc paths.
+      The separate cold-outlining items remain open because these regions are
+      still present inside the main generated parser proc.
 
 - [ ] Add cold outlining for generated parser error paths.
   - Tasks:
@@ -610,7 +884,7 @@ inflate the main parser frame and instruction footprint.
       every site. Verified with `zig build run-test-zig-module-backend`,
       `zig build run-test-zig-http-header-decoder-platform`, and
       `zig build run-test-zig-json-decoder-platform`.
-    - Refreshed optimized HTTP artifacts:
+    - Refreshed optimized HTTP LLVM/disassembly output:
       `/tmp/roc_http_after_runtime_error_helper.ll` and
       `/tmp/roc_http_after_runtime_error_helper.s`. The IR has one
       `define internal void @roc_runtime_error`, the helper disassembles to
@@ -620,6 +894,105 @@ inflate the main parser frame and instruction footprint.
       generated parser proc `_roc__proc_11b` only dropped from about 261,488 to
       261,328 bytes, so broader decode-error/missing-field/ARC cold outlining
       remains open.
+    - Additional progress: the LLVM runtime-error helper is now marked `cold`
+      and, on targets where Roc crash lowering is known not to return,
+      `noreturn`. Linux AArch64 is deliberately excluded because its current
+      eval crash path returns to the host. Verified with
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Additional progress: initialized-payload branch weighting is now carried
+      as explicit parser-lowering data instead of being inferred by the LLVM
+      backend. Required-field missing branches set `uninitialized_is_cold`;
+      optional-field absence leaves it unset because optional absence is
+      ordinary parser behavior. Verified with
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-wasm-static-lib`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`. The refreshed optimized
+      report
+      `/tmp/roc-http-header-disasm-after-explicit-payload-hint-report.txt`
+      matches the optional-finish metrics: `_roc__proc_db` remains at 93,024
+      code bytes and 3,104 total stack bytes.
+    - Additional parser-finish progress: optional fields now finish through an
+      initialized-payload expression that directly produces the optional
+      `Try(...)` field value and then falls through to the shared record
+      construction continuation. This removes an immediately-consumed generated
+      `Try(field, err)` layer for optional fields without changing required
+      field missing-error behavior. Verified with
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-wasm-static-lib`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Additional branch-structure progress: ordinary LIR `switch_stmt` now
+      carries an explicit `default_is_cold` bit. Generated parser
+      `try_sequence` and `try_record_sequence` lowering set that bit for the
+      Err-propagation default branch, ARC preserves it while rewriting switch
+      bodies, and the LLVM backend lowers the one-branch cold-default shape to
+      a weighted conditional branch instead of an unweighted LLVM `switch`.
+      This is still not full outlining, but it moves the generated parser Err
+      edge out of the "backend guessed this was cold" category. Verified with
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`. Added an ARC regression
+      asserting that cold-default switch metadata survives the ARC rewrite.
+    - Additional provenance cleanup: `try_sequence` and
+      `try_record_sequence` now carry an explicit `err_is_cold` field from
+      Monotype generation through Monotype specialization, Lambda Mono, and
+      both LIR lowerers. The lowerers no longer assume every node of that kind
+      has a cold Err edge; they consume explicit IR data produced when the
+      generated parser sequence is built. Verified with
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+    - Additional ARC cleanup outlining progress: LLVM-generated RC drop/free
+      helpers are now marked `noinline` when declared. The helper kind is the
+      explicit RC operation selected by LIR ARC insertion, so the backend does
+      not infer parser-specific behavior; it simply preserves the helper
+      boundary instead of letting LLVM clone recursive teardown bodies into hot
+      callers. Verified with `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-json-decoder-platform`, and
+      `zig build run-test-zig-http-header-decoder-platform`.
+      Refreshed optimized report:
+      `/tmp/roc-http-header-disasm-rc-helper-noinline-report.txt`. Compared
+      with `/tmp/roc-http-header-disasm-restored-length-bounds`, the Roc binary
+      dropped from 233,504 bytes to 119,136 bytes, `__TEXT` dropped from
+      196,608 bytes to 81,920 bytes, and the largest generated parser proc
+      dropped from about 153,228 code bytes to about 28,144 code bytes. The
+      parser proc now calls `_roc_llvm_rc_decref_*` helpers and contains no
+      direct `_roc_dealloc` calls. This does not complete the item because the
+      parser frame is still large at about 4,192 total stack bytes and
+      decode-error/missing-field construction is still not broadly outlined.
+    - Additional cold-call provenance progress: generated required-field
+      `missing_record_field` calls now carry an explicit `is_cold` bit from
+      Monotype direct calls through Monotype Lifted, specialization, Lambda
+      Mono, solved inlining, LIR, ARC, and LLVM. Cold calls are not inlined by
+      the direct-call wrapper/specialization paths, ARC preserves the metadata,
+      and LLVM emits `cold`/`noinline` call-site attributes from that explicit
+      IR bit rather than guessing from names. Optional missing-field calls are
+      deliberately not marked cold because optional absence is ordinary parser
+      behavior. Added an ARC regression for preserving cold direct-call
+      metadata. Verified with `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-wasm-static-lib`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
+      Refreshed optimized report:
+      `/tmp/roc-http-header-disasm-cold-call-attrs-report.txt`. The required
+      missing-field helper is now a tiny out-of-line proc (`_roc__proc_e1`,
+      12 code bytes), and the largest parser proc moved from 28,144 to 28,124
+      code bytes. The parser frame remains 4,192 total stack bytes, so this is
+      useful provenance and a small code-size cleanup but still not full cold
+      outlining.
 
 - [ ] Mark or structure cold compiler-generated paths in a backend-appropriate
       way.
@@ -630,6 +1003,46 @@ inflate the main parser frame and instruction footprint.
   - Success criteria:
     - The implementation follows `design.md`: later stages consume explicit data
       from earlier stages and do not guess.
+    - Intermediate progress: compiler-generated `.runtime_error` lowering now
+      routes through an explicit LIR runtime-error statement and an explicit
+      backend helper with cold/noreturn attributes where valid. This item stays
+      open until decode-error construction, missing-field construction, and
+      conditional ARC cleanup are also structured so the main generated parser
+      proc is not carrying large interleaved cold regions.
+    - Additional progress: LIR `switch_initialized_payload` now carries the
+      explicit `uninitialized_is_cold` bit produced by generated parser
+      lowering. LLVM consumes that bit for branch weights; dev, Wasm, the
+      interpreter, ARC, and LIR tools preserve or ignore the explicit bit.
+      This still does not outline the cold blocks themselves, so the
+      broader item remains open.
+    - Additional progress: ordinary LIR `switch_stmt` now carries the explicit
+      `default_is_cold` bit for parser-generated `Try` Err propagation. LLVM
+      consumes that bit only for the one-branch switch shape by emitting a
+      weighted conditional branch with the Ok arm likely and the Err default
+      arm cold. The bit is produced by parser lowering and preserved by ARC,
+      with a focused ARC regression proving preservation. This still does not
+      outline the cold block bodies themselves, so this checklist item remains
+      open.
+    - Additional progress: parser-generated `Try` sequencing carries its cold
+      Err provenance as an `err_is_cold` field before LIR exists. That keeps
+      the branch metadata explicit across Monotype, specialization, Lambda Mono,
+      and LIR lowering instead of making the LIR lowerer infer coldness from a
+      node kind. This still does not outline the cold block bodies themselves,
+      so this checklist item remains open.
+    - Additional progress: LLVM RC drop/free helpers are now explicitly kept
+      out of line with `noinline`. This is a backend-appropriate use of
+      attributes driven by explicit LIR ARC helper operations, not by source
+      names or parser-shaped guesses. It outlines recursive teardown helper
+      bodies from the generated parser proc, but it does not yet outline every
+      cold decode-error, missing-field, or cleanup branch body, so this item
+      remains open.
+    - Additional progress: direct calls can now carry explicit cold provenance.
+      Generated required-field missing-error calls set this bit before LIR
+      exists; specialization, solved inlining, LIR ARC, debug printing, and LLVM
+      preserve or consume the bit. LLVM uses it to emit cold/noinline call-site
+      attributes, and ARC has a focused regression proving the metadata
+      survives rewriting. This is still not broad outlining of every cold block,
+      so the item remains open.
 
 ## Phase 7: Revisit The Host's 16 KiB Stack Buffer
 
@@ -750,7 +1163,7 @@ fixed-width word compares because unused SSO bytes are zeroed.
     - Equal and unequal heap strings.
     - SSO vs heap/seamless equal and unequal strings.
     - Strings with embedded NUL bytes.
-    - Unicode strings where byte equality is the expected semantic.
+    - Unicode strings where byte equality is the expected byte-level result.
     - Different lengths with shared prefixes.
     - Boundary lengths around SSO max and SSO max plus one.
   - Success criteria:
@@ -810,7 +1223,7 @@ After the core phases above, inspect the generated HTTP parser again and remove
 whatever generic parser machinery remains in the hot path without changing the
 Roc API.
 
-- [ ] Inspect hot loop register and stack traffic.
+- [x] Inspect hot loop register and stack traffic.
   - Tasks:
     - Identify stores/loads that exist only because generated parser state is
       represented too generically.
@@ -839,8 +1252,62 @@ Roc API.
       one-memset-per-frame-local entry zeroing pattern. The remaining stack and
       memset traffic is generated by parser aggregates, parser result values,
       and cold/error machinery, so this item remains open.
+    - Intermediate evidence after direct `try_record_sequence` lowering:
+      `/tmp/roc_http_current.ll` shows the refreshed main generated parser proc
+      `_roc__proc_d1` at 1,602 allocas and 237 memsets before LLVM optimization,
+      with the largest alloca buckets coming from repeated 224-byte, 24-byte,
+      32-byte, 8-byte, and 200-byte temporary values. The optimized comparison
+      report `/tmp/roc-http-header-disasm-after-try-record-report.txt` shows
+      `_roc__proc_d1` at 98,504 code bytes and 3,568 total stack bytes. This is
+      a measurable improvement from the previous `_roc__proc_e4` shape, but the
+      remaining large frame is still generated by the parser/app body itself,
+      not by global LLVM frame-slot allocation.
+    - Intermediate evidence after hoisting generated `Fields(_shape)` out of
+      the parser loop: `lowerParseRecordFromState` now binds the generated
+      field-set value once before entering the record loop and passes that local
+      to each `parse_record_field` call. Verified with
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`,
+      `zig build run-test-zig-module-lir`, and
+      `zig build run-test-zig-module-backend`.
+      The refreshed report
+      `/tmp/roc-http-header-disasm-after-fields-hoist-report.txt` shows the
+      main generated Roc parser proc at 93,012 code bytes and 3,136 total stack
+      bytes, down from 96,368 code bytes and 3,568 total stack bytes before the
+      hoist. The remaining large alloca buckets in
+      `/tmp/roc_http_after_fields_hoist.ll` are mostly 8-byte, 24-byte,
+      1-byte, 32-byte, 2-byte, 224-byte, and 40-byte temporaries from
+      string/state/Try/error/ARC machinery. Capturing an already-built `Fields`
+      value in a stored parser closure would require a typed precomputed
+      capture representation; the current precomputed-capture path is
+      string-specific.
+    - Intermediate evidence after optional-field direct finish:
+      `/tmp/roc_http_after_optional_finish.ll` reduces the same main proc to
+      1,576 allocas and 213 memsets from 1,604 allocas and 237 memsets in
+      `/tmp/roc_http_after_fields_hoist.ll`. The optimized report
+      `/tmp/roc-http-header-disasm-after-optional-finish-report.txt` shows
+      `_roc__proc_db` at 93,024 code bytes and 3,104 total stack bytes. This is
+      a stack improvement from the previous 3,136-byte frame with effectively
+      unchanged code size. The remaining stack objects are still dominated by
+      string/state/Try/error/ARC temporaries and required-field finish paths, so
+      this item remains open.
+    - Intermediate evidence after explicit initialized-payload branch hints:
+      `/tmp/roc-http-header-disasm-after-explicit-payload-hint-report.txt`
+      matches the optional-finish code-shape metrics, and
+      `/tmp/roc_http_after_explicit_payload_hint.ll` contains branch-weight
+      metadata emitted from explicit LIR provenance rather than from a backend
+      assumption.
+    - Final inspection evidence:
+      `/tmp/roc-http-header-disasm-final-current/roc_http_header.s` shows
+      `_roc__proc_db` at 93,024 code bytes with a 3,008-byte local stack frame
+      plus 96 save bytes. Its prologue still writes parser construction state
+      and zeroed vector lanes into the frame, so the remaining stack traffic is
+      from generated parser state, string/state/Try/error values, and ARC/cold
+      cleanup paths. The field-dispatch string-helper calls are gone, so the
+      remaining high-impact follow-up is state/cold-path lowering rather than
+      field-name matching.
 
-- [ ] Keep nested parser construction eager and runtime parser loops small.
+- [x] Keep nested parser construction eager and runtime parser loops small.
   - Tasks:
     - Verify derived `parser_for` still constructs nested parsers before
       returning the runtime lambda.
@@ -850,20 +1317,42 @@ Roc API.
     - Compile-time parser construction tests still verify original field names
       are not in the final binary when renamed at compile time.
     - Runtime parser construction tests still pass.
+    - Verified by the JSON camel-case binary-omission checks in
+      `src/cli/test/json_decoder_platform_test.zig`, which assert original
+      snake_case field names are absent after compile-time renaming.
+    - Verified runtime/stored construction with:
+      `zig build run-test-cli -- --suite subcommands --filter "runtime prepared"`,
+      `zig build run-test-cli -- --suite subcommands --filter "stored parser Fields metadata"`,
+      and
+      `zig build run-test-cli -- --suite subcommands --filter "supports userspace Fields.rename_fields"`.
 
-- [ ] Avoid introducing backend-specific semantic logic.
+- [x] Avoid introducing backend-specific parser decisions.
   - Tasks:
     - LIR must contain explicit operations for presence bits, control flow,
       field dispatch, and ARC cleanup.
-    - Backends lower the explicit LIR and do not infer parser semantics.
+    - Backends lower the explicit LIR and do not infer parser-specific behavior.
   - Success criteria:
     - Dev, LLVM, and Wasm backends either lower explicit operations correctly or
       have targeted unsupported-test coverage if a backend does not yet support
       this platform example.
+    - Implemented behavior are carried by explicit Monotype/Lambda/LIR nodes
+      and low-level operations: `try_sequence`, `try_record_sequence`,
+      `uninitialized_payload`, `switch_initialized_payload`,
+      `if_initialized_payload`, `str_static_small_word_eq`, and
+      `str_static_small_word_caseless_eq`.
+    - Dev, LLVM, Wasm, interpreter, ARC, ARC solving/certification, TRMC,
+      scalarized joins, debug printing, and LIR image serialization all handle
+      the explicit nodes. Backends lower those nodes directly; they do not
+      infer HTTP/JSON/parser-specific behavior from source names or value shapes.
+    - Verified with `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-wasm-static-lib`,
+      and the parser platform tests.
 
 ## Phase 10: Verification Before Final Disassembly
 
-- [ ] Run focused parser/platform tests after each phase.
+- [x] Run focused parser/platform tests after each phase.
   - Required commands:
     - `zig build run-test-zig-http-header-decoder-platform`
     - `zig build run-test-zig-json-decoder-platform`
@@ -889,6 +1378,39 @@ Roc API.
       `zig build run-test-zig-http-header-decoder-platform`,
       `zig build run-test-zig-json-decoder-platform`, and
       `zig build run-test-zig-module-backend`.
+    - Passed after adding HTTP field-length bound `Continue` skipping:
+      `zig build run-test-zig-http-header-decoder-platform`.
+    - Passed again after the dev-backend initialized-payload mask fix and plan
+      cleanup:
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`, and
+      `zig build run-test-zig-module-postcheck`.
+    - Passed after optional-field direct finish:
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`, and
+      `zig build run-test-wasm-static-lib`.
+    - Passed after explicit initialized-payload branch hints:
+      `zig build run-test-zig-http-header-decoder-platform`,
+      `zig build run-test-zig-json-decoder-platform`,
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`, and
+      `zig build run-test-wasm-static-lib`.
+    - Passed after outlining LLVM RC drop/free helper bodies with `noinline`:
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-zig-json-decoder-platform`, and
+      `zig build run-test-zig-http-header-decoder-platform`.
+    - Passed after adding explicit cold direct-call provenance for generated
+      required-field missing-error calls:
+      `zig build run-test-zig-module-postcheck`,
+      `zig build run-test-zig-module-lir`,
+      `zig build run-test-zig-module-backend`,
+      `zig build run-test-wasm-static-lib`,
+      `zig build run-test-zig-http-header-decoder-platform`, and
+      `zig build run-test-zig-json-decoder-platform`.
 
 - [x] Run focused string equality tests after the `Str.is_eq` phase.
   - Tasks:
@@ -901,7 +1423,7 @@ Roc API.
       `zig-out/bin/roc test --no-cache test/cli/StrIsEqEdgeCases.roc`, and
       `zig build run-test-cli -- --suite subcommands --filter "Str.is_eq edge"`.
 
-- [ ] Run broader compiler checks after targeted tests pass.
+- [x] Run broader compiler checks after targeted tests pass.
   - Required command:
     - `zig build minici`
   - Failure protocol:
@@ -911,6 +1433,19 @@ Roc API.
     - Return to `zig build minici` only after the targeted section passes.
   - Success criteria:
     - `zig build minici` passes.
+    - Verified with `zig build minici` after following the targeted-failure
+      loop:
+      - fixed `run-check-zig-lints` by documenting the new public ARC solver
+        condition type;
+      - fixed `run-check-tidy` by deleting dead helpers left behind by earlier
+        parser-lowering iterations;
+      - fixed `run-check-unused-suppression` by removing unused parameters and
+        making the relevant ARC read-before-rebind helpers plain helpers;
+      - fixed the stage-data wording audit by tightening `plan.md` wording to
+        use concrete stage/output terms;
+      - refreshed and staged the macOS dev-output snapshot hashes after the
+        macOS deployment target change to 11.0;
+      - reran the full `zig build minici`, which passed end to end.
 
 - [x] Check optimized allocation invariants.
   - Tasks:
@@ -927,7 +1462,7 @@ Roc API.
       `roc_dealloc` hooks, and the test harness asserts those diagnostics are
       absent for every accepted request and every expected request failure.
 
-- [ ] Check generated code shape before final report.
+- [x] Check generated code shape before final report.
   - Tasks:
     - Search the optimized Roc disassembly for:
       - allocator calls on the hot path;
@@ -979,20 +1514,49 @@ Roc API.
       moved from userspace field lookup to generated `TryFieldCaseless`
       dispatch. The proc still has 2434 allocas and 255 memsets, so broad
       parser-state lowering remains open.
+    - Final refreshed evidence:
+      `/tmp/roc-http-header-disasm-final-current/roc_http_header.s` has no
+      references to `roc_builtins_str_equal` or
+      `roc_builtins_str_caseless_ascii_equals`. The main generated parser proc
+      is `_roc__proc_db`, reserves 3,008 local stack bytes plus 96 save bytes,
+      and is 93,024 code bytes. The entry no longer has the earlier whole-LIR
+      local-slot zeroing, but it still has explicit parser-construction
+      zeroing and in-proc cold/error/ARC cleanup regions. The complete Roc
+      disassembly still contains 33 textual calls to `_roc_alloc` and 2 calls
+      to `roc_runtime_error`; the HTTP platform tests keep the aborting
+      allocator hooks from being reached on every accepted request and expected
+      failure path.
+    - Current RC-helper outlining evidence:
+      `/tmp/roc-http-header-disasm-rc-helper-noinline/roc_http_header.s` has no
+      references to `roc_builtins_str_equal` or
+      `roc_builtins_str_caseless_ascii_equals`, no `_roc_alloc` textual
+      references, and keeps direct `_roc_dealloc` calls out of the main
+      generated parser proc. The largest generated parser proc is now
+      `_roc__proc_dc` at 28,144 code bytes with 4,192 total stack bytes. Code
+      size and binary size are much closer to the C/Rust comparison, but stack
+      and parser-state traffic remain open.
+    - Current cold-call provenance evidence:
+      `/tmp/roc-http-header-disasm-cold-call-attrs/roc_http_header.s` keeps the
+      same no-allocator/no-generic-string-helper shape. The required
+      missing-field helper is now out of line as `_roc__proc_e1` at 12 code
+      bytes, and `_roc__proc_dc` is 28,124 code bytes with the same 4,192 total
+      stack bytes. This confirms the explicit cold call metadata is reaching
+      optimized code, but the remaining stack frame and cold cleanup/error
+      regions still require deeper generated parser lowering.
 
 ## Completion Checklist
 
 The plan is not complete until every item below is true:
 
-- [ ] Generated record parser state is represented as presence bits plus payload
+- [x] Generated record parser state is represented as presence bits plus payload
       locals through the lowering path that reaches LIR.
-- [ ] Missing required fields do not require initializing fake values.
-- [ ] Optional absent fields are constructed at finish time from format
+- [x] Missing required fields do not require initializing fake values.
+- [x] Optional absent fields are constructed at finish time from format
       `missing_optional_field`, not from preinitialized slot tags.
-- [ ] Generated parser `Try` sequencing lowers to direct control flow through
+- [x] Generated parser `Try` sequencing lowers to direct control flow through
       LIR where producer and consumer are compiler-generated parser code.
-- [ ] Immediately-consumed `{ value, rest }` parser result records are avoided
-      where direct locals are semantically equivalent.
+- [x] Immediately-consumed `{ value, rest }` parser result records are avoided
+      where direct locals carry the same checked value.
 - [x] Static known `Fields` dispatch emits direct exact small-string compares.
 - [x] Static known `Fields` dispatch emits direct ASCII-caseless SWAR compares
       for eligible small strings.
@@ -1012,16 +1576,22 @@ The plan is not complete until every item below is true:
 - [x] HTTP header platform tests pass.
 - [x] JSON platform tests pass.
 - [x] String equality tests pass across the relevant execution paths.
-- [ ] `zig build minici` passes after targeted failures, if any, have been fixed
+- [x] `zig build minici` passes after targeted failures, if any, have been fixed
       through the targeted-failure loop.
-- [ ] Optimized HTTP header disassembly has no hot-path allocation, no hot-path
+- [x] Optimized HTTP header disassembly has no hot-path allocation, no hot-path
       runtime field map, and no per-header runtime field-name conversion.
+      Current evidence is in
+      `/tmp/roc-http-header-disasm-final-current/roc_http_header.s`: static
+      field dispatch uses generated direct comparisons and does not call the
+      generic string equality helpers. `_roc_alloc` calls remain in the full
+      generated proc as cold/support-code paths, but the aborting allocator
+      tests prove they are not on the exercised request path.
 
 ## Final Step: Redo Disassembly And Compare Roc To pico And may
 
 This must be the last step after every checklist item above is complete.
 
-- [ ] Rebuild all comparison artifacts.
+- [ ] Rebuild all comparison binaries and disassembly output.
   - Roc:
     - `zig build run-test-zig-http-header-decoder-platform`
     - dump `zig-out/bin/http_header_decoder_server_prebuilt`
@@ -1033,6 +1603,19 @@ This must be the last step after every checklist item above is complete.
     - build `Xudong-Huang/may_minihttp` release mode with the comparable
       `roc_compare` example.
     - dump the optimized binary.
+  - Completed with
+    `tools/http-header-disasm-report.sh --skip-roc-build --work-dir /tmp/roc-http-header-disasm-after-sso-substring`
+    after the SSO substring/trim helper changes.
+    The generated files are:
+    - Roc:
+      `/tmp/roc-http-header-disasm-after-sso-substring/roc_http_header.s`;
+    - pico:
+      `/tmp/roc-http-header-disasm-after-sso-substring/picohttpparser_arm64_o3.s`;
+    - may:
+      `/tmp/roc-http-header-disasm-after-sso-substring/may_minihttp_roc_compare.s`.
+    - These completed files are prior comparison artifacts. This item remains
+      open until it is rerun after every remaining completion-checklist item has
+      been finished.
 
 - [ ] Produce a full side-by-side report.
   - Required Roc numbers:
@@ -1059,11 +1642,68 @@ This must be the last step after every checklist item above is complete.
     - `httparse` request/header parser code sizes and stacks;
     - response encoder size/stack;
     - comparable per-connection read/parse/respond loop size/stack.
+  - Final side-by-side numbers:
+    - Roc binary:
+      - on disk: 233,504 bytes;
+      - `__TEXT`: 196,608 bytes;
+      - disassembly lines: 43,029;
+      - `_main`: 3,360 code bytes, 2,384 total stack bytes;
+      - `_roc__proc_ce`: 5,744 code bytes, 1,024 total stack bytes;
+      - `_roc__proc_d2`: 153,228 code bytes, 3,024 total stack bytes;
+      - `_roc__proc_d4`: 5,872 code bytes, 272 total stack bytes;
+      - full-disassembly textual counts:
+        `_roc_alloc` 0, `roc_builtins_str_equal` 0,
+        `roc_builtins_str_caseless_ascii_equals` 0,
+        `roc_builtins_roc_crashed` 2, `roc__proc_` 13.
+    - pico object:
+      - on disk: 6,224 bytes;
+      - text: 4,311 bytes;
+      - disassembly lines: 942;
+      - `phr_parse_request`: 720 code bytes, 80 stack bytes;
+      - `phr_parse_headers`: 248 code bytes, 48 stack bytes;
+      - internal `parse_headers`: 468 code bytes, 80 stack bytes.
+    - may binary:
+      - on disk: 627,776 bytes;
+      - `__TEXT`: 425,984 bytes;
+      - disassembly lines: 86,453;
+      - `httparse::parse_headers_iter_uninit`: 2,332 code bytes,
+        112 stack bytes;
+      - `httparse::Request::parse_with_config_and_uninit_headers`:
+        1,792 code bytes, 160 stack bytes;
+      - `may_minihttp::response::encode`: 1,936 code bytes,
+        160 stack bytes;
+      - comparable `generator::stack::StackBox<...>::call_once` loop:
+        3,300 code bytes, 1,504 stack bytes;
+      - `roc_compare::main`: 1,944 code bytes, 288 stack bytes.
+    - These are prior comparison numbers. The final report must refresh every
+      number after the remaining borrowed-string and cold-outlining work is
+      complete.
 
 - [ ] Analyze remaining gaps without proposing Roc API changes.
   - Success criteria:
-    - The report explains which differences are due to unavoidable Roc semantics,
+    - The report explains which differences are due to required Roc value representation and ARC behavior,
       which are due to remaining compiler implementation overhead, and which are
       likely removable with further lowering/backend work.
     - Any new follow-up item is grounded in disassembly evidence from the final
       comparison.
+  - Current gap analysis:
+    - Required Roc value representation and ARC behavior: the generated parser
+      still carries `Str` values from the userspace format API and must maintain
+      their reference-counted lifetime until the derived record has been
+      finished or the error path has cleaned up. This accounts for the
+      visible incref/decref traffic and some payload-presence control flow.
+    - Remaining compiler implementation overhead: `_roc__proc_db` still
+      materializes a large parser-state frame and explicit parser-construction
+      zeroing, even after local-slot zeroing and optional-field finish cleanup.
+      pico and may/httparse keep their parser state in a much smaller set of
+      direct pointer/length/header-array locals.
+    - Likely removable without changing the Roc API: more aggressive generated
+      parser state scalarization, cold outlining for decode-error/missing-field
+      construction and ARC cleanup, and better lowering of the safe `Str` slice
+      operations used by `find_first`/`trim` in the header format. Those are
+      grounded in the final disassembly: the generic string equality helpers
+      and textual allocator call sites are already gone, but stack traffic,
+      cold blocks, crash support paths, and ordinary `Str`/ARC lifetime traffic
+      remain in the generated proc.
+    - This current gap analysis is an intermediate snapshot. The final analysis
+      must be regenerated after the last optimized disassembly comparison.

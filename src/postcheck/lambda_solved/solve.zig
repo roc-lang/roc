@@ -378,6 +378,8 @@ const Solver = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .uninitialized,
+            .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
@@ -488,6 +490,48 @@ const Solver = struct {
                     _ = try self.expectExpr(branch.body, expected);
                 }
                 _ = try self.expectExpr(if_.final_else, expected);
+            },
+            .if_initialized_payload => |payload_switch| {
+                _ = try self.inferExpr(payload_switch.cond);
+                _ = self.localTy(payload_switch.payload);
+                _ = try self.expectExpr(payload_switch.initialized, expected);
+                _ = try self.expectExpr(payload_switch.uninitialized, expected);
+            },
+            .try_sequence => |sequence| {
+                const try_ty = try self.inferExpr(sequence.try_expr);
+                const tags = switch (try self.shapeContent(try_ty)) {
+                    .tag_union => |span| self.program.types.tagSpan(span),
+                    else => Common.invariant("try_sequence input was not a Try tag union"),
+                };
+                var ok_ty: ?Type.TypeVarId = null;
+                for (tags) |tag| {
+                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    const payloads = self.program.types.span(tag.payloads);
+                    if (payloads.len != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
+                    ok_ty = payloads[0];
+                    break;
+                }
+                try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
+                _ = try self.expectExpr(sequence.ok_body, expected);
+            },
+            .try_record_sequence => |sequence| {
+                const try_ty = try self.inferExpr(sequence.try_expr);
+                const tags = switch (try self.shapeContent(try_ty)) {
+                    .tag_union => |span| self.program.types.tagSpan(span),
+                    else => Common.invariant("try_record_sequence input was not a Try tag union"),
+                };
+                var ok_ty: ?Type.TypeVarId = null;
+                for (tags) |tag| {
+                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    const payloads = self.program.types.span(tag.payloads);
+                    if (payloads.len != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
+                    ok_ty = payloads[0];
+                    break;
+                }
+                const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
+                try self.unify(self.localTy(sequence.value_local), try self.recordField(ok_record_ty, sequence.value_field));
+                try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
+                _ = try self.expectExpr(sequence.ok_body, expected);
             },
             .block => |block| {
                 for (self.program.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);

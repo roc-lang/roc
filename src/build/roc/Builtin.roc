@@ -195,6 +195,28 @@ Builtin :: [].{
 		## ```
 		drop_prefix : Str, Str -> Str
 
+		## Drops the given prefix from the start of a [Str], comparing ASCII
+		## letters without regard to capitalization. Non-ASCII bytes must match
+		## exactly.
+		##
+		## The returned [Str] is a slice of the original string. If the prefix is
+		## not found, returns `Err(NotFound)`.
+		##
+		## ```roc
+		## expect "Cache-Control: max-age=0".drop_prefix_caseless_ascii("cache-control") == Ok(": max-age=0")
+		## expect "X-Api-Key".drop_prefix_caseless_ascii("x_api_key") == Err(NotFound)
+		## ```
+		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound])
+		drop_prefix_caseless_ascii = |source, prefix| {
+			split = str_drop_prefix_caseless_ascii_raw(source, prefix)
+
+			if split.found {
+				Ok(split.after)
+			} else {
+				Err(NotFound)
+			}
+		}
+
 		## Drops the given suffix [Str] from the end of a [Str]
 		## If the suffix is not found, returns the original string.
 		##
@@ -9660,6 +9682,10 @@ list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler. Returns string slices into the source string.
 str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+
+# Implemented by the compiler. Returns a string slice after the prefix when the
+# source starts with the prefix using ASCII-caseless comparison.
+str_drop_prefix_caseless_ascii_raw : Str, Str -> { after : Str, found : Bool }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

@@ -232,6 +232,10 @@ pub const ProcCallee = union(enum) {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
+    /// This direct call is on an explicitly generated cold path. Later stages
+    /// may use this to avoid inlining and to attach backend cold-call metadata;
+    /// they must not infer coldness from callee names or source paths.
+    is_cold: bool = false,
 };
 
 /// Low-level builtin call.
@@ -251,6 +255,46 @@ pub const MatchExpr = struct {
 pub const IfExpr = struct {
     branches: Span(IfBranch),
     final_else: ExprId,
+};
+
+/// Compiler-generated branch that ties an ordinary presence condition to the
+/// payload local whose initialization that condition represents. The
+/// initialized branch may read `payload`; the uninitialized branch must not.
+pub const InitializedPayloadSwitch = struct {
+    cond: ExprId,
+    cond_mask: u64 = 1,
+    payload: LocalId,
+    uninitialized_is_cold: bool = false,
+    initialized: ExprId,
+    uninitialized: ExprId,
+};
+
+/// Compiler-generated Try sequencing. This preserves ordinary `Try` values in
+/// user code while giving LIR lowering an explicit producer/consumer edge for
+/// `Ok` continuation and `Err` propagation.
+pub const TrySequence = struct {
+    try_expr: ExprId,
+    ok_local: LocalId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
+};
+
+/// Compiler-generated Try sequencing whose Ok payload is an immediately
+/// destructured record. LIR lowering can bind the requested record fields
+/// directly from the Ok tag payload instead of first materializing the whole
+/// payload record.
+pub const TryRecordSequence = struct {
+    try_expr: ExprId,
+    value_local: LocalId,
+    value_field: names.RecordFieldNameId,
+    rest_local: LocalId,
+    rest_field: names.RecordFieldNameId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
 };
 
 /// Block expression with statements and a final expression.
@@ -340,6 +384,18 @@ pub const ExprData = union(enum) {
     },
     match_: MatchExpr,
     if_: IfExpr,
+    /// Compiler-generated uninitialized value marker. LIR lowering may leave
+    /// the target local unbound instead of assigning a sentinel. This must only
+    /// be generated in contexts that are dominated by an initialized-payload
+    /// check before the value is read.
+    uninitialized,
+    uninitialized_payload: struct {
+        condition: LocalId,
+        mask: u64 = 1,
+    },
+    if_initialized_payload: InitializedPayloadSwitch,
+    try_sequence: TrySequence,
+    try_record_sequence: TryRecordSequence,
     block: BlockExpr,
     loop_: LoopExpr,
     break_: ?ExprId,

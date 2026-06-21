@@ -334,6 +334,8 @@ const Lifter = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .uninitialized,
+            .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
             .fn_ref,
@@ -375,6 +377,7 @@ const Lifter = struct {
                 expr.data = .{ .call_proc = .{
                     .callee = .{ .lifted = fn_id },
                     .args = call.args,
+                    .is_cold = call.is_cold,
                 } };
             },
             .low_level => |call| for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg),
@@ -397,6 +400,19 @@ const Lifter = struct {
                     try self.rewriteExpr(branch.body);
                 }
                 try self.rewriteExpr(if_.final_else);
+            },
+            .if_initialized_payload => |payload_switch| {
+                try self.rewriteExpr(payload_switch.cond);
+                try self.rewriteExpr(payload_switch.initialized);
+                try self.rewriteExpr(payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                try self.rewriteExpr(sequence.try_expr);
+                try self.rewriteExpr(sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                try self.rewriteExpr(sequence.try_expr);
+                try self.rewriteExpr(sequence.ok_body);
             },
             .block => |block| {
                 for (self.output.stmtSpan(block.statements)) |stmt| try self.rewriteStmt(stmt);
@@ -593,6 +609,8 @@ const CaptureSet = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .uninitialized,
+            .uninitialized_payload,
             .def_ref,
             .fn_ref,
             .crash,
@@ -661,6 +679,26 @@ const CaptureSet = struct {
                     try self.collectExpr(branch.body, bound);
                 }
                 try self.collectExpr(if_.final_else, bound);
+            },
+            .if_initialized_payload => |payload_switch| {
+                try self.collectExpr(payload_switch.cond, bound);
+                try self.addIfFree(payload_switch.payload, bound);
+                try self.collectExpr(payload_switch.initialized, bound);
+                try self.collectExpr(payload_switch.uninitialized, bound);
+            },
+            .try_sequence => |sequence| {
+                try self.collectExpr(sequence.try_expr, bound);
+                try bound.put(input, sequence.ok_local);
+                try self.collectExpr(sequence.ok_body, bound);
+                _ = bound.remove(input, sequence.ok_local);
+            },
+            .try_record_sequence => |sequence| {
+                try self.collectExpr(sequence.try_expr, bound);
+                try bound.put(input, sequence.value_local);
+                try bound.put(input, sequence.rest_local);
+                try self.collectExpr(sequence.ok_body, bound);
+                _ = bound.remove(input, sequence.rest_local);
+                _ = bound.remove(input, sequence.value_local);
             },
             .block => |block| {
                 var added = std.ArrayList(Mono.LocalId).empty;

@@ -31,6 +31,12 @@ pub const StrFindFirstLayout = extern struct {
     found_offset: u32,
 };
 
+/// Field offsets for the dev backend's `Str.drop_prefix_caseless_ascii` result copy.
+pub const StrDropPrefixCaselessAsciiLayout = extern struct {
+    after_offset: u32,
+    found_offset: u32,
+};
+
 // Re-export commonly used functions
 pub const rcNone = utils.rcNone;
 pub const copy_fallback = list.copy_fallback;
@@ -204,6 +210,17 @@ pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usiz
 
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.before_offset))).* = result.before;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
+}
+
+/// Wrapper: strDropPrefixCaselessAscii(RocStr, RocStr, *RocOps) -> { after, found }
+pub fn roc_builtins_str_drop_prefix_caseless_ascii(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrDropPrefixCaselessAsciiLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = str.strDropPrefixCaselessAscii(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
     @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
 }
 

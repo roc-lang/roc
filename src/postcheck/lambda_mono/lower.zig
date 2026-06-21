@@ -479,6 +479,11 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .uninitialized => .uninitialized,
+            .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
+                .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys.items[@intFromEnum(payload.condition)])),
+                .mask = payload.mask,
+            } },
             .list => |items| .{ .list = try self.lowerExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
             .record => |fields| .{ .record = try self.lowerFieldExprSpan(fields) },
@@ -504,6 +509,7 @@ const Lowerer = struct {
                 break :blk .{ .direct_call = .{
                     .target = try self.ensureOwnFnSpec(callee, .finite),
                     .args = try self.lowerDirectCallArgs(callee, call.args),
+                    .is_cold = call.is_cold,
                 } };
             },
             .low_level => |call| .{ .low_level = .{
@@ -539,6 +545,29 @@ const Lowerer = struct {
             .if_ => |if_| .{ .if_ = .{
                 .branches = try self.lowerIfBranchSpan(if_.branches),
                 .final_else = try self.lowerExpr(if_.final_else),
+            } },
+            .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
+                .cond = try self.lowerExpr(payload_switch.cond),
+                .cond_mask = payload_switch.cond_mask,
+                .payload = try self.localFor(payload_switch.payload, try self.lowerType(self.solved.local_tys.items[@intFromEnum(payload_switch.payload)])),
+                .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
+                .initialized = try self.lowerExpr(payload_switch.initialized),
+                .uninitialized = try self.lowerExpr(payload_switch.uninitialized),
+            } },
+            .try_sequence => |sequence| .{ .try_sequence = .{
+                .try_expr = try self.lowerExpr(sequence.try_expr),
+                .ok_local = try self.localFor(sequence.ok_local, try self.lowerType(self.solved.local_tys.items[@intFromEnum(sequence.ok_local)])),
+                .err_is_cold = sequence.err_is_cold,
+                .ok_body = try self.lowerExpr(sequence.ok_body),
+            } },
+            .try_record_sequence => |sequence| .{ .try_record_sequence = .{
+                .try_expr = try self.lowerExpr(sequence.try_expr),
+                .value_local = try self.localFor(sequence.value_local, try self.lowerType(self.solved.local_tys.items[@intFromEnum(sequence.value_local)])),
+                .value_field = sequence.value_field,
+                .rest_local = try self.localFor(sequence.rest_local, try self.lowerType(self.solved.local_tys.items[@intFromEnum(sequence.rest_local)])),
+                .rest_field = sequence.rest_field,
+                .err_is_cold = sequence.err_is_cold,
+                .ok_body = try self.lowerExpr(sequence.ok_body),
             } },
             .block => |block| .{ .block = .{
                 .statements = try self.lowerStmtSpan(block.statements),

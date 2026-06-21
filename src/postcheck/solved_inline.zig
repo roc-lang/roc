@@ -196,12 +196,12 @@ const DirectCallWrapperAnalyzer = struct {
     fn directCallCalleeFromBody(self: *const DirectCallWrapperAnalyzer, expr_id: Lifted.ExprId) ?Lifted.FnId {
         const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
-            .call_proc => |call| Lifted.callProcCallee(call),
+            .call_proc => |call| if (call.is_cold) null else Lifted.callProcCallee(call),
             .block => |block| blk: {
                 if (self.solved.lifted.stmtSpan(block.statements).len != 0) return null;
                 const final_expr = self.solved.lifted.exprs.items[@intFromEnum(block.final_expr)];
                 break :blk switch (final_expr.data) {
-                    .call_proc => |call| Lifted.callProcCallee(call),
+                    .call_proc => |call| if (call.is_cold) null else Lifted.callProcCallee(call),
                     else => null,
                 };
             },

@@ -11874,7 +11874,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-
         dispatch_resolution: while (true) {
             if (dispatcher_content == .err) {
                 // If the root type is an error, then skip constraint checking
@@ -12423,6 +12422,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 break :dispatch_resolution;
             } else if (dispatcher_content == .structure and
                 (dispatcher_content.structure == .record or
+                    dispatcher_content.structure == .record_unbound or
                     dispatcher_content.structure == .tuple or
                     dispatcher_content.structure == .tag_union or
                     dispatcher_content.structure == .empty_record or
@@ -12455,7 +12455,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
-                        if (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
+                        const supports_parse = try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region);
+                        if (supports_parse) {
                             try self.satisfyImplicitParserConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -12492,8 +12493,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                         }
                     } else {
-                        // Structural types (other than is_eq) cannot have methods called on them.
-                        // The user must explicitly wrap the value in a nominal type.
+                        // Structural types (other than is_eq, parser_for, and encode_to)
+                        // cannot have methods called on them. The user must explicitly wrap
+                        // the value in a nominal type.
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
@@ -12885,6 +12887,14 @@ fn typeSupportsDerivedParse(
             }
             break :blk true;
         },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            const field_vars = fields_slice.items(.var_);
+            for (field_vars) |field_var| {
+                if (!try self.varSupportsDerivedParseField(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
         .tag_union => |tag_union| blk: {
             if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) break :blk false;
             const tags_slice = self.types.getTagsSlice(tag_union.tags);
@@ -12962,6 +12972,7 @@ fn varSupportsDerivedParseField(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal),
             .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedParse(.{ .record_unbound = fields }, env, region),
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
             .empty_record => true,
             .empty_tag_union => false,
@@ -13001,6 +13012,13 @@ fn typeSupportsDerivedEncode(
             }
             break :blk true;
         },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!try self.varSupportsDerivedEncodeShape(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
         .empty_record => true,
         else => false,
     };
@@ -13016,6 +13034,7 @@ fn varSupportsDerivedEncodeShape(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalSupportsDerivedEncodeShape(nominal),
             .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedEncode(.{ .record_unbound = fields }, env, region),
             .empty_record => true,
             else => false,
         },
@@ -13827,6 +13846,11 @@ fn validateDerivedParseVar(
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseRecord(var_, record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
             },
+            .record_unbound => |fields| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
             .tag_union => |tag_union| blk: {
                 if (visited.contains(resolved.var_)) break :blk .ok;
                 try visited.put(resolved.var_, {});
@@ -13868,7 +13892,6 @@ fn validateDerivedParseRecord(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!DerivedParseValidation {
-    const fields = self.types.getRecordFieldsSlice(fields_range);
     switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
@@ -13887,7 +13910,12 @@ fn validateDerivedParseRecord(
             .unsupported, .reported_error => |result| return result,
         }
     }
-    for (fields.items(.var_)) |field_var| {
+
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
+    defer self.gpa.free(field_vars);
+
+    for (field_vars) |field_var| {
         switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -14074,6 +14102,11 @@ fn validateDerivedEncodeVar(
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
             },
+            .record_unbound => |fields| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
             .empty_record => try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, false),
             else => .unsupported,
         },
@@ -14094,13 +14127,17 @@ fn validateDerivedEncodeRecord(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!DerivedParseValidation {
-    const fields = self.types.getRecordFieldsSlice(fields_range);
-    switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, fields.len > 0)) {
+    const has_fields = self.types.getRecordFieldsSlice(fields_range).len > 0;
+    switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, has_fields)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
 
-    for (fields.items(.var_)) |field_var| {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
+    defer self.gpa.free(field_vars);
+
+    for (field_vars) |field_var| {
         switch (try self.validateDerivedEncodeVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,

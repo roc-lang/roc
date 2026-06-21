@@ -23,6 +23,7 @@ pub const LowLevel = enum {
     str_ends_with,
     str_repeat,
     str_drop_prefix,
+    str_drop_prefix_caseless_ascii,
     str_drop_suffix,
     str_find_first,
     str_count_utf8_bytes,
@@ -623,6 +624,7 @@ pub const LowLevel = enum {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
             .str_find_first,
             .str_from_utf8,

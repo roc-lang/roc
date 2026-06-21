@@ -227,6 +227,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_str_contains", {} },
     .{ "roc_builtins_str_count_utf8_bytes", {} },
     .{ "roc_builtins_str_drop_prefix", {} },
+    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
     .{ "roc_builtins_str_drop_suffix", {} },
     .{ "roc_builtins_str_ends_with", {} },
     .{ "roc_builtins_str_equal", {} },

@@ -103,6 +103,7 @@ pub fn certifyStore(
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
         .repr_scratch = std.AutoHashMap(ValueId, u32).init(allocator),
         .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+        .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
         .diag = diag,
     };
     defer certifier.deinit();
@@ -133,6 +134,7 @@ fn certifyRcAtomicity(
         const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = switch (stmt) {
             .incref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
             .decref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            .decref_if_initialized => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
             .free => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
             else => continue,
         };
@@ -217,7 +219,7 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -333,7 +335,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -347,7 +349,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
         const structural = switch (stmt) {
-            .join, .jump, .incref, .decref, .free => true,
+            .join, .jump, .incref, .decref, .decref_if_initialized, .free => true,
             else => false,
         };
         const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
@@ -369,10 +371,30 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             }),
             .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .decref_if_initialized => |rc| context.append(" cond={d}/0x{x} value={d} next={d}", .{
+                @intFromEnum(rc.cond),
+                rc.cond_mask,
+                @intFromEnum(rc.value),
+                @intFromEnum(rc.next),
+            }),
             .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .assign_call => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             .assign_low_level => |a| context.append(" target={d} op={s} next={d}", .{
                 @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
+            }),
+            .switch_stmt => |s| {
+                context.append(" cond={d} default={d}", .{ @intFromEnum(s.cond), @intFromEnum(s.default_branch) });
+                for (store.getCFSwitchBranches(s.branches)) |branch| {
+                    context.append(" branch({d}->{d})", .{ branch.value, @intFromEnum(branch.body) });
+                }
+                if (s.continuation) |continuation| context.append(" continuation={d}", .{@intFromEnum(continuation)});
+            },
+            .switch_initialized_payload => |s| context.append(" cond={d}/0x{x} payload={d} initialized={d} uninitialized={d}", .{
+                @intFromEnum(s.cond),
+                s.cond_mask,
+                @intFromEnum(s.payload),
+                @intFromEnum(s.initialized_branch),
+                @intFromEnum(s.uninitialized_branch),
             }),
             .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
             inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
@@ -399,6 +421,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .expect => |e| e.condition == needle,
         .incref => |rc| rc.value == needle,
         .decref => |rc| rc.value == needle,
+        .decref_if_initialized => |rc| rc.cond == needle or rc.value == needle,
         .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
         .switch_initialized_payload => |s| s.cond == needle or s.payload == needle,
@@ -417,6 +440,15 @@ fn spanHasLocal(store: *const LirStore, span: LIR.LocalSpan, needle: LIR.LocalId
 const ValueId = u32;
 const no_value: ValueId = std.math.maxInt(u32);
 const no_dense: u32 = std.math.maxInt(u32);
+
+const PresenceCondition = struct {
+    local: LIR.LocalId,
+    mask: u64,
+
+    fn eql(self: PresenceCondition, other: PresenceCondition) bool {
+        return self.local == other.local and self.mask == other.mask;
+    }
+};
 
 /// Immutable per-value data shared by every forked state in one proc walk.
 const ValueInfo = struct {
@@ -440,6 +472,12 @@ const State = struct {
     /// Aggregate value currently holding a moved-in unit of this value, or
     /// `no_value`. Keeps consumed operands live until the holder dies.
     holder: std.ArrayList(ValueId),
+    /// Presence condition for a value that represents conditional ownership.
+    /// `no_dense` means the value is ordinary. A conditional value carries a
+    /// possible ownership unit: if the condition is true, the unit exists and
+    /// must be released; if false, the payload was never initialized.
+    conditional_condition: std.ArrayList(u32),
+    conditional_condition_mask: std.ArrayList(u64),
 
     fn init(allocator: Allocator, local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, local_count);
@@ -449,6 +487,8 @@ const State = struct {
             .local_value = local_value,
             .balance = .empty,
             .holder = .empty,
+            .conditional_condition = .empty,
+            .conditional_condition_mask = .empty,
         };
     }
 
@@ -456,6 +496,8 @@ const State = struct {
         self.allocator.free(self.local_value);
         self.balance.deinit(self.allocator);
         self.holder.deinit(self.allocator);
+        self.conditional_condition.deinit(self.allocator);
+        self.conditional_condition_mask.deinit(self.allocator);
     }
 
     fn clone(self: *const State) Allocator.Error!State {
@@ -463,12 +505,18 @@ const State = struct {
         errdefer self.allocator.free(local_value);
         var balance = try self.balance.clone(self.allocator);
         errdefer balance.deinit(self.allocator);
-        const holder = try self.holder.clone(self.allocator);
+        var holder = try self.holder.clone(self.allocator);
+        errdefer holder.deinit(self.allocator);
+        var conditional_condition = try self.conditional_condition.clone(self.allocator);
+        errdefer conditional_condition.deinit(self.allocator);
+        const conditional_condition_mask = try self.conditional_condition_mask.clone(self.allocator);
         return .{
             .allocator = self.allocator,
             .local_value = local_value,
             .balance = balance,
             .holder = holder,
+            .conditional_condition = conditional_condition,
+            .conditional_condition_mask = conditional_condition_mask,
         };
     }
 
@@ -490,12 +538,25 @@ const State = struct {
         return self.holder.items[value];
     }
 
+    fn conditionalConditionOf(self: *const State, value: ValueId) ?PresenceCondition {
+        if (value >= self.conditional_condition.items.len) return null;
+        const condition = self.conditional_condition.items[value];
+        if (condition == no_dense) return null;
+        return .{ .local = @enumFromInt(condition), .mask = self.conditional_condition_mask.items[value] };
+    }
+
     fn growToValue(self: *State, value: ValueId) Allocator.Error!void {
         while (self.balance.items.len <= value) {
             try self.balance.append(self.allocator, 0);
         }
         while (self.holder.items.len <= value) {
             try self.holder.append(self.allocator, no_value);
+        }
+        while (self.conditional_condition.items.len <= value) {
+            try self.conditional_condition.append(self.allocator, no_dense);
+        }
+        while (self.conditional_condition_mask.items.len <= value) {
+            try self.conditional_condition_mask.append(self.allocator, 0);
         }
     }
 
@@ -507,6 +568,12 @@ const State = struct {
     fn setHolder(self: *State, value: ValueId, holder_value: ValueId) Allocator.Error!void {
         try self.growToValue(value);
         self.holder.items[value] = holder_value;
+    }
+
+    fn setConditional(self: *State, value: ValueId, condition: PresenceCondition) Allocator.Error!void {
+        try self.growToValue(value);
+        self.conditional_condition.items[value] = @intFromEnum(condition.local);
+        self.conditional_condition_mask.items[value] = condition.mask;
     }
 };
 
@@ -523,11 +590,16 @@ const LocalSummary = struct {
     /// unit-carrying value in the lender/holder chain. Equal to `repr` for
     /// ABI-borrowed parameters, which are self-anchored.
     lender_repr: u32,
+    /// For conditional-owned locals: raw local id of the presence condition.
+    condition: u32,
+    /// For conditional-owned locals: presence mask on `condition`.
+    condition_mask: u64,
 };
 
 const LocalClass = enum(u8) {
     unbound,
     owned,
+    conditional_owned,
     borrowed,
 };
 
@@ -539,6 +611,9 @@ const JoinRecord = struct {
     /// Jump states must agree only on these; everything else was settled
     /// before the jump.
     relevant: std.bit_set.DynamicBitSetUnmanaged,
+    maybe_uninitialized_params: LIR.LocalSpan,
+    maybe_uninitialized_conditions: LIR.LocalSpan,
+    maybe_uninitialized_condition_masks: LIR.U64Span,
     /// Digests of entry states the body has been scheduled under. The body
     /// is certified once per distinct jump state, exactly as shared switch
     /// suffixes are re-walked per distinct inflowing state.
@@ -582,6 +657,9 @@ const Certifier = struct {
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
     join_bodies: std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId),
+    /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
+    /// dense proc-local positions, so the cache is cleared at each proc boundary.
+    reads_before_rebind_cache: std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
     /// Scratch bitset over store locals, reused by join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
     diag: *Diagnostic,
@@ -589,6 +667,7 @@ const Certifier = struct {
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
+    current_proc_body: LIR.CFStmtId = undefined,
     current_stmt: LIR.CFStmtId = undefined,
     /// Join whose body the current segment certifies, for diagnostics.
     current_origin_join: ?LIR.JoinPointId = null,
@@ -604,6 +683,8 @@ const Certifier = struct {
         self.local_dense.deinit(self.allocator);
         self.proc_locals.deinit(self.allocator);
         self.join_bodies.deinit();
+        self.clearReadsBeforeRebindCache();
+        self.reads_before_rebind_cache.deinit();
         self.relevant_scratch.deinit(self.allocator);
     }
 
@@ -616,6 +697,12 @@ const Certifier = struct {
             record.pending.deinit(self.allocator);
         }
         self.records.clearRetainingCapacity();
+    }
+
+    fn clearReadsBeforeRebindCache(self: *Certifier) void {
+        var iter = self.reads_before_rebind_cache.valueIterator();
+        while (iter.next()) |bitset| bitset.deinit(self.allocator);
+        self.reads_before_rebind_cache.clearRetainingCapacity();
     }
 
     fn fail(self: *Certifier, comptime fmt: []const u8, args: anytype) error{Certification} {
@@ -812,20 +899,33 @@ const Certifier = struct {
         }
 
         for (self.proc_locals.items) |local| {
-            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0 };
+            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
             if (self.isRc(local)) {
                 const value = state.valueOf(local);
                 if (value != no_value) {
                     const repr = self.repr_scratch.get(value) orelse 0;
                     const units = state.balanceOf(value);
                     if (units > 0) {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0 };
+                        if (state.conditionalConditionOf(value)) |condition| {
+                            summary = .{
+                                .class = .conditional_owned,
+                                .repr = repr,
+                                .balance = @intCast(units),
+                                .lender_repr = 0,
+                                .condition = @intFromEnum(condition.local),
+                                .condition_mask = condition.mask,
+                            };
+                        } else {
+                            summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
+                        }
                     } else if (self.valueIsLive(state, value)) {
                         summary = .{
                             .class = .borrowed,
                             .repr = repr,
                             .balance = 0,
                             .lender_repr = self.liveAnchorRepr(state, value),
+                            .condition = no_dense,
+                            .condition_mask = 0,
                         };
                     }
                 }
@@ -849,11 +949,16 @@ const Certifier = struct {
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
         var hasher = std.hash.Wyhash.init(0x6172635f63657274);
         hasher.update(std.mem.asBytes(&cursor));
-        for (summary) |entry| {
+        for (summary, 0..) |entry, dense| {
+            if (entry.class == .unbound) continue;
+            const dense_u32: u32 = @intCast(dense);
+            hasher.update(std.mem.asBytes(&dense_u32));
             hasher.update(std.mem.asBytes(&entry.class));
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
             hasher.update(std.mem.asBytes(&entry.lender_repr));
+            hasher.update(std.mem.asBytes(&entry.condition));
+            hasher.update(std.mem.asBytes(&entry.condition_mask));
         }
         return hasher.final();
     }
@@ -871,7 +976,18 @@ const Certifier = struct {
             _ = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
         }
         for (summary, 0..) |entry, dense| {
+            if (entry.class != .conditional_owned or entry.repr != dense) continue;
+            const local = self.proc_locals.items[dense];
+            const value = try self.bindFresh(&state, local, 1, &.{});
+            try state.setConditional(value, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
+        }
+        for (summary, 0..) |entry, dense| {
             if (entry.class != .owned or entry.repr == dense) continue;
+            const local = self.proc_locals.items[dense];
+            state.bindValue(local, state.valueOf(self.proc_locals.items[entry.repr]));
+        }
+        for (summary, 0..) |entry, dense| {
+            if (entry.class != .conditional_owned or entry.repr == dense) continue;
             const local = self.proc_locals.items[dense];
             state.bindValue(local, state.valueOf(self.proc_locals.items[entry.repr]));
         }
@@ -1002,6 +1118,11 @@ const Certifier = struct {
                     try self.noteProcLocal(rc.value);
                     try stack.append(self.allocator, rc.next);
                 },
+                .decref_if_initialized => |rc| {
+                    try self.noteProcLocal(rc.cond);
+                    try self.noteProcLocal(rc.value);
+                    try stack.append(self.allocator, rc.next);
+                },
                 .free => |rc| {
                     try self.noteProcLocal(rc.value);
                     try stack.append(self.allocator, rc.next);
@@ -1041,7 +1162,9 @@ const Certifier = struct {
         local: LIR.LocalId,
     ) void {
         if (!self.isRc(local)) return;
-        relevant.set(@intFromEnum(local));
+        const dense = self.denseOf(local);
+        if (dense == no_dense) return;
+        relevant.set(dense);
     }
 
     fn noteExposedReadSpan(
@@ -1104,9 +1227,9 @@ const Certifier = struct {
     ) Allocator.Error!void {
         if (graph.indices.contains(stmt)) return;
 
-        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.store.locals.items.len);
+        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.proc_locals.items.len);
         errdefer reads.deinit(graph.allocator);
-        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.store.locals.items.len);
+        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.proc_locals.items.len);
         errdefer exposed.deinit(graph.allocator);
 
         const index = graph.nodes.items.len;
@@ -1150,15 +1273,21 @@ const Certifier = struct {
         if (self.isRc(local)) graph.nodes.items[node_index].def = local;
     }
 
-    fn computeReadsBeforeRebind(self: *Certifier, start: LIR.CFStmtId) Allocator.Error!std.bit_set.DynamicBitSetUnmanaged {
+    fn computeReadsBeforeRebind(self: *Certifier, start: LIR.CFStmtId) Allocator.Error!*const std.bit_set.DynamicBitSetUnmanaged {
+        if (self.reads_before_rebind_cache.getPtr(start)) |cached| {
+            return cached;
+        }
+        errdefer self.clearReadsBeforeRebindCache();
+
         var graph_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer graph_arena.deinit();
         const graph_allocator = graph_arena.allocator();
 
         var graph = ReadBeforeRebindGraph.init(graph_allocator);
         var work = std.ArrayList(LIR.CFStmtId).empty;
+        var cache_roots = std.ArrayList(LIR.CFStmtId).empty;
 
-        try self.ensureReadBeforeRebindNode(&graph, &work, start);
+        try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
 
         while (work.pop()) |stmt| {
             const node_index = graph.indices.get(stmt) orelse unreachable;
@@ -1231,6 +1360,11 @@ const Certifier = struct {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
+                .decref_if_initialized => |rc| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.cond);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
+                },
                 .free => |rc| {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
@@ -1251,8 +1385,9 @@ const Certifier = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, switch_stmt.uninitialized_branch);
                 },
                 .join => |join_stmt| {
+                    try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    try cache_roots.append(graph_allocator, join_stmt.body);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.body);
                 },
                 .jump => |jump_stmt| {
                     if (self.join_bodies.get(jump_stmt.target)) |target_body| {
@@ -1265,56 +1400,106 @@ const Certifier = struct {
             }
         }
 
-        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.store.locals.items.len);
+        const node_count = graph.nodes.items.len;
+        var pred_counts = try graph_allocator.alloc(usize, node_count);
+        @memset(pred_counts, 0);
+        for (graph.nodes.items) |node| {
+            const successor_start = node.successor_start;
+            const successor_end = successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[successor_start..successor_end]) |successor| {
+                const successor_index = graph.indices.get(successor) orelse unreachable;
+                pred_counts[successor_index] += 1;
+            }
+        }
 
-        var changed = true;
-        while (changed) {
-            changed = false;
-            var node_index = graph.nodes.items.len;
-            while (node_index > 0) {
-                node_index -= 1;
-                const node = &graph.nodes.items[node_index];
+        var pred_starts = try graph_allocator.alloc(usize, node_count + 1);
+        pred_starts[0] = 0;
+        for (pred_counts, 0..) |count, index| {
+            pred_starts[index + 1] = pred_starts[index] + count;
+        }
+        var pred_writes = try graph_allocator.dupe(usize, pred_starts[0..node_count]);
+        const predecessors = try graph_allocator.alloc(usize, pred_starts[node_count]);
+        for (graph.nodes.items, 0..) |node, predecessor_index| {
+            const successor_start = node.successor_start;
+            const successor_end = successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[successor_start..successor_end]) |successor| {
+                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const write_index = pred_writes[successor_index];
+                predecessors[write_index] = predecessor_index;
+                pred_writes[successor_index] += 1;
+            }
+        }
 
-                scratch.unsetAll();
-                const successor_start = node.successor_start;
-                const successor_end = successor_start + @as(usize, node.successor_len);
-                for (graph.successors.items[successor_start..successor_end]) |successor| {
-                    const successor_index = graph.indices.get(successor) orelse unreachable;
-                    scratch.setUnion(graph.nodes.items[successor_index].exposed);
-                }
-                if (node.def) |local| scratch.unset(@intFromEnum(local));
-                scratch.setUnion(node.reads);
+        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.proc_locals.items.len);
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
+        var node_work = std.ArrayList(usize).empty;
+        try node_work.ensureTotalCapacity(graph_allocator, node_count);
+        for (0..node_count) |node_index| {
+            node_work.appendAssumeCapacity(node_index);
+            in_work.set(node_index);
+        }
 
-                if (!node.exposed.eql(scratch)) {
-                    node.exposed.unsetAll();
-                    node.exposed.setUnion(scratch);
-                    changed = true;
+        while (node_work.pop()) |node_index| {
+            in_work.unset(node_index);
+            const node = &graph.nodes.items[node_index];
+
+            scratch.unsetAll();
+            const successor_start = node.successor_start;
+            const successor_end = successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[successor_start..successor_end]) |successor| {
+                const successor_index = graph.indices.get(successor) orelse unreachable;
+                scratch.setUnion(graph.nodes.items[successor_index].exposed);
+            }
+            if (node.def) |local| {
+                const dense = self.denseOf(local);
+                if (dense != no_dense) scratch.unset(dense);
+            }
+            scratch.setUnion(node.reads);
+
+            if (!node.exposed.eql(scratch)) {
+                node.exposed.unsetAll();
+                node.exposed.setUnion(scratch);
+
+                const pred_start = pred_starts[node_index];
+                const pred_end = pred_starts[node_index + 1];
+                for (predecessors[pred_start..pred_end]) |predecessor_index| {
+                    if (in_work.isSet(predecessor_index)) continue;
+                    try node_work.append(graph_allocator, predecessor_index);
+                    in_work.set(predecessor_index);
                 }
             }
         }
 
-        const start_index = graph.indices.get(start) orelse unreachable;
-        return try graph.nodes.items[start_index].exposed.clone(self.allocator);
+        for (cache_roots.items) |root| {
+            if (self.reads_before_rebind_cache.contains(root)) continue;
+            const node_index = graph.indices.get(root) orelse unreachable;
+            var cached = try graph.nodes.items[node_index].exposed.clone(self.allocator);
+            errdefer cached.deinit(self.allocator);
+            try self.reads_before_rebind_cache.put(root, cached);
+        }
+
+        const cached = self.reads_before_rebind_cache.getPtr(start) orelse {
+            std.debug.panic("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
+        };
+        return cached;
     }
 
-    /// Computes the join's relevant-local set: its parameters plus every
-    /// refcounted proc local the body subtree reads before rebinding.
+    /// Computes the join's relevant-local set: every refcounted proc local the
+    /// body subtree reads before rebinding. Join parameters are ordinary locals
+    /// for this purpose; carrying every parameter unconditionally makes loops
+    /// with conditionally initialized payload cells explode into one entry
+    /// summary for every field-presence subset.
     fn computeJoinRelevant(
         self: *Certifier,
-        params: LIR.LocalSpan,
         body: LIR.CFStmtId,
     ) CertifyError!std.bit_set.DynamicBitSetUnmanaged {
         var relevant = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.store.locals.items.len);
         errdefer relevant.deinit(self.allocator);
-        for (self.store.getLocalSpan(params)) |param| {
-            if (self.isRc(param)) relevant.set(@intFromEnum(param));
-        }
-        var reads = try self.computeReadsBeforeRebind(body);
-        defer reads.deinit(self.allocator);
-        for (self.proc_locals.items) |local| {
+        const reads = try self.computeReadsBeforeRebind(body);
+        for (self.proc_locals.items, 0..) |local, dense| {
             if (!self.isRc(local)) continue;
             if (relevant.isSet(@intFromEnum(local))) continue;
-            if (reads.isSet(@intFromEnum(local))) {
+            if (reads.isSet(dense)) {
                 relevant.set(@intFromEnum(local));
             }
         }
@@ -1340,6 +1525,19 @@ const Certifier = struct {
         }
         if (info.lenders.len == 0) return no_value;
         return self.liveAnchorValueDepth(state, info.lenders[0], depth + 1);
+    }
+
+    fn maybeUninitializedCondition(record: *const JoinRecord, store: *const LirStore, local: LIR.LocalId) ?PresenceCondition {
+        const params = store.getLocalSpan(record.maybe_uninitialized_params);
+        const conditions = store.getLocalSpan(record.maybe_uninitialized_conditions);
+        const masks = store.getU64Span(record.maybe_uninitialized_condition_masks);
+        if (params.len != conditions.len or params.len != masks.len) {
+            std.debug.panic("ARC borrow certifier invariant violated: maybe-uninitialized join metadata arity mismatch", .{});
+        }
+        for (params, conditions, masks) |param, condition, mask| {
+            if (param == local) return .{ .local = condition, .mask = mask };
+        }
+        return null;
     }
 
     /// Builds the jump-state summary restricted to the join's relevant
@@ -1404,21 +1602,45 @@ const Certifier = struct {
         }
 
         for (self.proc_locals.items) |local| {
-            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0 };
+            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
             if (self.isRc(local) and self.relevant_scratch.isSet(@intFromEnum(local))) {
-                const value = state.valueOf(local);
-                if (value != no_value) {
-                    const repr = self.repr_scratch.get(value) orelse 0;
-                    const units = state.balanceOf(value);
-                    if (units > 0) {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0 };
-                    } else if (self.valueIsLive(state, value)) {
-                        summary = .{
-                            .class = .borrowed,
-                            .repr = repr,
-                            .balance = 0,
-                            .lender_repr = self.liveAnchorRepr(state, value),
-                        };
+                if (maybeUninitializedCondition(record, self.store, local)) |condition| {
+                    summary = .{
+                        .class = .conditional_owned,
+                        .repr = self.denseOf(local),
+                        .balance = 1,
+                        .lender_repr = 0,
+                        .condition = @intFromEnum(condition.local),
+                        .condition_mask = condition.mask,
+                    };
+                } else {
+                    const value = state.valueOf(local);
+                    if (value != no_value) {
+                        const repr = self.repr_scratch.get(value) orelse 0;
+                        const units = state.balanceOf(value);
+                        if (units > 0) {
+                            if (state.conditionalConditionOf(value)) |condition| {
+                                summary = .{
+                                    .class = .conditional_owned,
+                                    .repr = repr,
+                                    .balance = @intCast(units),
+                                    .lender_repr = 0,
+                                    .condition = @intFromEnum(condition.local),
+                                    .condition_mask = condition.mask,
+                                };
+                            } else {
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
+                            }
+                        } else if (self.valueIsLive(state, value)) {
+                            summary = .{
+                                .class = .borrowed,
+                                .repr = repr,
+                                .balance = 0,
+                                .lender_repr = self.liveAnchorRepr(state, value),
+                                .condition = no_dense,
+                                .condition_mask = 0,
+                            };
+                        }
                     }
                 }
             }
@@ -1450,6 +1672,7 @@ const Certifier = struct {
     }
 
     fn noteProcLocal(self: *Certifier, local: LIR.LocalId) Allocator.Error!void {
+        if (!self.isRc(local)) return;
         const index = @intFromEnum(local);
         if (index >= self.local_dense.items.len) return;
         if (self.local_dense.items[index] != no_dense) return;
@@ -1471,11 +1694,13 @@ const Certifier = struct {
     ) CertifyError!void {
         self.current_proc = proc_id;
         self.current_sig = self.sigs.get(proc_id);
+        self.current_proc_body = body;
         self.values.clearRetainingCapacity();
         _ = self.lender_arena.reset(.retain_capacity);
         self.clearRecords();
         self.memo.clearRetainingCapacity();
         self.join_bodies.clearRetainingCapacity();
+        self.clearReadsBeforeRebindCache();
         try self.collectProcLocals(proc, body);
         try self.relevant_scratch.resize(self.allocator, self.store.locals.items.len, false);
 
@@ -1648,6 +1873,16 @@ const Certifier = struct {
                     try self.applyRelease(&state, rc.value);
                     cursor = rc.next;
                 },
+                .decref_if_initialized => |rc| {
+                    _ = try self.requireLive(&state, rc.cond);
+                    if (!self.isRc(rc.value)) {
+                        return self.fail("decref_if_initialized of non-refcounted local {d}", .{@intFromEnum(rc.value)});
+                    }
+                    if (state.valueOf(rc.value) != no_value) {
+                        try self.applyRelease(&state, rc.value);
+                    }
+                    cursor = rc.next;
+                },
                 .free => |rc| {
                     try self.applyRelease(&state, rc.value);
                     cursor = rc.next;
@@ -1667,7 +1902,31 @@ const Certifier = struct {
                 .switch_initialized_payload => |switch_stmt| {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     if (self.isRc(switch_stmt.payload)) {
-                        const payload_is_initialized = state.valueOf(switch_stmt.payload) != no_value;
+                        const payload_value = state.valueOf(switch_stmt.payload);
+                        if (payload_value != no_value) {
+                            if (state.conditionalConditionOf(payload_value)) |condition| {
+                                if (!condition.eql(.{ .local = switch_stmt.cond, .mask = switch_stmt.cond_mask })) {
+                                    return self.fail(
+                                        "initialized-payload switch condition l{d}/0x{x} did not match payload l{d} condition l{d}/0x{x}",
+                                        .{ @intFromEnum(switch_stmt.cond), switch_stmt.cond_mask, @intFromEnum(switch_stmt.payload), @intFromEnum(condition.local), condition.mask },
+                                    );
+                                }
+
+                                var initialized_state = try state.clone();
+                                errdefer initialized_state.deinit();
+                                try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.initialized_branch, .state = initialized_state, .origin_join = segment.origin_join } });
+
+                                var uninitialized_state = try state.clone();
+                                errdefer uninitialized_state.deinit();
+                                const units = uninitialized_state.balanceOf(payload_value);
+                                if (units > 0) try uninitialized_state.addBalance(payload_value, -units);
+                                uninitialized_state.bindValue(switch_stmt.payload, no_value);
+                                try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join } });
+                                return;
+                            }
+                        }
+
+                        const payload_is_initialized = payload_value != no_value;
                         const target = if (payload_is_initialized)
                             switch_stmt.initialized_branch
                         else
@@ -1695,7 +1954,10 @@ const Certifier = struct {
                         record.value_ptr.* = .{
                             .body = join_stmt.body,
                             .params = join_stmt.params,
-                            .relevant = try self.computeJoinRelevant(join_stmt.params, join_stmt.body),
+                            .relevant = try self.computeJoinRelevant(join_stmt.body),
+                            .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
+                            .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
+                            .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
                             .scheduled = std.AutoHashMap(u64, void).init(self.allocator),
                             .pending = .empty,
                         };
@@ -1792,9 +2054,13 @@ const Certifier = struct {
         }
         const value = state.valueOf(local);
         if (value == no_value) {
+            self.diag.context_local = local;
+            self.diag.context_proc = self.current_proc;
             return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
+            self.diag.context_local = local;
+            self.diag.context_proc = self.current_proc;
             return self.fail("release of local {d} without an ownership unit", .{@intFromEnum(local)});
         }
         try state.addBalance(value, -1);
@@ -2013,6 +2279,15 @@ const CertifyTest = struct {
 
     fn decrefStmt(self: *CertifyTest, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .decref = .{
+            .value = value,
+            .rc = rcHelper(.decref, layout_idx),
+            .next = next,
+        } });
+    }
+
+    fn decrefIfInitializedStmt(self: *CertifyTest, cond: LIR.LocalId, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .decref_if_initialized = .{
+            .cond = cond,
             .value = value,
             .rc = rcHelper(.decref, layout_idx),
             .next = next,
@@ -2349,6 +2624,39 @@ test "certify flags an owned parameter that is never released" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
 }
 
+test "certify accepts conditional decref of live payload" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const conditional_release = try f.decrefIfInitializedStmt(cond, payload, .str, ret);
+    const result_assign = try f.assignI64(result, conditional_release);
+    const cond_assign = try f.assignI64(cond, result_assign);
+    const body = try f.assignStr(payload, cond_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.certify();
+}
+
+test "certify accepts conditional decref of unbound payload" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const conditional_release = try f.decrefIfInitializedStmt(cond, payload, .str, ret);
+    const result_assign = try f.assignI64(result, conditional_release);
+    const body = try f.assignI64(cond, result_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.certify();
+}
+
 test "certify follows initialized payload switch branch when rc payload is live" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -2427,6 +2735,45 @@ test "certify flags uninitialized payload switch branch that reads unbound paylo
 
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
+}
+
+test "certify compresses maybe-initialized join payload states" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const conditional_release = try f.decrefIfInitializedStmt(cond, payload, .str, ret);
+    const result_assign = try f.assignI64(result, conditional_release);
+
+    const jump_with_payload = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump_without_payload = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release_before_jump = try f.decrefStmt(payload, .str, jump_without_payload);
+
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = 1, .body = jump_with_payload },
+        }),
+        .default_branch = release_before_jump,
+    } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{payload}),
+        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{cond}),
+        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        .body = result_assign,
+        .remainder = switch_stmt,
+    } });
+    const cond_assign = try f.assignI64(cond, join_stmt);
+    const body = try f.assignStr(payload, cond_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.certify();
 }
 
 test "certify flags branches that disagree at a join" {

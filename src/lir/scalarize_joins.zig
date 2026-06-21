@@ -207,7 +207,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try self.stack.append(self.allocator, s.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -414,7 +414,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, j.body);
                     try self.stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |*s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
                     s.next = self.resolveRemoved(s.next);
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -465,7 +465,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, join_stmt.body);
                     try self.stack.append(self.allocator, join_stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |a| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -584,6 +584,11 @@ const Pass = struct {
                     try self.stack.append(self.allocator, rc.next);
                 },
                 .decref => |rc| {
+                    try self.noteUse(rc.value);
+                    try self.stack.append(self.allocator, rc.next);
+                },
+                .decref_if_initialized => |rc| {
+                    try self.noteUse(rc.cond);
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },

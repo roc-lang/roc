@@ -42,6 +42,8 @@ pub const ComptimeSite = Mono.ComptimeSite;
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
 pub const RecordDestruct = Mono.RecordDestruct;
+/// Compiler-generated initialized-payload switch shared with Monotype IR.
+pub const InitializedPayloadSwitch = Mono.InitializedPayloadSwitch;
 
 /// Typed Monotype Lifted expression.
 pub const Expr = Mono.Expr;

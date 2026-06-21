@@ -269,6 +269,11 @@ pub const MonoLlvmCodeGen = struct {
         found_offset: u32,
     };
 
+    const StrDropPrefixCaselessAsciiLayoutInfo = struct {
+        after_offset: u32,
+        found_offset: u32,
+    };
+
     const RcHelperEntry = struct {
         key: layout.RcHelperKey,
         atomicity: RcAtomicity,
@@ -1086,6 +1091,14 @@ pub const MonoLlvmCodeGen = struct {
         defer attrs.deinit(builder);
         try attrs.addFnAttr(.cold, builder);
         try attrs.addFnAttr(.@"noinline", builder);
+        // Linux AArch64 eval tests return from crash callbacks to avoid
+        // longjmping through LLVM-generated frames. Every other target lowers
+        // `emitCrashBytes` to `unreachable`, so tell LLVM this cold helper does
+        // not return; otherwise the hot caller must conservatively preserve
+        // state for a control-flow edge that cannot happen.
+        if (!(self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux)) {
+            try attrs.addFnAttr(.noreturn, builder);
+        }
         func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
 
         self.runtime_error_func = func;
@@ -1448,7 +1461,7 @@ pub const MonoLlvmCodeGen = struct {
                 _ = wip.call(.normal, .ccc, .none, entry_ty, entry_fn.toValue(builder), &.{ idx_value, ops_value, ret_slot, args_buf }, "") catch return error.OutOfMemory;
             }
         } else {
-            _ = try self.callFunctionIndex(proc_fn.?, &.{ ret_slot, args_buf });
+            _ = try self.callFunctionIndex(proc_fn.?, &.{ ret_slot, args_buf }, false);
         }
 
         if (ret_pieces.len == 0) {
@@ -1521,7 +1534,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
         try self.copyEntrypointArgsToInternalBuffer(args_ptr, args_buf, arg_layouts);
-        _ = try self.callFunctionIndex(proc_fn, &.{ roc_ops, ret_ptr, args_buf });
+        _ = try self.callFunctionIndex(proc_fn, &.{ roc_ops, ret_ptr, args_buf }, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -1565,7 +1578,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const ret_slot = try self.allocArgBuffer(&.{ret_layout}, false);
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
-        _ = try self.callFunctionIndex(proc_fn, &.{ ret_slot, args_buf });
+        _ = try self.callFunctionIndex(proc_fn, &.{ ret_slot, args_buf }, false);
 
         const exit_code_raw = try self.loadScalar(ret_slot, ret_layout);
         const exit_code = try self.coerceScalar(exit_code_raw, self.ptrSizedIntType(), false);
@@ -1853,6 +1866,7 @@ pub const MonoLlvmCodeGen = struct {
                 .comptime_branch_taken,
                 .incref,
                 .decref,
+                .decref_if_initialized,
                 .free,
                 => |stmt| try self.noteStmtIncoming(&stack, stmt.next),
                 .switch_stmt => |switch_stmt| {
@@ -1992,7 +2006,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call => |assign| {
-                try self.emitDirectCall(assign.target, assign.proc, assign.args);
+                try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.is_cold);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
@@ -2046,6 +2060,10 @@ pub const MonoLlvmCodeGen = struct {
             },
             .decref => |dec| {
                 try self.emitRcForLocal(.decref, dec.value, 1, dec.atomicity);
+                try work.append(wa, .{ .node = dec.next });
+            },
+            .decref_if_initialized => |dec| {
+                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
             .free => |free_stmt| {
@@ -2154,7 +2172,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+    fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan, is_cold: bool) Error!void {
         const proc = self.store.getProcSpec(proc_id);
         const arg_locals = self.store.getLocalSpan(args);
         const param_locals = self.store.getLocalSpan(proc.args);
@@ -2177,9 +2195,9 @@ pub const MonoLlvmCodeGen = struct {
         try self.packRocArgsFromLocals(args_buf, arg_locals, arg_layouts);
         const func = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
         if (self.host_call_mode == .extern_symbols) {
-            _ = try self.callFunctionIndex(func, &.{ self.slot(target).ptr, args_buf });
+            _ = try self.callFunctionIndex(func, &.{ self.slot(target).ptr, args_buf }, is_cold);
         } else {
-            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.slot(target).ptr, args_buf });
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.slot(target).ptr, args_buf }, is_cold);
         }
     }
 
@@ -2397,6 +2415,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_caseless_ascii_equals => try self.emitStrBoolBuiltin(target, "roc_builtins_str_caseless_ascii_equals", arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, arg_locals[0]),
             .str_find_first => try self.emitStrFindFirst(target, arg_locals),
+            .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals, unique_args),
             .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0], unique_args),
             .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0], unique_args),
@@ -2880,11 +2899,18 @@ pub const MonoLlvmCodeGen = struct {
         const branch_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, branches.len);
         for (branch_blocks) |*block| block.* = wip.block(0, "switch_case") catch return error.OutOfMemory;
         const cond = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
-        var switch_inst = wip.@"switch"(cond, default_block, @intCast(branches.len), .none) catch return error.OutOfMemory;
-        for (branches, branch_blocks) |branch, block| {
-            switch_inst.addCase(builder.intConst(cond.typeOfWip(wip), branch.value) catch return error.OutOfMemory, block, wip) catch return error.OutOfMemory;
+        if (sw.default_is_cold and branches.len == 1) {
+            const branch = branches[0];
+            const expected = builder.intValue(cond.typeOfWip(wip), branch.value) catch return error.OutOfMemory;
+            const is_branch = wip.icmp(.eq, cond, expected, "") catch return error.OutOfMemory;
+            _ = wip.brCond(is_branch, branch_blocks[0], default_block, .then_likely) catch return error.OutOfMemory;
+        } else {
+            var switch_inst = wip.@"switch"(cond, default_block, @intCast(branches.len), .none) catch return error.OutOfMemory;
+            for (branches, branch_blocks) |branch, block| {
+                switch_inst.addCase(builder.intConst(cond.typeOfWip(wip), branch.value) catch return error.OutOfMemory, block, wip) catch return error.OutOfMemory;
+            }
+            switch_inst.finish(wip);
         }
-        switch_inst.finish(wip);
 
         const state = try self.allocator.create(SwitchState);
         state.* = .{
@@ -2906,9 +2932,10 @@ pub const MonoLlvmCodeGen = struct {
         const initialized_block = wip.block(0, "payload_initialized") catch return error.OutOfMemory;
         const uninitialized_block = wip.block(0, "payload_uninitialized") catch return error.OutOfMemory;
         const cond_value = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
-        const one = builder.intValue(cond_value.typeOfWip(wip), 1) catch return error.OutOfMemory;
-        const is_initialized = wip.icmp(.eq, cond_value, one, "") catch return error.OutOfMemory;
-        _ = wip.brCond(is_initialized, initialized_block, uninitialized_block, .then_likely) catch return error.OutOfMemory;
+        const mask = builder.intValue(cond_value.typeOfWip(wip), sw.cond_mask) catch return error.OutOfMemory;
+        const masked = wip.bin(.@"and", cond_value, mask, "") catch return error.OutOfMemory;
+        const is_initialized = wip.icmp(.eq, masked, mask, "") catch return error.OutOfMemory;
+        _ = wip.brCond(is_initialized, initialized_block, uninitialized_block, if (sw.uninitialized_is_cold) .then_likely else .none) catch return error.OutOfMemory;
 
         const state = try self.allocator.create(InitializedPayloadSwitchState);
         state.* = .{
@@ -2918,6 +2945,31 @@ pub const MonoLlvmCodeGen = struct {
             .uninitialized_branch = sw.uninitialized_branch,
         };
         try work.append(wa, .{ .initialized_payload_branch = .{ .state = state, .initialized = true } });
+    }
+
+    fn emitDecrefIfInitialized(
+        self: *MonoLlvmCodeGen,
+        cond: LocalId,
+        cond_mask: u64,
+        value: LocalId,
+        atomicity: lir.LIR.RcAtomicity,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const release_block = wip.block(0, "payload_cond_decref") catch return error.OutOfMemory;
+        const next_block = wip.block(0, "payload_cond_next") catch return error.OutOfMemory;
+        const cond_value = try self.readSwitchValue(self.slot(cond).ptr, self.localLayout(cond));
+        const mask = builder.intValue(cond_value.typeOfWip(wip), cond_mask) catch return error.OutOfMemory;
+        const masked = wip.bin(.@"and", cond_value, mask, "") catch return error.OutOfMemory;
+        const is_initialized = wip.icmp(.eq, masked, mask, "") catch return error.OutOfMemory;
+        _ = wip.brCond(is_initialized, release_block, next_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = release_block };
+        try self.emitRcForLocal(.decref, value, 1, atomicity);
+        if (!self.currentBlockHasTerminator()) {
+            _ = wip.br(next_block) catch return error.OutOfMemory;
+        }
+        wip.cursor = .{ .block = next_block };
     }
 
     /// Registers the join point, queues the remainder subtree, and lets
@@ -3520,6 +3572,33 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_str_find_first", call_args.types.items, call_args.values.items);
+    }
+
+    fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_slot = self.slot(target);
+        const info = try self.resolveStrDropPrefixCaselessAsciiLayout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = wip.alloca(
+            .normal,
+            .i8,
+            builder.intValue(.i32, @sizeOf(builtins.dev_wrappers.StrDropPrefixCaselessAsciiLayout)) catch return error.OutOfMemory,
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrDropPrefixCaselessAsciiLayout)),
+            .default,
+            "str_drop_prefix_caseless_ascii_layout",
+        ) catch return error.OutOfMemory;
+
+        try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
+        try self.storeRawInt(layout_ptr, 4, .i32, info.found_offset, 4);
+
+        var call_args = try self.rocStrArgs2(args[0], args[1], false);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_str_drop_prefix_caseless_ascii", call_args.types.items, call_args.values.items);
     }
 
     fn emitStrJoinWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
@@ -4623,6 +4702,20 @@ pub const MonoLlvmCodeGen = struct {
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
+        switch (helper_key.op) {
+            .incref => {},
+            .decref, .free => {
+                // Drop/free helpers include the recursive teardown code for a layout.
+                // Keeping them out of line prevents LLVM from cloning large cleanup
+                // trees into hot callers such as generated parsers. This does not
+                // mark ordinary decrefs as cold; it only preserves the explicit RC
+                // helper boundary that LIR ARC already selected.
+                var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
+                defer attrs.deinit(builder);
+                try attrs.addFnAttr(.@"noinline", builder);
+                func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
+            },
+        }
         try self.rc_helpers.put(cache_key, .{
             .key = helper_key,
             .atomicity = atomicity,
@@ -4762,8 +4855,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
         switch (helper_key.op) {
-            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }),
-            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }),
+            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }, false),
+            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }, false),
         }
     }
 
@@ -5377,6 +5470,24 @@ pub const MonoLlvmCodeGen = struct {
             .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
             .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
             .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
+        };
+    }
+
+    fn resolveStrDropPrefixCaselessAsciiLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrDropPrefixCaselessAsciiLayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+
+        const record_idx = ret_layout_val.getStruct().idx;
+        const record_data = self.layouts().getStructData(record_idx);
+        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
+        if (fields.len != 2) return error.CompilationFailed;
+
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool) return error.CompilationFailed;
+
+        return .{
+            .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
+            .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
         };
     }
 
@@ -6019,9 +6130,16 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
-    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
+        if (is_cold) {
+            var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
+            defer attrs.deinit(builder);
+            try attrs.addFnAttr(.cold, builder);
+            try attrs.addFnAttr(.@"noinline", builder);
+            return wip.call(.normal, .ccc, attrs.finish(builder) catch return error.OutOfMemory, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
+        }
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
     }
 

@@ -71,6 +71,7 @@ const strReserveC = builtins.str.reserveC;
 const strReleaseExcessCapacity = builtins.str.strReleaseExcessCapacity;
 const strWithCapacityC = builtins.str.withCapacityC;
 const strDropPrefix = builtins.str.strDropPrefix;
+const strDropPrefixCaselessAscii = builtins.str.strDropPrefixCaselessAscii;
 const strDropSuffix = builtins.str.strDropSuffix;
 const strFindFirst = builtins.str.findFirst;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
@@ -190,6 +191,7 @@ pub const BuiltinFn = enum {
     str_static_small_word_caseless_eq,
     str_count_utf8_bytes,
     str_find_first,
+    str_drop_prefix_caseless_ascii,
     str_caseless_ascii_equals,
     str_repeat,
     str_trim,
@@ -309,6 +311,7 @@ pub const BuiltinFn = enum {
             .str_static_small_word_caseless_eq => "roc_builtins_str_static_small_word_caseless_eq",
             .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
             .str_find_first => "roc_builtins_str_find_first",
+            .str_drop_prefix_caseless_ascii => "roc_builtins_str_drop_prefix_caseless_ascii",
             .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
             .str_repeat => "roc_builtins_str_repeat",
             .str_trim => "roc_builtins_str_trim",
@@ -519,6 +522,16 @@ fn wrapStrFindFirst(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.after_offset))).* = result.after;
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.before_offset))).* = result.before;
     @as(*u8, @ptrCast(@alignCast(out_bytes + find_layout.found_offset))).* = if (result.found) 1 else 0;
+}
+
+fn wrapStrDropPrefixCaselessAscii(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, prefix_layout: *const dev_wrappers.StrDropPrefixCaselessAsciiLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = strDropPrefixCaselessAscii(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + prefix_layout.after_offset))).* = result.after;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + prefix_layout.found_offset))).* = if (result.found) 1 else 0;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
@@ -2920,6 +2933,54 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addLeaArg(frame_ptr, layout_slot);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, @intFromPtr(&wrapStrFindFirst), .str_find_first);
+
+                    return self.stackLocationForLayout(ll.ret_layout, result_offset);
+                },
+                .str_drop_prefix_caseless_ascii => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const ls = self.layout_store;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    if (ret_layout_val.tag != .struct_) {
+                        std.debug.panic("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected record return layout", .{});
+                    }
+                    const record_idx = ret_layout_val.getStruct().idx;
+                    const record_data = ls.getStructData(record_idx);
+                    const fields = ls.struct_fields.sliceRange(record_data.getFields());
+                    if (fields.len != 2 or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
+                    {
+                        std.debug.panic("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected fields after Str, found Bool", .{});
+                    }
+
+                    const result_offset = self.codegen.allocStackSlot(record_data.size);
+                    try self.zeroStackArea(result_offset, record_data.size);
+
+                    const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrDropPrefixCaselessAsciiLayout));
+                    const layout_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot, layout_reg);
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot + 4, layout_reg);
+                    self.codegen.freeGeneral(layout_reg);
+
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(frame_ptr, result_offset);
+                    try builder.addMemArg(frame_ptr, a_off);
+                    try builder.addMemArg(frame_ptr, a_off + 16);
+                    try builder.addMemArg(frame_ptr, a_off + 8);
+                    try builder.addMemArg(frame_ptr, b_off);
+                    try builder.addMemArg(frame_ptr, b_off + 16);
+                    try builder.addMemArg(frame_ptr, b_off + 8);
+                    try builder.addLeaArg(frame_ptr, layout_slot);
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&wrapStrDropPrefixCaselessAscii), .str_drop_prefix_caseless_ascii);
 
                     return self.stackLocationForLayout(ll.ret_layout, result_offset);
                 },
@@ -5627,6 +5688,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(dec.value), dec.value);
                         try stack.append(sa, dec.next);
                     },
+                    .decref_if_initialized => |dec| {
+                        try locals.put(localKey(dec.cond), dec.cond);
+                        try locals.put(localKey(dec.value), dec.value);
+                        try stack.append(sa, dec.next);
+                    },
                     .free => |free_stmt| {
                         try locals.put(localKey(free_stmt.value), free_stmt.value);
                         try stack.append(sa, free_stmt.next);
@@ -5752,6 +5818,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try stack.append(sa, inc.next);
                     },
                     .decref => |dec| {
+                        try locals.put(localKey(dec.value), dec.value);
+                        try stack.append(sa, dec.next);
+                    },
+                    .decref_if_initialized => |dec| {
+                        try locals.put(localKey(dec.cond), dec.cond);
                         try locals.put(localKey(dec.value), dec.value);
                         try stack.append(sa, dec.next);
                     },
@@ -14324,12 +14395,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             const switch_env = try self.captureStmtEnv();
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.cmpRegImm12(.w64, cond_reg, 1);
-                            } else {
-                                try self.codegen.emit.cmpRegImm32(.w64, cond_reg, 1);
-                            }
+                            const cond_mask: i64 = @bitCast(sw.cond_mask);
+                            const compare_reg = try self.allocTempGeneral();
+                            try self.emitMovRegReg(compare_reg, cond_reg);
+                            const mask_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(mask_reg, cond_mask);
+                            try self.codegen.emitAnd(.w64, compare_reg, compare_reg, mask_reg);
+                            self.codegen.freeGeneral(mask_reg);
+                            try self.emitCmpImm(compare_reg, cond_mask);
                             const else_patch = try self.emitJumpIfNotEqual();
+                            self.codegen.freeGeneral(compare_reg);
                             self.codegen.freeGeneral(cond_reg);
                             try self.restoreStmtEnv(&switch_env);
 
@@ -14361,6 +14436,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .rc = dec.rc,
                                 .atomicity = dec.atomicity,
                             });
+                            try work.append(wa, .{ .node = dec.next });
+                        },
+
+                        .decref_if_initialized => |dec| {
+                            const cond_loc = try self.emitValueLocal(dec.cond);
+                            const cond_reg = try self.ensureInGeneralReg(cond_loc);
+                            const cond_mask: i64 = @bitCast(dec.cond_mask);
+                            const compare_reg = try self.allocTempGeneral();
+                            try self.emitMovRegReg(compare_reg, cond_reg);
+                            const mask_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(mask_reg, cond_mask);
+                            try self.codegen.emitAnd(.w64, compare_reg, compare_reg, mask_reg);
+                            self.codegen.freeGeneral(mask_reg);
+                            try self.emitCmpImm(compare_reg, cond_mask);
+                            const skip_patch = try self.emitJumpIfNotEqual();
+                            self.codegen.freeGeneral(compare_reg);
+                            self.codegen.freeGeneral(cond_reg);
+
+                            _ = try self.generateDecref(.{
+                                .value = dec.value,
+                                .rc = dec.rc,
+                                .atomicity = dec.atomicity,
+                            });
+                            const done_patch = try self.codegen.emitJump();
+                            const successor_offset = self.codegen.currentOffset();
+                            self.codegen.patchJump(skip_patch, successor_offset);
+                            self.codegen.patchJump(done_patch, successor_offset);
                             try work.append(wa, .{ .node = dec.next });
                         },
 

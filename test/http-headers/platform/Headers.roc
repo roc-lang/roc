@@ -96,7 +96,7 @@ parse_record_field_from_headers : Fields(_shape), Str -> Try(
 	],
 	Headers.DecodeErr,
 )
-parse_record_field_from_headers = |_, headers|
+parse_record_field_from_headers = |fields, headers|
 	if headers.is_empty() {
 		Ok(Done({ rest: { raw: "" } }))
 	} else {
@@ -113,13 +113,21 @@ parse_record_field_from_headers = |_, headers|
 					name_len = Str.count_utf8_bytes(name)
 					line_len = Str.count_utf8_bytes(line_parts.before)
 
-					if name_len < line_len {
-						Ok(TryFieldCaseless({
-							name,
-							rest: { raw: value_start },
-						}))
-					} else {
+					if name_len >= line_len {
 						Err(Headers.DecodeErr.BadHeader)
+					} else {
+						if name_len < Fields.shortest_name(fields) {
+							Ok(Continue({ rest: { raw: line_parts.after } }))
+						} else {
+							if name_len > Fields.longest_name(fields) {
+								Ok(Continue({ rest: { raw: line_parts.after } }))
+							} else {
+								Ok(TryFieldCaseless({
+									name,
+									rest: { raw: value_start },
+								}))
+							}
+						}
 					}
 				}
 

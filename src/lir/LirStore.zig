@@ -23,6 +23,7 @@ const Symbol = lir_defs.Symbol;
 const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
 const LirPatternSpan = lir_defs.LirPatternSpan;
+const U64Span = lir_defs.U64Span;
 
 /// Source-level name to use when presenting a specialized LIR proc in debug output.
 pub const ProcDebugName = extern struct {
@@ -37,6 +38,7 @@ cf_switch_branches: std.ArrayList(CFSwitchBranch),
 join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
+u64s: std.ArrayList(u64),
 proc_specs: std.ArrayList(LirProcSpec),
 strings: base.StringLiteral.Store,
 allocator: Allocator,
@@ -70,6 +72,7 @@ pub fn init(allocator: Allocator) Self {
         .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
+        .u64s = std.ArrayList(u64).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -93,6 +96,7 @@ pub fn deinit(self: *Self) void {
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
+    self.u64s.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.patterns.deinit(self.allocator);
@@ -318,12 +322,36 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
     return self.local_ids.items[span.start..][0..span.len];
 }
 
+/// Stores u64 values and returns the corresponding flat-storage span.
+pub fn addU64Span(self: *Self, values: []const u64) Allocator.Error!U64Span {
+    if (values.len == 0) return U64Span.empty();
+
+    const start = @as(u32, @intCast(self.u64s.items.len));
+    try self.u64s.appendSlice(self.allocator, values);
+    return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// Resolves a u64 span to its stored slice.
+pub fn getU64Span(self: *const Self, span: U64Span) []const u64 {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.u64s.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: u64 span start={d} len={d} exceeds u64 storage len={d}",
+                .{ span.start, span.len, self.u64s.items.len },
+            );
+        }
+    }
+    return self.u64s.items[span.start..][0..span.len];
+}
+
 /// Appends a statement/control-flow node and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
     const loc = switch (stmt) {
-        .incref, .decref, .free => base.SourceLoc.none,
+        .incref, .decref, .decref_if_initialized, .free => base.SourceLoc.none,
         else => self.current_loc,
     };
     try self.cf_stmt_locs.append(self.allocator, loc);

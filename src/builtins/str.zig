@@ -931,11 +931,26 @@ pub const FindFirstResult = struct {
     after: RocStr,
 };
 
+/// Result layout for `Str.drop_prefix_caseless_ascii`.
+pub const DropPrefixCaselessAsciiResult = struct {
+    after: RocStr,
+    found: bool,
+};
+
 fn retainedSlice(source: RocStr, start: usize, length: usize, roc_ops: *RocOps) RocStr {
     if (length == 0) return RocStr.empty();
 
     source.incref(1, roc_ops);
     return substringUnsafe(source, start, length, roc_ops);
+}
+
+fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
+    std.debug.assert(length < SMALL_STRING_SIZE);
+
+    var result = RocStr.empty();
+    result.setLen(length);
+    @memcpy(result.asU8ptrMut()[0..length], bytes[0..length]);
+    return result;
 }
 
 /// Find the first delimiter occurrence and return seamless slices around it.
@@ -971,7 +986,7 @@ pub fn substringUnsafe(
     string: RocStr,
     start: usize,
     length: usize,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) RocStr {
     if (string.isSmallStr()) {
         if (start == 0) {
@@ -979,8 +994,7 @@ pub fn substringUnsafe(
             output.setLen(length);
             return output;
         }
-        const slice = string.asSlice()[start .. start + length];
-        return RocStr.fromSlice(slice, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + start, length);
     }
     if (string.bytes) |source_ptr| {
         if (start == 0 and string.isUnique()) {
@@ -1058,6 +1072,37 @@ pub fn strDropPrefix(
     // This is safe even for small strings (incref is a no-op for them).
     string.incref(1, roc_ops);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
+}
+
+/// Drop a prefix using the same ASCII-caseless semantics as
+/// `strCaselessAsciiEquals`.
+///
+/// On success, the returned `after` string is a retained seamless slice of
+/// `string`. On failure, `after` is empty and the source string is not retained.
+/// This shape is important for parser field dispatch: a miss must be only byte
+/// comparison work, not temporary string construction or refcount traffic.
+pub fn strDropPrefixCaselessAscii(
+    string: RocStr,
+    prefix: RocStr,
+    roc_ops: *RocOps,
+) DropPrefixCaselessAsciiResult {
+    const string_len = string.len();
+    const prefix_len = prefix.len();
+
+    if (prefix_len > string_len) {
+        return .{ .after = RocStr.empty(), .found = false };
+    }
+
+    if (!bytesCaselessAsciiEqualFast(string.asU8ptr(), prefix.asU8ptr(), prefix_len)) {
+        return .{ .after = RocStr.empty(), .found = false };
+    }
+
+    const after_len = string_len - prefix_len;
+    string.incref(1, roc_ops);
+    return .{
+        .after = substringUnsafe(string, prefix_len, after_len, roc_ops),
+        .found = true,
+    };
 }
 
 /// Str.drop_suffix - Returns string with suffix removed, or original if no match.
@@ -1740,7 +1785,7 @@ pub fn strTrim(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
     } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -1806,7 +1851,7 @@ pub fn strTrimStart(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
     } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -1872,7 +1917,7 @@ pub fn strTrimEnd(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr(), new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr(), new_len);
     } else if (update_mode == .InPlace or string.isUnique()) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -2614,6 +2659,21 @@ test "RocStr.staticSmallWordCaselessEq: compares selected lanes" {
     try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
     try std.testing.expect(roc_str.staticSmallWordCaselessEq(8, 6, words[1]));
     try std.testing.expect(!roc_str.staticSmallWordCaselessEq(8, 6, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: compares Cache-Control tail lane" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("Cache-Control", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("cache-control");
+    const mismatch = packStaticSmallForTest("contrxl");
+
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(8, 5, words[1]));
+    try std.testing.expect(!roc_str.staticSmallWordCaselessEq(8, 5, mismatch[0]));
 }
 
 test "RocStr.staticSmallWordCaselessEq: exact ineligible bytes and unicode lanes" {
@@ -4266,6 +4326,70 @@ test "caselessAsciiEquals: unicode capitalization still differs" {
     try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
 }
 
+test "dropPrefixCaselessAscii: small string success does not allocate" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("Cache-Control: 0", test_env.getOps());
+    const prefix = RocStr.fromSlice("cache-control", test_env.getOps());
+
+    const result = strDropPrefixCaselessAscii(source, prefix, test_env.getOps());
+
+    try std.testing.expect(result.found);
+    try std.testing.expect(result.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: miss does not retain or allocate" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("Cache-Control: 0", test_env.getOps());
+    const prefix = RocStr.fromSlice("content-length", test_env.getOps());
+
+    const result = strDropPrefixCaselessAscii(source, prefix, test_env.getOps());
+
+    try std.testing.expect(!result.found);
+    try std.testing.expect(result.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: non-ascii bytes match exactly only" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("café: 0", test_env.getOps());
+    const same_accent = RocStr.fromSlice("CAFé", test_env.getOps());
+    const different_accent = RocStr.fromSlice("CAFÉ", test_env.getOps());
+
+    const found = strDropPrefixCaselessAscii(source, same_accent, test_env.getOps());
+    const not_found = strDropPrefixCaselessAscii(source, different_accent, test_env.getOps());
+
+    try std.testing.expect(found.found);
+    try std.testing.expect(found.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expect(!not_found.found);
+    try std.testing.expect(not_found.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: punctuation case-bit pairs do not match" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("X_Auth: 0", test_env.getOps());
+    const exact_punctuation = RocStr.fromSlice("x_auth", test_env.getOps());
+    const case_bit_punctuation = RocStr.fromSlice("x\x7Fauth", test_env.getOps());
+
+    const found = strDropPrefixCaselessAscii(source, exact_punctuation, test_env.getOps());
+    const not_found = strDropPrefixCaselessAscii(source, case_bit_punctuation, test_env.getOps());
+
+    try std.testing.expect(found.found);
+    try std.testing.expect(found.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expect(!not_found.found);
+    try std.testing.expect(not_found.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
 test "strTrim: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4372,6 +4496,7 @@ test "strTrim: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "strTrimStart: empty" {
@@ -4459,6 +4584,7 @@ test "strTrimStart: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "strTrimEnd: empty" {
@@ -4543,6 +4669,7 @@ test "strTrimEnd: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "ReverseUtf8View: hello world" {

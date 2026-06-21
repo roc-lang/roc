@@ -373,6 +373,7 @@ str_trim_end_import: ?u32 = null,
 str_split_import: ?u32 = null,
 str_join_with_import: ?u32 = null,
 str_find_first_import: ?u32 = null,
+str_drop_prefix_caseless_ascii_import: ?u32 = null,
 str_reserve_import: ?u32 = null,
 str_release_excess_capacity_import: ?u32 = null,
 str_with_capacity_import: ?u32 = null,
@@ -1329,6 +1330,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_str_find_first: (source, delimiter, result, after_off, before_off, found_off) -> void
     const str_find_first_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.str_find_first_import = try self.module.addImport("env", "roc_str_find_first", str_find_first_type);
+
+    // roc_str_drop_prefix_caseless_ascii: (source, prefix, result, after_off, found_off) -> void
+    const str_drop_prefix_caseless_ascii_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.str_drop_prefix_caseless_ascii_import = try self.module.addImport("env", "roc_str_drop_prefix_caseless_ascii", str_drop_prefix_caseless_ascii_type);
 
     // Caseless equals: (str_a, str_b) -> i32
     self.str_caseless_ascii_equals_import = try self.module.addImport("env", "roc_str_caseless_ascii_equals", str_eq_type);
@@ -3156,6 +3161,11 @@ fn collectProcLocals(
                 try work.append(wa, inc.next);
             },
             .decref => |dec| {
+                try recordProcLocal(locals, dec.value);
+                try work.append(wa, dec.next);
+            },
+            .decref_if_initialized => |dec| {
+                try recordProcLocal(locals, dec.cond);
                 try recordProcLocal(locals, dec.value);
                 try work.append(wa, dec.next);
             },
@@ -7326,6 +7336,22 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             const cond_vt = try self.procLocalValType(sw.cond);
             const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
             try self.emitProcLocal(sw.cond);
+            switch (cond_vt) {
+                .i64 => {
+                    self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @bitCast(sw.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
+                },
+                .i32 => {
+                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(sw.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                },
+                .f32, .f64 => wasmInvariantFmt(
+                    "WASM/codegen invariant violated: switch_initialized_payload condition local {d} had non-integer value type {s}",
+                    .{ @intFromEnum(sw.cond), @tagName(cond_vt) },
+                ),
+            }
             try self.emitLocalSet(cond_local);
             const state = try self.allocator.create(SwitchEqState);
             state.* = .{ .cond_local = cond_local, .cond_vt = cond_vt, .branch_count = 1 };
@@ -7333,7 +7359,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = sw.uninitialized_branch, .stop = stop } });
             try work.append(wa, .switch_else);
             try work.append(wa, .{ .node = .{ .stmt_id = sw.initialized_branch, .stop = stop } });
-            try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = 1 } });
+            try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = @bitCast(sw.cond_mask) } });
         },
         .join => |j| {
             const jp_key = @intFromEnum(j.id);
@@ -7401,6 +7427,41 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .decref => |dec| {
             try self.generateRcStmt(dec.value, dec.rc, dec.atomicity, 1);
+            try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
+        },
+        .decref_if_initialized => |dec| {
+            const cond_vt = try self.procLocalValType(dec.cond);
+            try self.emitProcLocal(dec.cond);
+            switch (cond_vt) {
+                .i64 => {
+                    self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @bitCast(dec.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @bitCast(dec.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
+                },
+                .i32 => {
+                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(dec.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(dec.cond_mask)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+                },
+                .f32, .f64 => wasmInvariantFmt(
+                    "WASM/codegen invariant violated: decref_if_initialized condition local {d} had non-integer value type {s}",
+                    .{ @intFromEnum(dec.cond), @tagName(cond_vt) },
+                ),
+            }
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory;
+            self.cf_depth += 1;
+
+            try self.generateRcStmt(dec.value, dec.rc, dec.atomicity, 1);
+
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
             try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
         },
         .free => |free_stmt| {
@@ -10144,6 +10205,40 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
             try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
             try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
+            try self.emitCall(import_idx);
+            try self.emitFpOffset(result_offset);
+        },
+
+        .str_drop_prefix_caseless_ascii => {
+            const import_idx = self.str_drop_prefix_caseless_ascii_import orelse unreachable;
+            try self.emitProcLocal(args[0]);
+            const source = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(source);
+            try self.emitProcLocal(args[1]);
+            const prefix = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(prefix);
+
+            const ls = self.getLayoutStore();
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            if (ret_layout_val.tag != .struct_) unreachable;
+            const record_idx = ret_layout_val.getStruct().idx;
+            const record_data = ls.getStructData(record_idx);
+            const fields = ls.struct_fields.sliceRange(record_data.getFields());
+            if (fields.len != 2 or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
+            {
+                unreachable;
+            }
+
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
+            const result_align = try self.layoutStorageByteAlign(ll.ret_layout);
+            const result_offset = try self.allocStackMemory(result_size, result_align);
+            try self.emitLocalGet(source);
+            try self.emitLocalGet(prefix);
+            try self.emitFpOffset(result_offset);
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
             try self.emitCall(import_idx);
             try self.emitFpOffset(result_offset);
         },

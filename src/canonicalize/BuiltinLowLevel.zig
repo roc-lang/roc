@@ -185,6 +185,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
         try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
     }
+    if (env.common.findIdent("str_drop_prefix_caseless_ascii_raw")) |str_drop_prefix_caseless_ascii_ident| {
+        try low_level_map.put(str_drop_prefix_caseless_ascii_ident, .str_drop_prefix_caseless_ascii);
+    }
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
