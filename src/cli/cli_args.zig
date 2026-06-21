@@ -118,6 +118,7 @@ pub const RunArgs = struct {
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
+    timings: bool = false, // always show the per-phase timing breakdown
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
@@ -127,6 +128,7 @@ pub const CheckArgs = struct {
     path: []const u8, // the path of the roc file to be checked
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
     time: bool = false, // whether to print timing information
+    timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
@@ -142,6 +144,7 @@ pub const BuildArgs = struct {
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
+    timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
@@ -301,6 +304,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var main: ?[]const u8 = null;
     var time: bool = false;
+    var timings: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
     var max_threads: ?usize = null;
@@ -319,6 +323,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\Options:
             \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
             \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
+            \\      --timings      Show how long each compilation phase took (shown automatically when checking is slow)
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
             \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
@@ -339,6 +344,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--time")) {
             time = true;
+        } else if (mem.eql(u8, arg, "--timings")) {
+            timings = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
@@ -368,7 +375,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .timings = timings, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -379,6 +386,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var debug: bool = false;
     var allow_errors: bool = false;
     var verbose: bool = false;
+    var timings: bool = false;
     var no_cache: bool = false;
     var max_threads: ?usize = null;
     var wasm_memory: ?usize = null;
@@ -404,6 +412,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
+            \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
             \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
@@ -477,6 +486,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             z_dump_linker = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--timings")) {
+            timings = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.startsWith(u8, arg, "--jobs")) {
@@ -504,7 +515,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -991,6 +1002,9 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\Usage: roc experimental-lsp [OPTIONS]
             \\
             \\Options:
+            \\      --stdio            Communicate over stdio (the default and only
+            \\                         transport; accepted for compatibility with LSP
+            \\                         clients that pass it explicitly)
             \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
             \\      --debug-build      Log build environment actions to the debug log
             \\      --debug-syntax     Log syntax/type checking steps to the debug log
@@ -998,6 +1012,10 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\  -h, --help            Print help
             \\
             };
+        } else if (mem.eql(u8, arg, "--stdio")) {
+            // LSP clients (e.g. vscode-languageclient) append a transport flag to
+            // the server command line. We only ever speak LSP over stdio, so accept
+            // `--stdio` as a no-op rather than rejecting it as an unexpected argument.
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
         } else if (mem.eql(u8, arg, "--debug-build")) {
@@ -1025,6 +1043,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
+    var timings: bool = false;
     var max_threads: ?usize = null;
     var resolve_limits: ResolveLimitArgs = .{};
     var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
@@ -1079,6 +1098,8 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             no_cache = true;
         } else if (mem.eql(u8, arg, "--allow-errors")) {
             allow_errors = true;
+        } else if (mem.eql(u8, arg, "--timings")) {
+            timings = true;
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {
@@ -1108,7 +1129,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -1137,6 +1158,13 @@ test "roc run" {
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqualStrings("apparg1", result.run.app_args[0]);
         try testing.expectEqualStrings("apparg2", result.run.app_args[1]);
+        try testing.expectEqual(false, result.run.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--timings", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqual(true, result.run.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{"-v"});
@@ -1241,6 +1269,13 @@ test "roc build" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.build.path);
         try testing.expectEqual(.speed, result.build.opt);
+        try testing.expectEqual(false, result.build.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--timings", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.build.path);
+        try testing.expectEqual(true, result.build.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--opt=size" });
@@ -1444,6 +1479,13 @@ test "roc check" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expectEqual(false, result.check.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--timings", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expectEqual(true, result.check.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--main=mymain.roc", "foo.roc" });
@@ -1587,6 +1629,40 @@ test "roc glue" {
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc experimental-lsp" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"experimental-lsp"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(!result.experimental_lsp.debug_io);
+    }
+    {
+        // LSP clients (e.g. vscode-languageclient) append `--stdio`; it must be
+        // accepted as a no-op since stdio is the only transport we support.
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--debug-transport", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(result.experimental_lsp.debug_io);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--bogus" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("experimental-lsp", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--bogus", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }

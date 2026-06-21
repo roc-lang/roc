@@ -214,6 +214,14 @@ generate_roc_list_generic =
 	\\            return &[_]T{};
 	\\        }
 	\\
+	\\        /// Return every initialized element in the backing allocation.
+	\\        pub fn allocationItems(self: Self) []const T {
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return &[_]T{};
+	\\            const count = self.allocationElementCount();
+	\\            const ptr: [*]const T = @ptrCast(@alignCast(alloc_ptr));
+	\\            return ptr[0..count];
+	\\        }
+	\\
 	\\        /// Return the number of elements in the list.
 	\\        pub fn len(self: Self) usize {
 	\\            return self.length;
@@ -245,6 +253,15 @@ generate_roc_list_generic =
 	\\            }
 	\\            const ptr = self.elements_ptr orelse return null;
 	\\            return @ptrCast(ptr);
+	\\        }
+	\\
+	\\        fn allocationElementCount(self: Self) usize {
+	\\            if (self.isSeamlessSlice() and elements_refcounted) {
+	\\                const alloc_ptr = self.getAllocationPtr() orelse return 0;
+	\\                const ptr: [*]const usize = @ptrCast(@alignCast(alloc_ptr));
+	\\                return (ptr - 2)[0];
+	\\            }
+	\\            return self.length;
 	\\        }
 	\\
 	\\        /// Allocate a new list with space for `length` elements.
@@ -299,6 +316,13 @@ generate_roc_list_generic =
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
+	\\            return rc.* == 1;
+	\\        }
+	\\
+	\\        /// Return true if this list's allocation has exactly one counted ref.
+	\\        pub fn hasOneRef(self: Self) bool {
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return false;
+	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\            return rc.* == 1;
 	\\        }
 	\\    };
@@ -687,6 +711,10 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
+missing_type_compile_error = |type_id, mode| {
+	"    comptime { @compileError(\"missing glue type information for recursive ${mode} of type id ${U64.to_str(type_id)}\"); }\n"
+}
+
 decref_helper_name_from_repr = |type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
@@ -726,7 +754,7 @@ incref_helper_name_from_repr = |type_repr| {
 decref_stmt_for_type_id = |type_table, type_id, expr| {
 	match List.get(type_table, type_id) {
 		Ok(type_repr) => decref_stmt_for_repr(type_table, type_repr, expr)
-		Err(_) => ""
+		Err(_) => missing_type_compile_error(type_id, "decref")
 	}
 }
 
@@ -738,13 +766,13 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 			if elem_stmt == "" {
 				"    ${expr}.decref(roc_host);\n"
 			} else {
-				"    {\n        const list = ${expr};\n        if (list.isUnique()) {\n            for (list.items()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+				"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
 			}
 		}
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
 				Ok(RocFunction(_)) => "    decrefErasedCallable(${expr}, roc_host);\n"
-				_ => {
+				Ok(_) => {
 					inner_zig = type_id_to_zig(type_table, inner_id)
 					if inner_zig == "*anyopaque" {
 						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
@@ -754,6 +782,7 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
 					}
 				}
+				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")
 			}
 		RocRecord(_) => {
 			helper = decref_helper_name_from_repr(type_repr)
@@ -788,7 +817,7 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 incref_stmt_for_type_id = |type_table, type_id, expr| {
 	match List.get(type_table, type_id) {
 		Ok(type_repr) => incref_stmt_for_repr(type_table, type_repr, expr)
-		Err(_) => ""
+		Err(_) => missing_type_compile_error(type_id, "incref")
 	}
 }
 
@@ -799,7 +828,8 @@ incref_stmt_for_repr = |type_table, type_repr, expr| {
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
 				Ok(RocFunction(_)) => "    increfErasedCallable(${expr}, amount);\n"
-				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
+				Ok(_) => "    increfBox(@ptrCast(${expr}), amount);\n"
+				Err(_) => missing_type_compile_error(inner_id, "boxed-payload incref")
 			}
 		RocRecord(_) => {
 			helper = incref_helper_name_from_repr(type_repr)
@@ -916,7 +946,7 @@ generate_box_payload_decref_helpers = |type_table| {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
 					match List.get(type_table, inner_id) {
 						Ok(RocFunction(_)) => {}
-						_ => {
+						Ok(_) => {
 							inner_zig = type_id_to_zig(type_table, inner_id)
 							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
 								stmt = decref_stmt_for_type_id(type_table, inner_id, "payload.*")
@@ -925,6 +955,12 @@ generate_box_payload_decref_helpers = |type_table| {
 									"fn ${box_payload_decref_name(inner_id)}(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {\n    const payload: *${inner_zig} = @ptrCast(@alignCast(data_ptr orelse return));\n${stmt}}\n\n",
 								)
 							}
+						}
+						Err(_) => {
+							$helpers = Str.concat(
+								$helpers,
+								"fn ${box_payload_decref_name(inner_id)}(_: ?*anyopaque, _: *RocHost) callconv(.c) void {\n    comptime { @compileError(\"missing glue type information for boxed payload type id ${U64.to_str(inner_id)}\"); }\n}\n\n",
+							)
 						}
 					}
 				}

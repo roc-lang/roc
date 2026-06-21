@@ -672,9 +672,15 @@ const Lowerer = struct {
 
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = switch (source_fn.body) {
             .roc => |body_id| self.solved.lifted.exprLoc(body_id),
             .hosted => base.SourceLoc.none,
+        };
+        self.result.store.current_region = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprRegion(body_id),
+            .hosted => base.Region.zero(),
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
@@ -974,7 +980,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, proc, source.branch_regions);
+        }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -1481,7 +1487,10 @@ const Lowerer = struct {
         const expr_ty = try self.lowerExprTy(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -2546,7 +2555,10 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.result.store.current_region = self.solved.lifted.stmtRegion(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
@@ -3052,6 +3064,15 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const elems = self.solved.lifted.patSpan(list.patterns);
         const fixed_count: i64 = @intCast(elems.len);
+
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
 
         // The list length is read by the length test, by the indices of fixed
         // elements that match from the back, and by the rest slice. It is
@@ -4330,7 +4351,9 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .comptime_sites = try cloneComptimeSites(allocator, &program.comptime_sites),
         .source_files = source_files,
         .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .expr_regions = try cloneArrayList(base.Region, allocator, &program.expr_regions),
         .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .stmt_regions = try cloneArrayList(base.Region, allocator, &program.stmt_regions),
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -4346,6 +4369,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
             break :blk names;
         },
         .current_loc = program.current_loc,
+        .current_region = program.current_region,
     };
 }
 
@@ -4360,6 +4384,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: *const std.ArrayList
         cloned.appendAssumeCapacity(.{
             .kind = site.kind,
             .region = site.region,
+            .checked_site = site.checked_site,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
         });
     }
@@ -4383,40 +4408,41 @@ fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedName
     var cloned = check.CheckedNames.NameStore.init(allocator);
     errdefer cloned.deinit();
 
-    for (source.module_names.items, 0..) |text, index| {
-        const id = try cloned.internModuleName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed module-name ids");
-    }
-    for (source.type_names.items, 0..) |text, index| {
-        const id = try cloned.internTypeName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed type-name ids");
-    }
-    for (source.method_names.items, 0..) |text, index| {
-        const id = try cloned.internMethodName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed method-name ids");
-    }
-    for (source.record_field_labels.items, 0..) |text, index| {
-        const id = try cloned.internRecordFieldLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed record-field ids");
-    }
-    for (source.tag_labels.items, 0..) |text, index| {
-        const id = try cloned.internTagLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed tag ids");
-    }
-    for (source.export_names.items, 0..) |text, index| {
-        const id = try cloned.internExportName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed export-name ids");
-    }
-    for (source.external_symbol_names.items, 0..) |text, index| {
-        const id = try cloned.internExternalSymbolName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed external-symbol ids");
-    }
-    for (source.proc_bases.items, 0..) |key, index| {
+    // Re-intern every name in serial-id order; the ids must come back identical.
+    try reinternNames("module-name", &source.module_names, &cloned, NameStore.internModuleName);
+    try reinternNames("type-name", &source.type_names, &cloned, NameStore.internTypeName);
+    try reinternNames("method-name", &source.method_names, &cloned, NameStore.internMethodName);
+    try reinternNames("record-field", &source.record_field_labels, &cloned, NameStore.internRecordFieldLabel);
+    try reinternNames("tag", &source.tag_labels, &cloned, NameStore.internTagLabel);
+    try reinternNames("export-name", &source.export_names, &cloned, NameStore.internExportName);
+    try reinternNames("external-symbol", &source.external_symbol_names, &cloned, NameStore.internExternalSymbolName);
+    for (source.proc_bases.items.items, 0..) |key, index| {
         const id = try cloned.internProcBase(key);
         if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed proc-base ids");
     }
 
     return cloned;
+}
+
+const NameStore = check.CheckedNames.NameStore;
+
+/// Re-intern every text of one source interner into `dest` in serial-id order,
+/// asserting each id round-trips to its original position. A name interner
+/// deduplicates, so this reproduces ids `0..count-1` exactly UNLESS the source
+/// held the same text under two ids — dedup would collapse those and shift every
+/// later id, which the per-id check turns into a loud invariant break rather than
+/// a silently divergent clone.
+fn reinternNames(
+    comptime label: []const u8,
+    source: anytype,
+    dest: *NameStore,
+    comptime intern: anytype,
+) std.mem.Allocator.Error!void {
+    var i: u32 = 0;
+    while (i < source.count()) : (i += 1) {
+        const id = try intern(dest, source.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed " ++ label ++ " ids (duplicate text in source?)");
+    }
 }
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {

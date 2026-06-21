@@ -12,8 +12,8 @@ step = |boxed| {
     }
 }
 
-main! = || {
-    b0 = Box.box(0)
+main! = |seed| {
+    b0 = Box.box(seed)
     b1 = step(b0)
     b2 = step(b1)
     b3 = step(b2)
@@ -31,7 +31,7 @@ main! = || {
     b15 = step(b14)
     b16 = step(b15)
 
-    if Box.unbox(b16) == 96 {
+    if Box.unbox(b16) == seed + 96 {
         "ok"
     } else {
         "bad"

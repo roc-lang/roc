@@ -520,7 +520,7 @@ pub const NumeralDispatchPlan = extern struct {
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
-pub const NumericSuffixType = extern struct {
+pub const NumericSuffixTarget = extern struct {
     node_idx: u32,
     kind: u32,
     data1: u32,
@@ -532,6 +532,7 @@ pub const NumericSuffixType = extern struct {
         builtin,
         local,
         external,
+        invalid,
     };
 
     pub const Target = union(enum) {
@@ -541,9 +542,10 @@ pub const NumericSuffixType = extern struct {
             import_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
+        invalid,
     };
 
-    pub fn target(self: NumericSuffixType) Target {
+    pub fn target(self: NumericSuffixTarget) Target {
         return switch (@as(Kind, @enumFromInt(self.kind))) {
             .builtin => .{ .builtin = @enumFromInt(self.data1) },
             .local => .{ .local = @enumFromInt(self.data1) },
@@ -551,6 +553,7 @@ pub const NumericSuffixType = extern struct {
                 .import_idx = @enumFromInt(self.data1),
                 .target_node_idx = self.data2,
             } },
+            .invalid => .invalid,
         };
     }
 };
@@ -646,7 +649,7 @@ numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// node plus the constraint's target and function type vars.
 quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
-numeric_suffix_types: NumericSuffixType.SafeList,
+numeric_suffix_targets: NumericSuffixTarget.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -804,7 +807,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
-        .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
+        .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -826,7 +829,7 @@ pub fn deinit(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
-    self.numeric_suffix_types.deinit(self.gpa);
+    self.numeric_suffix_targets.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -867,7 +870,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
-    self.numeric_suffix_types.deinit(self.gpa);
+    self.numeric_suffix_targets.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -3120,7 +3123,7 @@ pub const Serialized = extern struct {
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
-    numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
+    numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3183,7 +3186,7 @@ pub const Serialized = extern struct {
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
         try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
-        try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
+        try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3237,7 +3240,7 @@ pub const Serialized = extern struct {
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
             .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
-            .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
+            .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
         };
 
         return env;
@@ -3294,7 +3297,7 @@ pub const Serialized = extern struct {
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
+            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3474,46 +3477,52 @@ pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralD
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.
-pub fn recordNumericSuffixType(
+pub fn recordNumericSuffixTarget(
     self: *Self,
     node_idx: Node.Idx,
-    target: NumericSuffixType.Target,
+    target: NumericSuffixTarget.Target,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
-    const suffix_type = switch (target) {
-        .builtin => |num_kind| NumericSuffixType{
+    const suffix_target = switch (target) {
+        .builtin => |num_kind| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.builtin),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.builtin),
             .data1 = @intFromEnum(num_kind),
             .data2 = 0,
         },
-        .local => |stmt_idx| NumericSuffixType{
+        .local => |stmt_idx| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.local),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.local),
             .data1 = @intFromEnum(stmt_idx),
             .data2 = 0,
         },
-        .external => |external| NumericSuffixType{
+        .external => |external| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.external),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
         },
+        .invalid => NumericSuffixTarget{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.invalid),
+            .data1 = 0,
+            .data2 = 0,
+        },
     };
 
-    for (self.numeric_suffix_types.items.items) |*existing| {
+    for (self.numeric_suffix_targets.items.items) |*existing| {
         if (existing.node_idx != raw_node) continue;
-        existing.* = suffix_type;
+        existing.* = suffix_target;
         return;
     }
-    _ = try self.numeric_suffix_types.append(self.gpa, suffix_type);
+    _ = try self.numeric_suffix_targets.append(self.gpa, suffix_target);
 }
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
-pub fn numericSuffixTypeForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixType {
+pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
     const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeric_suffix_types.items.items) |suffix_type| {
-        if (suffix_type.node_idx == raw_node) return suffix_type;
+    for (self.numeric_suffix_targets.items.items) |suffix_target| {
+        if (suffix_target.node_idx == raw_node) return suffix_target;
     }
     return null;
 }
