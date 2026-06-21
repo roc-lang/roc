@@ -176,7 +176,7 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) anyerror!De
         }
     }
 
-    const stub_size = jumpStubSize();
+    const stub_size = try jumpStubSize();
     const stub_section_offset = std.mem.alignForward(usize, view.code.len, 16);
     for (function_stubs.items, 0..) |*stub, i| {
         stub.offset = stub_section_offset + i * stub_size;
@@ -255,15 +255,17 @@ fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!us
     return max_alignment;
 }
 
-fn jumpStubSize() usize {
+const JumpStubError = RunImage.ImageError || error{UnsupportedPlatform};
+
+fn jumpStubSize() JumpStubError!usize {
     return switch (builtin.cpu.arch) {
         .x86_64 => 13,
         .aarch64, .aarch64_be => 20,
-        else => unreachable,
+        else => error.UnsupportedPlatform,
     };
 }
 
-fn writeJumpStub(buf: []u8, target_addr: usize) RunImage.ImageError!void {
+fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
     switch (builtin.cpu.arch) {
         .x86_64 => {
             if (buf.len < 13) return error.InvalidDevRunImage;
