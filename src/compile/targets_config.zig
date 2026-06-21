@@ -173,7 +173,7 @@ pub const TargetsConfig = struct {
 
     /// Get the default target for commands that must execute the result on this host.
     /// This excludes build-compatible targets such as wasm32 that are not native
-    /// process executables for `roc run`, and targets that don't produce executables.
+    /// process executables for the default `roc` command, and targets that don't produce executables.
     pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
         for (self.targets) |spec| {
             if (spec.output == .exe and spec.target.isExecutableOnHost()) {

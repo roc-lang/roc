@@ -19,7 +19,34 @@ pub const platform_main_source = @embedFile("platform/main.roc");
 /// Embedded source for the echo platform's Echo.roc module (hosted line! function).
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
-/// Build-only Linux default platform. Unlike `roc run`, linked Linux output
+/// Default `roc` command platform source used by the shared-memory shim path.
+/// The process entrypoint lives in the generated shim host, so this platform
+/// only exposes the Roc entrypoint and binds echo! to the default runtime
+/// object's hosted symbol.
+pub const run_shim_platform_main_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host! }
+    \\    hosted { "roc_default_echo_line": Echo.line! }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : List(Str) => I8
+    \\main_for_host! = |args|
+    \\    match main!(args) {
+    \\        Ok(_) => 0
+    \\        Err(Exit(code)) => code
+    \\        Err(other) => {
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+    \\            1
+    \\        }
+    \\    }
+    \\
+;
+
+/// Build-only Linux default platform. Unlike the default `roc` command, linked Linux output
 /// owns its process entrypoint and lowers echo directly in the backend.
 pub const build_platform_main_source =
     \\platform ""

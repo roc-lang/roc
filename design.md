@@ -3181,9 +3181,9 @@ Shared:  shared library (.so, .dylib, .dll). For wasm32, a reactor module:
          into a component with wit-component.
 ```
 
-`roc run` requires the selected target's entry to be `output: Exe`; library
-and object platforms report that the output must be linked or loaded by a
-host application instead.
+The default `roc` command requires the selected target's entry to be
+`output: Exe`; library and object platforms report that the output must be
+linked or loaded by a host application instead.
 
 The output that static archives previously stood in for on wasm (a linked,
 loadable, no-entry module) is `Shared`, not `Archive`; `Archive` is never a
@@ -3241,8 +3241,8 @@ must be hidden in shared libraries — on ELF, default-visibility exports are
 preemptible, and two Roc-built libraries loaded into one process would
 otherwise interpose each other's runtime symbols.
 
-Interpreter execution (roc run, embedded interpreter builds, REPL,
-compile-time constants, glue evaluation) keeps the same host objects: a
+Interpreter execution (the default `roc` command, embedded interpreter builds,
+REPL, compile-time constants, glue evaluation) keeps the same host objects: a
 generated translation shim defines the exported entrypoints, marshals their
 natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted
