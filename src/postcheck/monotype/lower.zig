@@ -1393,6 +1393,7 @@ const Builder = struct {
                             .use = backing_use,
                         },
                     },
+                    .declared_order = try self.declaredOrderForNominal(view, nominal),
                 } };
             },
         };
@@ -1706,6 +1707,103 @@ const Builder = struct {
             if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
         }
         Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
+    }
+
+    const NominalDeclLookup = struct {
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+        /// Unnamed padding field types (declared order), in `view`'s store. For a
+        /// box-payload capability this is the *instance's* substituted padding, so
+        /// type-parameterized padding reserves its instantiated size; for a direct
+        /// declaration it is the declaration's own padding types.
+        padding_field_tys: []const checked.CheckedTypeId,
+    };
+
+    /// Resolves a nominal's source declaration across every representation that
+    /// has one, for reading declared field order. The box-payload representation
+    /// is the common case for record nominals (assigned while the checked module
+    /// data is built), so it must be handled, not just `*_declaration`.
+    fn nominalDeclarationFor(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclLookup {
+        return switch (nominal.representation) {
+            .local_declaration => |id| blk: {
+                const decl = view.types.nominalDeclarationById(id);
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(view.types) };
+            },
+            .imported_declaration => |imported| blk: {
+                const sv = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                const decl = sv.types.nominalDeclarationById(imported.declaration);
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(sv.types) };
+            },
+            .local_box_payload_capability => |cap| blk: {
+                const capability = view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(view.interface_capabilities) };
+            },
+            .imported_box_payload_capability => |cap| blk: {
+                const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
+                const capability = sv.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
+            },
+            .builtin, .opaque_without_backing => null,
+        };
+    }
+
+    /// Builds the declared-field-order span for a nominal/opaque record backing
+    /// from its source declaration (the declaration backing preserves source
+    /// order, unlike the lexicographically-sorted lowered row). Returns the empty
+    /// span for non-record backings or when no declaration is available. The
+    /// span feeds layout selection only; the lowered row stays lexicographic.
+    fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return Type.Span.empty();
+        const source_decl = lookup.declaration.nominal.source_decl orelse return Type.Span.empty();
+        // Read declared field order from the declaration's record annotation,
+        // which preserves source order (the checked row and every lowered row
+        // sort lexicographically). `lookup.view` is the declaring module, so this
+        // is correct across module boundaries.
+        const module_env = lookup.view.module_env;
+        const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
+            .s_nominal_decl => |decl| decl.anno,
+            else => return Type.Span.empty(),
+        };
+        // The backing record may be wrapped in parentheses; unwrap before reading
+        // its fields (the backing type itself already handles parens).
+        var record_anno = anno_idx;
+        const record = while (true) {
+            switch (module_env.store.getTypeAnno(record_anno)) {
+                .parens => |parens| record_anno = parens.anno,
+                .record => |record| break record,
+                else => return Type.Span.empty(),
+            }
+        };
+        const fields = module_env.store.sliceAnnoRecordFields(record.fields);
+        if (fields.len == 0) return Type.Span.empty();
+        // Unnamed fields are layout padding; their resolved checked types ride on
+        // the declaration in declared order and are pulled sequentially as each
+        // unnamed field is encountered while walking the declared annotation.
+        // Padding types come from the lookup, which for an instantiated nominal
+        // (box-payload capability) carries the *instance's* substituted padding
+        // types — so a type-parameterized padding field (`_ : a`) reserves the
+        // instantiated size, exactly like a named field of the same type.
+        const padding_types = lookup.padding_field_tys;
+        const padding_view = lookup.view;
+        var padding_cursor: usize = 0;
+        const entries = try self.allocator.alloc(Type.DeclaredField, fields.len);
+        defer self.allocator.free(entries);
+        for (fields, 0..) |field_idx, i| {
+            const field = module_env.store.getAnnoRecordField(field_idx);
+            if (field.is_unnamed) {
+                if (padding_cursor >= padding_types.len) {
+                    Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
+                }
+                const checked_ty = padding_types[padding_cursor];
+                padding_cursor += 1;
+                entries[i] = .{ .padding = try self.lowerType(padding_view, checked_ty) };
+            } else {
+                entries[i] = .{ .named = try self.program.names.internRecordFieldLabel(module_env.getIdentText(field.name)) };
+            }
+        }
+        return try self.program.types.addDeclaredFields(entries);
     }
 
     fn providedConstNode(self: *Builder, data: checked.ProvidedDataExport) ConstNode {
@@ -3153,6 +3251,7 @@ const BodyContext = struct {
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
             .backing = backing,
+            .declared_order = try self.builder.declaredOrderForNominal(self.view, nominal),
         } });
     }
 

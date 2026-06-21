@@ -911,15 +911,23 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => {
                 const struct_idx = lay.getStruct().idx;
                 const data = self.layouts().getStructData(struct_idx);
-                const field_count = data.fields.count;
-                const members = try self.allocator.alloc(LlvmBuilder.Metadata, field_count);
+                const sorted_fields = self.layouts().struct_fields.sliceRange(data.getFields());
+                // Padding spacers are not real members; describe only named fields.
+                var named_count: usize = 0;
+                for (0..sorted_fields.len) |i| {
+                    if (!sorted_fields.get(@intCast(i)).is_padding) named_count += 1;
+                }
+                const members = try self.allocator.alloc(LlvmBuilder.Metadata, named_count);
                 defer self.allocator.free(members);
-                for (members, 0..) |*member, original_index| {
-                    const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
-                    const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(original_index));
+                var member_index: usize = 0;
+                for (0..sorted_fields.len) |sorted_index| {
+                    const field = sorted_fields.get(@intCast(sorted_index));
+                    if (field.is_padding) continue;
+                    const field_layout = field.layout;
+                    const field_offset = self.layouts().getStructFieldOffset(struct_idx, @intCast(sorted_index));
                     const field_sa = self.sizeAlignOf(field_layout);
-                    member.* = builder.debugMemberType(
-                        builder.metadataStringFmt("f{d}", .{original_index}) catch return error.OutOfMemory,
+                    members[member_index] = builder.debugMemberType(
+                        builder.metadataStringFmt("f{d}", .{field.index}) catch return error.OutOfMemory,
                         null,
                         self.debug_compile_unit.unwrap(),
                         0,
@@ -928,6 +936,7 @@ pub const MonoLlvmCodeGen = struct {
                         @as(u64, @intCast(field_sa.alignment.toByteUnits())) * 8,
                         @as(u64, field_offset) * 8,
                     ) catch return error.OutOfMemory;
+                    member_index += 1;
                 }
                 return builder.debugStructType(
                     builder.metadataString("Record") catch return error.OutOfMemory,
@@ -5177,14 +5186,20 @@ pub const MonoLlvmCodeGen = struct {
                         const layout_val = self.layoutValue(state.layout_idx);
                         const info = self.layouts().getStructInfo(layout_val);
                         const field = info.fields.get(@intCast(state.index));
-                        const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(state.index));
-                        try work.append(wa, .{ .struct_combine = state });
-                        try work.append(wa, .{ .eval = .{
-                            .lhs_ptr = try self.offsetPtr(state.lhs_ptr, offset),
-                            .rhs_ptr = try self.offsetPtr(state.rhs_ptr, offset),
-                            .layout_idx = field.layout,
-                            .out = &state.field_out,
-                        } });
+                        if (field.is_padding) {
+                            // Padding spacers hold uninitialized bytes; never compare them.
+                            state.index += 1;
+                            try work.append(wa, .{ .struct_step = state });
+                        } else {
+                            const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(state.index));
+                            try work.append(wa, .{ .struct_combine = state });
+                            try work.append(wa, .{ .eval = .{
+                                .lhs_ptr = try self.offsetPtr(state.lhs_ptr, offset),
+                                .rhs_ptr = try self.offsetPtr(state.rhs_ptr, offset),
+                                .layout_idx = field.layout,
+                                .out = &state.field_out,
+                            } });
+                        }
                     }
                 },
                 .struct_combine => |state| {

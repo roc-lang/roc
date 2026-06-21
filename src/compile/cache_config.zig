@@ -26,7 +26,9 @@ pub const Constants = struct {
     /// top-level-field hash can't see (e.g. a node-payload layout edit).
     /// 3: annotation node payload gained mentions/introduces-type-var flags.
     /// 4: numeric suffix metadata was renamed to suffix targets.
-    pub const CACHE_VERSION = 4;
+    /// 5: nominal record declared-field-order and unnamed padding fields added
+    ///    node, diagnostic, and type-annotation payloads.
+    pub const CACHE_VERSION = 5;
 };
 
 /// Configuration for the Roc cache system.

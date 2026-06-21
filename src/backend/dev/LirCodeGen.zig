@@ -7306,6 +7306,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var fi: u32 = field_count;
                     while (fi > 0) {
                         fi -= 1;
+                        // Padding spacers hold uninitialized bytes; never compare them.
+                        if (ls.getStructFieldIsPadding(struct_idx, @intCast(fi))) continue;
                         const field_size = ls.getStructFieldSize(struct_idx, @intCast(fi));
                         if (field_size == 0) continue;
                         const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(fi));
