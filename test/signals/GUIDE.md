@@ -155,29 +155,32 @@ the next value from the current one.
 
 For a real browser host, the initial load looks like this:
 
-1. Call `roc_ui_init`. Roc runs `main({})` once and returns the graph
-   description plus the initial render patches.
-2. The host ingests the description: it mints a dense integer id per node, builds
-   the dependency adjacency and a topological ordering, and stores each node's
-   retained transform closure.
+1. Call `roc_ui_init`. Roc runs `main({})` once and returns the descriptor tree
+   (an `Elem` with embedded signal edges and retained closures).
+2. The host ingests the descriptor: it mints a dense integer id per node, builds
+   the dependency adjacency and a topological ordering, stores each node's
+   retained transform closure, computes the initial values by calling those
+   closures in dependency order, and produces the initial render patches.
 3. The host applies the initial patches to the DOM and binds listeners from
    `BindClick`, `BindInput`, and `BindCheck`.
 
 When a user types in the `Name` input:
 
 1. The bound DOM listener fires. The host looks up the input's source node id in
-   O(1) and calls `roc_ui_event` with that id and the typed value `"Ada"`.
-2. Roc applies the source's reducer and returns the new source value (and any
-   effect requests).
+   O(1) and calls that source's retained reducer closure directly with the typed
+   value `"Ada"`. There is no per-event call back into a Roc entrypoint; after
+   the one-time `roc_ui_init`, the host drives every event in-process by invoking
+   the retained closures it already holds.
+2. The reducer produces the new source value (and any effect requests).
 3. The host marks that source dirty and walks its dependents **in dependency
-   order**, asking Roc (in a batch) to recompute only the derived nodes whose
-   inputs changed. Where a recomputed value equals its previous value,
-   propagation stops there.
+   order**, invoking only the retained transform closures whose inputs changed.
+   Where a recomputed value equals its previous value (`is_eq`), propagation
+   stops there.
 4. The host emits the minimal render patches for the sinks whose value changed.
 
 The host never stores Roc callbacks inside DOM nodes, never evaluates signals
-itself, and never scans the graph to guess what changed. It routes explicit
-events into Roc and applies explicit patches from the runtime.
+itself, and never scans the graph to guess what changed. It calls the retained
+closures it holds and applies explicit patches from the runtime.
 
 The patch command set:
 
@@ -189,6 +192,42 @@ The patch command set:
 
 The simulated host applies these against an in-memory element tree; a browser
 host maps the same commands onto real DOM operations.
+
+## One Call Into Roc at Startup, Direct Calls After
+
+A natural question: if the host calls `roc_ui_init` only once, how does Roc keep
+running your code — your button handlers, your derived values, and the new rows a
+growing list needs?
+
+The answer is that `roc_ui_init` does not just return *data*; it returns your
+*functions*, packaged inside the description. Every handler you write
+(`|n| n + 1`), every `Signal.map` transform, and every `Ui.each` row builder
+(`|key, row| ...`) is a real Roc function. They all travel to the host once,
+inside the `Elem`, as retained closures — the host keeps a direct pointer to each
+compiled function plus the values it captured.
+
+After that, the host runs your Roc code by **calling those pointers directly**,
+not by re-entering a Roc entry point:
+
+- **A click** runs your reducer function directly to produce the next state
+  value.
+- **A changed signal** runs your `map`/`map2`/`combine` functions directly to
+  recompute derived values.
+- **A new list row or a flipped branch** runs your row builder or branch function
+  directly to produce a fresh piece of UI structure.
+
+That last point is the one that surprises people: even when Roc must *create new
+UI* at runtime (a new row appears in a list), it does not need a new entry point.
+The host already holds your row-builder function from init; it just calls it with
+the new row's data and gets back the new `Elem`. The only difference from a click
+handler is that this function returns *UI* instead of a *value*.
+
+This is the heart of the performance story. There is exactly one boundary
+crossing into Roc — `roc_ui_init`, at startup. Everything after it is an ordinary
+in-process function call into code that is already compiled and already in memory,
+with its captured data riding along. Nothing is marshaled across a generic FFI
+door per event, and the host never asks Roc "what should I do?" — it already holds
+the exact function for the job.
 
 ## Identity Without Keys
 
@@ -340,9 +379,14 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
   attributes; `Html.on_click`, `Html.on_input`, and `Html.on_check` for handlers.
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
-  own local state.
+  own local state (planned; see `DESIGN.md` Definition of Done).
 
 ## Real-World Effects
+
+> Status: effects are a designed-but-not-yet-implemented capability. The model
+> below is the target shape; `Signal.from_task`, `Signal.interval`,
+> `Ui.on_change`, and `Ui.on_cleanup` are on the Definition-of-Done list in
+> `DESIGN.md`, not yet in the platform.
 
 Effects (HTTP, timers, storage, navigation) follow the same ownership rule as
 rendering: Roc describes what should happen; the host performs it; results
