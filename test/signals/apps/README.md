@@ -20,6 +20,10 @@ applications that use `../platform/main.roc` and are run by
   test-only, not part of `run-signals-bench`, and proves reusable stateful
   `Ui.component` scopes keep local state across keyed row movement while row
   disposal still drops the removed component instance.
+- `async_effects.roc` is a Phase 2 G4 regression fixture. It is test-only, not
+  part of `run-signals-bench`, and proves fake task results, `Ui.on_change`
+  commands, task-status rendering, pending request cancellation, and cleanup
+  descriptors.
 
 Useful checks from the repository root:
 
@@ -29,6 +33,7 @@ Useful checks from the repository root:
 ./zig-out/bin/roc check test/signals/apps/kanban_board.roc
 ./zig-out/bin/roc check test/signals/apps/identity_stress.roc
 ./zig-out/bin/roc check test/signals/apps/component_composition.roc
+./zig-out/bin/roc check test/signals/apps/async_effects.roc
 
 ./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-ops-dashboard test/signals/apps/ops_dashboard.roc
 ./zig-out/bin/signals-ops-dashboard test/signals/apps/ops_dashboard.txt
@@ -44,6 +49,9 @@ Useful checks from the repository root:
 
 ./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-component-composition test/signals/apps/component_composition.roc
 ./zig-out/bin/signals-component-composition test/signals/apps/component_composition.txt
+
+./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-async-effects test/signals/apps/async_effects.roc
+./zig-out/bin/signals-async-effects test/signals/apps/async_effects.txt
 ```
 
 The same binaries can replay their spec actions as benchmark traces:
@@ -65,6 +73,9 @@ expect_visible role:heading name:"Checkout wizard"
 fill label:"Email" "team@example.com"
 check label:"Accept terms"
 click role:button name:"Place order"
+resolve_task "lookup" "Roc result"
+expect_pending_task "lookup" 0
+expect_cleanup "async panel cleanup" 1
 ```
 
 The apps expose pure `main : {} -> Elem.Elem`. Signal state is retained by

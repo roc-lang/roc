@@ -1,0 +1,37 @@
+# Async effects lifecycle scenario
+
+expect_visible role:heading name:"Async effects"
+expect_visible role:region name:"Async panel"
+expect_text text:"Status: loading" "Status: loading"
+expect_pending_task "lookup" 0
+expect_cleanup "async panel cleanup" 0
+
+fill label:"Search" "roc"
+expect_pending_task "lookup" 1
+expect_text text:"Status: loading" "Status: loading"
+
+resolve_task "lookup" "Roc result"
+expect_pending_task "lookup" 0
+expect_text text:"Status: done Roc result" "Status: done Roc result"
+
+fill label:"Search" "zig"
+expect_pending_task "lookup" 1
+expect_text text:"Status: loading" "Status: loading"
+
+reject_task "lookup" "offline"
+expect_pending_task "lookup" 0
+expect_text text:"Status: failed offline" "Status: failed offline"
+
+fill label:"Search" "cancel me"
+expect_pending_task "lookup" 1
+
+click role:button name:"Toggle panel"
+expect_absent role:region name:"Async panel"
+expect_visible role:region name:"Panel closed"
+expect_pending_task "lookup" 0
+expect_cleanup "async panel cleanup" 1
+
+click role:button name:"Toggle panel"
+expect_visible role:region name:"Async panel"
+expect_text text:"Status: loading" "Status: loading"
+expect_cleanup "async panel cleanup" 1

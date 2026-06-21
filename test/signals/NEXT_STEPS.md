@@ -44,31 +44,35 @@ history.
   component app proves multiple stateful instances keep separate construction
   identities across keyed row movement and dispose state when the owning row
   scope is removed.
+- `Signal.fake_task`/`Signal.from_task`, `Signal.fold_task`, `Signal.start_str`,
+  `Ui.on_change`, and `Ui.on_cleanup` now have host-owned lifecycle support.
+  The async effects app proves fake task result injection, `[Loading, Done,
+  Failed]` rendering through a fold, pending request cancellation when the
+  owning scope is disposed, and cleanup descriptor execution.
 
 ## Remaining Design Gaps
 
 These map one-to-one to the Definition of Done in `DESIGN.md`. The platform is
 "done" when all are closed and the success-metric specs are green.
 
-1. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
-   `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` need a host-owned
-   lifecycle tied to explicit scope ownership and cleanup.
+1. **Timer subscriptions are unimplemented (DoD 4).** `Signal.interval` still
+   needs a host-owned lifecycle tied to explicit scope ownership and cleanup.
 
 ## Next Green Slices
 
 Take one slice at a time and commit each green result.
 
-1. **Effect lifecycle scaffold (closes gap 4).** Add the smallest host-owned
-   subscription lifecycle for one cleanup-safe effect source.
+1. **Timer subscription lifecycle (finishes gap 4).** Add `Signal.interval`
+   as a host-owned source with explicit scope ownership and cleanup.
 
 ### Capability apps (add alongside the slices, smallest proof only)
 
 Each app maps to exactly one Definition-of-Done capability. Keep them minimal and
 assertion-tight; no catalog fixtures.
 
-- **Async / effects app** — `Signal.from_task` with injected fake results,
-  `[Loading, Done, Failed]` rendering, `Ui.on_change` firing a request, scope
-  disposal cancelling in-flight work via `Ui.on_cleanup` (proves gap 4).
+- **Async / effects app** — implemented in `async_effects.roc`; keep it minimal
+  and focused on task results, change-triggered commands, pending cancellation,
+  and cleanup execution.
 
 Avoid broad fixture catalogs, extra DOM polish, new metric counters, or coverage
 around already-solved identity behavior unless it is the smallest proof for one
@@ -84,6 +88,7 @@ committing code changes.
 - Platform Roc or ABI changes:
   `./zig-out/bin/roc check test/signals/apps/checkout_wizard.roc`
   `./zig-out/bin/roc check test/signals/apps/component_composition.roc`
+  `./zig-out/bin/roc check test/signals/apps/async_effects.roc`
   `./zig-out/bin/roc check test/signals/apps/identity_stress.roc`
   `./zig-out/bin/roc check test/signals/apps/kanban_board.roc`
   `./zig-out/bin/roc check test/signals/apps/ops_dashboard.roc`

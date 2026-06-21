@@ -1,6 +1,10 @@
 import HostValue exposing [HostValue]
 import Node
 
+TaskStatus(a, err) := [Loading, Done(a), Failed(err)]
+
+Task(a, err) := { source : Node.TaskSource, tag : Box(HostValue.TypeTag(TaskStatus(a, err))) }
+
 ## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor
 ## referencing state/source binders. The `a` lives only in Roc's type system.
 ## Runtime values are opaque host-owned cells; each edge carries the exact typed
@@ -14,6 +18,143 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 
 	from_expr : Node.SignalExpr, Box(HostValue.TypeTag(a)) -> Signal(a)
 	from_expr = |expr, tag| { expr: Box.box(expr), tag }
+
+	from_task : Task(a, err) -> Signal(TaskStatus(a, err))
+	from_task = |task| { expr: Box.box(Node.SignalExpr.TaskSource(task.source)), tag: task.tag }
+
+	fold_task :
+		Task(a, err), b, (a -> b), (err -> b) -> Signal(b)
+			where [
+				b.is_eq : b, b -> Bool,
+			]
+	fold_task = |task, loading, done, failed| {
+		status = Signal.from_task(task)
+		Signal.map(
+			status,
+			|value| match value {
+				TaskStatus.Loading => loading
+				TaskStatus.Done(done_value) => done(done_value)
+				TaskStatus.Failed(err_value) => failed(err_value)
+			},
+		)
+	}
+
+	fake_task :
+		Str, (Str -> a), (Str -> err) -> Task(a, err)
+			where [
+				a.is_eq : a, a -> Bool,
+				err.is_eq : err, err -> Bool,
+			]
+	fake_task = |name, to_done, to_failed| {
+		token = Box.box(0)
+		status_tag = HostValue.new_tag({})
+		payload_tag = HostValue.new_str_payload_tag({})
+
+		loading : TaskStatus(a, err)
+		loading = TaskStatus.Loading
+
+		initial : {} -> HostValue
+		initial = |_| HostValue.store_tagged(Box.box(loading), status_tag)
+
+		done : HostValue -> HostValue
+		done = |payload_hv| {
+			payload : Str
+			payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_tag))
+			status : TaskStatus(a, err)
+			status = TaskStatus.Done(to_done(payload))
+			HostValue.store_tagged(Box.box(status), status_tag)
+		}
+
+		failed : HostValue -> HostValue
+		failed = |payload_hv| {
+			payload : Str
+			payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_tag))
+			status : TaskStatus(a, err)
+			status = TaskStatus.Failed(to_failed(payload))
+			HostValue.store_tagged(Box.box(status), status_tag)
+		}
+
+		eq : HostValue, HostValue -> Bool
+		eq = |left_hv, right_hv| {
+			left : TaskStatus(a, err)
+			left = Box.unbox(HostValue.get_tagged(left_hv, status_tag))
+			right : TaskStatus(a, err)
+			right = Box.unbox(HostValue.get_tagged(right_hv, status_tag))
+			match left {
+				TaskStatus.Loading => match right {
+					TaskStatus.Loading => True
+					_ => False
+				}
+				TaskStatus.Done(left_value) => match right {
+					TaskStatus.Done(right_value) => left_value.is_eq(right_value)
+					_ => False
+				}
+				TaskStatus.Failed(left_error) => match right {
+					TaskStatus.Failed(right_error) => left_error.is_eq(right_error)
+					_ => False
+				}
+			}
+		}
+
+		drop : HostValue -> {}
+		drop = |host_value| {
+			boxed : Box(TaskStatus(a, err))
+			boxed = HostValue.take_tagged(host_value, status_tag)
+			_ = boxed
+			{}
+		}
+
+		payload_drop : HostValue -> {}
+		payload_drop = |host_value| {
+			boxed : Box(Str)
+			boxed = HostValue.take_tagged(host_value, payload_tag)
+			_ = boxed
+			{}
+		}
+
+		{
+			source: {
+				token,
+				name,
+				payload_tag,
+				payload_drop: Box.box(payload_drop),
+				initial: Box.box(initial),
+				done: Box.box(done),
+				failed: Box.box(failed),
+				eq: Box.box(eq),
+				drop: Box.box(drop),
+			},
+			tag: status_tag,
+		}
+	}
+
+	start_str : Task(a, err), Str -> Node.Cmd
+	start_str = |task, request| {
+		request_tag = HostValue.new_str_payload_tag({})
+		request_init : {} -> HostValue
+		request_init = |_| HostValue.store_tagged(Box.box(request), request_tag)
+		request_read : HostValue -> Str
+		request_read = |value| Box.unbox(HostValue.get_tagged(value, request_tag))
+		request_drop : HostValue -> {}
+		request_drop = |value| {
+			boxed : Box(Str)
+			boxed = HostValue.take_tagged(value, request_tag)
+			_ = boxed
+			{}
+		}
+		Node.Cmd.StartTask(
+			{
+				task_token: task.source.token,
+				task_name: task.source.name,
+				request_init: Box.box(request_init),
+				request_read: Box.box(request_read),
+				request_drop: Box.box(request_drop),
+			},
+		)
+	}
+
+	cleanup : Str -> Node.Cleanup
+	cleanup = |name| Node.Cleanup.Cleanup(name)
 
 	## A constant signal.
 	const : a -> Signal(a)
@@ -90,12 +231,12 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 
 		{
 			expr: Box.box(
-					Node.SignalExpr.Map(
-						token,
-						signal.expr,
-						Box.box(wrapped),
-						Box.box(eq),
-						Box.box(drop),
+				Node.SignalExpr.Map(
+					token,
+					signal.expr,
+					Box.box(wrapped),
+					Box.box(eq),
+					Box.box(drop),
 				),
 			),
 			tag: output_tag,

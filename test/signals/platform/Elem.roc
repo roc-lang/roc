@@ -15,9 +15,14 @@ import HostValue exposing [HostValue]
 ## - `Component`: introduces a reusable local scope for helper-owned state.
 ##   Advances the parent scope ordinal and collects the child under a component
 ##   scope whose internal ordinals are local to the component instance.
+## - `OnChange`: a non-rendering sink that runs a host command when a signal's
+##   value changes.
+## - `Cleanup`: a non-rendering descriptor run when the owning scope is disposed.
 Elem := [
 	Component({ child : Box(Elem) }),
+	Cleanup({ cleanup : Node.Cleanup }),
 	Element({ tag : Str, attrs : List(Node.Attr), children : List(Elem) }),
+	OnChange({ signal : Box(Node.SignalExpr), to_cmd : Box((HostValue -> Node.Cmd)) }),
 	Text(Str),
 	TextSignal({ signal : Box(Node.SignalExpr), read : Box((HostValue -> Str)) }),
 	State({ binder : Node.BinderRef, initial : Box(({} -> HostValue)), eq : Box((HostValue, HostValue -> Bool)), drop : Box((HostValue -> {})), child : Box(Elem) }),

@@ -2678,6 +2678,12 @@ pub fn build(b: *std.Build) void {
             .spec = "test/signals/apps/component_composition.txt",
             .bench = false,
         },
+        .{
+            .exe_name = "signals-async-effects",
+            .source = "test/signals/apps/async_effects.roc",
+            .spec = "test/signals/apps/async_effects.txt",
+            .bench = false,
+        },
     };
 
     for (signals_apps) |signals_app| {

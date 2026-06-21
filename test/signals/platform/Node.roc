@@ -36,13 +36,41 @@ Node := [].{
 	## host can identify shared derived nodes from explicit data. `ConstValue`
 	## carries a boxed value initializer plus output equality. `Map`/`Map2`/
 	## `Combine` are derived nodes carrying boxed typed transforms (confined
-	## erasure) and a boxed `is_eq` thunk for change pruning.
+	## erasure) and a boxed `is_eq` thunk for change pruning. `TaskSource` is a
+	## host-owned effect source whose results enter the same signal graph.
+	TaskSource : {
+		token : Box(U64),
+		name : Str,
+		payload_tag : Box(HostValue.TypeTag(Str)),
+		payload_drop : Box((HostValue -> {})),
+		initial : Box(({} -> HostValue)),
+		done : Box((HostValue -> HostValue)),
+		failed : Box((HostValue -> HostValue)),
+		eq : Box((HostValue, HostValue -> Bool)),
+		drop : Box((HostValue -> {})),
+	}
+
 	SignalExpr := [
 		Ref(BinderRef),
 		ConstValue(Box(U64), Box(({} -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 		Map(Box(U64), Box(SignalExpr), Box((HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
+		TaskSource(TaskSource),
+	]
+
+	Cmd := [
+		StartTask({
+			task_token : Box(U64),
+			task_name : Str,
+			request_init : Box(({} -> HostValue)),
+			request_read : Box((HostValue -> Str)),
+			request_drop : Box((HostValue -> {})),
+		}),
+	]
+
+	Cleanup := [
+		Cleanup(Str),
 	]
 
 	## Text/attr sink fields, matching the host's render field discriminants.

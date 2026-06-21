@@ -146,6 +146,21 @@ Ui := [].{
 	component : ({} -> Elem) -> Elem
 	component = |body| Elem.Component({ child: Box.box(body({})) })
 
+	on_change : Signal(a), (a -> Node.Cmd) -> Elem
+	on_change = |signal, to_cmd| {
+		tag = signal.tag
+		wrapped : HostValue -> Node.Cmd
+		wrapped = |value| {
+			typed : a
+			typed = Box.unbox(HostValue.get_tagged(value, tag))
+			to_cmd(typed)
+		}
+		Elem.OnChange({ signal: Signal.to_expr(signal), to_cmd: Box.box(wrapped) })
+	}
+
+	on_cleanup : Node.Cleanup -> Elem
+	on_cleanup = |cleanup| Elem.Cleanup({ cleanup: cleanup })
+
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
 	when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 	when = |condition, when_true, when_false| {

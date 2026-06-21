@@ -82,6 +82,15 @@ const HostActiveEventDesc = struct {
     transform: abi.RocErasedCallable,
 };
 
+const HostPendingTask = struct {
+    request_id: u64,
+    owner_scope_id: u64,
+    task_token: HostSignalToken,
+    task_name: []const u8,
+    request: []const u8,
+    active: bool,
+};
+
 const HostSignalEventRoute = struct {
     event_id: u64,
     signal_ids: []u64,
@@ -325,12 +334,26 @@ const HostSignalCombineRecord = struct {
     cached_value: HostSignalCacheSlot = .absent,
 };
 
+const HostSignalTaskSourceRecord = struct {
+    token: HostSignalToken,
+    name: []const u8,
+    payload_tag: HostValueTypeTag,
+    payload_drop: abi.RocErasedCallable,
+    initial: abi.RocErasedCallable,
+    done: abi.RocErasedCallable,
+    failed: abi.RocErasedCallable,
+    eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
 const HostSignalRecordPayload = union(enum) {
     ref: u64,
     const_value: HostSignalConstRecord,
     map: HostSignalMapRecord,
     map2: HostSignalMap2Record,
     combine: HostSignalCombineRecord,
+    task_source: HostSignalTaskSourceRecord,
 };
 
 const HostSignalRecord = struct {
@@ -355,6 +378,7 @@ const HostSignalRecord = struct {
             .map => |payload| payload.token,
             .map2 => |payload| payload.token,
             .combine => |payload| payload.token,
+            .task_source => |payload| payload.token,
         };
     }
 
@@ -412,6 +436,20 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
                 metrics.closure_releases += 3;
+            },
+            .task_source => |payload| {
+                var cached_value = payload.cached_value;
+                cached_value.deinit(roc_host, metrics);
+                abi.decrefBox(@ptrCast(payload.token), roc_host);
+                allocator.free(payload.name);
+                abi.decrefBox(@ptrCast(payload.payload_tag), roc_host);
+                abi.decrefErasedCallable(payload.payload_drop, roc_host);
+                abi.decrefErasedCallable(payload.initial, roc_host);
+                abi.decrefErasedCallable(payload.done, roc_host);
+                abi.decrefErasedCallable(payload.failed, roc_host);
+                abi.decrefErasedCallable(payload.eq, roc_host);
+                abi.decrefErasedCallable(payload.drop, roc_host);
+                metrics.closure_releases += 6;
             },
         }
 
@@ -498,6 +536,18 @@ const HostNodeSignalBoolAttrDesc = struct {
     cached_value: HostSignalCacheSlot = .absent,
 };
 
+const HostNodeOnChangeDesc = struct {
+    scope_id: u64,
+    signal: HostSignalBinding,
+    to_cmd: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+const HostNodeCleanupDesc = struct {
+    scope_id: u64,
+    name: []const u8,
+};
+
 const HostNodeEventDesc = struct {
     elem_id: u64,
     kind: RenderEventKind,
@@ -561,6 +611,8 @@ const HostNodeDescriptorStream = struct {
     signal_text_attrs: std.ArrayListUnmanaged(HostNodeSignalTextAttrDesc) = .empty,
     static_bool_attrs: std.ArrayListUnmanaged(HostNodeStaticBoolAttrDesc) = .empty,
     signal_bool_attrs: std.ArrayListUnmanaged(HostNodeSignalBoolAttrDesc) = .empty,
+    on_changes: std.ArrayListUnmanaged(HostNodeOnChangeDesc) = .empty,
+    cleanups: std.ArrayListUnmanaged(HostNodeCleanupDesc) = .empty,
     events: std.ArrayListUnmanaged(HostNodeEventDesc) = .empty,
     scope_sites: std.ArrayListUnmanaged(HostNodeScopeSiteDesc) = .empty,
     states: std.ArrayListUnmanaged(HostNodeStateDesc) = .empty,
@@ -612,6 +664,19 @@ const HostNodeDescriptorStream = struct {
             abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_bool_attrs.deinit(allocator);
+
+        for (self.on_changes.items) |*desc| {
+            desc.cached_value.deinit(roc_host, metrics);
+            desc.signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(desc.to_cmd, roc_host);
+        }
+        self.on_changes.deinit(allocator);
+
+        for (self.cleanups.items) |desc| {
+            allocator.free(desc.name);
+        }
+        self.cleanups.deinit(allocator);
 
         for (self.events.items) |desc| {
             if (desc.owns_payload_tag) {
@@ -703,6 +768,7 @@ const HostNodeDescriptorStream = struct {
                     self.rememberSignalRecordTree(allocator, child);
                 }
             },
+            .task_source => {},
         }
     }
 
@@ -825,6 +891,34 @@ const HostNodeDescriptorStream = struct {
             owned_signal.deinit(allocator, roc_host, metrics);
             metrics.closure_releases += 1;
             abi.decrefErasedCallable(read, roc_host);
+            std.process.exit(1);
+        };
+    }
+
+    fn appendOnChange(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, scope_id: u64, signal: HostSignalBinding, to_cmd: abi.RocErasedCallable) void {
+        self.rememberSignalRecordTree(allocator, signal.record);
+        abi.increfErasedCallable(to_cmd, 1);
+        metrics.closure_retains += 1;
+        self.on_changes.append(allocator, .{
+            .scope_id = scope_id,
+            .signal = signal,
+            .to_cmd = to_cmd,
+        }) catch {
+            var owned_signal = signal;
+            owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.closure_releases += 1;
+            abi.decrefErasedCallable(to_cmd, roc_host);
+            std.process.exit(1);
+        };
+    }
+
+    fn appendCleanup(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, scope_id: u64, name: []const u8) void {
+        const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
+        self.cleanups.append(allocator, .{
+            .scope_id = scope_id,
+            .name = name_copy,
+        }) catch {
+            allocator.free(name_copy);
             std.process.exit(1);
         };
     }
@@ -969,6 +1063,10 @@ const HostActiveTextSignalSink = struct {
 };
 
 const HostActiveBoolSignalSink = struct {
+    index: usize,
+};
+
+const HostActiveChangeSignalSink = struct {
     index: usize,
 };
 
@@ -1239,6 +1337,10 @@ const SpecCommandType = enum {
     expect_checked,
     expect_disabled,
     expect_updates,
+    resolve_task,
+    reject_task,
+    expect_cleanup,
+    expect_pending_task,
     mark_metrics,
     expect_metric_delta,
 };
@@ -1275,6 +1377,7 @@ fn emptyLocator() Locator {
 const SpecCommand = struct {
     cmd_type: SpecCommandType,
     locator: Locator,
+    task_name: ?[]const u8 = null,
     expected_text: ?[]const u8,
     expected_count: ?u64,
     expected_bool: ?bool,
@@ -1284,6 +1387,7 @@ const SpecCommand = struct {
 fn freeSpecCommands(allocator: std.mem.Allocator, commands: []SpecCommand) void {
     for (commands) |cmd| {
         cmd.locator.deinit(allocator);
+        if (cmd.task_name) |name| allocator.free(name);
         if (cmd.expected_text) |text| allocator.free(text);
     }
     if (commands.len > 0) {
@@ -1347,6 +1451,24 @@ fn splitTrailingToken(input: []const u8) ParseError!struct { head: []const u8, t
     return .{
         .head = std.mem.trim(u8, trimmed[0..space_idx], " \t"),
         .token = std.mem.trim(u8, trimmed[space_idx + 1 ..], " \t"),
+    };
+}
+
+fn parseSingleQuoted(input: []const u8) ParseError![]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t");
+    if (trimmed.len < 2 or trimmed[0] != '"' or trimmed[trimmed.len - 1] != '"') return ParseError.InvalidFormat;
+    return trimmed[1 .. trimmed.len - 1];
+}
+
+fn splitTwoQuoted(input: []const u8) ParseError!struct { first: []const u8, second: []const u8 } {
+    const trimmed = std.mem.trim(u8, input, " \t");
+    if (trimmed.len < 5 or trimmed[0] != '"') return ParseError.InvalidFormat;
+    const first_end = std.mem.indexOfScalarPos(u8, trimmed, 1, '"') orelse return ParseError.InvalidFormat;
+    const rest = std.mem.trim(u8, trimmed[first_end + 1 ..], " \t");
+    if (rest.len < 2 or rest[0] != '"' or rest[rest.len - 1] != '"') return ParseError.InvalidFormat;
+    return .{
+        .first = trimmed[1..first_end],
+        .second = rest[1 .. rest.len - 1],
     };
 }
 
@@ -1454,6 +1576,38 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             const split = try splitTrailingToken(trimmed[15..]);
             const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
             try appendSpecCommand(&commands, allocator, .expect_updates, try parseLocator(allocator, split.head), null, expected_count, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "resolve_task ")) {
+            const split = try splitTwoQuoted(trimmed["resolve_task ".len..]);
+            const task_name = allocator.dupe(u8, split.first) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(task_name);
+            const payload = allocator.dupe(u8, split.second) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(payload);
+            try appendSpecCommand(&commands, allocator, .resolve_task, emptyLocator(), payload, null, null, line_num);
+            commands.items[commands.items.len - 1].task_name = task_name;
+        } else if (std.mem.startsWith(u8, trimmed, "reject_task ")) {
+            const split = try splitTwoQuoted(trimmed["reject_task ".len..]);
+            const task_name = allocator.dupe(u8, split.first) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(task_name);
+            const payload = allocator.dupe(u8, split.second) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(payload);
+            try appendSpecCommand(&commands, allocator, .reject_task, emptyLocator(), payload, null, null, line_num);
+            commands.items[commands.items.len - 1].task_name = task_name;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_cleanup ")) {
+            const split = try splitTrailingToken(trimmed["expect_cleanup ".len..]);
+            const name_value = try parseSingleQuoted(split.head);
+            const task_name = allocator.dupe(u8, name_value) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(task_name);
+            const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
+            try appendSpecCommand(&commands, allocator, .expect_cleanup, emptyLocator(), null, expected_count, null, line_num);
+            commands.items[commands.items.len - 1].task_name = task_name;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_pending_task ")) {
+            const split = try splitTrailingToken(trimmed["expect_pending_task ".len..]);
+            const name_value = try parseSingleQuoted(split.head);
+            const task_name = allocator.dupe(u8, name_value) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(task_name);
+            const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
+            try appendSpecCommand(&commands, allocator, .expect_pending_task, emptyLocator(), null, expected_count, null, line_num);
+            commands.items[commands.items.len - 1].task_name = task_name;
         } else if (std.mem.startsWith(u8, trimmed, "expect_metric_delta ")) {
             const split = try splitTrailingToken(trimmed[20..]);
             const metric_name = allocator.dupe(u8, split.head) catch return ParseError.OutOfMemory;
@@ -1525,7 +1679,11 @@ const HostEnv = struct {
     active_source_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u64)) = .empty,
     active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
     active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
+    active_change_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveChangeSignalSink)) = .empty,
     active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
+    pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
+    cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
+    next_task_request_id: u64 = 1,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
     next_elem_id: u64 = 0,
@@ -2004,6 +2162,11 @@ const HostEnv = struct {
         }
         self.active_bool_signal_routes.items.len = 0;
 
+        for (self.active_change_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_change_signal_routes.items.len = 0;
+
         for (self.active_structural_signal_routes.items) |*route| {
             route.deinit(allocator);
         }
@@ -2025,7 +2188,7 @@ const HostEnv = struct {
         if (self.activeSignalRecordId(record)) |record_id| return record_id;
 
         switch (record.payload) {
-            .ref, .const_value => {},
+            .ref, .const_value, .task_source => {},
             .map => |payload| _ = self.appendActiveSignalRecordTree(payload.input),
             .map2 => |payload| {
                 _ = self.appendActiveSignalRecordTree(payload.left);
@@ -2072,7 +2235,7 @@ const HostEnv = struct {
             const record_id: u64 = @intCast(index);
             var rank: u64 = 0;
             switch (node.record.payload) {
-                .ref, .const_value => {},
+                .ref, .const_value, .task_source => {},
                 .map => |payload| {
                     const input_id = self.requireActiveSignalRecordId(payload.input);
                     rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
@@ -2134,6 +2297,16 @@ const HostEnv = struct {
         return &self.active_bool_signal_routes.items[route_index];
     }
 
+    fn ensureActiveChangeSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active change signal route referenced an unknown signal record");
+        const allocator = self.gpa.allocator();
+        const route_index: usize = @intCast(record_id);
+        while (self.active_change_signal_routes.items.len <= route_index) {
+            self.active_change_signal_routes.append(allocator, .empty) catch std.process.exit(1);
+        }
+        return &self.active_change_signal_routes.items[route_index];
+    }
+
     fn ensureActiveStructuralSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
         if (record_id >= self.active_signal_graph.items.len) failHost("active structural signal route referenced an unknown signal record");
         const allocator = self.gpa.allocator();
@@ -2158,6 +2331,9 @@ const HostEnv = struct {
         for (stream.signal_bool_attrs.items) |*desc| {
             _ = self.appendActiveSignalRecordTree(desc.signal.record);
         }
+        for (stream.on_changes.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.signal.record);
+        }
         for (stream.whens.items) |*desc| {
             _ = self.appendActiveSignalRecordTree(desc.condition.record);
         }
@@ -2175,7 +2351,7 @@ const HostEnv = struct {
                         route.append(allocator, @intCast(record_id)) catch std.process.exit(1);
                     }
                 },
-                .const_value, .map, .map2, .combine => {},
+                .const_value, .map, .map2, .combine, .task_source => {},
             }
         }
 
@@ -2198,6 +2374,13 @@ const HostEnv = struct {
         for (stream.signal_bool_attrs.items, 0..) |desc, index| {
             const record_id = self.requireActiveSignalRecordId(desc.signal.record);
             self.ensureActiveBoolSignalRoute(record_id).append(allocator, .{
+                .index = index,
+            }) catch std.process.exit(1);
+        }
+
+        for (stream.on_changes.items, 0..) |desc, index| {
+            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+            self.ensureActiveChangeSignalRoute(record_id).append(allocator, .{
                 .index = index,
             }) catch std.process.exit(1);
         }
@@ -2471,9 +2654,152 @@ const HostEnv = struct {
         return record_ids;
     }
 
+    fn dirtyActiveSignalRecordIdsForRoots(self: *HostEnv, allocator: std.mem.Allocator, root_record_ids: []const u64) []u64 {
+        var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+        errdefer dirty_record_ids.deinit(allocator);
+
+        for (root_record_ids) |record_id| {
+            if (record_id >= self.active_signal_graph.items.len) failHost("dirty active signal root referenced an unknown record");
+            self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
+        }
+
+        const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch std.process.exit(1);
+        self.sortActiveSignalRecordIdsByRank(record_ids);
+        return record_ids;
+    }
+
     fn recordDispatch(self: *HostEnv) void {
         self.dispatch_metrics.events_processed += 1;
         self.dispatch_metrics.recompute_batches += 1;
+    }
+
+    fn deinitPendingTask(self: *HostEnv, task: *HostPendingTask) void {
+        const allocator = self.gpa.allocator();
+        abi.decrefBox(@ptrCast(task.task_token), self.roc_host.?);
+        allocator.free(task.task_name);
+        allocator.free(task.request);
+        task.* = undefined;
+    }
+
+    fn clearPendingTasks(self: *HostEnv) void {
+        for (self.pending_tasks.items) |*task| {
+            self.deinitPendingTask(task);
+        }
+        self.pending_tasks.items.len = 0;
+    }
+
+    fn cancelPendingTasksInScopeSubtree(self: *HostEnv, scope_id: u64) void {
+        var write_index: usize = 0;
+        for (self.pending_tasks.items) |*task| {
+            if (self.scopeIsDescendantOrSelf(task.owner_scope_id, scope_id)) {
+                self.deinitPendingTask(task);
+                continue;
+            }
+            self.pending_tasks.items[write_index] = task.*;
+            write_index += 1;
+        }
+        self.pending_tasks.items.len = write_index;
+    }
+
+    fn appendCleanupEvent(self: *HostEnv, name: []const u8) void {
+        const allocator = self.gpa.allocator();
+        const copy = allocator.dupe(u8, name) catch std.process.exit(1);
+        self.cleanup_events.append(allocator, copy) catch {
+            allocator.free(copy);
+            std.process.exit(1);
+        };
+    }
+
+    fn cleanupEventCount(self: *const HostEnv, name: []const u8) u64 {
+        var count: u64 = 0;
+        for (self.cleanup_events.items) |event_name| {
+            if (std.mem.eql(u8, event_name, name)) count += 1;
+        }
+        return count;
+    }
+
+    fn activeTaskRecordByToken(self: *HostEnv, token: HostSignalToken) ?*HostSignalRecord {
+        for (self.active_signal_graph.items) |node| {
+            switch (node.record.payload) {
+                .task_source => |payload| {
+                    if (payload.token == token) return node.record;
+                },
+                .ref, .const_value, .map, .map2, .combine => {},
+            }
+        }
+        return null;
+    }
+
+    fn activeTaskRecordByName(self: *HostEnv, name: []const u8) ?*HostSignalRecord {
+        var found: ?*HostSignalRecord = null;
+        for (self.active_signal_graph.items) |node| {
+            switch (node.record.payload) {
+                .task_source => |payload| {
+                    if (!std.mem.eql(u8, payload.name, name)) continue;
+                    if (found != null) failHost("fake task result matched more than one active task source");
+                    found = node.record;
+                },
+                .ref, .const_value, .map, .map2, .combine => {},
+            }
+        }
+        return found;
+    }
+
+    fn pendingTaskIndexByName(self: *HostEnv, name: []const u8) ?usize {
+        var found: ?usize = null;
+        for (self.pending_tasks.items, 0..) |task, index| {
+            if (!task.active) continue;
+            if (!std.mem.eql(u8, task.task_name, name)) continue;
+            if (found != null) failHost("fake task result matched more than one pending request");
+            found = index;
+        }
+        return found;
+    }
+
+    fn pendingTaskCountByName(self: *const HostEnv, name: []const u8) u64 {
+        var count: u64 = 0;
+        for (self.pending_tasks.items) |task| {
+            if (task.active and std.mem.eql(u8, task.task_name, name)) count += 1;
+        }
+        return count;
+    }
+
+    fn removePendingTaskAt(self: *HostEnv, index: usize) HostPendingTask {
+        if (index >= self.pending_tasks.items.len) failHost("pending task index is out of bounds");
+        const task = self.pending_tasks.items[index];
+        const last_index = self.pending_tasks.items.len - 1;
+        if (index != last_index) {
+            self.pending_tasks.items[index] = self.pending_tasks.items[last_index];
+        }
+        self.pending_tasks.items.len = last_index;
+        return task;
+    }
+
+    fn appendPendingTask(self: *HostEnv, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) void {
+        const allocator = self.gpa.allocator();
+        if (self.next_task_request_id == std.math.maxInt(u64)) failHost("host task request id overflowed");
+        const request_id = self.next_task_request_id;
+        self.next_task_request_id += 1;
+
+        abi.increfBox(@ptrCast(task_token), 1);
+        const task_name_copy = allocator.dupe(u8, task_name) catch std.process.exit(1);
+        const request_copy = allocator.dupe(u8, request) catch {
+            allocator.free(task_name_copy);
+            std.process.exit(1);
+        };
+        self.pending_tasks.append(allocator, .{
+            .request_id = request_id,
+            .owner_scope_id = owner_scope_id,
+            .task_token = task_token,
+            .task_name = task_name_copy,
+            .request = request_copy,
+            .active = true,
+        }) catch {
+            abi.decrefBox(@ptrCast(task_token), self.roc_host.?);
+            allocator.free(task_name_copy);
+            allocator.free(request_copy);
+            std.process.exit(1);
+        };
     }
 
     fn clearStates(self: *HostEnv) void {
@@ -2729,6 +3055,14 @@ const HostEnv = struct {
             }
         }
 
+        for (self.active_stream.cleanups.items) |cleanup| {
+            if (cleanup.scope_id == scope_id) {
+                self.appendCleanupEvent(cleanup.name);
+            }
+        }
+
+        self.cancelPendingTasksInScopeSubtree(scope_id);
+
         for (self.dom_identities.items) |*identity| {
             if (identity.active and identity.scope_id == scope_id) {
                 self.deactivateDomElement(identity.elem_id);
@@ -2929,7 +3263,7 @@ const HostEnv = struct {
                 _ = self.internNodeIdentity(scope_id, ordinal.*);
                 ordinal.* += 1;
             },
-            .Text, .TextSignal => {},
+            .Cleanup, .OnChange, .Text, .TextSignal => {},
         }
     }
 
@@ -3044,6 +3378,29 @@ const HostEnv = struct {
                 stream.rememberSignalRecord(allocator, record);
                 break :blk record;
             },
+            .TaskSource => blk: {
+                const payload = expr.payload.task_source;
+                const token = payload.@"token";
+                if (stream.signalRecordByToken(token)) |record| {
+                    HostEnv.validateExistingSignalRecord(record, .task_source);
+                    break :blk record.retain();
+                }
+
+                abi.increfBox(@ptrCast(payload.@"payload_tag"), 1);
+                const record = HostSignalRecord.init(allocator, .{ .task_source = .{
+                    .token = retainHostSignalToken(token),
+                    .name = allocator.dupe(u8, payload.@"name".asSlice()) catch std.process.exit(1),
+                    .payload_tag = @ptrCast(payload.@"payload_tag"),
+                    .payload_drop = retainHostCallable(payload.@"payload_drop", &self.pending_roc_metrics),
+                    .initial = retainHostCallable(payload.@"initial", &self.pending_roc_metrics),
+                    .done = retainHostCallable(payload.@"done", &self.pending_roc_metrics),
+                    .failed = retainHostCallable(payload.@"failed", &self.pending_roc_metrics),
+                    .eq = retainHostCallable(payload.@"eq", &self.pending_roc_metrics),
+                    .drop = retainHostCallable(payload.@"drop", &self.pending_roc_metrics),
+                } });
+                stream.rememberSignalRecord(allocator, record);
+                break :blk record;
+            },
         };
     }
 
@@ -3065,6 +3422,7 @@ const HostEnv = struct {
                     HostEnv.appendSignalRecordSourceNodeIds(allocator, source_node_ids, child);
                 }
             },
+            .task_source => {},
         }
     }
 
@@ -3147,6 +3505,14 @@ const HostEnv = struct {
                 const text_signal = elem.payload.text_signal;
                 const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
                 stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
+            },
+            .Cleanup => {
+                stream.appendCleanup(allocator, scope_id, elem.payload.cleanup.@"cleanup".asSlice());
+            },
+            .OnChange => {
+                const payload = elem.payload.on_change;
+                const signal = self.bindNodeSignal(allocator, stream, payload.@"signal".*, binder_stack.items);
+                stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, scope_id, signal, payload.@"to_cmd");
             },
             .State => {
                 const site_ordinal = ordinal.*;
@@ -3682,6 +4048,16 @@ const HostEnv = struct {
             dest.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
             dest.signal_bool_attrs.items[dest.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
+        for (previous.on_changes.items) |desc| {
+            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) continue;
+            const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+            dest.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
+            dest.on_changes.items[dest.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+        }
+        for (previous.cleanups.items) |desc| {
+            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) continue;
+            dest.appendCleanup(allocator, desc.scope_id, desc.name);
+        }
         for (previous.events.items, 0..) |desc, event_index| {
             if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
             self.appendEventDescriptorFromStream(roc_host, dest, desc, event_index);
@@ -3728,6 +4104,14 @@ const HostEnv = struct {
             const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
             dest.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
             dest.signal_bool_attrs.items[dest.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+        }
+        for (replacement.on_changes.items) |desc| {
+            const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+            dest.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
+            dest.on_changes.items[dest.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+        }
+        for (replacement.cleanups.items) |desc| {
+            dest.appendCleanup(allocator, desc.scope_id, desc.name);
         }
         for (replacement.events.items, 0..) |desc, event_index| {
             self.appendEventDescriptorFromStream(roc_host, dest, desc, event_index);
@@ -3805,6 +4189,13 @@ const HostEnv = struct {
         desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
         self.pending_roc_metrics.closure_releases += 1;
         abi.decrefErasedCallable(desc.read, roc_host);
+    }
+
+    fn deinitActiveOnChangeDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
+        desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+        desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
+        self.pending_roc_metrics.closure_releases += 1;
+        abi.decrefErasedCallable(desc.to_cmd, roc_host);
     }
 
     fn deinitActiveEventDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostActiveEventDesc) void {
@@ -3906,6 +4297,34 @@ const HostEnv = struct {
             write_index += 1;
         }
         self.active_stream.signal_bool_attrs.items.len = write_index;
+    }
+
+    fn removeActiveOnChangeDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        var write_index: usize = 0;
+        for (self.active_stream.on_changes.items) |desc| {
+            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                var removed = desc;
+                self.deinitActiveOnChangeDesc(roc_host, &removed);
+                continue;
+            }
+            self.active_stream.on_changes.items[write_index] = desc;
+            write_index += 1;
+        }
+        self.active_stream.on_changes.items.len = write_index;
+    }
+
+    fn removeActiveCleanupDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
+        const allocator = self.gpa.allocator();
+        var write_index: usize = 0;
+        for (self.active_stream.cleanups.items) |desc| {
+            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                allocator.free(desc.name);
+                continue;
+            }
+            self.active_stream.cleanups.items[write_index] = desc;
+            write_index += 1;
+        }
+        self.active_stream.cleanups.items.len = write_index;
     }
 
     fn removeActiveEventDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
@@ -4012,6 +4431,8 @@ const HostEnv = struct {
         self.removeActiveSignalTextAttrDescriptorsInTarget(roc_host, target);
         self.removeActiveStaticBoolAttrDescriptorsInTarget(target);
         self.removeActiveSignalBoolAttrDescriptorsInTarget(roc_host, target);
+        self.removeActiveOnChangeDescriptorsInTarget(roc_host, target);
+        self.removeActiveCleanupDescriptorsInTarget(target);
         self.removeActiveEventDescriptorsInTarget(roc_host, target);
         self.removeActiveStateDescriptorsInTarget(roc_host, target);
         self.removeActiveWhenDescriptorsInTarget(roc_host, target);
@@ -4078,6 +4499,12 @@ const HostEnv = struct {
         self.active_stream.signal_bool_attrs.appendSlice(allocator, replacement.signal_bool_attrs.items) catch std.process.exit(1);
         replacement.signal_bool_attrs.items.len = 0;
 
+        self.active_stream.on_changes.appendSlice(allocator, replacement.on_changes.items) catch std.process.exit(1);
+        replacement.on_changes.items.len = 0;
+
+        self.active_stream.cleanups.appendSlice(allocator, replacement.cleanups.items) catch std.process.exit(1);
+        replacement.cleanups.items.len = 0;
+
         self.appendReplacementEventsMoved(replacement);
 
         for (replacement.scope_sites.items) |*desc| {
@@ -4107,6 +4534,9 @@ const HostEnv = struct {
             self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
         }
         for (self.active_stream.signal_bool_attrs.items) |desc| {
+            self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+        }
+        for (self.active_stream.on_changes.items) |desc| {
             self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
         }
         for (self.active_stream.whens.items) |desc| {
@@ -4298,6 +4728,16 @@ const HostEnv = struct {
             stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
             stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
         }
+        for (previous.on_changes.items) |desc| {
+            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
+            const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+            stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
+            stream.on_changes.items[stream.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.pending_roc_metrics);
+        }
+        for (previous.cleanups.items) |desc| {
+            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
+            stream.appendCleanup(allocator, desc.scope_id, desc.name);
+        }
         for (previous.events.items, 0..) |desc, event_index| {
             if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
             const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
@@ -4360,6 +4800,14 @@ const HostEnv = struct {
                 const text_signal = elem.payload.text_signal;
                 const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
                 stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
+            },
+            .Cleanup => {
+                stream.appendCleanup(allocator, scope_id, elem.payload.cleanup.@"cleanup".asSlice());
+            },
+            .OnChange => {
+                const payload = elem.payload.on_change;
+                const signal = self.bindNodeSignal(allocator, stream, payload.@"signal".*, binder_stack.items);
+                stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, scope_id, signal, payload.@"to_cmd");
             },
             .State => {
                 const site_ordinal = ordinal.*;
@@ -4493,12 +4941,21 @@ const HostEnv = struct {
         self.active_source_signal_routes.deinit(allocator);
         self.active_text_signal_routes.deinit(allocator);
         self.active_bool_signal_routes.deinit(allocator);
+        self.active_change_signal_routes.deinit(allocator);
         self.active_structural_signal_routes.deinit(allocator);
         self.clearActiveSignalGraph();
         self.active_signal_graph.deinit(allocator);
         self.active_stream.deinit(allocator, self.roc_host.?, &self.pending_roc_metrics);
         self.clearActiveEvents();
         self.active_events.deinit(allocator);
+
+        self.clearPendingTasks();
+        self.pending_tasks.deinit(allocator);
+
+        for (self.cleanup_events.items) |name| {
+            allocator.free(name);
+        }
+        self.cleanup_events.deinit(allocator);
 
         if (self.root_elem) |root| {
             abi.decrefElem(root, self.roc_host.?);
@@ -5275,6 +5732,10 @@ fn cloneMemoizedDirtySignalResult(host: *HostEnv, record: *HostSignalRecord, dir
             .value = cloneCachedSignalValue(host, &payload.cached_value),
             .changed = record.last_dirty_changed,
         },
+        .task_source => |*payload| .{
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
+            .changed = record.last_dirty_changed,
+        },
     };
 }
 
@@ -5291,6 +5752,7 @@ fn hostSignalRecordDropCallable(host: *HostEnv, record: *const HostSignalRecord)
         .map => |payload| payload.drop,
         .map2 => |payload| payload.drop,
         .combine => |payload| payload.drop,
+        .task_source => |payload| payload.drop,
     };
 }
 
@@ -5341,6 +5803,15 @@ fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSig
             }
             values.deinit(host.gpa.allocator());
             return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
+        },
+        .task_source => |*payload| {
+            switch (payload.cached_value) {
+                .present => return cloneCachedSignalValue(host, &payload.cached_value),
+                .absent => {
+                    const value = callValueInitThunk(roc_host, payload.initial);
+                    return replaceSignalExprCacheAndClone(host, &payload.cached_value, roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
+                },
+            }
         },
     }
 }
@@ -5416,6 +5887,10 @@ fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
             values.deinit(host.gpa.allocator());
             return rememberDirtySignalResult(record, dirty_generation, updateDirtySignalExprCache(host, roc_host, &payload.cached_value, value));
         },
+        .task_source => |*payload| return rememberDirtySignalResult(record, dirty_generation, .{
+            .value = cloneCachedSignalValue(host, &payload.cached_value),
+            .changed = record.last_dirty_generation == dirty_generation and record.last_dirty_changed,
+        }),
     }
 }
 
@@ -5430,7 +5905,10 @@ fn evalDirtyHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *H
 fn propagateDirtyActiveSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
     const dirty_record_ids = host.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
     defer allocator.free(dirty_record_ids);
+    return propagateDirtyActiveSignalRecordIds(host, roc_host, allocator, dirty_record_ids, dirty_source_node_ids, dirty_generation);
+}
 
+fn propagateDirtyActiveSignalRecordIds(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_record_ids: []const u64, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
     var changed_record_ids: std.ArrayListUnmanaged(u64) = .empty;
     errdefer changed_record_ids.deinit(allocator);
 
@@ -5453,6 +5931,7 @@ fn hostSignalRecordEqCallable(host: *HostEnv, record: *const HostSignalRecord) a
         .map => |payload| payload.eq,
         .map2 => |payload| payload.eq,
         .combine => |payload| payload.eq,
+        .task_source => |payload| payload.eq,
     };
 }
 
@@ -5524,6 +6003,121 @@ fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
     }
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
     return applyRenderBoolField(host, elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
+}
+
+fn updateTaskSourceCache(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) bool {
+    return switch (record.payload) {
+        .task_source => |*payload| switch (payload.cached_value) {
+            .absent => {
+                payload.cached_value.replace(roc_host, &host.pending_roc_metrics, value, payload.eq, payload.drop);
+                return true;
+            },
+            .present => |*cached| {
+                if (cached.valueEquals(roc_host, value)) {
+                    cached.dropIncoming(roc_host, value);
+                    recordSignalPrune(host);
+                    return false;
+                }
+                cached.replaceValue(roc_host, value);
+                return true;
+            },
+        },
+        .ref, .const_value, .map, .map2, .combine => failHost("task source update targeted a non-task signal record"),
+    };
+}
+
+fn applyDirtySignalBatch(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) CommandCounts {
+    const dirty_structural_signals = collectDirtyStructuralSignals(host, roc_host, host.gpa.allocator(), dirty_source_node_ids, changed_record_ids, dirty_generation);
+    defer host.gpa.allocator().free(dirty_structural_signals);
+
+    var counts = applyDirtyRenderSinks(host, roc_host, dirty_source_node_ids, changed_record_ids, dirty_generation);
+    if (dirty_structural_signals.len != 0) {
+        counts.addAll(applyDirtyStructuralSignalsLocally(host, roc_host, dirty_source_node_ids, dirty_structural_signals));
+    }
+    return counts;
+}
+
+fn dispatchTaskSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) CommandCounts {
+    if (!updateTaskSourceCache(host, roc_host, record, value)) return .{};
+
+    host.recordDispatch();
+    var metrics = host.pending_roc_metrics;
+    metrics.nodes_recomputed += 1;
+    host.pending_roc_metrics = metrics;
+    const dirty_generation = host.nextDirtySignalGeneration();
+    record.last_dirty_generation = dirty_generation;
+    record.last_dirty_changed = true;
+
+    const record_id = host.requireActiveSignalRecordId(record);
+    const roots = [_]u64{record_id};
+    const dirty_record_ids = host.dirtyActiveSignalRecordIdsForRoots(host.gpa.allocator(), &roots);
+    defer host.gpa.allocator().free(dirty_record_ids);
+
+    const changed_record_ids = propagateDirtyActiveSignalRecordIds(host, roc_host, host.gpa.allocator(), dirty_record_ids, &.{}, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    return applyDirtySignalBatch(host, roc_host, &.{}, changed_record_ids, dirty_generation);
+}
+
+fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct73) CommandCounts {
+    const record = host.activeTaskRecordByToken(cmd.@"task_token") orelse failHost("StartTask referenced a task source that is not active");
+    const task_payload = switch (record.payload) {
+        .task_source => |payload| payload,
+        .ref, .const_value, .map, .map2, .combine => unreachable,
+    };
+    if (!std.mem.eql(u8, task_payload.name, cmd.@"task_name".asSlice())) {
+        failHost("StartTask task name does not match the referenced task source");
+    }
+
+    const request_value = callValueInitThunk(roc_host, cmd.@"request_init");
+    defer callErasedHostValueToUnit(roc_host, cmd.@"request_drop", request_value);
+    const request = callErasedHostValueToStr(roc_host, cmd.@"request_read", request_value);
+    defer request.decref(roc_host);
+
+    host.appendPendingTask(owner_scope_id, cmd.@"task_token", cmd.@"task_name".asSlice(), request.asSlice());
+
+    const loading = callValueInitThunk(roc_host, task_payload.initial);
+    return dispatchTaskSourceValue(host, roc_host, record, loading);
+}
+
+fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
+    const pending_index = host.pendingTaskIndexByName(name) orelse failHost("fake task result had no matching pending request");
+    var pending = host.removePendingTaskAt(pending_index);
+    defer host.deinitPendingTask(&pending);
+
+    const record = host.activeTaskRecordByName(name) orelse failHost("fake task result matched no active task source");
+    const task_payload = switch (record.payload) {
+        .task_source => |payload| payload,
+        .ref, .const_value, .map, .map2, .combine => unreachable,
+    };
+    if (task_payload.token != pending.task_token) {
+        failHost("fake task result matched a pending request for a different task source");
+    }
+
+    const payload_value = hostValueStrTagged(host, roc_host, payload_text, task_payload.payload_tag);
+    defer callErasedHostValueToUnit(roc_host, task_payload.payload_drop, payload_value);
+    const next = if (failed)
+        callErasedHostValueToHostValue(roc_host, task_payload.failed, payload_value)
+    else
+        callErasedHostValueToHostValue(roc_host, task_payload.done, payload_value);
+    return dispatchTaskSourceValue(host, roc_host, record, next);
+}
+
+fn evalOnChangeInitial(host: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
+    const value = evalHostSignalBinding(host, roc_host, &desc.signal);
+    desc.cached_value.replace(roc_host, &host.pending_roc_metrics, value, hostSignalBindingEqCallable(host, &desc.signal), hostSignalBindingDropCallable(host, &desc.signal));
+}
+
+fn evalDirtyOnChange(host: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc, dirty_source_node_ids: []const u64, dirty_generation: u64) CommandCounts {
+    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.signal, dirty_source_node_ids, dirty_generation);
+    if (!result.changed) {
+        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, &desc.signal), result.value);
+        return .{};
+    }
+    if (!updateDirtySignalCache(host, roc_host, &desc.cached_value, result.value)) return .{};
+
+    const cmd = callErasedHostValueToStartTaskCmd(roc_host, desc.to_cmd, result.value);
+    defer abi.decref__AnonStruct73(cmd, roc_host);
+    return startTaskCommand(host, roc_host, desc.scope_id, cmd);
 }
 
 fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
@@ -5612,6 +6206,13 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
                 if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                     counts.addBoolField(desc.field);
                 }
+            }
+        }
+
+        if (route_index < host.active_change_signal_routes.items.len) {
+            for (host.active_change_signal_routes.items[route_index].items) |route| {
+                const desc = &host.active_stream.on_changes.items[route.index];
+                counts.addAll(evalDirtyOnChange(host, roc_host, desc, dirty_source_node_ids, dirty_generation));
             }
         }
     }
@@ -5862,6 +6463,11 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
             counts.addBoolField(desc.field);
         }
     }
+    for (stream.on_changes.items) |*desc| {
+        if (host.scopeIsInReplacementTarget(desc.scope_id, targets.replacement)) {
+            evalOnChangeInitial(host, roc_host, desc);
+        }
+    }
 
     applyStructuralEventBindingsForSeen(host, stream, seen, &counts);
 
@@ -5923,6 +6529,9 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
+    }
+    for (stream.on_changes.items) |*desc| {
+        evalOnChangeInitial(host, roc_host, desc);
     }
     for (stream.events.items, 0..) |desc, index| {
         bindNodeEvent(host, desc, @intCast(index + 1));
@@ -6044,6 +6653,11 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
     for (host.active_stream.signal_bool_attrs.items) |*desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addBoolField(desc.field);
+        }
+    }
+    for (host.active_stream.on_changes.items) |*desc| {
+        if (host.scopeIsInReplacementTarget(desc.scope_id, targets.replacement)) {
+            evalOnChangeInitial(host, roc_host, desc);
         }
     }
 
@@ -6187,6 +6801,9 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
             counts.addBoolField(desc.field);
         }
     }
+    for (stream.on_changes.items) |*desc| {
+        evalOnChangeInitial(host, roc_host, desc);
+    }
 
     applyStructuralEventBindings(host, stream, seen, &counts);
 
@@ -6208,6 +6825,14 @@ fn hostValueStr(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8) HostV
     const payload: *RocStr = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(RocStr), @alignOf(RocStr), true, roc_host)));
     payload.* = RocStr.fromSlice(value, roc_host);
     const host_value = host.storeHostValue(@ptrCast(payload));
+    if (builtin.is_test) host.setTestHostValueKind(host_value, .str);
+    return host_value;
+}
+
+fn hostValueStrTagged(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8, tag: HostValueTypeTag) HostValue {
+    const payload: *RocStr = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(RocStr), @alignOf(RocStr), true, roc_host)));
+    payload.* = RocStr.fromSlice(value, roc_host);
+    const host_value = host.storeHostValueWithRetainedTag(@ptrCast(payload), tag);
     if (builtin.is_test) host.setTestHostValueKind(host_value, .str);
     return host_value;
 }
@@ -6265,6 +6890,19 @@ fn callErasedHostValueToHostValue(roc_host: *abi.RocHost, callable: abi.RocErase
     const payload = erasedCallablePayload(callable);
     var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
     var result: HostValue = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
+fn callErasedHostValueToStartTaskCmd(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) abi.__AnonStruct73 {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
+    var result: abi.__AnonStruct73 = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),
@@ -6614,7 +7252,7 @@ fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
 
 fn commandIsAction(cmd: SpecCommand) bool {
     return switch (cmd.cmd_type) {
-        .click, .fill, .check, .uncheck => true,
+        .click, .fill, .check, .uncheck, .resolve_task, .reject_task => true,
         else => false,
     };
 }
@@ -6648,6 +7286,17 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             } else {
                 _ = setElementCheckedIfChanged(elem, checked);
             }
+        },
+
+        .resolve_task, .reject_task => {
+            const task_name = cmd.task_name orelse failHost("benchmark task command had no task name");
+            const payload = cmd.expected_text orelse "";
+            const start_ns = benchmarkNowNs();
+            const counts = resolvePendingTask(host, roc_host, task_name, payload, cmd.cmd_type == .reject_task);
+            stats.dispatch_apply_ns += benchmarkNowNs() - start_ns;
+            stats.commands.addAll(counts);
+            finishHostMetrics(host);
+            stats.actions += 1;
         },
 
         else => {},
@@ -6974,6 +7623,16 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 }
             },
 
+            .resolve_task, .reject_task => {
+                const task_name = cmd.task_name orelse {
+                    writeLocatorFailure(cmd.line_num, "task command had no task name");
+                    return 1;
+                };
+                const payload = cmd.expected_text orelse "";
+                _ = resolvePendingTask(&host_env, &roc_host, task_name, payload, cmd.cmd_type == .reject_task);
+                finishHostMetrics(&host_env);
+            },
+
             .expect_visible => {
                 _ = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
                     writeLocatorFailure(cmd.line_num, "locator did not resolve to one visible element");
@@ -7049,6 +7708,30 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 if (actual != expected) {
                     var buf: [512]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected updates: {d}\n  Got updates:      {d}\n", .{ cmd.line_num, expected, actual }) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+            },
+
+            .expect_cleanup => {
+                const name = cmd.task_name orelse "";
+                const expected = cmd.expected_count orelse 0;
+                const actual = host_env.cleanupEventCount(name);
+                if (actual != expected) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected cleanup \"{s}\": {d}\n  Got cleanup count:       {d}\n", .{ cmd.line_num, name, expected, actual }) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+            },
+
+            .expect_pending_task => {
+                const name = cmd.task_name orelse "";
+                const expected = cmd.expected_count orelse 0;
+                const actual = host_env.pendingTaskCountByName(name);
+                if (actual != expected) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected pending task \"{s}\": {d}\n  Got pending task count:       {d}\n", .{ cmd.line_num, name, expected, actual }) catch "TEST FAILED\n";
                     writeStderr(msg);
                     return 1;
                 }
