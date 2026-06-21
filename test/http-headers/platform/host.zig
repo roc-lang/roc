@@ -8,7 +8,7 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 const request_buffer_size = 2 * 1024;
-const max_content_length = 1024;
+const max_body_len = 1024;
 const listen_backlog = 16;
 const stdout_fd: c_int = 1;
 const stderr_fd: c_int = 2;
@@ -41,7 +41,7 @@ const ServerError = ParseError || error{
 const ParsedRequest = struct {
     path: []const u8,
     protocol: []const u8,
-    content_length: usize,
+    body_len: usize,
     header_bytes: usize,
     total_bytes: usize,
     header_block: []const u8,
@@ -50,7 +50,7 @@ const ParsedRequest = struct {
 const ParsedHead = struct {
     path: []const u8,
     protocol: []const u8,
-    content_length: usize,
+    body_len: usize,
     header_start: usize,
     header_end: usize,
     header_bytes: usize,
@@ -117,7 +117,12 @@ comptime {
 
     switch (builtin.os.tag) {
         .linux => {
-            @export(&linuxStart, .{ .name = "_start" });
+            if (builtin.cpu.arch == .x86_64) {
+                @export(&linuxStartX86_64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_http_linux_start_main", .visibility = .hidden });
+            } else {
+                @export(&linuxStart, .{ .name = "_start" });
+            }
             @export(&linuxMemcpy, .{ .name = "memcpy", .visibility = .hidden });
             @export(&linuxMemmove, .{ .name = "memmove", .visibility = .hidden });
             @export(&linuxMemset, .{ .name = "memset", .visibility = .hidden });
@@ -193,6 +198,20 @@ fn cMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 fn linuxStart() callconv(.c) noreturn {
     if (comptime builtin.os.tag != .linux) unreachable;
     linux.exitGroup(serverMain());
+}
+
+fn linuxStartMain() callconv(.c) c_int {
+    return serverMain();
+}
+
+fn linuxStartX86_64() callconv(.naked) noreturn {
+    asm volatile (
+        \\call roc_http_linux_start_main
+        \\movl %%eax, %%edi
+        \\movl $231, %%eax
+        \\syscall
+        \\ud2
+    );
 }
 
 fn linuxMemcpy(dest: ?*anyopaque, src: ?*const anyopaque, len: usize) callconv(.c) ?*anyopaque {
@@ -278,16 +297,16 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
             else => |e| return e,
         };
 
-        if (head.content_length > max_content_length) return error.RequestTooLarge;
-        if (head.content_length > buffer.len - head.header_bytes) return error.RequestTooLarge;
+        if (head.body_len > max_body_len) return error.RequestTooLarge;
+        if (head.body_len > buffer.len - head.header_bytes) return error.RequestTooLarge;
 
-        const required_total = head.header_bytes + head.content_length;
+        const required_total = head.header_bytes + head.body_len;
         if (total < required_total) continue;
 
         return .{
             .path = head.path,
             .protocol = head.protocol,
-            .content_length = head.content_length,
+            .body_len = head.body_len,
             .header_bytes = head.header_bytes,
             .total_bytes = required_total,
             .header_block = buffer[head.header_start..head.header_end],
@@ -311,8 +330,8 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
     const protocol = request_line[second_space + 1 ..];
     if (!bytesEqual(protocol, "HTTP/1.1")) return error.BadProtocol;
 
-    var content_length: usize = 0;
-    var saw_content_length = false;
+    var body_len: usize = 0;
+    var saw_body_len_header = false;
     var line_start = request_line_end + 2;
     while (line_start < header_end) {
         const rel_end = findCrlf(bytes[line_start..header_bytes]) orelse return error.BadHeader;
@@ -323,9 +342,9 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
             if (findByte(line, ':')) |colon| {
                 const name = line[0..colon];
                 if (asciiEqualIgnoreCase(name, "Content-Length")) {
-                    if (saw_content_length) return error.DuplicateContentLength;
-                    content_length = try parseContentLength(line[colon + 1 ..]);
-                    saw_content_length = true;
+                    if (saw_body_len_header) return error.DuplicateContentLength;
+                    body_len = try parseContentLength(line[colon + 1 ..]);
+                    saw_body_len_header = true;
                 }
             }
         }
@@ -336,7 +355,7 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
     return .{
         .path = path,
         .protocol = protocol,
-        .content_length = content_length,
+        .body_len = body_len,
         .header_start = request_line_end + 2,
         .header_end = header_end,
         .header_bytes = header_bytes,

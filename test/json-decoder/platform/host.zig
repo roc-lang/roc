@@ -79,7 +79,12 @@ comptime {
 
     switch (builtin.os.tag) {
         .linux => {
-            @export(&linuxStart, .{ .name = "_start" });
+            if (builtin.cpu.arch == .x86_64) {
+                @export(&linuxStartX86_64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_json_linux_start_main", .visibility = .hidden });
+            } else {
+                @export(&linuxStart, .{ .name = "_start" });
+            }
             @export(&linuxMemcpy, .{ .name = "memcpy", .visibility = .hidden });
             @export(&linuxMemmove, .{ .name = "memmove", .visibility = .hidden });
             @export(&linuxMemset, .{ .name = "memset", .visibility = .hidden });
@@ -154,6 +159,20 @@ fn cMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 fn linuxStart() callconv(.c) noreturn {
     if (comptime builtin.os.tag != .linux) unreachable;
     linux.exitGroup(hostMain());
+}
+
+fn linuxStartMain() callconv(.c) c_int {
+    return hostMain();
+}
+
+fn linuxStartX86_64() callconv(.naked) noreturn {
+    asm volatile (
+        \\call roc_json_linux_start_main
+        \\movl %%eax, %%edi
+        \\movl $231, %%eax
+        \\syscall
+        \\ud2
+    );
 }
 
 fn linuxMemcpy(dest: ?*anyopaque, src: ?*const anyopaque, len: usize) callconv(.c) ?*anyopaque {
