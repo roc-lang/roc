@@ -50,6 +50,7 @@ const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
 const package_resolution = @import("package_resolution.zig");
+const watch_inputs = @import("watch_inputs.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -2121,20 +2122,44 @@ pub const BuildEnv = struct {
         self.gpa.free(inputs);
     }
 
+    pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {
+        watch_inputs.deinit(self.gpa, inputs);
+    }
+
     fn appendWatchInput(
         self: *BuildEnv,
         paths: *std.ArrayList([]const u8),
         seen: *std.StringHashMapUnmanaged(void),
         path: []const u8,
     ) Allocator.Error!void {
+        if (seen.contains(path)) return;
+
         const owned = try self.gpa.dupe(u8, path);
         errdefer self.gpa.free(owned);
-        const gop = try seen.getOrPut(self.gpa, owned);
-        if (gop.found_existing) {
-            self.gpa.free(owned);
-            return;
-        }
+
         try paths.append(self.gpa, owned);
+        errdefer _ = paths.pop();
+        try seen.put(self.gpa, owned, {});
+    }
+
+    fn appendWatchInputState(
+        self: *BuildEnv,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+        state: watch_inputs.State,
+    ) Allocator.Error!void {
+        if (seen.contains(path)) return;
+
+        const owned = try self.gpa.dupe(u8, path);
+        errdefer self.gpa.free(owned);
+
+        try inputs.append(self.gpa, .{
+            .path = owned,
+            .state = state,
+        });
+        errdefer _ = inputs.pop();
+        try seen.put(self.gpa, owned, {});
     }
 
     fn appendFileDependencyWatchInputs(
@@ -2150,6 +2175,31 @@ pub const BuildEnv = struct {
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
             try self.appendWatchInput(paths, seen, full_path);
+        }
+    }
+
+    fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
+        return switch (dep.state) {
+            .present => .{ .hash = dep.content_hash },
+            .missing => .missing,
+            .unreadable => .unreadable,
+            .pending => unreachable,
+        };
+    }
+
+    fn appendFileDependencyWatchInputStates(
+        self: *BuildEnv,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        module_path: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        const source_dir = std.fs.path.dirname(module_path) orelse ".";
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
         }
     }
 
@@ -2190,6 +2240,49 @@ pub const BuildEnv = struct {
         }
 
         return paths.toOwnedSlice(self.gpa);
+    }
+
+    /// Collect exact filesystem inputs read by the current build, paired with
+    /// the state consumed by compilation. Returned paths are owned by the
+    /// BuildEnv allocator and must be released with `freeWatchInputStates`.
+    pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
+        var inputs = std.ArrayList(watch_inputs.Input).empty;
+        errdefer {
+            for (inputs.items) |input| self.gpa.free(input.path);
+            inputs.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg_name = entry.key_ptr.*;
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            if (self.schedulers.get(pkg_name)) |sched| {
+                for (sched.modules.items) |*sched_mod| {
+                    const env = if (sched_mod.semantic) |*semantic|
+                        if (semantic.checked_artifact) |*artifact|
+                            artifact.moduleEnv()
+                        else
+                            semantic.module_env
+                    else
+                        null;
+                    const module_env = env orelse continue;
+                    try self.appendWatchInputState(
+                        &inputs,
+                        &seen,
+                        sched_mod.path,
+                        .{ .hash = watch_inputs.hashBytes(module_env.getSourceAll()) },
+                    );
+                    try self.appendFileDependencyWatchInputStates(&inputs, &seen, sched_mod.path, module_env);
+                }
+            }
+        }
+
+        return inputs.toOwnedSlice(self.gpa);
     }
 
     /// Information about a compiled module, ready for serialization.

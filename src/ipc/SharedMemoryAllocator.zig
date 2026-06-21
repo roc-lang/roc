@@ -282,6 +282,25 @@ pub fn fromFdWithHeaderOffset(
     return shm;
 }
 
+/// Rewind a mapped shared-memory header's used size. This is for parent-owned
+/// coordination code that no longer has a `SharedMemoryAllocator` value but
+/// still owns a live mapping. It is only safe when no process can read the
+/// discarded bytes again.
+pub fn rewindMappedHeader(
+    base_ptr: [*]align(1) u8,
+    total_size: usize,
+    used_size: usize,
+) error{InvalidSharedMemory}!void {
+    const header_ptr: *Header = @ptrCast(@alignCast(base_ptr));
+    if (header_ptr.magic != HEADER_MAGIC or header_ptr.version != HEADER_VERSION) {
+        return error.InvalidSharedMemory;
+    }
+    if (used_size < @sizeOf(Header) or used_size > total_size) {
+        return error.InvalidSharedMemory;
+    }
+    header_ptr.used_size = used_size;
+}
+
 /// Updates the header with the current used size.
 /// Should be called before handing off to child process.
 pub fn updateHeader(self: *SharedMemoryAllocator) void {
@@ -503,6 +522,15 @@ pub fn reset(self: *SharedMemoryAllocator) void {
     self.updateHeader();
 }
 
+/// Reset the bump cursor to a previously recorded used-size boundary.
+pub fn resetToUsedSize(self: *SharedMemoryAllocator, used_size: usize) error{InvalidSharedMemory}!void {
+    if (used_size < @sizeOf(Header) or used_size > self.total_size) {
+        return error.InvalidSharedMemory;
+    }
+    self.offset.store(used_size, .monotonic);
+    self.updateHeader();
+}
+
 test "shared memory allocator basic operations" {
     const testing = std.testing;
     const io = testing.io;
@@ -532,6 +560,29 @@ test "shared memory allocator basic operations" {
     const used = shm.getUsedSize();
     try testing.expect(used >= 100 * @sizeOf(u32));
     try testing.expect(shm.getAvailableSize() <= shm.total_size - used);
+}
+
+test "shared memory allocator rewinds mapped header to a used-size boundary" {
+    const testing = std.testing;
+    const io = testing.io;
+
+    const page_size = try getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(io, 1024 * 1024, page_size);
+    defer shm.deinit(testing.allocator);
+
+    const shm_allocator = shm.allocator();
+    _ = try shm_allocator.alloc(u8, 128);
+    const reusable_boundary = shm.getUsedSize();
+    shm.updateHeader();
+
+    _ = try shm_allocator.alloc(u8, 256);
+    shm.updateHeader();
+    try testing.expect(shm.getUsedSize() > reusable_boundary);
+
+    try rewindMappedHeader(shm.base_ptr, shm.total_size, reusable_boundary);
+    const header_ptr: *const Header = @ptrCast(@alignCast(shm.base_ptr));
+    try testing.expectEqual(@as(u64, @intCast(reusable_boundary)), header_ptr.used_size);
+    try testing.expectError(error.InvalidSharedMemory, rewindMappedHeader(shm.base_ptr, shm.total_size, @sizeOf(Header) - 1));
 }
 
 test "shared memory allocator cross-process" {

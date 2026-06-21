@@ -52,6 +52,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const package_source = @import("package_source.zig");
+const watch_inputs = @import("watch_inputs.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -1256,6 +1257,10 @@ pub const Coordinator = struct {
         self.gpa.free(inputs);
     }
 
+    pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
+        watch_inputs.deinit(self.gpa, inputs);
+    }
+
     fn appendWatchInput(
         self: *Coordinator,
         paths: *std.ArrayList([]const u8),
@@ -1275,6 +1280,29 @@ pub const Coordinator = struct {
         try seen.put(self.gpa, absolute, {});
     }
 
+    fn appendWatchInputState(
+        self: *Coordinator,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+        state: watch_inputs.State,
+    ) Allocator.Error!void {
+        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
+        errdefer self.gpa.free(absolute);
+
+        if (seen.contains(absolute)) {
+            self.gpa.free(absolute);
+            return;
+        }
+
+        try inputs.append(self.gpa, .{
+            .path = absolute,
+            .state = state,
+        });
+        errdefer _ = inputs.pop();
+        try seen.put(self.gpa, absolute, {});
+    }
+
     fn appendFileDependencyWatchInputs(
         self: *Coordinator,
         paths: *std.ArrayList([]const u8),
@@ -1287,6 +1315,30 @@ pub const Coordinator = struct {
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
             try self.appendWatchInput(paths, seen, full_path);
+        }
+    }
+
+    fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
+        return switch (dep.state) {
+            .present => .{ .hash = dep.content_hash },
+            .missing => .missing,
+            .unreadable => .unreadable,
+            .pending => unreachable,
+        };
+    }
+
+    fn appendFileDependencyWatchInputStates(
+        self: *Coordinator,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        source_dir: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
         }
     }
 
@@ -1317,6 +1369,39 @@ pub const Coordinator = struct {
         }
 
         return paths.toOwnedSlice(self.gpa);
+    }
+
+    /// Collect exact filesystem inputs read by this coordinator run, paired
+    /// with the state consumed by compilation. Returned paths are owned by the
+    /// coordinator allocator and must be released with `freeWatchInputStates`.
+    pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
+        var inputs = std.ArrayList(watch_inputs.Input).empty;
+        errdefer {
+            for (inputs.items) |input| self.gpa.free(input.path);
+            inputs.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            for (pkg.modules.items) |*mod| {
+                const env = mod.moduleEnv() orelse continue;
+                try self.appendWatchInputState(
+                    &inputs,
+                    &seen,
+                    mod.path,
+                    .{ .hash = watch_inputs.hashBytes(env.getSourceAll()) },
+                );
+                try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), env);
+            }
+        }
+
+        return inputs.toOwnedSlice(self.gpa);
     }
 
     /// Collect published checked artifacts available to post-check lowering.

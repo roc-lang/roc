@@ -1637,18 +1637,171 @@ fn checkedHostedTable(
     };
 }
 
-fn checkedInterpreterHostIdentity(
+const LayoutHashContext = struct {
+    layouts: *const layout.Store,
+    seen: std.AutoHashMap(layout.Idx, u32),
+    next_seen: u32 = 0,
+
+    fn init(allocator: Allocator, layouts: *const layout.Store) LayoutHashContext {
+        return .{
+            .layouts = layouts,
+            .seen = std.AutoHashMap(layout.Idx, u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *LayoutHashContext) void {
+        self.seen.deinit();
+    }
+
+    fn hashIdx(
+        self: *LayoutHashContext,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        idx: layout.Idx,
+    ) Allocator.Error!void {
+        if (idx == layout.Idx.none) {
+            updateHashBytes(hasher, "layout-none");
+            return;
+        }
+
+        if (self.seen.get(idx)) |seen_index| {
+            updateHashBytes(hasher, "layout-ref");
+            updateHashU32(hasher, seen_index);
+            return;
+        }
+
+        const seen_index = self.next_seen;
+        self.next_seen += 1;
+        try self.seen.put(idx, seen_index);
+
+        const layout_val = self.layouts.getLayout(idx);
+        const size_align = self.layouts.layoutSizeAlign(layout_val);
+        updateHashBytes(hasher, "layout-node");
+        updateHashU32(hasher, seen_index);
+        updateHashU32(hasher, @intCast(@intFromEnum(layout_val.tag)));
+        updateHashU32(hasher, @intCast(size_align.size));
+        updateHashU32(hasher, @intCast(size_align.alignment.toByteUnits()));
+        updateHashBool(hasher, self.layouts.layoutContainsRefcounted(layout_val));
+
+        switch (layout_val.tag) {
+            .scalar => {
+                const scalar = layout_val.getScalar();
+                updateHashU32(hasher, @intCast(@intFromEnum(scalar.tag)));
+                switch (scalar.tag) {
+                    .int => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getInt()))),
+                    .frac => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getFrac()))),
+                    .str, .opaque_ptr => {},
+                }
+            },
+            .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
+            .box_of_zst, .list_of_zst, .erased_callable, .zst => {},
+            .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
+            .struct_ => {
+                const info = self.layouts.getStructInfo(layout_val);
+                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
+                updateHashU32(hasher, info.size());
+                updateHashU32(hasher, @intCast(info.fields.len));
+                for (0..info.fields.len) |i| {
+                    const field = info.fields.get(i);
+                    updateHashU32(hasher, @intCast(field.index));
+                    updateHashBool(hasher, field.is_padding);
+                    try self.hashIdx(hasher, field.layout);
+                }
+            },
+            .tag_union => {
+                const info = self.layouts.getTagUnionInfo(layout_val);
+                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
+                updateHashU32(hasher, info.size());
+                updateHashU32(hasher, @intCast(info.data.discriminant_offset));
+                updateHashU32(hasher, @intCast(info.data.discriminant_size));
+                updateHashU32(hasher, @intCast(info.variants.len));
+                for (0..info.variants.len) |i| {
+                    const variant = info.variants.get(i);
+                    try self.hashIdx(hasher, variant.payload_layout);
+                }
+            },
+        }
+    }
+};
+
+fn updateLayoutFingerprint(
+    allocator: Allocator,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    layouts: *const layout.Store,
+    layout_idx: layout.Idx,
+) Allocator.Error!void {
+    var ctx = LayoutHashContext.init(allocator, layouts);
+    defer ctx.deinit();
+    try ctx.hashIdx(hasher, layout_idx);
+}
+
+fn updatePlatformAppRelationIdentity(
+    hasher: *std.crypto.hash.sha2.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) void {
+    updateHashBytes(hasher, "platform-app-relations-v1");
+
+    const relations = root_artifact.platform_requirement_relations.relations;
+    updateHashU32(hasher, @intCast(relations.len));
+    for (relations) |relation| {
+        updateHashU32(hasher, @intFromEnum(relation.declaration));
+        updateHashU32(hasher, relation.requires_idx);
+        hasher.update(&relation.declared_source_ty.bytes);
+        hasher.update(&relation.requested_source_ty.bytes);
+        hasher.update(&relation.app_value_source_scheme.bytes);
+        updateHashU32(hasher, @intFromEnum(relation.value_kind));
+    }
+
+    const bindings = root_artifact.platform_required_bindings.bindings;
+    updateHashU32(hasher, @intCast(bindings.len));
+    for (bindings) |binding| {
+        updateHashU32(hasher, @intFromEnum(binding.declaration));
+        updateHashU32(hasher, binding.requires_idx);
+        hasher.update(&binding.requested_source_ty.bytes);
+        updateHashU32(hasher, @intFromEnum(binding.checked_relation));
+        updateHashU32(hasher, @intFromEnum(std.meta.activeTag(binding.value_use)));
+    }
+}
+
+fn updateHostCallableLayoutIdentity(
+    allocator: Allocator,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+) Allocator.Error!void {
+    updateHashBytes(hasher, "host-callable-layouts-v1");
+    updateHashU32(hasher, @intCast(platform_entrypoints.len));
+    for (platform_entrypoints) |entrypoint| {
+        updateHashU32(hasher, entrypoint.ordinal);
+        const proc = store.getProcSpec(entrypoint.root_proc);
+        const arg_layouts = try argLayoutsForProc(allocator, store, entrypoint.root_proc);
+        defer allocator.free(arg_layouts);
+        updateHashU32(hasher, @intCast(arg_layouts.len));
+        for (arg_layouts) |arg_layout| {
+            try updateLayoutFingerprint(allocator, hasher, layouts, arg_layout);
+        }
+        try updateLayoutFingerprint(allocator, hasher, layouts, proc.ret_layout);
+    }
+}
+
+fn checkedInterpreterHostIdentity(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
-) [32]u8 {
+) Allocator.Error![32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-checked-host-interface-v1");
+    updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
     updateHashU32(&hasher, @intFromEnum(target_usize));
 
     const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
     hasher.update(&declarations_hash);
+    updatePlatformAppRelationIdentity(&hasher, root_artifact);
+    try updateHostCallableLayoutIdentity(allocator, &hasher, store, layouts, platform_entrypoints);
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
     for (entrypoint_names) |name| {
@@ -3647,18 +3800,19 @@ fn reportHotReloadAcknowledgement(
     ctx: *CliCtx,
     control: *const ipc.hot_reload.Control,
     last_reported_ack: *u64,
-) CliOutputWriteError!void {
+) CliOutputWriteError!?u64 {
     const generation = ipc.hot_reload.acknowledgedGeneration(control);
-    if (generation == 0 or generation <= last_reported_ack.*) return;
+    if (generation == 0 or generation <= last_reported_ack.*) return null;
 
     const status = ipc.hot_reload.acknowledgedStatus(control);
     switch (status) {
-        .none => return,
+        .none => return null,
         .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
         .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
     }
     ctx.io.flush();
     last_reported_ack.* = generation;
+    return generation;
 }
 
 fn runHotReloadDevShim(
@@ -3669,7 +3823,7 @@ fn runHotReloadDevShim(
     args: cli_args.RunArgs,
     selected_target: RocTarget,
     expected_host_identity: [32]u8,
-    initial_watch_inputs: []const []const u8,
+    initial_watch_inputs: []const compile.watch_inputs.Input,
     source_rewrite: ?HotReloadSourceRewrite,
     warning_count: usize,
 ) CliMainError!void {
@@ -3700,7 +3854,10 @@ fn runHotReloadDevShim(
 
     var next_generation: u64 = 2;
     const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
+    const hot_reload_reclaim_offset = ipc.hot_reload.imageSize(hot_reload_control);
     var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
+    var last_reclaimed_ack = last_reported_ack;
+    var last_finished_generation: u64 = 1;
     var active_rebuild: ?HotReloadRebuild = null;
     defer {
         if (active_rebuild) |*rebuild| {
@@ -3710,13 +3867,38 @@ fn runHotReloadDevShim(
     }
 
     while (!host_child.done.load(.seq_cst)) {
-        try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
+        if (try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack)) |ack_generation| {
+            if (active_rebuild == null and
+                ack_generation >= last_finished_generation and
+                ack_generation > last_reclaimed_ack)
+            {
+                try SharedMemoryAllocator.rewindMappedHeader(
+                    @ptrCast(@alignCast(shm_handle.ptr)),
+                    shm_handle.mapped_size,
+                    hot_reload_reclaim_offset,
+                );
+                last_reclaimed_ack = ack_generation;
+            }
+        }
 
         if (active_rebuild) |*rebuild| {
             if (rebuild.child.done.load(.seq_cst)) {
+                const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
+                const rebuild_generation = rebuild.generation;
                 pending_rebuild = (try finishHotReloadRebuild(ctx, &state, &signal, rebuild)) or pending_rebuild;
+                if (rebuild_succeeded) last_finished_generation = rebuild_generation;
                 rebuild.deinit(ctx);
                 active_rebuild = null;
+                if (last_reported_ack >= last_finished_generation and
+                    last_reported_ack > last_reclaimed_ack)
+                {
+                    try SharedMemoryAllocator.rewindMappedHeader(
+                        @ptrCast(@alignCast(shm_handle.ptr)),
+                        shm_handle.mapped_size,
+                        hot_reload_reclaim_offset,
+                    );
+                    last_reclaimed_ack = last_reported_ack;
+                }
             }
         }
 
@@ -3750,7 +3932,7 @@ fn runHotReloadDevShim(
     host_child.thread.join();
     host_child_joined = true;
     defer destroyHotShimChild(ctx, host_child);
-    try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
+    _ = try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
 
     if (active_rebuild) |*rebuild| {
         rebuild.cancelAndJoin();
@@ -3814,7 +3996,7 @@ const LoweredCoordinatorResult = struct {
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: ?[32]u8,
-    watch_inputs: []const []const u8,
+    watch_inputs: []const compile.watch_inputs.Input,
     watch_inputs_allocator: Allocator,
     counts: CoordinatorReportCounts,
 
@@ -3826,7 +4008,7 @@ const LoweredCoordinatorResult = struct {
     }
 
     fn deinitWatchInputs(self: *LoweredCoordinatorResult) void {
-        freeOwnedPathSlice(self.watch_inputs_allocator, self.watch_inputs);
+        compile.watch_inputs.deinit(self.watch_inputs_allocator, self.watch_inputs);
         self.watch_inputs = &.{};
     }
 };
@@ -4122,8 +4304,8 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         lowered_result.entrypoint_names,
         lowered,
     );
-    ipc.hot_reload.publish(control, args.generation, publication.image_offset, publication.image_bound);
     shm.updateHeader();
+    ipc.hot_reload.publish(control, args.generation, publication.image_offset, publication.image_bound);
 }
 
 fn writeDevRunImageToSharedMemory(
@@ -4440,7 +4622,7 @@ fn lowerLirWithCoordinator(
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
         if (reporter) |r| r.fail();
-        const watch_inputs = try coord.collectWatchInputs();
+        const watch_inputs = try coord.collectWatchInputStates();
         return .{
             .lowered = null,
             .entrypoint_names = &.{},
@@ -4454,8 +4636,8 @@ fn lowerLirWithCoordinator(
 
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    const watch_inputs = try coord.collectWatchInputs();
-    errdefer coord.freeWatchInputs(watch_inputs);
+    const watch_inputs = try coord.collectWatchInputStates();
+    errdefer coord.freeWatchInputStates(watch_inputs);
     if (finalized_counts.errors > 0) {
         if (reporter) |r| r.fail();
         return .{
@@ -4508,8 +4690,14 @@ fn lowerLirWithCoordinator(
         imported_artifacts,
         relation_artifacts,
     );
-    const checked_host_identity = checkedInterpreterHostIdentity(
+    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+    defer ctx.gpa.free(platform_entrypoints);
+    const checked_host_identity = try checkedInterpreterHostIdentity(
+        ctx.gpa,
         root_artifact,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        platform_entrypoints,
         entrypoint_names,
         lowered.target_usize,
         hosted_table,
@@ -8698,6 +8886,14 @@ const WatchFileState = union(enum) {
     }
 };
 
+fn watchFileStateFromCompiler(state: compile.watch_inputs.State) WatchFileState {
+    return switch (state) {
+        .hash => |hash| .{ .hash = hash },
+        .missing => .missing,
+        .unreadable => .unreadable,
+    };
+}
+
 const WatchSnapshotEntry = struct {
     state: WatchFileState,
 };
@@ -8882,14 +9078,79 @@ fn captureWatchInputSet(ctx: *CliCtx, inputs: []const []const u8) WatchCollectIn
     };
 }
 
+fn appendCompilerWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    input: compile.watch_inputs.Input,
+) WatchCollectInputSetError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, input.path)) {
+        try snapshot.append(ctx.gpa, .{ .state = watchFileStateFromCompiler(input.state) });
+    }
+}
+
+fn appendCurrentCollectedWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchCollectInputSetError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        const absolute_path = paths.items[paths.items.len - 1];
+        try snapshot.append(ctx.gpa, .{ .state = try readWatchFileState(ctx, absolute_path) });
+    }
+}
+
+fn collectWatchInputSetFromCompilerInputs(
+    ctx: *CliCtx,
+    compiler_inputs: []const compile.watch_inputs.Input,
+    extra_paths: []const []const u8,
+) WatchCollectInputSetError!WatchInputSet {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    for (compiler_inputs) |input| {
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
+    }
+
+    for (extra_paths) |path| {
+        try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, path);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
 fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectInputSetError!WatchInputSet {
-    const paths = try collectWatchPaths(ctx, build_env, extra_paths);
+    if (build_env) |env| {
+        const inputs = try env.collectWatchInputStates();
+        defer env.freeWatchInputStates(inputs);
+        return collectWatchInputSetFromCompilerInputs(ctx, inputs, extra_paths);
+    }
+
+    const paths = try collectWatchPaths(ctx, null, extra_paths);
     return captureWatchInputSet(ctx, paths);
 }
 
 fn collectHotReloadWatchInputSet(
     ctx: *CliCtx,
-    paths_in: []const []const u8,
+    inputs_in: []const compile.watch_inputs.Input,
     source_rewrite: ?HotReloadSourceRewrite,
 ) WatchCollectInputSetError!WatchInputSet {
     var paths = std.ArrayList([]const u8).empty;
@@ -8901,29 +9162,38 @@ fn collectHotReloadWatchInputSet(
     var seen: std.StringHashMapUnmanaged(void) = .{};
     defer seen.deinit(ctx.gpa);
 
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
     const synthetic_abs = if (source_rewrite) |rewrite|
         try absolutePathFromCwd(ctx, rewrite.synthetic_app_path)
     else
         null;
     defer if (synthetic_abs) |path| ctx.gpa.free(path);
 
-    for (paths_in) |path| {
+    for (inputs_in) |input| {
         if (synthetic_abs) |synthetic_path| {
-            const path_abs = try absolutePathFromCwd(ctx, path);
+            const path_abs = try absolutePathFromCwd(ctx, input.path);
             defer ctx.gpa.free(path_abs);
             if (std.mem.eql(u8, path_abs, synthetic_path)) {
-                _ = try appendOwnedWatchPath(ctx, &paths, &seen, source_rewrite.?.source_path);
+                try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, source_rewrite.?.source_path);
                 continue;
             }
         }
-        _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
     }
 
     if (source_rewrite) |rewrite| {
-        _ = try appendOwnedWatchPath(ctx, &paths, &seen, rewrite.source_path);
+        try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, rewrite.source_path);
     }
 
-    return captureWatchInputSet(ctx, try paths.toOwnedSlice(ctx.gpa));
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
 }
 
 fn appendSerializedWatchFileState(gpa: Allocator, bytes: *std.ArrayList(u8), state: WatchFileState) Allocator.Error!void {
@@ -9021,10 +9291,10 @@ fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildE
 fn writeHotReloadWatchPathsFile(
     ctx: *CliCtx,
     file_path: []const u8,
-    paths: []const []const u8,
+    inputs: []const compile.watch_inputs.Input,
     source_rewrite: ?HotReloadSourceRewrite,
 ) WatchWriteInputsError!void {
-    var input_set = try collectHotReloadWatchInputSet(ctx, paths, source_rewrite);
+    var input_set = try collectHotReloadWatchInputSet(ctx, inputs, source_rewrite);
     defer input_set.deinit(ctx);
     try writeWatchInputSetFile(ctx, file_path, &input_set);
 }

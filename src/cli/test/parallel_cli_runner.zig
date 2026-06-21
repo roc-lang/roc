@@ -1946,6 +1946,7 @@ const hot_reload_host_c_source =
     \\};
     \\
     \\static unsigned char *stored_boxed = NULL;
+    \\static unsigned char *retained_boxed = NULL;
     \\static const char *app_path_for_host_effects = NULL;
     \\static volatile int edit_on_sleep = 0;
     \\
@@ -2011,6 +2012,17 @@ const hot_reload_host_c_source =
     \\
     \\int64_t roc_host_stored_boxed_call(int64_t value) {
     \\    return call_boxed_i64_to_i64(stored_boxed, value);
+    \\}
+    \\
+    \\static int retain_stored_boxed(void) {
+    \\    void *ops = roc_shim_get_ops();
+    \\    if (stored_boxed == NULL) return 1;
+    \\    if (retained_boxed != NULL) {
+    \\        roc_builtins_erased_callable_decref(retained_boxed, ops);
+    \\    }
+    \\    roc_builtins_erased_callable_incref(stored_boxed, 1, ops);
+    \\    retained_boxed = stored_boxed;
+    \\    return 0;
     \\}
     \\
     \\static const char *app_header =
@@ -2258,9 +2270,16 @@ const hot_reload_host_c_source =
     \\
     \\    if (write_app(app_path, app_store_boxed_wide_capture)) return 1;
     \\    if (wait_for_value("boxed-wide-capture", 151)) return 1;
+    \\    if (retain_stored_boxed()) return 1;
     \\
     \\    if (write_app(app_path, app_store_boxed_empty_capture)) return 1;
     \\    if (wait_for_value("boxed-empty-capture", 7)) return 1;
+    \\    int64_t old_wide_result = call_boxed_i64_to_i64(retained_boxed, 9);
+    \\    printf("boxed-wide-old-after-shrink:%lld\n", (long long)old_wide_result);
+    \\    fflush(stdout);
+    \\    if (old_wide_result != 159) return 1;
+    \\    roc_builtins_erased_callable_decref(retained_boxed, roc_shim_get_ops());
+    \\    retained_boxed = NULL;
     \\
     \\    if (write_app(app_path, app_const_thirteen)) return 1;
     \\    if (wait_for_value("boxed-post-reload", 13)) return 1;
@@ -2451,6 +2470,7 @@ fn customHotReloadDevShim(
             .{ .stream = .stdout, .text = "boxed-store:101\n" },
             .{ .stream = .stdout, .text = "boxed-wide-capture:151\n" },
             .{ .stream = .stdout, .text = "boxed-empty-capture:7\n" },
+            .{ .stream = .stdout, .text = "boxed-wide-old-after-shrink:159\n" },
             .{ .stream = .stdout, .text = "boxed-post-reload:13\n" },
             .{ .stream = .stdout, .text = "boxed-old-after-reload:12\n" },
             .{ .stream = .stdout, .text = "boxed-released\n" },
@@ -2634,6 +2654,26 @@ const hot_reload_model_host_c_source =
     \\"value : Model -> U64\n"
     \\"value = |model| model.value\n";
     \\
+    \\static const char *app_incompatible_same_layout =
+    \\"Model : U64\n\n"
+    \\"main = { init, update, value }\n\n"
+    \\"init : U64 -> Model\n"
+    \\"init = |seed| seed\n\n"
+    \\"update : Model, U64 -> Model\n"
+    \\"update = |model, delta| model + (delta * 100)\n\n"
+    \\"value : Model -> U64\n"
+    \\"value = |model| model\n";
+    \\
+    \\static const char *app_incompatible_larger =
+    \\"Model : { value : U64, extra : U64 }\n\n"
+    \\"main = { init, update, value }\n\n"
+    \\"init : U64 -> Model\n"
+    \\"init = |seed| { value: seed, extra: 100 }\n\n"
+    \\"update : Model, U64 -> Model\n"
+    \\"update = |model, delta| { value: model.value + (delta * 1000), extra: model.extra }\n\n"
+    \\"value : Model -> U64\n"
+    \\"value = |model| model.value + model.extra\n";
+    \\
     \\static int write_app(const char *path, const char *body) {
     \\    FILE *file = fopen(path, "wb");
     \\    if (file == NULL) {
@@ -2685,6 +2725,20 @@ const hot_reload_model_host_c_source =
     \\    if (wait_for_model_value("model-initial", 12)) return 1;
     \\    if (write_app(app_path, app_updated)) return 1;
     \\    if (wait_for_model_value("model-reload", 30)) return 1;
+    \\
+    \\    if (write_app(app_path, app_incompatible_same_layout)) return 1;
+    \\    usleep(2000000);
+    \\    uint64_t after_same_layout = run_model_pipeline(10, 2);
+    \\    printf("model-same-layout-rejected:%llu\n", (unsigned long long)after_same_layout);
+    \\    fflush(stdout);
+    \\    if (after_same_layout != 30) return 1;
+    \\
+    \\    if (write_app(app_path, app_incompatible_larger)) return 1;
+    \\    usleep(2000000);
+    \\    uint64_t after_larger = run_model_pipeline(10, 2);
+    \\    printf("model-larger-rejected:%llu\n", (unsigned long long)after_larger);
+    \\    fflush(stdout);
+    \\    if (after_larger != 30) return 1;
     \\
     \\    puts("model-done");
     \\    fflush(stdout);
@@ -2777,14 +2831,16 @@ fn customHotReloadModelBoundary(
         .contains = &.{
             .{ .stream = .stdout, .text = "model-initial:12\n" },
             .{ .stream = .stdout, .text = "model-reload:30\n" },
+            .{ .stream = .stdout, .text = "model-same-layout-rejected:30\n" },
+            .{ .stream = .stdout, .text = "model-larger-rejected:30\n" },
             .{ .stream = .stdout, .text = "model-done\n" },
             .{ .stream = .stderr, .text = "hot reload generation" },
             .{ .stream = .stderr, .text = "accepted by host" },
+            .{ .stream = .stderr, .text = "changed the platform host interface" },
         },
         .not_contains = &.{
             .{ .stream = .stderr, .text = "timed out waiting" },
             .{ .stream = .stderr, .text = "panic" },
-            .{ .stream = .stderr, .text = "changed the platform host interface" },
         },
     })) |message| return failureFromRun(allocator, timer, result, message);
 
