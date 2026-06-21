@@ -374,6 +374,7 @@ const HostSignalRecord = struct {
     ref_count: usize,
     payload: HostSignalRecordPayload,
     active_graph_id: ?u64 = null,
+    active_use_count: usize = 0,
     last_dirty_generation: u64 = 0,
     last_dirty_changed: bool = false,
 
@@ -2195,6 +2196,7 @@ const HostEnv = struct {
             const active_graph_id = node.record.active_graph_id orelse failHost("active signal graph record was missing its dense id");
             if (active_graph_id != index) failHost("active signal graph record dense id did not match its slot");
             node.record.active_graph_id = null;
+            node.record.active_use_count = 0;
             node.record.release(allocator, roc_host, &self.pending_roc_metrics);
         }
         self.active_signal_graph.items.len = 0;
@@ -2207,6 +2209,29 @@ const HostEnv = struct {
         }
         self.active_source_signal_routes.items.len = 0;
 
+        for (self.active_text_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_text_signal_routes.items.len = 0;
+
+        for (self.active_bool_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_bool_signal_routes.items.len = 0;
+
+        for (self.active_change_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_change_signal_routes.items.len = 0;
+
+        for (self.active_structural_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_structural_signal_routes.items.len = 0;
+    }
+
+    fn clearActiveSinkSignalRoutes(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
         for (self.active_text_signal_routes.items) |*route| {
             route.deinit(allocator);
         }
@@ -2241,88 +2266,239 @@ const HostEnv = struct {
         return self.activeSignalRecordId(record) orelse failHost("active signal graph referenced a record that was not registered");
     }
 
-    fn appendActiveSignalRecordTree(self: *HostEnv, record: *HostSignalRecord) u64 {
-        if (self.activeSignalRecordId(record)) |record_id| return record_id;
-
-        switch (record.payload) {
-            .ref, .const_value, .task_source, .interval_source => {},
-            .map => |payload| _ = self.appendActiveSignalRecordTree(payload.input),
-            .map2 => |payload| {
-                _ = self.appendActiveSignalRecordTree(payload.left);
-                _ = self.appendActiveSignalRecordTree(payload.right);
-            },
-            .combine => |payload| {
-                for (payload.children) |child| {
-                    _ = self.appendActiveSignalRecordTree(child);
-                }
-            },
-        }
-
+    fn appendActiveSignalGraphNode(self: *HostEnv, record: *HostSignalRecord, rank: u64) u64 {
         const allocator = self.gpa.allocator();
         const record_id: u64 = @intCast(self.active_signal_graph.items.len);
-        self.active_signal_graph.append(allocator, .{ .record = record.retain() }) catch std.process.exit(1);
+        self.active_signal_graph.append(allocator, .{
+            .record = record.retain(),
+            .rank = rank,
+        }) catch std.process.exit(1);
         record.active_graph_id = record_id;
         self.pending_roc_metrics.active_graph_records_rebuilt += 1;
         return record_id;
     }
 
-    fn appendActiveSignalDependent(self: *HostEnv, route_lists: []std.ArrayListUnmanaged(u64), input_record: *HostSignalRecord, dependent_record_id: u64) void {
+    fn appendActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
         const allocator = self.gpa.allocator();
-        const input_record_id = self.requireActiveSignalRecordId(input_record);
         const input_index: usize = @intCast(input_record_id);
-        if (!u64SliceContains(route_lists[input_index].items, dependent_record_id)) {
-            route_lists[input_index].append(allocator, dependent_record_id) catch std.process.exit(1);
+        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent referenced an unknown input record");
+        const dependents = &self.active_signal_graph.items[input_index].dependents;
+        if (!u64SliceContains(dependents.*, dependent_record_id)) {
+            const previous_len = dependents.*.len;
+            dependents.* = allocator.realloc(dependents.*, previous_len + 1) catch std.process.exit(1);
+            dependents.*[previous_len] = dependent_record_id;
         }
     }
 
-    fn rebuildActiveSignalGraphDependents(self: *HostEnv) void {
+    fn removeActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
+        const input_index: usize = @intCast(input_record_id);
+        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent removal referenced an unknown input record");
+        const dependents = &self.active_signal_graph.items[input_index].dependents;
+        for (dependents.*, 0..) |existing_id, index| {
+            if (existing_id != dependent_record_id) continue;
+            std.mem.copyForwards(u64, dependents.*[index..], dependents.*[index + 1 ..]);
+            dependents.* = self.gpa.allocator().realloc(dependents.*, dependents.*.len - 1) catch std.process.exit(1);
+            return;
+        }
+        failHost("active signal dependent removal missed its edge");
+    }
+
+    fn replaceActiveSignalDependentId(self: *HostEnv, input_record_id: u64, old_dependent_id: u64, new_dependent_id: u64) void {
+        const input_index: usize = @intCast(input_record_id);
+        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent rewrite referenced an unknown input record");
+        const dependents = self.active_signal_graph.items[input_index].dependents;
+        for (dependents) |*existing_id| {
+            if (existing_id.* != old_dependent_id) continue;
+            existing_id.* = new_dependent_id;
+            return;
+        }
+        failHost("active signal dependent rewrite missed its edge");
+    }
+
+    fn appendActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64, record_id: u64) void {
+        const route = self.ensureActiveSourceSignalRoute(source_node_id);
+        if (!u64SliceContains(route.items, record_id)) {
+            route.append(self.gpa.allocator(), record_id) catch std.process.exit(1);
+        }
+    }
+
+    fn removeActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64, record_id: u64) void {
+        if (source_node_id >= self.active_source_signal_routes.items.len) failHost("active source signal route removal referenced an unknown source node");
+        var route = &self.active_source_signal_routes.items[@intCast(source_node_id)];
+        for (route.items, 0..) |existing_id, index| {
+            if (existing_id != record_id) continue;
+            _ = route.swapRemove(index);
+            return;
+        }
+        failHost("active source signal route removal missed its record");
+    }
+
+    fn replaceActiveSourceSignalRouteId(self: *HostEnv, source_node_id: u64, old_record_id: u64, new_record_id: u64) void {
+        if (source_node_id >= self.active_source_signal_routes.items.len) failHost("active source signal route rewrite referenced an unknown source node");
+        const route = self.active_source_signal_routes.items[@intCast(source_node_id)].items;
+        for (route) |*existing_id| {
+            if (existing_id.* != old_record_id) continue;
+            existing_id.* = new_record_id;
+            return;
+        }
+        failHost("active source signal route rewrite missed its record");
+    }
+
+    fn recordSliceContains(records: []const *HostSignalRecord, record: *HostSignalRecord) bool {
+        for (records) |existing| {
+            if (existing == record) return true;
+        }
+        return false;
+    }
+
+    fn appendUniqueActiveInputRecord(self: *HostEnv, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+        if (!HostEnv.recordSliceContains(records.items, record)) {
+            records.append(self.gpa.allocator(), record) catch std.process.exit(1);
+        }
+    }
+
+    fn appendActiveSignalInputRecords(self: *HostEnv, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+        switch (record.payload) {
+            .ref, .const_value, .task_source, .interval_source => {},
+            .map => |payload| self.appendUniqueActiveInputRecord(records, payload.input),
+            .map2 => |payload| {
+                self.appendUniqueActiveInputRecord(records, payload.left);
+                self.appendUniqueActiveInputRecord(records, payload.right);
+            },
+            .combine => |payload| {
+                for (payload.children) |child| {
+                    self.appendUniqueActiveInputRecord(records, child);
+                }
+            },
+        }
+    }
+
+    fn retainActiveSignalRecord(self: *HostEnv, record: *HostSignalRecord) void {
+        if (record.active_use_count != 0) {
+            record.active_use_count += 1;
+            return;
+        }
+
+        record.active_use_count = 1;
+        var rank: u64 = 0;
+
+        switch (record.payload) {
+            .ref, .const_value, .task_source, .interval_source => {},
+            .map => |payload| {
+                self.retainActiveSignalRecord(payload.input);
+                const input_id = self.requireActiveSignalRecordId(payload.input);
+                rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
+            },
+            .map2 => |payload| {
+                self.retainActiveSignalRecord(payload.left);
+                if (payload.right != payload.left) {
+                    self.retainActiveSignalRecord(payload.right);
+                }
+                const left_id = self.requireActiveSignalRecordId(payload.left);
+                const right_id = self.requireActiveSignalRecordId(payload.right);
+                rank = @max(
+                    self.active_signal_graph.items[@intCast(left_id)].rank,
+                    self.active_signal_graph.items[@intCast(right_id)].rank,
+                ) + 1;
+            },
+            .combine => |payload| {
+                for (payload.children, 0..) |child, index| {
+                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    self.retainActiveSignalRecord(child);
+                    const child_id = self.requireActiveSignalRecordId(child);
+                    rank = @max(rank, self.active_signal_graph.items[@intCast(child_id)].rank + 1);
+                }
+            },
+        }
+
+        const record_id = self.appendActiveSignalGraphNode(record, rank);
+
+        switch (record.payload) {
+            .ref => |source_node_id| self.appendActiveSourceSignalRoute(source_node_id, record_id),
+            .const_value, .task_source, .interval_source => {},
+            .map => |payload| self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.input), record_id),
+            .map2 => |payload| {
+                self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.left), record_id);
+                if (payload.right != payload.left) {
+                    self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.right), record_id);
+                }
+            },
+            .combine => |payload| {
+                for (payload.children, 0..) |child, index| {
+                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(child), record_id);
+                }
+            },
+        }
+    }
+
+    fn updateMovedActiveSignalRecordEdges(self: *HostEnv, moved_record: *HostSignalRecord, old_record_id: u64, new_record_id: u64) void {
+        switch (moved_record.payload) {
+            .ref => |source_node_id| self.replaceActiveSourceSignalRouteId(source_node_id, old_record_id, new_record_id),
+            .const_value, .task_source, .interval_source => {},
+            .map => |payload| self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.input), old_record_id, new_record_id),
+            .map2 => |payload| {
+                self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.left), old_record_id, new_record_id);
+                if (payload.right != payload.left) {
+                    self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.right), old_record_id, new_record_id);
+                }
+            },
+            .combine => |payload| {
+                for (payload.children, 0..) |child, index| {
+                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(child), old_record_id, new_record_id);
+                }
+            },
+        }
+    }
+
+    fn removeActiveSignalGraphNode(self: *HostEnv, record_id: u64, record: *HostSignalRecord) void {
         const allocator = self.gpa.allocator();
-        const record_count = self.active_signal_graph.items.len;
-        const route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), record_count) catch std.process.exit(1);
-        defer allocator.free(route_lists);
+        const record_index: usize = @intCast(record_id);
+        if (record_index >= self.active_signal_graph.items.len) failHost("active signal graph removal referenced an unknown record");
+        if (self.active_signal_graph.items[record_index].record != record) failHost("active signal graph removal referenced the wrong record");
+        if (self.active_signal_graph.items[record_index].dependents.len != 0) failHost("active signal graph removed a record with live dependents");
 
-        for (route_lists) |*list| {
-            list.* = .empty;
-        }
-        errdefer {
-            for (route_lists) |*list| {
-                list.deinit(allocator);
-            }
-        }
+        allocator.free(self.active_signal_graph.items[record_index].dependents);
+        const last_index = self.active_signal_graph.items.len - 1;
+        _ = self.active_signal_graph.swapRemove(record_index);
+        record.active_graph_id = null;
+        record.release(allocator, self.roc_host.?, &self.pending_roc_metrics);
 
-        for (self.active_signal_graph.items, 0..) |*node, index| {
-            const record_id: u64 = @intCast(index);
-            var rank: u64 = 0;
-            switch (node.record.payload) {
-                .ref, .const_value, .task_source, .interval_source => {},
-                .map => |payload| {
-                    const input_id = self.requireActiveSignalRecordId(payload.input);
-                    rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
-                    self.appendActiveSignalDependent(route_lists, payload.input, record_id);
-                },
-                .map2 => |payload| {
-                    const left_id = self.requireActiveSignalRecordId(payload.left);
-                    const right_id = self.requireActiveSignalRecordId(payload.right);
-                    rank = @max(
-                        self.active_signal_graph.items[@intCast(left_id)].rank,
-                        self.active_signal_graph.items[@intCast(right_id)].rank,
-                    ) + 1;
-                    self.appendActiveSignalDependent(route_lists, payload.left, record_id);
-                    self.appendActiveSignalDependent(route_lists, payload.right, record_id);
-                },
-                .combine => |payload| {
-                    for (payload.children) |child| {
-                        const child_id = self.requireActiveSignalRecordId(child);
-                        rank = @max(rank, self.active_signal_graph.items[@intCast(child_id)].rank + 1);
-                        self.appendActiveSignalDependent(route_lists, child, record_id);
-                    }
-                },
-            }
-            node.rank = rank;
+        if (record_index != last_index) {
+            const moved_id: u64 = @intCast(record_index);
+            const old_moved_id: u64 = @intCast(last_index);
+            const moved_record = self.active_signal_graph.items[record_index].record;
+            moved_record.active_graph_id = moved_id;
+            self.updateMovedActiveSignalRecordEdges(moved_record, old_moved_id, moved_id);
+        }
+    }
+
+    fn releaseActiveSignalRecord(self: *HostEnv, record: *HostSignalRecord) void {
+        if (record.active_use_count == 0) failHost("active signal graph record use count underflow");
+        record.active_use_count -= 1;
+        if (record.active_use_count != 0) return;
+
+        const allocator = self.gpa.allocator();
+        const record_id = self.requireActiveSignalRecordId(record);
+        var input_records: std.ArrayListUnmanaged(*HostSignalRecord) = .empty;
+        defer input_records.deinit(allocator);
+        self.appendActiveSignalInputRecords(&input_records, record);
+
+        switch (record.payload) {
+            .ref => |source_node_id| self.removeActiveSourceSignalRoute(source_node_id, record_id),
+            .const_value, .task_source, .interval_source => {},
+            .map, .map2, .combine => {},
         }
 
-        for (self.active_signal_graph.items, route_lists) |*node, *route_list| {
-            node.dependents = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
+        for (input_records.items) |input_record| {
+            self.removeActiveSignalDependentId(self.requireActiveSignalRecordId(input_record), record_id);
+        }
+
+        self.removeActiveSignalGraphNode(record_id, record);
+
+        for (input_records.items) |input_record| {
+            self.releaseActiveSignalRecord(input_record);
         }
     }
 
@@ -2376,43 +2552,9 @@ const HostEnv = struct {
         return &self.active_structural_signal_routes.items[route_index];
     }
 
-    fn rebuildActiveSignalGraphFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
+    fn rebuildActiveSinkSignalRoutesFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
         const allocator = self.gpa.allocator();
-        self.clearActiveSignalRoutes();
-        self.clearActiveSignalGraph();
-
-        for (stream.signal_text_nodes.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.signal.record);
-        }
-        for (stream.signal_text_attrs.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.signal.record);
-        }
-        for (stream.signal_bool_attrs.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.signal.record);
-        }
-        for (stream.on_changes.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.signal.record);
-        }
-        for (stream.whens.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.condition.record);
-        }
-        for (stream.eaches.items) |*desc| {
-            _ = self.appendActiveSignalRecordTree(desc.items.record);
-        }
-
-        self.rebuildActiveSignalGraphDependents();
-
-        for (self.active_signal_graph.items, 0..) |node, record_id| {
-            switch (node.record.payload) {
-                .ref => |source_node_id| {
-                    const route = self.ensureActiveSourceSignalRoute(source_node_id);
-                    if (!u64SliceContains(route.items, @intCast(record_id))) {
-                        route.append(allocator, @intCast(record_id)) catch std.process.exit(1);
-                    }
-                },
-                .const_value, .map, .map2, .combine, .task_source, .interval_source => {},
-            }
-        }
+        self.clearActiveSinkSignalRoutes();
 
         for (stream.signal_text_nodes.items, 0..) |desc, index| {
             const record_id = self.requireActiveSignalRecordId(desc.signal.record);
@@ -2459,6 +2601,32 @@ const HostEnv = struct {
                 .index = index,
             }) catch std.process.exit(1);
         }
+    }
+
+    fn rebuildActiveSignalGraphFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
+        self.clearActiveSignalRoutes();
+        self.clearActiveSignalGraph();
+
+        for (stream.signal_text_nodes.items) |*desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
+        for (stream.signal_text_attrs.items) |*desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
+        for (stream.signal_bool_attrs.items) |*desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
+        for (stream.on_changes.items) |*desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
+        for (stream.whens.items) |*desc| {
+            self.retainActiveSignalRecord(desc.condition.record);
+        }
+        for (stream.eaches.items) |*desc| {
+            self.retainActiveSignalRecord(desc.items.record);
+        }
+
+        self.rebuildActiveSinkSignalRoutesFromStream(stream);
     }
 
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
@@ -4344,6 +4512,7 @@ const HostEnv = struct {
         for (self.active_stream.signal_text_nodes.items) |desc| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.signal.record);
                 self.deinitActiveSignalTextNodeDesc(roc_host, &removed);
                 continue;
             }
@@ -4372,6 +4541,7 @@ const HostEnv = struct {
         for (self.active_stream.signal_text_attrs.items) |desc| {
             if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.signal.record);
                 self.deinitActiveSignalTextAttrDesc(roc_host, &removed);
                 continue;
             }
@@ -4396,6 +4566,7 @@ const HostEnv = struct {
         for (self.active_stream.signal_bool_attrs.items) |desc| {
             if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.signal.record);
                 self.deinitActiveSignalBoolAttrDesc(roc_host, &removed);
                 continue;
             }
@@ -4410,6 +4581,7 @@ const HostEnv = struct {
         for (self.active_stream.on_changes.items) |desc| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.signal.record);
                 self.deinitActiveOnChangeDesc(roc_host, &removed);
                 continue;
             }
@@ -4495,6 +4667,7 @@ const HostEnv = struct {
         for (self.active_stream.whens.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.condition.record);
                 removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
                 removed.condition.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
                 self.pending_roc_metrics.closure_releases += 1;
@@ -4514,6 +4687,7 @@ const HostEnv = struct {
         for (self.active_stream.eaches.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
                 var removed = desc;
+                self.releaseActiveSignalRecord(removed.items.record);
                 removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
                 removed.items.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
                 self.pending_roc_metrics.closure_releases += 7;
@@ -4590,21 +4764,33 @@ const HostEnv = struct {
         self.active_stream.text_nodes.appendSlice(allocator, replacement.text_nodes.items) catch std.process.exit(1);
         replacement.text_nodes.items.len = 0;
 
+        for (replacement.signal_text_nodes.items) |desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
         self.active_stream.signal_text_nodes.appendSlice(allocator, replacement.signal_text_nodes.items) catch std.process.exit(1);
         replacement.signal_text_nodes.items.len = 0;
 
         self.active_stream.static_text_attrs.appendSlice(allocator, replacement.static_text_attrs.items) catch std.process.exit(1);
         replacement.static_text_attrs.items.len = 0;
 
+        for (replacement.signal_text_attrs.items) |desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
         self.active_stream.signal_text_attrs.appendSlice(allocator, replacement.signal_text_attrs.items) catch std.process.exit(1);
         replacement.signal_text_attrs.items.len = 0;
 
         self.active_stream.static_bool_attrs.appendSlice(allocator, replacement.static_bool_attrs.items) catch std.process.exit(1);
         replacement.static_bool_attrs.items.len = 0;
 
+        for (replacement.signal_bool_attrs.items) |desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
         self.active_stream.signal_bool_attrs.appendSlice(allocator, replacement.signal_bool_attrs.items) catch std.process.exit(1);
         replacement.signal_bool_attrs.items.len = 0;
 
+        for (replacement.on_changes.items) |desc| {
+            self.retainActiveSignalRecord(desc.signal.record);
+        }
         self.active_stream.on_changes.appendSlice(allocator, replacement.on_changes.items) catch std.process.exit(1);
         replacement.on_changes.items.len = 0;
 
@@ -4622,9 +4808,15 @@ const HostEnv = struct {
         self.active_stream.states.appendSlice(allocator, replacement.states.items) catch std.process.exit(1);
         replacement.states.items.len = 0;
 
+        for (replacement.whens.items) |desc| {
+            self.retainActiveSignalRecord(desc.condition.record);
+        }
         self.active_stream.whens.appendSlice(allocator, replacement.whens.items) catch std.process.exit(1);
         replacement.whens.items.len = 0;
 
+        for (replacement.eaches.items) |desc| {
+            self.retainActiveSignalRecord(desc.items.record);
+        }
         self.active_stream.eaches.appendSlice(allocator, replacement.eaches.items) catch std.process.exit(1);
         replacement.eaches.items.len = 0;
     }
@@ -4717,6 +4909,7 @@ const HostEnv = struct {
         replacement.render_nodes.items.len = 0;
         self.validateActiveRenderDescriptorIntegrity();
         self.rebuildActiveStreamSignalRecordTable();
+        self.rebuildActiveSinkSignalRoutesFromStream(&self.active_stream);
 
         return .{
             .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch std.process.exit(1),
@@ -6856,7 +7049,6 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
     }
     applyStructuralEventBindingsForSeen(host, &host.active_stream, event_seen, &counts);
 
-    host.rebuildActiveSignalGraphFromStream(&host.active_stream);
     host.render_metrics.patches_emitted += counts.total;
     return counts;
 }
@@ -9338,12 +9530,14 @@ test "signals host dirty each append patches only changed row" {
     const rows_removed_start = host.pending_roc_metrics.rows_removed;
     const row_call_start = test_row_elem_call_count;
     const patch_start = host.render_metrics.patches_emitted;
+    const graph_rebuild_start = host.pending_roc_metrics.active_graph_records_rebuilt;
 
     const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, row_count), host.pending_roc_metrics.rows_reused - rows_reused_start);
     try std.testing.expectEqual(@as(u64, 1), host.pending_roc_metrics.rows_created - rows_created_start);
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.rows_removed - rows_removed_start);
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
     try std.testing.expectEqual(row_call_start + 1, test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.create_element);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
@@ -9398,8 +9592,10 @@ test "signals host updates nested when without rebuilding unchanged row" {
     try std.testing.expectEqual(@as(usize, 1), dirty_structural_signals.len);
     try std.testing.expectEqual(HostActiveStructuralSignalKind.when, dirty_structural_signals[0].kind);
 
+    const graph_rebuild_start = host.pending_roc_metrics.active_graph_records_rebuilt;
     _ = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
 
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
     try std.testing.expectEqual(@as(u64, 1), test_row_elem_call_count);
     try std.testing.expect(activeTextElementId(&host, "row-1-1-true") == null);
     try std.testing.expect(activeTextElementId(&host, "row-1-1-false") != null);

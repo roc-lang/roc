@@ -4,7 +4,7 @@
 remaining gaps only; completed phase notes and retired findings belong in git
 history.
 
-## Current State (2026-06-21)
+## Current State (2026-06-22)
 
 - The public app surface uses retained `Elem`/`Signal`/`Html`/`Ui` values. Apps
   no longer import the removed `Reactive`/`Graph`/`UiRuntime` surface.
@@ -28,12 +28,17 @@ history.
   per dirty batch and prunes parent transforms when a child output is unchanged.
 - Active signal records carry explicit dense ids while they are in the active
   graph, and the active graph owns a retained reference to each record while it
-  points at it. Record→id lookup is O(1), and `active_graph_records_rebuilt`
-  counts graph records reconstructed by full or structural rebuilds.
-- The host rebuilds an active signal graph from retained signal records after
-  each descriptor stream. Dirty source node ids route to source signal records,
-  then walk explicit dependent edges in rank order. Leaf and structural sinks
-  fan out from the changed terminal signal record ids.
+  points at it. Active graph membership is ref-counted separately from normal
+  signal ownership, record→id lookup is O(1), and `active_graph_records_rebuilt`
+  counts graph records constructed by full ingestion or newly activated
+  structural roots.
+- The host builds the active signal graph from retained signal records during
+  initial/full descriptor ingestion. Dirty structural splices release removed
+  descriptor roots, retain inserted descriptor roots, and patch source routes
+  plus dependent edges in place; after the stream mutation only sink routes are
+  rebuilt. Dirty source node ids route to source signal records, then walk
+  explicit dependent edges in rank order. Leaf and structural sinks fan out from
+  the changed terminal signal record ids.
 - Non-structural dirty updates patch only matching text/value/checked/disabled
   sinks. Structural dirty updates patch DOM incrementally, reuse/move surviving
   keyed row DOM, and patch event bindings by changed slot.
@@ -44,9 +49,6 @@ history.
   Preserved-order `Ui.each` churn splices only removed/changed/new row scopes
   before applying one DOM patch to the affected each site; reorder churn uses an
   explicit whole-site replacement because row order actually changed.
-  **Caveat (foundation gap):** the DOM patch is local, but the signal-graph
-  maintenance underneath it is not — every structural splice still calls a full
-  clear-and-rebuild of the active signal graph. See *Foundation Gaps* below.
 - `Ui.component` introduces reusable local scopes for helper-owned state. The
   component app proves multiple stateful instances keep separate construction
   identities across keyed row movement and dispose state when the owning row
@@ -75,18 +77,6 @@ would have caught it.
 
 Severity order (highest first). Take one slice at a time and commit each green
 result. Each slice lands its fix *and* the assertion that locks it in.
-
-### G-F1 — Incremental signal-graph maintenance (Critical)
-
-- **Problem:** every structural change clears and rebuilds the entire active
-  signal graph, so reconstruction is O(total active graph records) even when the
-  structural splice touches one scope.
-- **Fix:** on a splice, edit only the affected scope's records and patch
-  adjacency/rank in place instead of clear-and-rebuild. Initial ingestion may be
-  O(N); nothing after it may be.
-- **Counter + assertion:** the generated large-N each app asserts
-  `expect_metric_delta active_graph_records_rebuilt 0` on a single-row item
-  change and a bound proportional to moved rows on reorder.
 
 ### G-F2 — O(1) descriptor lookup (Critical)
 
@@ -146,8 +136,9 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 - **Generated large-N each app** (the one place large N is allowed, because it is
   generated systematically, not a handwritten catalog). N is a build parameter;
   specs assert the budget for single-row update / append / remove / filter /
-  reorder using the new counters. This is the primary proof for G-F1..G-F4 and
-  the allocation-flatness part of the success metrics.
+  reorder using the new counters. This extends the G-F1 active-graph canary from
+  host unit coverage to a generated app, and is the primary proof for G-F2..G-F4
+  plus the allocation-flatness part of the success metrics.
 - **`kanban_board`** reorder and filter steps gain `mark_metrics` /
   `expect_metric_delta` blocks bounding work.
 - **`async_effects`** gains a `retained_alloc_delta` / closure-balance assertion
@@ -162,7 +153,7 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 ## Green Gates
 
 Use the smallest gate that proves the slice, then run the full signal gate before
-committing code changes. Each foundation slice (G-F1..G-F6) must land its fix and
+committing code changes. Each foundation slice (G-F2..G-F6) must land its fix and
 its locking assertion together; a fix without the counter/spec that would catch a
 regression is not done.
 
