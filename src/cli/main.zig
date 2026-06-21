@@ -831,12 +831,14 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
 }
 
-fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
+    return switch (args) {
+        .run, .build, .check, .test_cmd, .docs, .glue, .experimental_lsp => true,
+        .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
+    };
+}
 
-    ensureWindowsConsoleSupportsAnsiAndUtf8();
-
+fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
     // Start background cache cleanup on a separate thread.
     // This is a fire-and-forget thread that:
     // - Cleans up stale temp directories (>5 min old)
@@ -851,27 +853,35 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     // writer uses, so cleanup can never target a different directory than where
     // artifacts are written. The background thread itself is CoreCtx-free and
     // allocation-free; it only borrows these base paths (copied in by value).
-    {
-        const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-        const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
-        const cache_base: []const u8 = blk: {
-            const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-            break :blk cfg.getEffectiveCacheDir(arena) catch "";
-        };
-        if (temp_base.len != 0 or cache_base.len != 0) {
-            if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
-                // Thread started successfully, will run in background
-            } else |_| {
-                // Non-fatal: cleanup failure shouldn't prevent compilation
-                std.log.debug("Failed to start background cleanup thread", .{});
-            }
+    const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
+    const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
+    const cache_base: []const u8 = blk: {
+        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+        break :blk cfg.getEffectiveCacheDir(arena) catch "";
+    };
+    if (temp_base.len != 0 or cache_base.len != 0) {
+        if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+            // Thread started successfully, will run in background.
+        } else |_| {
+            // Non-fatal: cleanup failure shouldn't prevent compilation.
+            std.log.debug("Failed to start background cleanup thread", .{});
         }
     }
+}
+
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.create(std_io);
 
     const parsed_args = try cli_args.parse(arena, std_io, args[1..]);
+    if (parsedArgsStartBackgroundCleanup(parsed_args)) {
+        startBackgroundCacheCleanup(gpa, arena, std_io);
+    }
 
     // Determine command for context
     const command: Command = switch (parsed_args) {
