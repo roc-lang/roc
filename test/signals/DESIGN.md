@@ -259,10 +259,14 @@ Signal.combine : List(Signal(a)) -> Signal(List(a))
     where [a.is_eq : a, a -> Bool]
 
 # Async / effects as sources (same propagation path as user events)
+Signal.fake_task : Str, (Str -> a), (Str -> err) -> Task(a, err)
 Signal.from_task : Task(a, err) -> Signal([Loading, Done(a), Failed(err)])
-Signal.interval : Duration -> Signal(Instant)
-Ui.on_change : Signal(a), (a -> Cmd(msg)) -> Elem   # sink: fires a Cmd when value changes
-Ui.on_cleanup : Task({}, {}) -> Elem                # runs at scope disposal
+Signal.fold_task : Task(a, err), b, (a -> b), (err -> b) -> Signal(b)
+Signal.start_str : Task(a, err), Str -> Cmd
+Signal.cleanup : Str -> Cleanup
+Signal.interval : U64 -> Signal(U64)  # test host: period ms -> tick count
+Ui.on_change : Signal(a), (a -> Cmd) -> Elem  # sink: fires a Cmd when value changes
+Ui.on_cleanup : Cleanup -> Elem               # runs at scope disposal
 
 # Structure
 Html.div : List(Attr), List(Elem) -> Elem
@@ -475,10 +479,9 @@ roc_ui_init : {} -> Box(Elem)
   entrypoint is needed or wanted: the host already holds a direct pointer to the
   specific builder for that specific site. Adding an entrypoint would reintroduce
   the boundary crossing this model exists to remove, and force the host to ask
-  Roc "which builder?" when it already knows. The *open* work for `Ui.each`
-  (NEXT_STEPS gap 1) is purely host-side patch locality — splicing the returned
-  sub-tree into only the affected scope rather than rebuilding the active
-  descriptor stream — not how Roc is invoked.
+  Roc "which builder?" when it already knows. `Ui.each` patch locality is
+  host-side: the host splices returned row sub-trees into affected scopes and
+  preserves surviving row scopes instead of re-entering the root descriptor.
 - **Why a single entrypoint, not the batched protocol.** An earlier design
   sketched four entrypoints (`ui_init` / `ui_event` / `ui_recompute` / `ui_drop`)
   with a batched recompute round-trip to amortize FFI cost. The in-process model
@@ -670,8 +673,8 @@ need to prove and which a real browser would not expose.
 
 ## Implementation Plan
 
-This records the order the platform was built and what remains. The foundation
-through step 4 is implemented; steps 5–8 are the Definition of Done below.
+This records the order the platform was built. The steps below are implemented
+on the simulated host; `NEXT_STEPS.md` is reserved for newly discovered gaps.
 
 1. Build the simulated DOM, spec parser, and ABI box/refcount helpers in the
    host. **(done)**
@@ -684,13 +687,13 @@ through step 4 is implemented; steps 5–8 are the Definition of Done below.
    `kanban_board`, plus the `identity_stress` fixture) and run their specs.
    **(done)**
 5. Make `Ui.each` structural updates scope-local — no active descriptor-stream
-   rebuild. **(remaining; see NEXT_STEPS)**
+   rebuild. **(done)**
 6. Add `Ui.component` named scopes for local state across helper functions.
-   **(remaining)**
+   **(done)**
 7. Add debug-only carrier type-tag assertions on the erasure boundary.
-   **(remaining)**
+   **(done)**
 8. Implement effects/subscriptions as sources (`Signal.from_task`,
-   `Signal.interval`, `Ui.on_change`, `Ui.on_cleanup`). **(remaining)**
+   `Signal.interval`, `Ui.on_change`, `Ui.on_cleanup`). **(done)**
 
 ## Definition of Done
 
@@ -741,59 +744,37 @@ otherwise-unproven capability,"** never size or visual richness. Today's suite:
 - `identity_stress` — `when -> each -> when` row-local state through
   reorder/insert/filter/disposal.
 
-The suite has gaps against the Definition of Done. Add **small** apps, each
-mapped to exactly one unproven capability:
+Additional capability fixtures and host tests close the Definition-of-Done
+coverage:
 
-- **A derived-graph / diamond app** (e.g. a pricing or metrics panel): a wide
-  fan-in where one source feeds many derivations that re-join, asserting
-  glitch-free single recompute and that `is_eq` pruning suppresses unchanged
-  branches under high update volume. Proves linear scaling on *derivation* depth,
-  not just list churn.
-- **An async/effects app** (e.g. a saved form or a search box): `Signal.from_task`
-  with injected fake results, `[Loading, Done, Failed]` rendering, `Ui.on_change`
-  firing a request, and a scope disposal that cancels in-flight work via
-  `Ui.on_cleanup`. Proves capability 4 of the Definition of Done.
-- **A component-composition app**: a reusable stateful component (`Ui.component`)
-  instantiated multiple times and moved/disposed, proving capability 2 — local
-  state stays attached to the right instance.
+- `identity_stress` proves nested structural churn, row reuse, row creation and
+  row disposal with metric assertions over `Ui.when`/`Ui.each`.
+- `component_composition` proves reusable stateful `Ui.component` instances keep
+  local state across keyed row movement and dispose with the owning row scope.
+- `async_effects` proves fake task result injection, `[Loading, Done, Failed]`
+  rendering through a fold, `Ui.on_change` request issuance, pending-request
+  cancellation, deterministic interval ticks, interval cancellation, and cleanup
+  execution.
+- Host tests cover topological rank ordering, diamond deduplication, confined
+  erasure through carrier tags, retained closure lifecycle accounting, dirty
+  cache pruning, and local structural splicing.
 
 Keep each new app minimal: the smallest structure that exercises the capability
 and the tightest `expect_metric_delta` assertions that prove the scaling
 property. Avoid catalog-style fixtures and avoid re-proving already-green
 identity behavior.
 
-## Risks, in Priority Order
+## Retired Risks
 
-The original three gating experiments are **all green**: retained closures
-across the boundary (now in-process, refcount-correct, exercised by every app),
-construction-site identity under dynamic shape (`identity_stress`), and
-glitch-free `is_eq`-pruned diamond propagation (host test asserts ranks and a
-single join recompute). They are no longer the top risks. The live risks, highest
-first:
+The original gating risks are green on the simulated host: retained closures are
+in-process and refcount-correct, construction-site identity survives dynamic
+shape changes, `Ui.each` structural work is locally spliced, debug/safe builds
+assert carrier type tags at the erasure boundary, and effects/timers enter the
+same propagation path as user events. The optimized benchmark gate now builds
+and runs the representative benchmark apps.
 
-1. **`Ui.each` scaling is not yet proven linear.** Structural changes still
-   materialize an updated active descriptor stream before patching (DOM survivors
-   are reused, but the work is not yet provably O(changed rows)). This is the
-   headline property of the whole platform and the most important thing left to
-   prove. Close it with Plan step 5 and capability app 1's metric assertions.
-2. **The erasure-boundary invariant is argued, not checked.** Type correctness of
-   *routing* lives in the host, not Roc's type system; a wiring bug is undefined
-   behavior, not a clean error. Mitigation is the debug-only carrier type tags
-   (Plan step 7). Cheap, high-leverage, do early.
-3. **Effects/async are entirely unbuilt.** The whole `Cmd`/`Sub` story is design
-   prose. A real UI framework needs it; until it exists through the single
-   propagation path, the "effects are just sources" claim is unverified.
-4. **Eager-edge over-subscription cost.** Declared edges wake on any input change
-   even when a conditional read would not have used it. Confirm with the
-   derived-graph app whether `is_eq` pruning keeps this acceptable, or whether a
-   dynamic-subgraph primitive (sharing the `Ui.each` mechanism) is needed for
-   wide conditional fan-in.
-5. **Maturity unknowns to confirm alongside:** that static dispatch on
-   `encode`/`decode`/`hash`/`is_eq` resolves and monomorphizes across the platform
-   boundary on current Roc (no ability auto-derivation; each value type defines
-   the methods), and that deeply nested generic `Signal`/`Elem` combinators do not
-   blow up monomorphization or compile time (the optimized benchmark is currently
-   blocked on roc-lang/roc#9717).
+The remaining risks are future-stage questions, not gates on the simulated-host
+Definition of Done; see Open Questions.
 
 ## Success Metrics
 

@@ -62,9 +62,8 @@ zig build run-signals-bench
 ./zig-out/bin/signals-ops-dashboard --bench-app --bench-name signals-ops-dashboard --bench-iterations 100 --bench-samples 3 test/signals/apps/ops_dashboard.txt
 ```
 
-The optimized benchmark build currently hits roc-lang/roc#9717 for
-`signals-ops-dashboard`. Keep the failure explicit until the compiler bug is
-fixed; the correctness gate remains `zig build run-test-signals`.
+The optimized benchmark gate builds the benchmark apps and replays their specs
+as benchmark traces. The correctness gate remains `zig build run-test-signals`.
 
 Specs use semantic locators:
 

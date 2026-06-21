@@ -379,14 +379,15 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
   attributes; `Html.on_click`, `Html.on_input`, and `Html.on_check` for handlers.
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
-  own local state (planned; see `DESIGN.md` Definition of Done).
+  own local state.
 
 ## Real-World Effects
 
-> Status: effects are a designed-but-not-yet-implemented capability. The model
-> below is the target shape; `Signal.from_task`, `Signal.interval`,
-> `Ui.on_change`, and `Ui.on_cleanup` are on the Definition-of-Done list in
-> `DESIGN.md`, not yet in the platform.
+> Status: effects are implemented in the test host with deterministic fake tasks
+> and timer ticks. The current app-facing helpers are intentionally small:
+> `Signal.fake_task`, `Signal.from_task`, `Signal.fold_task`,
+> `Signal.start_str`, `Signal.interval`, `Ui.on_change`, and
+> `Ui.on_cleanup`.
 
 Effects (HTTP, timers, storage, navigation) follow the same ownership rule as
 rendering: Roc describes what should happen; the host performs it; results
@@ -413,12 +414,13 @@ work (`Loading`, then `Done` or `Failed`). When the task resolves, the host sets
 that source node and runs the same dirty-propagation a user event would. Error
 states are ordinary signal values you fold and render.
 
-Two related helpers:
+Related helpers:
 
-- `Signal.interval(duration)` is a timer source.
+- `Signal.interval(period_ms)` is a timer source. In the test host it uses `U64`
+  milliseconds and yields a `U64` tick count.
 - `Ui.on_change(signal, |value| cmd)` fires an effect request when a signal
-  changes, and `Ui.on_cleanup(task)` runs when the surrounding scope is disposed
-  (for unsubscribing or cancelling).
+  changes, and `Ui.on_cleanup(cleanup)` runs when the surrounding scope is
+  disposed.
 
 Request identity comes from the owning scope and node, not from app-written
 strings, so re-evaluation never refires a request, and disposing a scope cancels
