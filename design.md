@@ -3282,11 +3282,11 @@ under the runtime-state mutex, deallocates the previous machine-code allocation,
 and acknowledges the generation as accepted. If validation or loading fails, it
 acknowledges rejection and keeps using the previous `RunImage`.
 
-Headerless default apps and Windows hot loading are intentionally not part of
-the first implementation. Headerless default apps compile through synthetic
-temporary source files, so their watch roots and rebuild source rewriting need a
-separate design. Windows requires explicit shared-memory handle inheritance for
-the internal rebuild worker.
+Headerless default apps compile through synthetic temporary source files. Watch
+input collection rewrites those synthetic app paths back to the user's original
+source file, and rebuild workers rewrite the synthetic source from the original
+file before lowering a replacement image. Windows uses explicit shared-memory
+handle inheritance for both the host shim child and the internal rebuild worker.
 
 ## Relationship To Cor LSS
 

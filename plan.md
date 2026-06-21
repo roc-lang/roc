@@ -259,7 +259,7 @@ run subcommand.
   - `roc --watch` enables hot loading for the default dev-shim execution path.
   - Avoid referring to a run subcommand; this path is the default `roc` command.
 
-### Remaining Limitations
+### Resolved Limitations
 
 - [x] Support `roc --watch` hot loading on Windows.
 - [x] Support headerless default apps in `roc --watch`.
