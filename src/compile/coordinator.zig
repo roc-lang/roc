@@ -1554,6 +1554,7 @@ pub const Coordinator = struct {
                 .top_level_const,
                 .imported_const,
                 => |const_use| try self.appendConstRef(const_use.const_ref),
+                .selected_hoisted_const => |selected| try self.appendConstRef(selected.const_use.const_ref),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
@@ -2162,6 +2163,16 @@ pub const Coordinator = struct {
 
         var publication_with_availability = publication;
         publication_with_availability.explicit_roots = explicit_roots;
+        const current_artifact = mod.checkedArtifact();
+        const republish_hoisted_roots = if (publication_with_availability.hoisted_roots.len == 0 and current_artifact != null)
+            try selectedHoistedRootInputsFromArtifact(self.gpa, current_artifact.?)
+        else
+            &.{};
+        defer check.HoistRoots.freeSelectedRootSlice(self.gpa, republish_hoisted_roots);
+        if (publication_with_availability.hoisted_roots.len == 0) {
+            publication_with_availability.hoisted_roots = republish_hoisted_roots;
+        }
+
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
         defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
@@ -2235,6 +2246,65 @@ pub const Coordinator = struct {
                 self.storeCheckedModuleInCache(republished_artifact);
             }
         }
+    }
+
+    fn selectedHoistedRootInputsFromArtifact(
+        allocator: Allocator,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
+        var count: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => count += 1,
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => {},
+            }
+        }
+        if (count == 0) return &.{};
+
+        const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
+        var initialized: usize = 0;
+        errdefer {
+            check.HoistRoots.deinitSelectedRootBodies(allocator, roots[0..initialized]);
+            allocator.free(roots);
+        }
+
+        var i: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => {},
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => continue,
+            }
+            const source_expr = switch (root.source) {
+                .hoisted => |hoisted| hoisted.expr,
+                .def,
+                .expr,
+                .statement,
+                .required_binding,
+                => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
+            };
+            const body = root.hoisted_body orelse
+                coordinatorInvariant("hoisted constant root was missing selected-root body", .{});
+            roots[i] = .{
+                .expr = source_expr,
+                .pattern = root.source_pattern,
+                .body = try check.HoistRoots.cloneBody(allocator, body),
+            };
+            initialized += 1;
+            i += 1;
+        }
+        std.debug.assert(i == count);
+
+        return roots;
     }
 
     const RootModuleRef = struct {
@@ -4266,6 +4336,38 @@ pub const Coordinator = struct {
 const CheckedModuleCacheRunStats = struct {
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
+    hoisted_constants: usize,
+    pattern_extraction_regions: PatternExtractionRegionStats,
+};
+
+const PatternExtractionRegionStats = struct {
+    count: usize,
+    digest: [32]u8,
+};
+
+const PatternExtractionRegionStatsError = error{
+    PatternExtractionMissingSourcePattern,
+    PatternExtractionSourcePatternMismatch,
+    PatternExtractionMissingCheckedPattern,
+    PatternExtractionMissingSyntheticMatch,
+    PatternExtractionSyntheticMatchRegionMismatch,
+    PatternExtractionRootWasNotSyntheticMatch,
+    PatternExtractionSyntheticMatchBranchCountMismatch,
+    PatternExtractionSyntheticMatchWasTrySuffix,
+    PatternExtractionSyntheticMatchSkippedExhaustiveness,
+    PatternExtractionMissingBaseExpr,
+    PatternExtractionBaseRegionMismatch,
+    PatternExtractionSyntheticPatternCountMismatch,
+    PatternExtractionSyntheticPatternWasDegenerate,
+    PatternExtractionSyntheticPatternHadRemaps,
+    PatternExtractionSyntheticBranchHadGuard,
+    PatternExtractionMissingScrutineePattern,
+    PatternExtractionScrutineePatternRegionMismatch,
+    PatternExtractionMissingSyntheticLookup,
+    PatternExtractionSyntheticLookupRegionMismatch,
+    PatternExtractionValueWasNotSyntheticLookup,
+    PatternExtractionLookupPatternMismatch,
+    PatternExtractionLookupWasNotResolved,
 };
 
 fn compileAppWithCheckedModuleCache(
@@ -4303,11 +4405,152 @@ fn compileAppWithCheckedModuleCache(
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const hoisted_constants = countHoistedConstants(root, imports, relations);
+    const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
+        .hoisted_constants = hoisted_constants,
+        .pattern_extraction_regions = pattern_extraction_regions,
     };
+}
+
+fn collectPatternExtractionRegionStats(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) PatternExtractionRegionStatsError!PatternExtractionRegionStats {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var count: usize = 0;
+
+    try hashPatternExtractionRegionsForView(&hasher, &count, check.CheckedArtifact.importedView(root));
+    for (imports) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+    for (relations) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return .{
+        .count = count,
+        .digest = digest,
+    };
+}
+
+fn hashPatternExtractionRegionsForView(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    count: *usize,
+    view: check.CheckedArtifact.ImportedModuleView,
+) PatternExtractionRegionStatsError!void {
+    for (view.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_constant) continue;
+        const body = root.hoisted_body orelse continue;
+        const extraction = switch (body) {
+            .expr => continue,
+            .pattern_extraction => |payload| payload,
+        };
+        count.* += 1;
+
+        if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
+        if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
+        const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+
+        const expected_match_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
+        const expected_lookup_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
+        const expected_base_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr));
+
+        const synthetic_match = checkedExprForId(view, root.expr) orelse return error.PatternExtractionMissingSyntheticMatch;
+        if (!expected_match_region.eq(synthetic_match.source_region)) return error.PatternExtractionSyntheticMatchRegionMismatch;
+        if (std.meta.activeTag(synthetic_match.data) != .match_) return error.PatternExtractionRootWasNotSyntheticMatch;
+        const match_data = synthetic_match.data.match_;
+        if (match_data.branches.len != 1) return error.PatternExtractionSyntheticMatchBranchCountMismatch;
+        if (match_data.is_try_suffix) return error.PatternExtractionSyntheticMatchWasTrySuffix;
+        if (match_data.skip_exhaustiveness) return error.PatternExtractionSyntheticMatchSkippedExhaustiveness;
+
+        const base_expr = checkedExprForId(view, match_data.cond) orelse return error.PatternExtractionMissingBaseExpr;
+        if (!expected_base_region.eq(base_expr.source_region)) return error.PatternExtractionBaseRegionMismatch;
+
+        const branch = match_data.branches[0];
+        const branch_patterns = branch.patternsSlice(view.checked_bodies);
+        if (branch_patterns.len != 1) return error.PatternExtractionSyntheticPatternCountMismatch;
+        if (branch_patterns[0].degenerate) return error.PatternExtractionSyntheticPatternWasDegenerate;
+        if (branch_patterns[0].binderRemapsSlice(view.checked_bodies).len != 0) return error.PatternExtractionSyntheticPatternHadRemaps;
+        if (branch.guard != null) return error.PatternExtractionSyntheticBranchHadGuard;
+
+        const scrutinee_pattern = checkedPatternForId(view, branch_patterns[0].pattern) orelse
+            return error.PatternExtractionMissingScrutineePattern;
+        if (!expected_match_region.eq(scrutinee_pattern.source_region)) return error.PatternExtractionScrutineePatternRegionMismatch;
+
+        const synthetic_lookup = checkedExprForId(view, branch.value) orelse return error.PatternExtractionMissingSyntheticLookup;
+        if (!expected_lookup_region.eq(synthetic_lookup.source_region)) return error.PatternExtractionSyntheticLookupRegionMismatch;
+        if (std.meta.activeTag(synthetic_lookup.data) != .lookup_local) return error.PatternExtractionValueWasNotSyntheticLookup;
+        const lookup = synthetic_lookup.data.lookup_local;
+        if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
+        if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
+
+        hasher.update(&view.key.bytes);
+        hashU32IntoSha256(hasher, @intFromEnum(root.id));
+        hashU32IntoSha256(hasher, @intFromEnum(root.expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.base_expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.scrutinee_pattern));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.result_pattern));
+        hashRegionIntoSha256(hasher, expected_base_region);
+        hashRegionIntoSha256(hasher, base_expr.source_region);
+        hashRegionIntoSha256(hasher, expected_match_region);
+        hashRegionIntoSha256(hasher, synthetic_match.source_region);
+        hashRegionIntoSha256(hasher, scrutinee_pattern.source_region);
+        hashRegionIntoSha256(hasher, expected_lookup_region);
+        hashRegionIntoSha256(hasher, synthetic_lookup.source_region);
+    }
+}
+
+fn checkedExprForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    expr: check.CheckedArtifact.CheckedExprId,
+) ?check.CheckedArtifact.CheckedExpr {
+    const index = @intFromEnum(expr);
+    if (index >= view.checked_bodies.exprCount()) return null;
+    return view.checked_bodies.expr(expr);
+}
+
+fn checkedPatternForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    pattern: check.CheckedArtifact.CheckedPatternId,
+) ?check.CheckedArtifact.CheckedPattern {
+    const index = @intFromEnum(pattern);
+    if (index >= view.checked_bodies.patternCount()) return null;
+    return view.checked_bodies.pattern(pattern);
+}
+
+fn hashRegionIntoSha256(hasher: *std.crypto.hash.sha2.Sha256, region: base.Region) void {
+    hashU32IntoSha256(hasher, region.start.offset);
+    hashU32IntoSha256(hasher, region.end.offset);
+}
+
+fn hashU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+fn countHoistedConstants(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) usize {
+    var count = root.hoisted_constants.entries.len;
+    for (imports) |view| count += view.hoisted_constants.entries.len;
+    for (relations) |view| count += view.hoisted_constants.entries.len;
+    return count;
 }
 
 fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
@@ -4368,6 +4611,85 @@ test "Coordinator checked module cache hits on second compile" {
     try std.testing.expect(second.build.cache_hits > 0);
     try std.testing.expect(second.build.modules_compiled < first.build.modules_compiled);
     try std.testing.expect(second.cache.hits > 0);
+}
+
+test "Coordinator checked module cache preserves hoisted roots on hit" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top = 40.I64
+        \\
+        \\main! = |args| {
+        \\    pair = (top, 2.I64)
+        \\    (left, right) = pair
+        \\    Ok(tag_value) = Ok(45.I64)
+        \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(first.hoisted_constants >= 2);
+    try std.testing.expect(first.pattern_extraction_regions.count >= 3);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(second.cache.hits > 0);
+    try std.testing.expectEqual(first.hoisted_constants, second.hoisted_constants);
+    try std.testing.expectEqual(first.pattern_extraction_regions.count, second.pattern_extraction_regions.count);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first.pattern_extraction_regions.digest,
+        &second.pattern_extraction_regions.digest,
+    );
 }
 
 test "Coordinator corrupt checked module cache entries compile from source" {

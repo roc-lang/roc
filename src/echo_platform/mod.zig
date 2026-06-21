@@ -50,7 +50,7 @@ pub const run_shim_platform_main_source =
 /// owns its process entrypoint and lowers echo directly in the backend.
 pub const build_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "_start": main_for_host! }
@@ -68,7 +68,7 @@ pub const build_platform_main_source =
     \\main_for_host! : {} => I8
     \\main_for_host! = |_args|
     \\    match main!([]) {
-    \\        Ok({}) => 0
+    \\        Ok(_) => 0
     \\        Err(Exit(code)) => code
     \\        Err(_) => 1
     \\    }
@@ -80,7 +80,7 @@ pub const build_platform_main_source =
 /// the C process status code.
 pub const build_c_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "main": main_for_host! }
@@ -98,7 +98,7 @@ pub const build_c_platform_main_source =
     \\main_for_host! : {} => I32
     \\main_for_host! = |_args|
     \\    match main!([]) {
-    \\        Ok({}) => 0
+    \\        Ok(_) => 0
     \\        Err(Exit(code)) => I8.to_i32(code)
     \\        Err(_) => 1
     \\    }
@@ -110,7 +110,7 @@ pub const build_c_platform_main_source =
 /// compile to an archive that a host can link and satisfy.
 pub const build_wasm_archive_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "main": main_for_host! }
@@ -125,7 +125,7 @@ pub const build_wasm_archive_platform_main_source =
     \\main_for_host! : {} => I32
     \\main_for_host! = |_args|
     \\    match main!([]) {
-    \\        Ok({}) => 0
+    \\        Ok(_) => 0
     \\        Err(Exit(code)) => I8.to_i32(code)
     \\        Err(_) => 1
     \\    }

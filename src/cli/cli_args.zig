@@ -1002,6 +1002,9 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\Usage: roc experimental-lsp [OPTIONS]
             \\
             \\Options:
+            \\      --stdio            Communicate over stdio (the default and only
+            \\                         transport; accepted for compatibility with LSP
+            \\                         clients that pass it explicitly)
             \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
             \\      --debug-build      Log build environment actions to the debug log
             \\      --debug-syntax     Log syntax/type checking steps to the debug log
@@ -1009,6 +1012,10 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\  -h, --help            Print help
             \\
             };
+        } else if (mem.eql(u8, arg, "--stdio")) {
+            // LSP clients (e.g. vscode-languageclient) append a transport flag to
+            // the server command line. We only ever speak LSP over stdio, so accept
+            // `--stdio` as a no-op rather than rejecting it as an unexpected argument.
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
         } else if (mem.eql(u8, arg, "--debug-build")) {
@@ -1622,6 +1629,40 @@ test "roc glue" {
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc experimental-lsp" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"experimental-lsp"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(!result.experimental_lsp.debug_io);
+    }
+    {
+        // LSP clients (e.g. vscode-languageclient) append `--stdio`; it must be
+        // accepted as a no-op since stdio is the only transport we support.
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--debug-transport", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(result.experimental_lsp.debug_io);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--bogus" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("experimental-lsp", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--bogus", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }

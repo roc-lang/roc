@@ -469,7 +469,10 @@ const Lowerer = struct {
         const expr = self.solved.lifted.exprs.items[index];
         const saved_loc = self.program.current_loc;
         defer self.program.current_loc = saved_loc;
+        const saved_region = self.program.current_region;
+        defer self.program.current_region = saved_region;
         self.program.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.program.current_region = self.solved.lifted.exprRegion(expr_id);
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
@@ -593,7 +596,7 @@ const Lowerer = struct {
         if (self.comptime_site_map[index]) |existing| return existing;
 
         const source = self.solved.lifted.comptimeSite(site);
-        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.branch_regions);
+        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.checked_site, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -817,7 +820,10 @@ const Lowerer = struct {
         if (self.stmt_map[index]) |cached| return cached;
         const saved_loc = self.program.current_loc;
         defer self.program.current_loc = saved_loc;
+        const saved_region = self.program.current_region;
+        defer self.program.current_region = saved_region;
         self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.program.current_region = self.solved.lifted.stmtRegion(stmt_id);
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
             .uninitialized => |pat| .{ .uninitialized = try self.lowerPat(pat) },
             .let_ => |let_| .{ .let_ = .{
