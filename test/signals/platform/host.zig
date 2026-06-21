@@ -22,8 +22,10 @@ const host_value_type_tags_enabled = switch (builtin.mode) {
 };
 
 const RuntimeMetrics = struct {
+    allocs_this_event: u64,
     closure_releases: u64,
     closure_retains: u64,
+    deallocs_this_event: u64,
     derived_calls_into_roc: u64,
     events_processed: u64,
     nodes_recomputed: u64,
@@ -1668,6 +1670,11 @@ const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
     alignment: std.mem.Alignment,
+};
+
+const RocAllocationHeader = extern struct {
+    total_size: usize,
+    ledger_index: usize,
 };
 
 const HostValueRegistryCell = if (host_value_type_tags_enabled) struct {
@@ -5184,8 +5191,10 @@ const HostEnv = struct {
 
 fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
+        .allocs_this_event = 0,
         .closure_releases = 0,
         .closure_retains = 0,
+        .deallocs_this_event = 0,
         .derived_calls_into_roc = 0,
         .events_processed = 0,
         .nodes_recomputed = 0,
@@ -5212,17 +5221,50 @@ fn currentRocHost() *abi.RocHost {
     return current_roc_host orelse @panic("signals RocHost is not initialized");
 }
 
+fn rocAllocationHeaderBytes(byte_alignment: usize) usize {
+    return std.mem.alignForward(usize, @sizeOf(RocAllocationHeader), byte_alignment);
+}
+
+fn rocAllocationHeaderFromUserPtr(ptr: *anyopaque) *RocAllocationHeader {
+    return @ptrFromInt(@intFromPtr(ptr) - @sizeOf(RocAllocationHeader));
+}
+
+fn rocAllocationUserPtr(alloc: RocAllocation) *anyopaque {
+    return @ptrFromInt(@intFromPtr(alloc.ptr) + rocAllocationHeaderBytes(alloc.alignment.toByteUnits()));
+}
+
+fn removeRocAllocationAt(host: *HostEnv, ledger_index: usize, base_ptr: [*]u8) void {
+    if (ledger_index >= host.roc_allocations.items.len) {
+        failHost("Roc allocation header referenced an unknown ledger index");
+    }
+    const recorded = host.roc_allocations.items[ledger_index];
+    if (recorded.ptr != base_ptr) {
+        failHost("Roc allocation header did not match its ledger slot");
+    }
+
+    const last_index = host.roc_allocations.items.len - 1;
+    _ = host.roc_allocations.swapRemove(ledger_index);
+    if (ledger_index != last_index) {
+        const moved = host.roc_allocations.items[ledger_index];
+        rocAllocationHeaderFromUserPtr(rocAllocationUserPtr(moved)).ledger_index = ledger_index;
+    }
+}
+
 fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const host = hostFromRocHost(roc_host);
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = min_alignment;
-    const total_size = length + size_storage_bytes;
+    const header_bytes = rocAllocationHeaderBytes(min_alignment);
+    const total_size = length + header_bytes;
 
     const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse std.process.exit(1);
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
+    const user_ptr: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + header_bytes);
+    const ledger_index = host.roc_allocations.items.len;
+    rocAllocationHeaderFromUserPtr(user_ptr).* = .{
+        .total_size = total_size,
+        .ledger_index = ledger_index,
+    };
 
     host.roc_allocations.append(host.gpa.allocator(), .{
         .ptr = base_ptr,
@@ -5230,8 +5272,9 @@ fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(
         .alignment = align_enum,
     }) catch std.process.exit(1);
     host.alloc_count += 1;
+    host.pending_roc_metrics.allocs_this_event += 1;
 
-    return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    return user_ptr;
 }
 
 fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
@@ -5239,18 +5282,15 @@ fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callc
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = min_alignment;
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
+    const header_bytes = rocAllocationHeaderBytes(min_alignment);
+    const header = rocAllocationHeaderFromUserPtr(ptr);
+    const total_size = header.total_size;
+    const ledger_index = header.ledger_index;
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - header_bytes);
 
-    for (host.roc_allocations.items, 0..) |alloc, i| {
-        if (alloc.ptr == base_ptr) {
-            _ = host.roc_allocations.swapRemove(i);
-            break;
-        }
-    }
+    removeRocAllocationAt(host, ledger_index, base_ptr);
     host.dealloc_count += 1;
+    host.pending_roc_metrics.deallocs_this_event += 1;
 
     allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
@@ -5260,35 +5300,39 @@ fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alig
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = min_alignment;
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
-    const old_user_data_size = old_total_size - size_storage_bytes;
-    const new_total_size = new_length + size_storage_bytes;
+    const header_bytes = rocAllocationHeaderBytes(min_alignment);
+    const old_header = rocAllocationHeaderFromUserPtr(ptr);
+    const old_total_size = old_header.total_size;
+    const old_ledger_index = old_header.ledger_index;
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - header_bytes);
+    const old_user_data_size = old_total_size - header_bytes;
+    const new_total_size = new_length + header_bytes;
 
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse std.process.exit(1);
-    const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_ptr) + header_bytes);
     const old_user_ptr: [*]const u8 = @ptrCast(ptr);
     const copy_size = @min(old_user_data_size, new_length);
     @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
 
-    for (host.roc_allocations.items, 0..) |alloc, i| {
-        if (alloc.ptr == old_base_ptr) {
-            _ = host.roc_allocations.swapRemove(i);
-            break;
-        }
-    }
+    const new_ledger_index = host.roc_allocations.items.len;
+    rocAllocationHeaderFromUserPtr(new_user_ptr).* = .{
+        .total_size = new_total_size,
+        .ledger_index = new_ledger_index,
+    };
     host.roc_allocations.append(host.gpa.allocator(), .{
         .ptr = new_ptr,
         .total_size = new_total_size,
         .alignment = align_enum,
     }) catch std.process.exit(1);
 
+    removeRocAllocationAt(host, old_ledger_index, old_base_ptr);
+    host.alloc_count += 1;
+    host.dealloc_count += 1;
+    host.pending_roc_metrics.allocs_this_event += 1;
+    host.pending_roc_metrics.deallocs_this_event += 1;
+
     allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
 
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
     return new_user_ptr;
 }
 
@@ -5478,8 +5522,10 @@ const BenchmarkStats = struct {
 
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
+        .allocs_this_event = left.allocs_this_event + right.allocs_this_event,
         .closure_releases = left.closure_releases + right.closure_releases,
         .closure_retains = left.closure_retains + right.closure_retains,
+        .deallocs_this_event = left.deallocs_this_event + right.deallocs_this_event,
         .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
         .events_processed = left.events_processed + right.events_processed,
         .nodes_recomputed = left.nodes_recomputed + right.nodes_recomputed,
@@ -5500,6 +5546,8 @@ fn u64MetricAsI64(value: u64) i64 {
 }
 
 fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
+    if (std.mem.eql(u8, name, "allocs_this_event")) return u64MetricAsI64(metrics.allocs_this_event);
+    if (std.mem.eql(u8, name, "deallocs_this_event")) return u64MetricAsI64(metrics.deallocs_this_event);
     if (std.mem.eql(u8, name, "events_processed")) return u64MetricAsI64(metrics.events_processed);
     if (std.mem.eql(u8, name, "nodes_recomputed")) return u64MetricAsI64(metrics.nodes_recomputed);
     if (std.mem.eql(u8, name, "propagation_prunes")) return u64MetricAsI64(metrics.propagation_prunes);
@@ -7467,7 +7515,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,allocs_this_event,deallocs_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -7505,8 +7553,10 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
         .{
+            stats.metrics.allocs_this_event,
+            stats.metrics.deallocs_this_event,
             stats.metrics.events_processed,
             stats.metrics.nodes_recomputed,
             stats.metrics.propagation_prunes,
@@ -8053,6 +8103,8 @@ test "signals host dirty plan deduplicates diamond join by rank" {
 
 test "signals metrics accumulate propagation pruning counters" {
     var left = zeroRuntimeMetrics();
+    left.allocs_this_event = 9;
+    left.deallocs_this_event = 6;
     left.events_processed = 2;
     left.nodes_recomputed = 5;
     left.propagation_prunes = 3;
@@ -8061,6 +8113,8 @@ test "signals metrics accumulate propagation pruning counters" {
     left.patches_emitted = 7;
 
     var right = zeroRuntimeMetrics();
+    right.allocs_this_event = 4;
+    right.deallocs_this_event = 5;
     right.events_processed = 1;
     right.nodes_recomputed = 8;
     right.propagation_prunes = 11;
@@ -8070,6 +8124,8 @@ test "signals metrics accumulate propagation pruning counters" {
     right.retained_alloc_delta = -2;
 
     const total = addRuntimeMetrics(left, right);
+    try std.testing.expectEqual(@as(u64, 13), total.allocs_this_event);
+    try std.testing.expectEqual(@as(u64, 11), total.deallocs_this_event);
     try std.testing.expectEqual(@as(u64, 3), total.events_processed);
     try std.testing.expectEqual(@as(u64, 13), total.nodes_recomputed);
     try std.testing.expectEqual(@as(u64, 14), total.propagation_prunes);
@@ -8077,6 +8133,47 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
+}
+
+test "signals host allocation ledger updates moved header indexes" {
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const first = rocAllocFn(&roc_host, 8, 8) orelse return error.OutOfMemory;
+    const middle = rocAllocFn(&roc_host, 16, 8) orelse return error.OutOfMemory;
+    const last = rocAllocFn(&roc_host, 24, 8) orelse return error.OutOfMemory;
+
+    try std.testing.expectEqual(@as(usize, 3), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rocAllocationHeaderFromUserPtr(last).ledger_index);
+
+    rocDeallocFn(&roc_host, middle, 8);
+
+    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rocAllocationHeaderFromUserPtr(last).ledger_index);
+    try std.testing.expectEqual(@as(u64, 3), host.pending_roc_metrics.allocs_this_event);
+    try std.testing.expectEqual(@as(u64, 1), host.pending_roc_metrics.deallocs_this_event);
+
+    const grown = rocReallocFn(&roc_host, first, 32, 8) orelse return error.OutOfMemory;
+
+    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(u64, 4), host.alloc_count);
+    try std.testing.expectEqual(@as(u64, 2), host.dealloc_count);
+    try std.testing.expectEqual(@as(u64, 4), host.pending_roc_metrics.allocs_this_event);
+    try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.deallocs_this_event);
+
+    rocDeallocFn(&roc_host, last, 8);
+    rocDeallocFn(&roc_host, grown, 8);
+
+    try std.testing.expectEqual(@as(usize, 0), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(u64, 4), host.alloc_count);
+    try std.testing.expectEqual(@as(u64, 4), host.dealloc_count);
+    try std.testing.expectEqual(@as(u64, 4), host.pending_roc_metrics.allocs_this_event);
+    try std.testing.expectEqual(@as(u64, 4), host.pending_roc_metrics.deallocs_this_event);
 }
 
 const TestErasedI64Capture = extern struct {

@@ -55,6 +55,10 @@ history.
   owning scope is disposed, deterministic interval ticks, active interval
   cancellation when the owning scope is disposed, and cleanup descriptor
   execution.
+- The Roc allocation ledger stores an explicit header-owned ledger index and
+  updates moved indexes after `swapRemove`, so allocation free/realloc removal is
+  O(1). Runtime metrics expose `allocs_this_event` and
+  `deallocs_this_event` through specs and the benchmark CSV.
 
 ## Foundation Gaps (the current frontier)
 
@@ -119,37 +123,28 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   bounded `append_child` proportional to displaced rows, and bounded
   `active_graph_records_rebuilt`.
 
-### G-F5 — O(1) allocation free (High)
-
-- **Problem:** the allocation ledger scans all live allocations on every free, so
-  session allocation cost is O(allocs²); this also inflates `dispatch_apply_ns`
-  and the allocation telemetry, conflating harness overhead with framework cost.
-- **Fix:** store the ledger index in the allocation header (or use a
-  pointer-keyed hash set) so free is O(1).
-- **Counter + assertion:** add per-event `allocs_this_event`/`deallocs_this_event`;
-  assert flat per-event allocations across N in the large-N app.
-
-### G-F6 — Telemetry and benchmark-gate coverage (High)
+### G-F5 — Telemetry and benchmark-gate coverage (High)
 
 - **Problem:** the current counters measure emitted patches and recomputed nodes
-  but not scanned nodes, rebuilt records, key compares, or per-event allocations;
+  but not scanned nodes, rebuilt records, or key compares;
   the benchmark gate (`run-signals-bench`) excludes `identity_stress`,
   `component_composition`, and `async_effects` — the apps that exercise structural
   churn, reorder, and async lifecycle.
-- **Fix:** land the four new counters (G-F1, G-F2, G-F3, G-F5) and the CSV
-  columns for them; flip `bench = true` for the three excluded apps with explicit
-  regression thresholds. Keep timing as corroborating CSV evidence only — never a
-  gate, since a timing-only check can pass while real work grows.
+- **Fix:** land the remaining new counters (G-F1, G-F2, G-F3) and the CSV columns
+  for them; flip `bench = true` for the three excluded apps with explicit
+  regression thresholds. Keep timing as corroborating CSV evidence only — never
+  a gate, since a timing-only check can pass while real work grows.
 - **Spec-vs-CSV split:** scaling invariants go in `expect_metric_delta`
   assertions; timing/aggregate evidence stays CSV-only (see `DESIGN.md` →
   Metrics).
 
-### G-F7 — Foundation coverage apps and assertions (Medium, lands alongside the fixes)
+### G-F6 — Foundation coverage apps and assertions (Medium, lands alongside the fixes)
 
 - **Generated large-N each app** (the one place large N is allowed, because it is
   generated systematically, not a handwritten catalog). N is a build parameter;
   specs assert the budget for single-row update / append / remove / filter /
-  reorder using the new counters. This is the primary proof for G-F1..G-F5.
+  reorder using the new counters. This is the primary proof for G-F1..G-F4 and
+  the allocation-flatness part of the success metrics.
 - **`kanban_board`** reorder and filter steps gain `mark_metrics` /
   `expect_metric_delta` blocks bounding work.
 - **`async_effects`** gains a `retained_alloc_delta` / closure-balance assertion
@@ -164,7 +159,7 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 ## Green Gates
 
 Use the smallest gate that proves the slice, then run the full signal gate before
-committing code changes. Each foundation slice (G-F1..G-F7) must land its fix and
+committing code changes. Each foundation slice (G-F1..G-F6) must land its fix and
 its locking assertion together; a fix without the counter/spec that would catch a
 regression is not done.
 
