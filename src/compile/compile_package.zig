@@ -62,6 +62,13 @@ const CoreCtx = @import("ctx").CoreCtx;
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
 
+/// Errors that can occur while publishing compile-time finalization results.
+pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
+/// Errors that can occur while type-checking a module.
+pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
+/// Errors that can occur while processing a package module.
+pub const ProcessError = Allocator.Error || error{FileNotFound} || TypeCheckModuleError;
+
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
 
@@ -535,7 +542,7 @@ pub const PackageEnv = struct {
     /// ID of the root module (the module passed to buildRoot)
     root_module_id: ?ModuleId = null,
     /// First error reported by worker threads during multi-threaded processing
-    worker_error: ?anyerror = null,
+    worker_error: ?ProcessError = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -943,13 +950,13 @@ pub const PackageEnv = struct {
     }
 
     /// Public API for processing a module by name (used by BuildEnv)
-    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) anyerror!void {
+    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) ProcessError!void {
         if (self.module_names.get(module_name)) |module_id| {
             try self.process(.{ .module_id = module_id });
         }
     }
 
-    pub fn process(self: *PackageEnv, task: Task) anyerror!void {
+    pub fn process(self: *PackageEnv, task: Task) ProcessError!void {
         // In dispatch-only mode, this method is invoked by the global scheduler.
         // In local mode, it's invoked by the internal run* loops.
 
@@ -1659,7 +1666,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    ) anyerror!TypeCheckOutput {
+    ) TypeCheckModuleError!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
@@ -1749,7 +1756,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return publishCheckedArtifactFromCheckedModuleWithStorage(
             gpa,
             env,
@@ -1767,7 +1774,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
         defer typed.modules.deinit();
         return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
@@ -1784,7 +1791,7 @@ pub const PackageEnv = struct {
         module_env_storage: CheckedArtifact.ModuleEnvStorage,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             modules,
@@ -1804,7 +1811,7 @@ pub const PackageEnv = struct {
         );
     }
 
-    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) anyerror!void {
+    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) TypeCheckModuleError!void {
         var st = &self.modules.items[module_id];
         var env = st.moduleEnv().?;
 

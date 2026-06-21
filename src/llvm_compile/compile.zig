@@ -20,6 +20,8 @@ const Allocator = std.mem.Allocator;
 
 var temp_path_counter = std.atomic.Value(usize).init(0);
 
+const TempPathError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.RealPathFileAllocError || error{TempDirUnavailable};
+
 // Platform-specific i128 ABI Handling
 //
 // When calling into separately compiled Zig builtins (e.g., Dec operations),
@@ -772,7 +774,7 @@ fn getTempDir(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable
 }
 
 /// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) anyerror![:0]const u8 {
+fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) TempPathError![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
     // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
     // mixed with the pid for cross-process uniqueness of the temp path.

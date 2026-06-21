@@ -14,7 +14,7 @@ fn TestServer(comptime ReaderType: type, comptime WriterType: type) type {
     return server_module.ServerWithSyntaxDriver(ReaderType, WriterType, TestSyntaxDriver);
 }
 
-fn lifecycleInput(allocator: std.mem.Allocator) anyerror![]u8 {
+fn lifecycleInput(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     const messages = [_][]const u8{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
         ,

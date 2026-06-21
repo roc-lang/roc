@@ -543,7 +543,7 @@ test "static strings are emitted into readonly object sections for native target
     }
 }
 
-fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) anyerror!void {
+fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) (Allocator.Error || error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     const code = switch (target.toCpuArch()) {
         .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 }, // ret

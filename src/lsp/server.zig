@@ -33,6 +33,17 @@ const completion_handler_mod = @import("handlers/completion.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
+/// Errors that can occur while opening the optional LSP debug log.
+pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError;
+/// Errors that can occur while running the LSP server over standard IO.
+pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || error{
+    EndOfStream,
+    HeaderTooLong,
+    InvalidHeader,
+    MissingContentLength,
+    PayloadTooLarge,
+};
+
 /// Factory for the Roc LSP server. Handles the state and request handlers.
 pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
     const SyntaxChecker = @import("syntax.zig").SyntaxChecker;
@@ -44,9 +55,13 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
     return struct {
         const Self = @This();
         const TransportType = makeTransport(ReaderType, WriterType);
-        const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) anyerror!void;
+        const HandlerError = Allocator.Error || error{ InvalidParams, WriteFailed };
+        const NotificationError = Allocator.Error;
+        const PayloadError = Allocator.Error || std.json.ParseError(std.json.Scanner) || HandlerError || NotificationError || error{InvalidIdType};
+        const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
+        const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerPtr = *const HandlerFn;
-        const NotificationFn = fn (*Self, ?std.json.Value) anyerror!void;
+        const NotificationFn = fn (*Self, ?std.json.Value) NotificationError!void;
         const NotificationPtr = *const NotificationFn;
         const InitializeHandler = initialize_handler_mod.handler(Self);
         const ShutdownHandler = shutdown_handler_mod.handler(Self);
@@ -132,11 +147,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.syntax_checker.deinit();
         }
 
-        pub fn run(self: *Self) anyerror!void {
+        pub fn run(self: *Self) TransportType.ReadMessageError!void {
             while (try self.processNextMessage()) {}
         }
 
-        fn processNextMessage(self: *Self) anyerror!bool {
+        fn processNextMessage(self: *Self) TransportType.ReadMessageError!bool {
             if (self.state == .exit_success or self.state == .exit_failure) {
                 return false;
             }
@@ -157,7 +172,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
         }
 
-        fn handlePayload(self: *Self, payload: []u8) anyerror!void {
+        fn handlePayload(self: *Self, payload: []u8) PayloadError!void {
             var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{});
             defer parsed.deinit();
 
@@ -186,7 +201,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
         }
 
-        fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) anyerror!void {
+        fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) HandlerError!void {
             if (request_handlers.get(method)) |handler| {
                 try handler(self, id, maybe_params);
                 return;
@@ -263,7 +278,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
         }
 
-        fn runSyntaxCheck(self: *Self, uri: []const u8) anyerror!void {
+        fn runSyntaxCheck(self: *Self, uri: []const u8) RunSyntaxCheckError!void {
             const doc = self.doc_store.get(uri);
             const root_path = if (self.client.root_uri) |root_uri|
                 try uri_util.uriToPath(self.allocator, root_uri)
@@ -317,7 +332,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) anyerror!void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) RunWithStdIoError!void {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
@@ -359,7 +374,7 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) anyerror!LogFileInfo {
+fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) CreateLogFileError!LogFileInfo {
     const dir_path = try resolveTempDir(allocator);
     defer allocator.free(dir_path);
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");

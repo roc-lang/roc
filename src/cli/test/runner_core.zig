@@ -11,6 +11,8 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const util = @import("util.zig");
 
+pub const RunnerError = util.RocRunError || std.mem.Allocator.Error;
+
 /// Result of a test execution
 pub const TestResult = enum {
     passed,
@@ -37,7 +39,7 @@ pub const TestStats = struct {
     }
 };
 
-fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) anyerror!std.process.RunResult {
+fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) RunnerError!std.process.RunResult {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
     // and PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -63,7 +65,7 @@ fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []cons
     });
 }
 
-fn runRocChild(allocator: Allocator, std_io: std.Io, argv: []const []const u8) anyerror!std.process.RunResult {
+fn runRocChild(allocator: Allocator, std_io: std.Io, argv: []const []const u8) RunnerError!std.process.RunResult {
     return runRocChildWithOutputLimit(allocator, std_io, argv, 50 * 1024);
 }
 
@@ -77,7 +79,7 @@ pub fn crossCompile(
     target: []const u8,
     output_name: []const u8,
     backend: ?[]const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target});
     defer allocator.free(target_arg);
 
@@ -123,7 +125,7 @@ pub fn buildNative(
     roc_file: []const u8,
     output_name: []const u8,
     backend: ?[]const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
@@ -161,7 +163,7 @@ pub fn runNative(
     allocator: Allocator,
     std_io: std.Io,
     exe_path: []const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     const result = util.runChildWithTimeout(std_io, allocator, &[_][]const u8{exe_path}, .{
         .max_output_bytes = 50 * 1024,
     }) catch |err| {
@@ -219,7 +221,7 @@ pub fn runWithIoSpec(
     roc_file: []const u8,
     io_spec: []const u8,
     backend: ?[]const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     if (backend) |b| {
         return runWithIoSpecBuildAndExec(allocator, std_io, roc_binary, roc_file, io_spec, b);
     }
@@ -281,7 +283,7 @@ fn runWithIoSpecBuildAndExec(
     roc_file: []const u8,
     io_spec: []const u8,
     backend: []const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     // Generate a temp output name from the roc file basename
     const basename = std.fs.path.stem(std.fs.path.basename(roc_file));
     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}_test", .{ basename, backend });
@@ -354,7 +356,7 @@ pub fn runWithValgrind(
     std_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
-) anyerror!TestResult {
+) RunnerError!TestResult {
     const valgrind_max_output_bytes = 16 * 1024 * 1024;
 
     // Valgrind only works on Linux x86_64
@@ -416,7 +418,7 @@ pub fn verifyPlatformFiles(
     std_io: std.Io,
     platform_dir: []const u8,
     target: []const u8,
-) anyerror!bool {
+) RunnerError!bool {
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 

@@ -20,6 +20,9 @@ const testing = std.testing;
 
 const compiled_builtins = @import("compiled_builtins");
 
+/// Errors that can occur while constructing or using a check test environment.
+pub const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult };
+
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
@@ -104,6 +107,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
         .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
         .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
@@ -519,7 +523,7 @@ pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) anyerror!void {
+pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) TestEnvError!void {
     return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
 }
 
@@ -527,7 +531,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) anyerror!void {
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) TestEnvError!void {
     try self.assertNoParseProblems();
     try self.assertNoCanProblems();
     if (!options.allow_type_errors) {
@@ -563,7 +567,7 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertLastDefType(self: *TestEnv, expected: []const u8) anyerror!void {
+pub fn assertLastDefType(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
@@ -584,7 +588,7 @@ pub fn assertLastDefTypeWithWarnings(
     self: *TestEnv,
     expected: []const u8,
     expected_warning_titles: []const []const u8,
-) anyerror!void {
+) TestEnvError!void {
     try self.assertNoParseProblems();
     try self.assertNoCanProblems();
     try self.assertOnlyTypeWarnings(expected_warning_titles);
@@ -601,7 +605,7 @@ pub fn assertLastDefTypeWithWarnings(
 /// Assert that every type problem is warning-severity and that the rendered
 /// titles match `expected_titles` exactly, in order. Any error-severity
 /// problem (or a count/title mismatch) fails the assertion.
-fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) anyerror!void {
+fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) TestEnvError!void {
     var report_builder = try report_mod.ReportBuilder.init(
         self.gpa,
         self.module_env,
@@ -626,7 +630,7 @@ fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) a
 }
 
 /// Assert that the last definition's type contains the given substring
-pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) anyerror!void {
+pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) TestEnvError!void {
     try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
@@ -645,7 +649,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
 /// Get the inferred type descriptor of the last declaration
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn getLastExprType(self: *TestEnv) Allocator.Error!types.Descriptor {
+pub fn getLastExprType(self: *TestEnv) TestEnvError!types.Descriptor {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
@@ -658,7 +662,7 @@ pub fn getLastExprType(self: *TestEnv) Allocator.Error!types.Descriptor {
 }
 
 /// Assert that there were no parse, canonicalization, or type checking errors.
-pub fn assertNoErrors(self: *TestEnv) anyerror!void {
+pub fn assertNoErrors(self: *TestEnv) TestEnvError!void {
     try self.assertNoParseProblems();
     try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
@@ -666,7 +670,7 @@ pub fn assertNoErrors(self: *TestEnv) anyerror!void {
 
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
-pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) anyerror!void {
+pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
 
@@ -696,7 +700,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) anyerror!void {
 
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
-pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) anyerror!void {
+pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
 
@@ -731,7 +735,7 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) anyerror!void
 
 /// Assert that checking produced exactly the expected problems (errors AND
 /// warnings), in order, each matching its expected rendered message exactly.
-pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) anyerror!void {
+pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
@@ -763,7 +767,7 @@ pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) anyerro
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.
-pub fn assertOneCanError(self: *TestEnv, expected: []const u8) anyerror!void {
+pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     const diagnostics = try self.module_env.getDiagnostics();
@@ -777,7 +781,7 @@ pub fn assertOneCanError(self: *TestEnv, expected: []const u8) anyerror!void {
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.
-pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) Allocator.Error!void {
+pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     const diagnostics = try self.module_env.getDiagnostics();
@@ -795,7 +799,7 @@ pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) Allocator.Erro
 }
 
 /// Assert that the first type error matches the expected title (allows multiple errors).
-pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) anyerror!void {
+pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     // Assert at least 1 problem
@@ -836,7 +840,7 @@ fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytyp
     };
 }
 
-fn assertNoParseProblems(self: *TestEnv) anyerror!void {
+fn assertNoParseProblems(self: *TestEnv) TestEnvError!void {
     if (self.parse_ast.hasErrors()) {
         var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
         defer report_buf.deinit();
@@ -859,7 +863,7 @@ fn assertNoParseProblems(self: *TestEnv) anyerror!void {
     }
 }
 
-fn assertNoCanProblems(self: *TestEnv) anyerror!void {
+fn assertNoCanProblems(self: *TestEnv) TestEnvError!void {
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
     defer report_buf.deinit();
 
@@ -881,7 +885,7 @@ fn assertNoCanProblems(self: *TestEnv) anyerror!void {
     }
 }
 
-fn assertNoTypeProblems(self: *TestEnv) anyerror!void {
+fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
     var report_builder = try report_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping, &self.checker.regions);
     defer report_builder.deinit();
 

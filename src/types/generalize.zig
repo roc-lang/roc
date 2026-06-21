@@ -540,7 +540,7 @@ fn mkVar(n: u32) Var {
     return @enumFromInt(n);
 }
 
-fn expectVarsEqual(actual: []Var, expected: []const Var) anyerror!void {
+fn expectVarsEqual(actual: []Var, expected: []const Var) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try std.testing.expectEqual(e, a);

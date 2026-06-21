@@ -531,7 +531,9 @@ test "bundle and unbundle over socket stream" {
         ready: std.Io.Semaphore = .{},
         done: std.Io.Semaphore = .{},
 
-        fn run(ctx: *@This()) anyerror!void {
+        const ThreadError = std.Io.net.UnixAddress.InitError || std.Io.net.UnixAddress.ListenError || std.Io.net.Server.AcceptError || std.Io.File.OpenError || std.Io.File.ReadStreamingError || std.Io.Writer.Error;
+
+        fn run(ctx: *@This()) ThreadError!void {
             const thread_io = std.testing.io;
             const unix_addr = try std.Io.net.UnixAddress.init(ctx.socket_path);
             var listener = try unix_addr.listen(thread_io, .{});
@@ -1390,14 +1392,14 @@ const MemoryFileSystem = struct {
         };
     }
 
-    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+    fn makeDir(ptr: *anyopaque, path: []const u8) bundle.ExtractError!void {
         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
         if (!self.directories.contains(path)) {
             try self.directories.put(try self.allocator.dupe(u8, path), {});
         }
     }
 
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) bundle.ExtractError!void {
         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
 
         // Create parent directories if needed
@@ -1503,7 +1505,9 @@ test "download from local server" {
         request_path: ?[]const u8 = null,
         response_sent: std.Io.Semaphore = .{},
         allocator: std.mem.Allocator,
-        error_occurred: ?anyerror = null,
+        error_occurred: ?ThreadError = null,
+
+        const ThreadError = std.mem.Allocator.Error || std.Io.net.Server.AcceptError || std.Io.net.Stream.Reader.Error || std.Io.net.Stream.Writer.Error || std.Io.Writer.Error || error{Unexpected};
 
         fn run(ctx: *@This()) void {
             const thread_io = std.testing.io;
@@ -1513,7 +1517,7 @@ test "download from local server" {
             };
         }
 
-        fn runImpl(ctx: *@This()) anyerror!void {
+        fn runImpl(ctx: *@This()) ThreadError!void {
             const thread_io = std.testing.io;
             const stream = try ctx.server.accept(thread_io);
             defer stream.close(thread_io);

@@ -19,6 +19,11 @@ pub const std_options: std.Options = .{
 const timeout_result_grace_ms: u64 = 5_000;
 const wrapper_name = "lsp integration tests";
 
+const BuildSpecsError = Allocator.Error;
+const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
+const WorkerArgvError = Allocator.Error || std.process.ExecutablePathError || std.process.Args.ToSliceError;
+const RunnerMainError = BuildSpecsError || StatsJsonError || WorkerArgvError || std.process.Args.ToSliceError;
+
 const TestStatus = enum(u8) {
     pass,
     fail,
@@ -51,7 +56,7 @@ fn matchesFilters(spec_name: []const u8, filters: []const []const u8) bool {
     return false;
 }
 
-fn buildSpecs(allocator: Allocator, filters: []const []const u8) anyerror![]const integration.Spec {
+fn buildSpecs(allocator: Allocator, filters: []const []const u8) BuildSpecsError![]const integration.Spec {
     var selected: std.ArrayListUnmanaged(integration.Spec) = .empty;
     for (&integration.specs) |spec| {
         if (matchesFilters(spec.name, filters)) {
@@ -79,7 +84,7 @@ fn appendMessagePart(
 
 fn buildMessage(
     allocator: Allocator,
-    maybe_error: ?anyerror,
+    maybe_error: ?integration.SpecError,
     logged_errors: usize,
     leaked_allocations: usize,
 ) ?[]const u8 {
@@ -109,7 +114,7 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: integration.Spec, _: u6
     log_err_count = 0;
 
     var status: TestStatus = .pass;
-    var maybe_error: ?anyerror = null;
+    var maybe_error: ?integration.SpecError = null;
     if (spec.run()) |_| {
         status = .pass;
     } else |err| switch (err) {
@@ -317,7 +322,7 @@ fn writeStatsJson(
     specs: []const integration.Spec,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) anyerror!void {
+) StatsJsonError!void {
     var stats_arena = std.heap.ArenaAllocator.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -348,7 +353,7 @@ fn writeStatsJson(
     });
 }
 
-fn buildWorkerArgvTemplate(io: std.Io, allocator: Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
+fn buildWorkerArgvTemplate(io: std.Io, allocator: Allocator, process_args: std.process.Args) WorkerArgvError![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path_len = try std.process.executablePath(io, &self_path_buf);
     const self_path = try allocator.dupe(u8, self_path_buf[0..self_path_len]);
@@ -390,7 +395,7 @@ fn printUsage() void {
 }
 
 /// Runs the parallel LSP integration harness or one worker process.
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) RunnerMainError!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

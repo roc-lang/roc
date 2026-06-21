@@ -25,7 +25,12 @@ const SourceAuditError = error{
     MissingCanonicalizationSourceEnd,
 };
 
-fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) anyerror!void {
+const TypeDeclTestError = std.mem.Allocator.Error || SourceAuditError || error{
+    TestExpectedEqual,
+    MissingQualifiedOuterOkIdent,
+};
+
+fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) TypeDeclTestError!void {
     const allocator = testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -396,7 +401,7 @@ test "block-local type paths with the same text do not redeclare each other" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
         }
     }.check);
@@ -422,7 +427,7 @@ test "block-local associated value lookup resolves through the visible local own
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
             try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
         }
@@ -447,7 +452,7 @@ test "same-named aliases in separate block scopes are not mutually recursive" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countMutualAliasDiagnostics(diagnostics));
         }
     }.check);
@@ -470,7 +475,7 @@ test "module-qualified type lookup ignores same-named block-local type roots" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
             try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
         }
@@ -490,7 +495,7 @@ test "block-local type use before declaration does not forward resolve" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 1), countUndeclaredTypeDiagnostics(diagnostics));
         }
     }.check);
@@ -508,7 +513,7 @@ test "block-local lambda use before declaration does not forward resolve" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 1), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
         }
     }.check);
@@ -526,7 +531,7 @@ test "block-local lambdas cannot be mutually recursive through forward declarati
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 1), countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics));
         }
     }.check);
@@ -546,7 +551,7 @@ test "block-local lambda declaration does not capture earlier use of same-named 
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
             try testing.expectEqual(@as(usize, 0), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
         }
@@ -566,7 +571,7 @@ test "malformed associated type header does not suppress later associated value"
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             const qualified_outer_ok = env.common.findIdent("Test.Outer.ok") orelse return error.MissingQualifiedOuterOkIdent;
             try testing.expect(env.getExposedValueNodeIndexById(qualified_outer_ok) != null);
             try testing.expectEqual(@as(usize, 0), countAssociatedLookupDiagnostics(env, diagnostics, "Outer.ok"));
@@ -589,7 +594,7 @@ test "block-local associated value does not leak after owner scope exits" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 1), countValueLookupDiagnostics(env, diagnostics, "T", "marker"));
 
             if (env.common.findIdent("T.marker")) |ident| {
@@ -637,7 +642,7 @@ test "block-local recursive nominal type can reference itself in its declaration
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
         }
     }.check);
@@ -655,7 +660,7 @@ test "local type alias redeclaration diagnostic renders" {
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             var count: usize = 0;
             for (diagnostics) |diagnostic| {
                 switch (diagnostic) {

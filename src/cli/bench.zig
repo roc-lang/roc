@@ -12,6 +12,8 @@ const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.target.os.tag == .windows;
 
+const BenchError = Allocator.Error || std.Io.Dir.Iterator.Error;
+
 var stderr_file_writer: std.Io.File.Writer = .{
     .io = std.Io.Threaded.global_single_threaded.io(),
     .interface = std.Io.File.Writer.initInterface(&.{}),
@@ -44,7 +46,7 @@ const BenchmarkResults = struct {
     total_time: u64,
 };
 
-fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
+fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io, path: []const u8) BenchError!void {
     const operation_name = if (is_parse) "parse" else "tokenizer";
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
@@ -140,16 +142,16 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io,
 }
 
 /// Benchmarks the parsing of Roc files.
-pub fn benchParse(gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
+pub fn benchParse(gpa: Allocator, std_io: std.Io, path: []const u8) BenchError!void {
     try benchParseOrTokenize(true, gpa, std_io, path);
 }
 
 /// Benchmarks the tokenization of Roc files.
-pub fn benchTokenizer(gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
+pub fn benchTokenizer(gpa: Allocator, std_io: std.Io, path: []const u8) BenchError!void {
     try benchParseOrTokenize(false, gpa, std_io, path);
 }
 
-fn collectRocFiles(gpa: Allocator, std_io: std.Io, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) anyerror!void {
+fn collectRocFiles(gpa: Allocator, std_io: std.Io, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) BenchError!void {
     // Check if path is a file or directory
     const stat = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
@@ -185,7 +187,7 @@ fn addRocFile(gpa: Allocator, std_io: std.Io, file_path: []const u8, roc_files: 
     });
 }
 
-fn findRocFiles(gpa: Allocator, std_io: std.Io, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) anyerror!void {
+fn findRocFiles(gpa: Allocator, std_io: std.Io, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) BenchError!void {
     var dir = std.Io.Dir.cwd().openDir(std_io, dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };

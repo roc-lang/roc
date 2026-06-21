@@ -61,6 +61,10 @@ const NUM_BACKENDS = 2;
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev" };
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
+const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
+const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
+const RunnerMainError = StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
+
 const BackendStatus = enum(u8) {
     pass,
     wrong,
@@ -132,7 +136,7 @@ const WireHeader = extern struct {
     backend_run_lens: [NUM_BACKENDS]u32,
 };
 
-const BackendEvalFn = *const fn (std.mem.Allocator, *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun;
+const BackendEvalFn = *const fn (std.mem.Allocator, *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun;
 
 const ForkResult = union(enum) {
     success: RuntimeHostEnv.RecordedRun,
@@ -313,7 +317,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
     return .{ .success = decoded };
 }
 
-fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
+fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -342,7 +346,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     return runtime_env.snapshot(allocator);
 }
 
-fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
+fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
     } else {
@@ -973,7 +977,7 @@ fn writeStatsJson(
     tests: []const TestCase,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) anyerror!void {
+) StatsJsonError!void {
     var stats_arena = std.heap.ArenaAllocator.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -1003,7 +1007,7 @@ fn writeStatsJson(
 }
 
 /// Public function `main`.
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) RunnerMainError!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

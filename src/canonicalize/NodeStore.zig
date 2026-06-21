@@ -417,7 +417,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 81;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 82;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
@@ -4159,6 +4159,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
         },
+        .file_import_absolute_path => |r| {
+            node.tag = .diag_file_import_absolute_path;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+        },
         .file_import_not_utf8 => |r| {
             node.tag = .diag_file_import_not_utf8;
             region = r.region;
@@ -4507,6 +4512,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_io_error => return CIR.Diagnostic{ .file_import_io_error = .{
+            .path = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_file_import_absolute_path => return CIR.Diagnostic{ .file_import_absolute_path = .{
             .path = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },

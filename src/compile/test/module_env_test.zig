@@ -211,6 +211,60 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     try std.testing.expectEqual(@as(u64, 2), serialized.method_defs.entries_len);
 }
 
+test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
+    const gpa = std.testing.allocator;
+    const source = "module []\n";
+
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
+
+    try original.initCIRFields("Test");
+
+    const present_idx = try original.recordFileDependency("data.txt");
+    const present_hash = [_]u8{0x11} ** 32;
+    original.setFileDependencyContentHash(present_idx, present_hash);
+
+    const missing_idx = try original.recordFileDependency("missing.txt");
+    original.setFileDependencyMissing(missing_idx);
+
+    const unreadable_idx = try original.recordFileDependency("denied.txt");
+    original.setFileDependencyUnreadable(unreadable_idx);
+
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
+
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "Test");
+    defer {
+        env.deinitCachedModule();
+        gpa.destroy(env);
+    }
+
+    const deps = env.file_dependencies.items.items;
+    try testing.expectEqual(@as(usize, 3), deps.len);
+
+    try testing.expectEqual(ModuleEnv.FileDependencyState.present, deps[0].state);
+    try testing.expectEqualStrings("data.txt", env.fileDependencyRelativePath(deps[0]));
+    try testing.expectEqualSlices(u8, &present_hash, &deps[0].content_hash);
+
+    try testing.expectEqual(ModuleEnv.FileDependencyState.missing, deps[1].state);
+    try testing.expectEqualStrings("missing.txt", env.fileDependencyRelativePath(deps[1]));
+
+    try testing.expectEqual(ModuleEnv.FileDependencyState.unreadable, deps[2].state);
+    try testing.expectEqualStrings("denied.txt", env.fileDependencyRelativePath(deps[2]));
+}
+
 test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const gpa = std.testing.allocator;
 

@@ -78,6 +78,17 @@ const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
+
+const WorkerFailureError = Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong } || compile_package.TypeCheckModuleError;
+const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
+const CheckedModuleCacheRunError = eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
+    UnsupportedBuiltinAnnotationOnly,
+    BuiltinLowLevelAnnotationMustBeFunction,
+    LowLevelOperationsNotFound,
+    HasUserErrors,
+    TestUnexpectedResult,
+};
+const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
 const TypeCheckedResult = messages.TypeCheckedResult;
 const CompileFailure = messages.CompileFailure;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
@@ -1240,6 +1251,74 @@ pub const Coordinator = struct {
         };
     }
 
+    pub fn freeWatchInputs(self: *Coordinator, inputs: []const []const u8) void {
+        for (inputs) |path| self.gpa.free(path);
+        self.gpa.free(inputs);
+    }
+
+    fn appendWatchInput(
+        self: *Coordinator,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+    ) Allocator.Error!void {
+        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
+        errdefer self.gpa.free(absolute);
+
+        if (seen.contains(absolute)) {
+            self.gpa.free(absolute);
+            return;
+        }
+
+        try paths.append(self.gpa, absolute);
+        errdefer _ = paths.pop();
+        try seen.put(self.gpa, absolute, {});
+    }
+
+    fn appendFileDependencyWatchInputs(
+        self: *Coordinator,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        source_dir: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInput(paths, seen, full_path);
+        }
+    }
+
+    /// Collect exact filesystem inputs read by this coordinator run. Returned
+    /// paths are owned by the coordinator allocator and must be released with
+    /// `freeWatchInputs`.
+    pub fn collectWatchInputs(self: *Coordinator) Allocator.Error![]const []const u8 {
+        var paths = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (paths.items) |path| self.gpa.free(path);
+            paths.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            for (pkg.modules.items) |*mod| {
+                try self.appendWatchInput(&paths, &seen, mod.path);
+
+                const env = mod.moduleEnv() orelse continue;
+                try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), env);
+            }
+        }
+
+        return paths.toOwnedSlice(self.gpa);
+    }
+
     /// Collect published checked artifacts available to post-check lowering.
     pub fn collectImportedArtifactViews(
         self: *Coordinator,
@@ -1837,7 +1916,7 @@ pub const Coordinator = struct {
     /// Must only be called after `coordinatorLoop` returns and after the
     /// caller has confirmed `hasUserErrors() == false`. Returns
     /// `error.HasUserErrors` if called while user-facing diagnostics exist.
-    pub fn finalizeExecutableArtifacts(self: *Coordinator) anyerror!void {
+    pub fn finalizeExecutableArtifacts(self: *Coordinator) (compile_package.PublishError || error{HasUserErrors})!void {
         if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse {
@@ -1904,7 +1983,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) anyerror!void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) (Allocator.Error || error{CompileTimeProblem})!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -1965,7 +2044,7 @@ pub const Coordinator = struct {
         app_mod: *ModuleState,
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
-    ) Allocator.Error!void {
+    ) compile_package.PublishError!void {
         var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
         errdefer report.deinit();
 
@@ -2122,7 +2201,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         publication: compile_package.ArtifactPublicationInputs,
-    ) anyerror!void {
+    ) compile_package.PublishError!void {
         const env = mod.moduleEnv() orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
@@ -2699,7 +2778,7 @@ pub const Coordinator = struct {
         reports: *std.ArrayList(Report),
         title: []const u8,
         path: []const u8,
-        err: anyerror,
+        err: WorkerFailureError,
     ) void {
         var rep = Report.init(allocator, title, .fatal);
         const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
@@ -2718,7 +2797,7 @@ pub const Coordinator = struct {
         allocator: Allocator,
         title: []const u8,
         path: []const u8,
-        err: anyerror,
+        err: WorkerFailureError,
     ) std.ArrayList(Report) {
         var reports = std.ArrayList(Report).empty;
         self.appendWorkerFailureReport(allocator, &reports, title, path, err);
@@ -4210,7 +4289,7 @@ pub const Coordinator = struct {
         };
     }
 
-    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) anyerror!WorkerResult {
+    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) TypeCheckWorkerError!WorkerResult {
         var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -4374,7 +4453,7 @@ fn compileAppWithCheckedModuleCache(
     allocator: Allocator,
     cache_dir: []const u8,
     app_path: []const u8,
-) anyerror!CheckedModuleCacheRunStats {
+) CheckedModuleCacheRunError!CheckedModuleCacheRunStats {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
@@ -4553,7 +4632,7 @@ fn countHoistedConstants(
     return count;
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
+fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) OverwriteFilesUnderDirError!usize {
     const io = std.testing.io;
     var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
     defer dir.close(io);

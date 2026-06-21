@@ -55,7 +55,7 @@ pub fn handler(comptime ServerType: type) type {
                 };
                 if (abs_path) |ap| {
                     defer self.allocator.free(ap);
-                    // Get imported modules from the syntax checker's cached build
+                    // Get imported modules from the syntax checker's cached build.
                     imported_envs = try self.syntax_checker.getImportedModuleEnvs(ap);
                 }
             }

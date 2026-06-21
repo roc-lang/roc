@@ -162,6 +162,10 @@ pub const Diagnostic = union(enum) {
         path: StringLiteral.Idx,
         region: Region,
     },
+    file_import_absolute_path: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
     file_import_not_utf8: struct {
         path: StringLiteral.Idx,
         region: Region,
@@ -406,6 +410,7 @@ pub const Diagnostic = union(enum) {
             .tuple_elem_not_canonicalized => |d| d.region,
             .file_import_not_found => |d| d.region,
             .file_import_io_error => |d| d.region,
+            .file_import_absolute_path => |d| d.region,
             .file_import_not_utf8 => |d| d.region,
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
@@ -1571,6 +1576,38 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addReflowingText("An IO error occurred while trying to read this file:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
+    /// Build a report for absolute file import paths.
+    pub fn buildFileImportAbsolutePathReport(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = Report.init(allocator, "ABSOLUTE FILE IMPORT", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("File imports must use a relative path, but this import uses ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(".");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Use a path relative to the source file instead.");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);

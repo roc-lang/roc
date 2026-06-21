@@ -231,12 +231,31 @@ pub const LinkError = error{
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
 
+const SelfExePathError = std.Io.Dir.ReadLinkError || error{
+    NameTooLong,
+    UnsupportedOs,
+};
+
+const SelfExeDirError = Allocator.Error || SelfExePathError;
+
+const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    NotMacho64,
+    UnexpectedEof,
+};
+
+const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    MissingLinkeditSegment,
+    MissingTextSegment,
+    NotMacho64,
+    UnexpectedEof,
+};
+
 /// Resolve the path of the currently running executable, host-OS specific.
 ///
 /// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
 /// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
 /// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
+fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
     switch (comptime builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
             var n: u32 = @intCast(buf.len);
@@ -259,7 +278,7 @@ fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
 }
 
 /// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
+fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) SelfExeDirError![]const u8 {
     var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const symlink_path = try selfExePath(std_io, &symlink_path_buf);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -835,7 +854,7 @@ const macho = std.macho;
 
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
-fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
+fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoStackSizeError!void {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
     defer file.close(io);
 
@@ -865,7 +884,7 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!vo
 /// blob is the last content in the file, recorded by LC_CODE_SIGNATURE; we
 /// recompute the page hashes over everything before it and write a fresh
 /// linker-style ad-hoc signature into that extent.
-fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
+fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) ResignMachoError!void {
     const io = ctx.io.std_io;
     const gpa = ctx.gpa;
 

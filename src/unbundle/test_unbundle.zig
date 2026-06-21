@@ -428,6 +428,8 @@ test "downloadAndExtract with bad archive returns error without crash" {
         server: *std.Io.net.Server,
         response_sent: std.Io.Semaphore = .{},
 
+        const ThreadError = std.Io.net.Server.AcceptError || std.Io.net.Stream.Reader.Error || std.Io.net.Stream.Writer.Error || std.Io.Writer.Error || error{Unexpected};
+
         fn run(ctx: *@This()) void {
             const thread_io = testing.io;
             ctx.runImpl() catch {
@@ -435,7 +437,7 @@ test "downloadAndExtract with bad archive returns error without crash" {
             };
         }
 
-        fn runImpl(ctx: *@This()) anyerror!void {
+        fn runImpl(ctx: *@This()) ThreadError!void {
             const thread_io = testing.io;
 
             const stream = ctx.server.accept(thread_io) catch return;

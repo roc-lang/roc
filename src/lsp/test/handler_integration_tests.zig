@@ -13,11 +13,11 @@ const test_env = @import("integration_env.zig");
 const frame = helpers.frame;
 const uriFromPath = helpers.uriFromPath;
 
-fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) anyerror![][]u8 {
+fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) integration_spec.SpecError![][]u8 {
     return helpers.collectResponsesWithIo(allocator, test_env.io, bytes);
 }
 
-fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) anyerror![]u8 {
+fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]u8 {
     var escaped: std.ArrayList(u8) = .empty;
     errdefer escaped.deinit(allocator);
     for (source) |c| {
@@ -34,7 +34,7 @@ fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) anyerror![]u8 {
 }
 
 /// Get the path to the test platform for creating valid Roc files
-fn platformPath(allocator: std.mem.Allocator) anyerror![]u8 {
+fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
     // Resolve from repo root to ensure absolute path
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
@@ -66,7 +66,7 @@ const ParsedResponse = struct {
         self.parsed.deinit();
     }
 
-    fn result(self: *const ParsedResponse) anyerror!std.json.Value {
+    fn result(self: *const ParsedResponse) integration_spec.SpecError!std.json.Value {
         const root = self.parsed.value;
         if (root != .object) return error.TestUnexpectedResult;
         if (root.object.get("error") != null) return error.TestUnexpectedResult;
@@ -74,7 +74,7 @@ const ParsedResponse = struct {
     }
 };
 
-fn responseById(allocator: std.mem.Allocator, responses: [][]u8, expected_id: i64) anyerror!ParsedResponse {
+fn responseById(allocator: std.mem.Allocator, responses: [][]u8, expected_id: i64) integration_spec.SpecError!ParsedResponse {
     for (responses) |response| {
         var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
         errdefer parsed.deinit();
@@ -97,18 +97,18 @@ fn responseById(allocator: std.mem.Allocator, responses: [][]u8, expected_id: i6
     return error.TestUnexpectedResult;
 }
 
-fn objectField(value: std.json.Value, name: []const u8) anyerror!std.json.Value {
+fn objectField(value: std.json.Value, name: []const u8) integration_spec.SpecError!std.json.Value {
     if (value != .object) return error.TestUnexpectedResult;
     return value.object.get(name) orelse error.TestUnexpectedResult;
 }
 
-fn integerField(value: std.json.Value, name: []const u8) anyerror!i64 {
+fn integerField(value: std.json.Value, name: []const u8) integration_spec.SpecError!i64 {
     const field_value = try objectField(value, name);
     if (field_value != .integer) return error.TestUnexpectedResult;
     return field_value.integer;
 }
 
-fn stringField(value: std.json.Value, name: []const u8) anyerror![]const u8 {
+fn stringField(value: std.json.Value, name: []const u8) integration_spec.SpecError![]const u8 {
     const field_value = try objectField(value, name);
     if (field_value != .string) return error.TestUnexpectedResult;
     return field_value.string;
@@ -120,7 +120,7 @@ fn expectRange(
     start_character: i64,
     end_line: i64,
     end_character: i64,
-) anyerror!void {
+) integration_spec.SpecError!void {
     const start = try objectField(range, "start");
     const end = try objectField(range, "end");
     try std.testing.expectEqual(start_line, try integerField(start, "line"));
@@ -136,7 +136,7 @@ fn expectLocation(
     start_character: i64,
     end_line: i64,
     end_character: i64,
-) anyerror!void {
+) integration_spec.SpecError!void {
     try std.testing.expect(result == .object);
     try std.testing.expectEqualStrings(expected_uri, try stringField(result, "uri"));
     try expectRange(try objectField(result, "range"), start_line, start_character, end_line, end_character);
@@ -149,7 +149,7 @@ fn expectNullOrLocation(
     start_character: i64,
     end_line: i64,
     end_character: i64,
-) anyerror!void {
+) integration_spec.SpecError!void {
     if (result == .null) return;
     try expectLocation(result, expected_uri, start_line, start_character, end_line, end_character);
 }
@@ -160,7 +160,7 @@ fn hasHighlightRange(
     start_character: i64,
     end_line: i64,
     end_character: i64,
-) anyerror!bool {
+) integration_spec.SpecError!bool {
     if (highlights != .array) return error.TestUnexpectedResult;
     for (highlights.array.items) |highlight| {
         const range = try objectField(highlight, "range");
@@ -177,7 +177,7 @@ fn hasHighlightRange(
     return false;
 }
 
-fn expectSymbolNames(result: std.json.Value, expected_names: []const []const u8) anyerror!void {
+fn expectSymbolNames(result: std.json.Value, expected_names: []const []const u8) integration_spec.SpecError!void {
     try std.testing.expect(result == .array);
     try std.testing.expect(result.array.items.len >= expected_names.len);
 
@@ -194,7 +194,7 @@ fn expectSymbolNames(result: std.json.Value, expected_names: []const []const u8)
     }
 }
 
-fn completionItems(result: std.json.Value) anyerror!std.json.Value {
+fn completionItems(result: std.json.Value) integration_spec.SpecError!std.json.Value {
     try std.testing.expect(result == .object);
     const is_incomplete = try objectField(result, "isIncomplete");
     try std.testing.expect(is_incomplete == .bool);
@@ -203,13 +203,13 @@ fn completionItems(result: std.json.Value) anyerror!std.json.Value {
     return items;
 }
 
-fn expectCompletionLabels(items: std.json.Value, labels: []const []const u8) anyerror!void {
+fn expectCompletionLabels(items: std.json.Value, labels: []const []const u8) integration_spec.SpecError!void {
     for (labels) |label| {
         try std.testing.expect(hasCompletionLabel(items, label));
     }
 }
 
-fn expectNonEmptyCompletionItems(items: std.json.Value) anyerror!void {
+fn expectNonEmptyCompletionItems(items: std.json.Value) integration_spec.SpecError!void {
     try std.testing.expect(items == .array);
     try std.testing.expect(items.array.items.len > 0);
 }
@@ -238,7 +238,7 @@ pub const specs = [_]integration_spec.Spec{
 };
 
 /// Verifies document symbols include top-level declarations from an opened file.
-pub fn documentSymbolHandlerExtractsFunctionDeclarations() anyerror!void {
+pub fn documentSymbolHandlerExtractsFunctionDeclarations() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -350,7 +350,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() anyerror!void {
 }
 
 /// Verifies document highlights include occurrences of the selected variable.
-pub fn documentHighlightHandlerFindsVariableOccurrences() anyerror!void {
+pub fn documentHighlightHandlerFindsVariableOccurrences() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -438,7 +438,7 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() anyerror!void {
 }
 
 /// Verifies goto definition locates a local variable definition.
-pub fn definitionHandlerFindsLocalVariableDefinition() anyerror!void {
+pub fn definitionHandlerFindsLocalVariableDefinition() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -536,7 +536,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() anyerror!void {
 }
 
 /// Verifies goto definition returns null for an unresolved symbol.
-pub fn definitionHandlerReturnsNullForUndefinedSymbol() anyerror!void {
+pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -624,7 +624,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() anyerror!void {
 }
 
 /// Verifies hover on a type annotation returns type information.
-pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() anyerror!void {
+pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() integration_spec.SpecError!void {
     // Regression test for Bug 1: s_type_anno statements were ignored by hover system
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -721,7 +721,7 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() anyerror!void {
 }
 
 /// Verifies goto definition on a builtin annotation type can reach `Builtin.roc`.
-pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() anyerror!void {
+pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_spec.SpecError!void {
     // Test that clicking on a type in a type annotation (e.g., "x : Str") navigates to Builtin.roc
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -816,7 +816,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() anyerror!void
 }
 
 /// Verifies document symbols still work after a goto-definition request.
-pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() anyerror!void {
+pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() integration_spec.SpecError!void {
     // Regression test: getDocumentSymbols should use getModuleLookupEnv()
     // after getDefinitionAtPosition creates a fresh build env.
     const allocator = test_env.allocator;
@@ -929,7 +929,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() anyerror!void {
 }
 
 /// Verifies repeated goto-definition requests preserve later document symbols.
-pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() anyerror!void {
+pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() integration_spec.SpecError!void {
     // Test that multiple sequential goto definition calls maintain proper state
     // for subsequent document symbol requests
     const allocator = test_env.allocator;
@@ -1057,7 +1057,7 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() anyerror!void {
 }
 
 /// Verifies document symbols report the expected Roc definition names.
-pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() anyerror!void {
+pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() integration_spec.SpecError!void {
     // Test that outline returns actual symbol names using valid Roc syntax
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1175,7 +1175,7 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() anyerror!void {
 }
 
 /// Verifies document symbols work without a prior syntax-check request.
-pub fn documentSymbolHandlerWorksIndependentlyOfCheck() anyerror!void {
+pub fn documentSymbolHandlerWorksIndependentlyOfCheck() integration_spec.SpecError!void {
     // Regression test: document symbols should work even without a prior check() call
     // The handler should build the module itself
     const allocator = test_env.allocator;
@@ -1292,7 +1292,7 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() anyerror!void {
 }
 
 /// Verifies completions include module-level definitions in expression context.
-pub fn completionHandlerReturnsModuleDefinitions() anyerror!void {
+pub fn completionHandlerReturnsModuleDefinitions() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -1380,7 +1380,7 @@ pub fn completionHandlerReturnsModuleDefinitions() anyerror!void {
 }
 
 /// Verifies completions include imported module members after a dot.
-pub fn completionHandlerReturnsModuleMembersAfterDot() anyerror!void {
+pub fn completionHandlerReturnsModuleMembersAfterDot() integration_spec.SpecError!void {
     // Test: typing "Str." should trigger completions from the Str module
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1470,7 +1470,7 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() anyerror!void {
 }
 
 /// Verifies completions include module names in expression context.
-pub fn completionHandlerReturnsModuleNamesInExpressionContext() anyerror!void {
+pub fn completionHandlerReturnsModuleNamesInExpressionContext() integration_spec.SpecError!void {
     // Test: in expression context, module names should be available
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1557,7 +1557,7 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() anyerror!void {
 }
 
 /// Verifies completions include type names after a type annotation colon.
-pub fn completionHandlerReturnsTypesAfterColon() anyerror!void {
+pub fn completionHandlerReturnsTypesAfterColon() integration_spec.SpecError!void {
     // Test: typing "x :" should trigger type completions
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1647,7 +1647,7 @@ pub fn completionHandlerReturnsTypesAfterColon() anyerror!void {
 }
 
 /// Verifies completions include `List` module members after `List.`.
-pub fn completionHandlerReturnsListModuleMembersAfterListDot() anyerror!void {
+pub fn completionHandlerReturnsListModuleMembersAfterListDot() integration_spec.SpecError!void {
     // Test: typing "List." should trigger completions from the List module
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1741,7 +1741,7 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() anyerror!void {
 }
 
 /// Verifies completions include local variables visible inside a block.
-pub fn completionHandlerReturnsLocalVariablesInBlockScope() anyerror!void {
+pub fn completionHandlerReturnsLocalVariablesInBlockScope() integration_spec.SpecError!void {
     // Test: local variables defined in a block should appear in completions
     // within that block
     const allocator = test_env.allocator;
@@ -1835,7 +1835,7 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() anyerror!void {
 }
 
 /// Verifies completions include lambda parameters inside the lambda body.
-pub fn completionHandlerReturnsLambdaParameters() anyerror!void {
+pub fn completionHandlerReturnsLambdaParameters() integration_spec.SpecError!void {
     // Test: lambda parameters should appear in completions within the lambda body
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1926,7 +1926,7 @@ pub fn completionHandlerReturnsLambdaParameters() anyerror!void {
 }
 
 /// Verifies completions include top-level definitions in a module.
-pub fn completionHandlerReturnsTopLevelDefinitions() anyerror!void {
+pub fn completionHandlerReturnsTopLevelDefinitions() integration_spec.SpecError!void {
     // Test: top-level definitions should appear in completions
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -2014,7 +2014,7 @@ pub fn completionHandlerReturnsTopLevelDefinitions() anyerror!void {
 }
 
 /// Verifies completions include record fields after a record dot access.
-pub fn completionHandlerReturnsRecordFieldsAfterDot() anyerror!void {
+pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError!void {
     // Test: typing "rec." where rec is a record should trigger field completions
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});

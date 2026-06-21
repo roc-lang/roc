@@ -20,6 +20,7 @@ const Diagnostics = runner.Diagnostics;
 const ExtraFile = runner.ExtraFile;
 
 const CoreCtx = compile.CoreCtx;
+const EchoNativeError = std.process.Args.ToSliceError || std.Io.Dir.ReadFileAllocError || runner.RunEchoError;
 
 // --- Diagnostics: write to real stderr ---
 //
@@ -72,7 +73,7 @@ fn printUsageAndExit() noreturn {
 /// CLI entry point. Parses argv, reads the app source (and any
 /// `--with-file` modules), then drives `runner.runEcho` against a
 /// 128 MiB FixedBufferAllocator. Exits with the Roc program's exit code.
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) EchoNativeError!void {
     process_io = init.io;
     const io = init.io;
 

@@ -352,3 +352,68 @@ fn maxEnd(base_ptr: [*]align(1) const u8, slices: []const []const u8) usize {
     }
     return max_end;
 }
+
+test "writeToSharedMemory serializes only executable image sections" {
+    var image_bytes: [4096]u8 align(16) = undefined;
+    var image_buffer = std.heap.FixedBufferAllocator.init(&image_bytes);
+    const image_allocator = image_buffer.allocator();
+    const scratch = std.testing.allocator;
+
+    const code = [_]u8{ 0x48, 0x31, 0xc0, 0xc3 };
+    const entrypoint_inputs = [_]EntrypointInput{
+        .{ .ordinal = 0, .code_offset = 0 },
+        .{ .ordinal = 1, .code_offset = 3 },
+    };
+    const relocations = [_]Relocation{
+        .{ .linked_function = .{ .offset = 1, .name = "roc_alloc" } },
+        .{ .linked_data = .{ .offset = 2, .name = "roc__answer", .kind = .rel32 } },
+    };
+    const data_bytes = [_]u8{ 1, 2, 3, 4 };
+    const data_exports = [_]StaticDataExport{
+        .{
+            .symbol_name = "roc__static",
+            .bytes = &data_bytes,
+            .symbol_offset = 1,
+            .alignment = 8,
+        },
+    };
+
+    const header = try writeToSharedMemory(
+        scratch,
+        image_allocator,
+        &image_bytes,
+        &code,
+        &entrypoint_inputs,
+        &relocations,
+        &data_exports,
+    );
+
+    try std.testing.expectEqual(MAGIC, header.magic);
+    try std.testing.expectEqual(FORMAT_VERSION, header.format_version);
+    try std.testing.expect(header.image_size <= image_bytes.len);
+
+    const view = try viewMappedImage(header, &image_bytes, header.image_size);
+
+    try std.testing.expectEqualSlices(u8, &code, view.code);
+    try std.testing.expectEqual(@as(usize, entrypoint_inputs.len), view.entrypoints.len);
+    try std.testing.expectEqual(@as(u32, 0), view.entrypoints[0].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), view.entrypoints[0].code_offset);
+    try std.testing.expectEqual(@as(u32, 1), view.entrypoints[1].ordinal);
+    try std.testing.expectEqual(@as(u64, 3), view.entrypoints[1].code_offset);
+
+    try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
+    try std.testing.expectEqual(RelocationKind.linked_function, try view.relocations[0].relocationKind());
+    try std.testing.expectEqual(@as(u64, 1), view.relocations[0].code_offset);
+    try std.testing.expectEqualStrings("roc_alloc", try view.symbolName(view.relocations[0].symbol));
+    try std.testing.expectEqual(RelocationKind.linked_data_rel32, try view.relocations[1].relocationKind());
+    try std.testing.expectEqual(@as(u64, 2), view.relocations[1].code_offset);
+    try std.testing.expectEqualStrings("roc__answer", try view.symbolName(view.relocations[1].symbol));
+
+    try std.testing.expectEqualSlices(u8, &data_bytes, view.data);
+    try std.testing.expectEqual(@as(usize, data_exports.len), view.data_symbols.len);
+    try std.testing.expectEqualStrings("roc__static", try view.dataSymbolName(view.data_symbols[0]));
+    try std.testing.expectEqual(@as(u64, 0), view.data_symbols[0].data_offset);
+    try std.testing.expectEqual(@as(u64, data_bytes.len), view.data_symbols[0].len);
+    try std.testing.expectEqual(@as(u64, 1), view.data_symbols[0].symbol_offset);
+    try std.testing.expectEqual(@as(u32, 8), view.data_symbols[0].alignment);
+}

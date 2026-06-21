@@ -50,7 +50,15 @@ pub const ElfDynLib = struct {
     sym_count: usize,
 
     /// Trusts the file. A malicious file can execute arbitrary code.
-    pub fn open(path: [:0]const u8) anyerror!ElfDynLib {
+    pub const OpenError = std.Io.File.OpenError || std.Io.File.StatError || posix.MMapError || error{
+        NotElfFile,
+        NotDynamicLibrary,
+        MissingDynamicLinkingInformation,
+        ElfStringSectionNotFound,
+        ElfSymSectionNotFound,
+    };
+
+    pub fn open(path: [:0]const u8) OpenError!ElfDynLib {
         const io = std.Options.debug_io;
         const file = try std.Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);

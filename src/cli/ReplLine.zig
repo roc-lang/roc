@@ -627,7 +627,7 @@ fn collectEvents(parser: *InputParser, chunks: []const []const u8) Allocator.Err
     return events;
 }
 
-fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) anyerror!void {
+fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) error{TestExpectedEqual}!void {
     try testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try testing.expectEqualDeep(e, a);
@@ -936,7 +936,7 @@ test "InputParser: bytes around a paste in the same chunk" {
     }, events.items);
 }
 
-fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) anyerror!void {
+fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) (std.mem.Allocator.Error || error{WriteFailed} || error{TestExpectedEqual})!void {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try writeAlignedToPrompt(&aw.writer, input, indent);

@@ -300,6 +300,7 @@ fn tidyFile(
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
+        tidyBannedAnyerror(file, errors);
         tidyBannedStdIo(file, errors);
         tidyBannedBuiltinStdFormat(file, errors);
         tidyBannedIndexOf(file, errors);
@@ -572,6 +573,21 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
         if (std.mem.find(u8, file.text, banned)) |offset| {
             errors.addBannedReminder(file, offset, banned);
         }
+    }
+}
+
+/// `anyerror` hides the actual errors a function can return. Keep source code
+/// explicit by spelling out the concrete error set or a named union of concrete
+/// error sets.
+fn tidyBannedAnyerror(file: SourceFile, errors: *Errors) void {
+    if (!std.mem.startsWith(u8, file.path, "src/")) return;
+
+    const banned = "anyerror";
+    var remaining: []const u8 = file.text;
+    while (std.mem.find(u8, remaining, banned)) |index| {
+        const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+        errors.addBanned(file, offset, banned, "an explicit error set");
+        remaining = remaining[index + banned.len ..];
     }
 }
 

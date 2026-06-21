@@ -1974,7 +1974,7 @@ pub fn strReleaseExcessCapacity(
     }
 }
 
-fn expectOk(result: FromUtf8Try) anyerror!void {
+fn expectOk(result: FromUtf8Try) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(result.is_ok, true);
 }
 
@@ -2938,7 +2938,7 @@ fn expectErr(
     err: Utf8DecodeError,
     problem: Utf8ByteProblem,
     test_env: *TestEnv,
-) anyerror!void {
+) error{ TestExpectedError, TestUnexpectedError, TestExpectedEqual }!void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 

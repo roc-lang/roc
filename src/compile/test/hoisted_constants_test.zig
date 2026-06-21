@@ -13,6 +13,29 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+const HoistedConstantsTestError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.Writer.Error ||
+    error{
+        AfterRootHadNoRequest,
+        BeforeRootHadNoRequest,
+        ExportedRuntimeEntrypointNotFound,
+        HoistedConstWasNotI64,
+        HoistedConstWasNotScalar,
+        HoistedRootDidNotStoreConstNode,
+        HoistedRootKindMismatch,
+        HoistedTemplateWasNotStored,
+        OutOfMemory,
+        PatternExtractionMissingCheckedRootPattern,
+        PatternExtractionMissingSourcePattern,
+        PatternExtractionRootValueWasNotSyntheticLookup,
+        PatternExtractionRootWasNotSyntheticMatch,
+        RootDidNotStoreConstNode,
+        TestExpectedEqual,
+        TestUnexpectedResult,
+    };
+
 test "hoisted local constants are finalized and restored during runtime lowering" {
     const gpa = std.testing.allocator;
 
@@ -1072,7 +1095,7 @@ fn findHoistedArtifact(
 
 fn expectCompileTimeRootKindsPresent(
     artifact: check.CheckedArtifact.ImportedModuleView,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     var saw_top_level_constant = false;
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
@@ -1102,7 +1125,7 @@ fn expectCompileTimeRootKindsPresent(
 
 fn expectExportedRuntimeEntrypoint(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     for (artifact.root_requests.runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
@@ -1119,7 +1142,7 @@ fn expectRootRequestBefore(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     before: check.CheckedArtifact.ComptimeRootId,
     after: check.CheckedArtifact.ComptimeRootId,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     const before_index = compileTimeRequestIndexForRoot(artifact, before) orelse return error.BeforeRootHadNoRequest;
     const after_index = compileTimeRequestIndexForRoot(artifact, after) orelse return error.AfterRootHadNoRequest;
     try std.testing.expect(before_index < after_index);
@@ -1173,7 +1196,7 @@ fn rootSourceMatches(
 
 fn expectPatternExtractionSyntheticRegions(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     const ModuleEnv = can.ModuleEnv;
     const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
@@ -1339,12 +1362,12 @@ fn expectPatternExtractionSyntheticRegions(
     try std.testing.expect(extraction_count >= 4);
 }
 
-fn expectRegionEqual(expected: base.Region, actual: base.Region) anyerror!void {
+fn expectRegionEqual(expected: base.Region, actual: base.Region) HoistedConstantsTestError!void {
     try std.testing.expectEqual(expected.start.offset, actual.start.offset);
     try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
-fn writeEchoPlatform(dir: anytype) anyerror!void {
+fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
     try dir.createDirPath(std.testing.io, ".roc_echo_platform");
     try dir.writeFile(std.testing.io, .{
         .sub_path = ".roc_echo_platform/main.roc",
@@ -1384,7 +1407,7 @@ fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
     needle: []const u8,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -1469,7 +1492,7 @@ fn countCompileTimeRootKind(
 fn storedI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     entry: check.CheckedArtifact.HoistedConstEntry,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const root = artifact.compile_time_roots.root(entry.root);
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
@@ -1495,7 +1518,7 @@ fn storedI64(
 fn rootStoredI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     root: check.CheckedArtifact.CompileTimeRoot,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
@@ -1509,7 +1532,7 @@ fn rootStoredI64(
 fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const value = artifact.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {

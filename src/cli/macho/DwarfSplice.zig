@@ -26,7 +26,7 @@ const SpliceError = error{
     RelocationOutOfBounds,
     NoLoadCommandSpace,
     UnanchoredTextAddress,
-} || Allocator.Error;
+} || Allocator.Error || Io.Dir.ReadFileAllocError || Io.File.OpenError || Io.File.WritePositionalError;
 
 const seg_cmd_size = @sizeOf(macho.segment_command_64);
 const sect_size = @sizeOf(macho.section_64);
@@ -49,7 +49,7 @@ const TextSymbol = struct {
 /// Splice the object's `__DWARF` sections into the executable. The caller
 /// must re-sign the executable afterwards. Returns without modifying the
 /// executable when the object carries no DWARF sections.
-pub fn spliceDwarf(gpa: Allocator, io: Io, exe_path: []const u8, obj_path: []const u8) anyerror!void {
+pub fn spliceDwarf(gpa: Allocator, io: Io, exe_path: []const u8, obj_path: []const u8) SpliceError!void {
     const obj_bytes = try Io.Dir.cwd().readFileAlloc(io, obj_path, gpa, .limited(std.math.maxInt(u32)));
     defer gpa.free(obj_bytes);
     const exe_bytes = try Io.Dir.cwd().readFileAlloc(io, exe_path, gpa, .limited(std.math.maxInt(u32)));
@@ -242,7 +242,7 @@ fn collectExeSymbols(
     map: *std.StringHashMap(u64),
     bytes: []const u8,
     header: macho.mach_header_64,
-) anyerror!void {
+) SpliceError!void {
     var it = LoadCommandWalker.init(bytes, header);
     while (try it.next()) |lc| {
         if (lc.cmd.cmd != .SYMTAB) continue;
@@ -293,7 +293,7 @@ fn applyRelocations(
     text: ObjSection,
     text_symbols: []const TextSymbol,
     exe_symbols: *const std.StringHashMap(u64),
-) anyerror!void {
+) SpliceError!void {
     var i: usize = 0;
     while (i < sect.nreloc) : (i += 1) {
         const off: usize = sect.reloff + i * @sizeOf(macho.relocation_info);
@@ -361,7 +361,7 @@ fn rewriteExecutable(
     exe_header: macho.mach_header_64,
     blob: []const u8,
     dwarf_sects: []macho.section_64,
-) anyerror!void {
+) SpliceError!void {
     const page_size: u64 = if (exe_header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
 
     // Find __LINKEDIT and the first section content offset (the load command

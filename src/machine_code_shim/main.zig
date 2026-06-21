@@ -27,6 +27,7 @@ pub const std_options = shim_io.std_options_no_stack_tracing;
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
+const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
 const ExecutableMemory = backend.ExecutableMemory;
 const dev_wrappers = builtins.dev_wrappers;
@@ -34,17 +35,41 @@ const dev_wrappers = builtins.dev_wrappers;
 const DevProgram = struct {
     view: RunImage.ProgramView,
     executable: ExecutableMemory,
+    generation: u64,
+
+    fn deinit(self: *DevProgram) void {
+        self.executable.deinit();
+    }
 };
 
 const RuntimeState = struct {
     shm: SharedMemoryAllocator,
     program: DevProgram,
+    control: ?*hot_reload.Control,
 };
 
 const ShimError = error{
     ImageUnavailable,
     InvalidEntrypoint,
     OutOfMemory,
+};
+
+const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
+    BranchOutOfRange,
+    EmptyCode,
+    InvalidOffset,
+    MisalignedBranchTarget,
+    MmapFailed,
+    MprotectFailed,
+    UnsupportedPlatform,
+    UnsupportedRelocationEncoding,
+    UnresolvedSymbol,
+    VirtualAllocFailed,
+    VirtualProtectFailed,
+};
+
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
+    SysctlFailed,
 };
 
 var runtime_state_initialized: bool = false;
@@ -60,23 +85,43 @@ fn allocator() Allocator {
     return std.heap.page_allocator;
 }
 
-fn openRuntimeState(gpa: Allocator) anyerror!RuntimeState {
+fn viewRuntimeImage(
+    shm: *const SharedMemoryAllocator,
+    image_offset: usize,
+    image_bound: usize,
+) RunImage.ImageError!RunImage.ProgramView {
+    if (image_offset > shm.total_size) return error.InvalidDevRunImage;
+    if (shm.total_size - image_offset < @sizeOf(RunImage.Header)) return error.InvalidDevRunImage;
+    if (image_bound == 0 or image_bound > shm.total_size) return error.InvalidDevRunImage;
+
+    const image_magic = std.mem.readInt(u32, shm.base_ptr[image_offset..][0..4], .little);
+    if (image_magic != RunImage.MAGIC) return error.InvalidDevRunImage;
+
+    const header: *const RunImage.Header = @ptrCast(@alignCast(shm.base_ptr + image_offset));
+    if (header.image_size > image_bound) return error.InvalidDevRunImage;
+    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
+}
+
+fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
-    if (shm.total_size < header_offset + @sizeOf(RunImage.Header)) return error.InvalidDevRunImage;
-    const image_magic = std.mem.readInt(u32, shm.base_ptr[header_offset..][0..4], .little);
-    if (image_magic != RunImage.MAGIC) return error.InvalidDevRunImage;
+    const control = hot_reload.controlFromBase(shm.base_ptr);
+    const has_hot_reload = hot_reload.initialized(control);
+    const generation = if (has_hot_reload) hot_reload.publishedGeneration(control) else 0;
+    const image_offset = if (has_hot_reload) hot_reload.imageOffset(control) else header_offset;
+    const image_bound = if (has_hot_reload) hot_reload.imageSize(control) else shm.total_size;
 
-    const header: *const RunImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
-    const view = try RunImage.viewMappedImage(header, shm.base_ptr, shm.total_size);
-    const program = try loadDevProgram(gpa, &view);
+    const view = try viewRuntimeImage(&shm, image_offset, image_bound);
+    var program = try loadDevProgram(gpa, &view);
+    program.generation = generation;
 
     return .{
         .shm = shm,
         .program = program,
+        .control = if (has_hot_reload) control else null,
     };
 }
 
@@ -128,7 +173,7 @@ const RelocationContext = struct {
     }
 };
 
-fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) anyerror!DevProgram {
+fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProgramError!DevProgram {
     if (view.code.len == 0) return error.EmptyCode;
 
     var function_stubs = std.ArrayList(FunctionStub).empty;
@@ -218,6 +263,7 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) anyerror!De
     return .{
         .view = view.*,
         .executable = executable,
+        .generation = 0,
     };
 }
 
@@ -333,6 +379,34 @@ fn executeDevEntrypoint(
     program.executable.callRocABIAt(entry_offset, @ptrCast(ops), ret, arg_ptr);
 }
 
+fn refreshRuntimeProgramIfNeeded(
+    state: *RuntimeState,
+) void {
+    const control = state.control orelse return;
+    const published_generation = hot_reload.publishedGeneration(control);
+    if (published_generation <= state.program.generation) return;
+
+    const view = viewRuntimeImage(
+        &state.shm,
+        hot_reload.imageOffset(control),
+        hot_reload.imageSize(control),
+    ) catch {
+        hot_reload.acknowledge(control, published_generation, .rejected);
+        return;
+    };
+
+    var next_program = loadDevProgram(allocator(), &view) catch {
+        hot_reload.acknowledge(control, published_generation, .rejected);
+        return;
+    };
+    next_program.generation = published_generation;
+
+    var old_program = state.program;
+    state.program = next_program;
+    old_program.deinit();
+    hot_reload.acknowledge(control, published_generation, .accepted);
+}
+
 fn evaluateEntrypoint(
     entry_idx: u32,
     ops: *RocOps,
@@ -340,7 +414,15 @@ fn evaluateEntrypoint(
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
     const state = try ensureRuntimeState(ops);
-    try executeDevEntrypoint(&state.program, entry_idx, ops, ret_ptr, arg_ptr);
+    if (state.control != null) {
+        runtime_state_mutex.lockUncancelable(shimIo());
+        defer runtime_state_mutex.unlock(shimIo());
+
+        refreshRuntimeProgramIfNeeded(state);
+        try executeDevEntrypoint(&state.program, entry_idx, ops, ret_ptr, arg_ptr);
+    } else {
+        try executeDevEntrypoint(&state.program, entry_idx, ops, ret_ptr, arg_ptr);
+    }
 }
 
 export fn roc_shim_get_ops() callconv(.c) *anyopaque {

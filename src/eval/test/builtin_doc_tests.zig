@@ -30,6 +30,15 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+const BuiltinDocTestError = test_helpers.TestHelperError || eval_mod.BuiltinModules.InitError || std.process.SpawnError || std.process.Child.WaitError || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.Dir.WriteFileError || std.Io.Dir.CreateDirPathError || CoreCtx.WriteError || error{
+    PhantomFailuresDetected,
+    DocBlockFailures,
+    SkipZigTest,
+    SigactionFailed,
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 /// Builtin module loaded and published once in the parent test process and
 /// reused (read-only) by every block: directly for the in-parent check phase,
 /// and — via fork copy-on-write — by the child eval phase. Reusing it avoids
@@ -83,7 +92,7 @@ const Block = struct {
     }
 };
 
-fn extractBlocks(allocator: Allocator, source: []const u8) anyerror![]Block {
+fn extractBlocks(allocator: Allocator, source: []const u8) BuiltinDocTestError![]Block {
     var blocks = std.ArrayList(Block).empty;
     errdefer {
         for (blocks.items) |*b| b.deinit(allocator);
@@ -129,7 +138,7 @@ fn extractBlocks(allocator: Allocator, source: []const u8) anyerror![]Block {
     return blocks.toOwnedSlice(allocator);
 }
 
-fn assembleStripped(allocator: Allocator, lines: []const []const u8) anyerror![]u8 {
+fn assembleStripped(allocator: Allocator, lines: []const []const u8) BuiltinDocTestError![]u8 {
     var stripped_lines = std.ArrayList([]const u8).empty;
     defer stripped_lines.deinit(allocator);
     for (lines) |line| try stripped_lines.append(allocator, stripDocPrefix(line));
@@ -257,7 +266,7 @@ fn extractDefName(line: []const u8) ?[]const u8 {
 /// top-level start or the end of source). Tracks `{`/`[`/`(` nesting so a
 /// closing brace on its own line is still treated as a continuation of the
 /// statement that opened the brace. Each returned slice points into `source`.
-fn splitTopLevelStatements(allocator: Allocator, source: []const u8) anyerror![][]const u8 {
+fn splitTopLevelStatements(allocator: Allocator, source: []const u8) BuiltinDocTestError![][]const u8 {
     var statements = std.ArrayList([]const u8).empty;
     errdefer statements.deinit(allocator);
 
@@ -335,7 +344,7 @@ const Failure = struct {
     }
 };
 
-fn dupeErr(allocator: Allocator, comptime fmt: []const u8, args: anytype) anyerror![]u8 {
+fn dupeErr(allocator: Allocator, comptime fmt: []const u8, args: anytype) BuiltinDocTestError![]u8 {
     return std.fmt.allocPrint(allocator, fmt, args);
 }
 
@@ -351,7 +360,7 @@ const ForkOutcome = union(enum) {
 };
 
 /// Function pointer signature for the work performed in the child process.
-const ChildWorkFn = *const fn (allocator: Allocator, source: []const u8) anyerror!?[]u8;
+const ChildWorkFn = *const fn (allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8;
 
 /// Run `work` in a forked child process, isolating crashes from the parent.
 /// `work` returns null on success or an owned error string on a clean failure.
@@ -478,7 +487,7 @@ fn runCheck(
     allocator: Allocator,
     source_kind: test_helpers.SourceKind,
     source: []const u8,
-) anyerror!?[]u8 {
+) BuiltinDocTestError!?[]u8 {
     var resources = (if (prePublishedBuiltin()) |ppb|
         test_helpers.parseAndCheckProgramForProblemsWithBuiltin(allocator, source_kind, source, &.{}, ppb)
     else
@@ -499,7 +508,7 @@ fn runCheck(
 /// `U8.from_str`) — unlike `parseAndCanonicalizeProgramPublishedRoots`, which
 /// currently trips a `mono body lowering reached annotation-only procedure
 /// body` invariant for some of these references.
-fn runExpects(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
+fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     const wrapped = try rewriteExpectsAsModule(allocator, source);
     defer allocator.free(wrapped);
     if (wrapped.len == 0) {
@@ -530,7 +539,7 @@ fn runExpects(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
 /// expect statements. Inlining (rather than binding each expect to its own
 /// name) avoids a separate compiler invariant that fires when constant
 /// definitions reuse rich payload types.
-fn rewriteExpectsAsModule(allocator: Allocator, source: []const u8) anyerror![]u8 {
+fn rewriteExpectsAsModule(allocator: Allocator, source: []const u8) BuiltinDocTestError![]u8 {
     const statements = try splitTopLevelStatements(allocator, source);
     defer allocator.free(statements);
 
@@ -584,7 +593,7 @@ fn runEval(
     allocator: Allocator,
     source_kind: test_helpers.SourceKind,
     source: []const u8,
-) anyerror!?[]u8 {
+) BuiltinDocTestError!?[]u8 {
     var compiled = compileNative(allocator, source_kind, source) catch |err|
         return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
     defer compiled.deinit(allocator);
@@ -603,7 +612,7 @@ fn compileNative(
     allocator: Allocator,
     source_kind: test_helpers.SourceKind,
     source: []const u8,
-) anyerror!test_helpers.CompiledTargetProgram {
+) BuiltinDocTestError!test_helpers.CompiledTargetProgram {
     if (prePublishedBuiltin()) |ppb| {
         return test_helpers.compileInspectedProgramForTargetWithBuiltin(
             allocator,
@@ -633,13 +642,13 @@ const ProcessResult = union(enum) {
 };
 
 /// Worker bodies invoked inside the forked child for each block kind.
-fn workerExpects(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
+fn workerExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     return runExpects(allocator, source);
 }
-fn workerEvalModule(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
+fn workerEvalModule(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     return runEval(allocator, .module, source);
 }
-fn workerEvalExpr(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
+fn workerEvalExpr(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     return runEval(allocator, .expr, source);
 }
 
@@ -651,7 +660,7 @@ fn workerEvalExpr(allocator: Allocator, source: []const u8) anyerror!?[]u8 {
 ///
 /// Stage 2 (test / eval) is isolated in a forked child so a single compiler
 /// invariant panic on one block doesn't kill the rest of the run.
-fn processBlock(allocator: Allocator, block: *const Block) anyerror!ProcessResult {
+fn processBlock(allocator: Allocator, block: *const Block) BuiltinDocTestError!ProcessResult {
     if (try checkAccordingToKind(allocator, block)) |msg| return .{ .failed = msg };
 
     switch (block.kind) {
@@ -692,7 +701,7 @@ fn processBlock(allocator: Allocator, block: *const Block) anyerror!ProcessResul
     }
 }
 
-fn forkResultToProcess(allocator: Allocator, outcome: ForkOutcome) anyerror!ProcessResult {
+fn forkResultToProcess(allocator: Allocator, outcome: ForkOutcome) BuiltinDocTestError!ProcessResult {
     return switch (outcome) {
         .success => .success,
         .failed => |msg| .{ .failed = msg },
@@ -701,7 +710,7 @@ fn forkResultToProcess(allocator: Allocator, outcome: ForkOutcome) anyerror!Proc
     };
 }
 
-fn checkAccordingToKind(allocator: Allocator, block: *const Block) anyerror!?[]u8 {
+fn checkAccordingToKind(allocator: Allocator, block: *const Block) BuiltinDocTestError!?[]u8 {
     switch (block.kind) {
         .expects_only, .module_with_def => {
             return try runCheck(allocator, .module, block.source);
@@ -736,7 +745,7 @@ fn reproduceWithBinary(
     allocator: Allocator,
     block: *const Block,
     block_index: usize,
-) anyerror!bool {
+) BuiltinDocTestError!bool {
     const wrapper = try wrapForBinary(allocator, block);
     defer allocator.free(wrapper);
 
@@ -796,7 +805,7 @@ fn reproduceWithBinary(
 }
 
 /// Wrap the block source so that the `roc` binary can run it standalone.
-fn wrapForBinary(allocator: Allocator, block: *const Block) anyerror![]u8 {
+fn wrapForBinary(allocator: Allocator, block: *const Block) BuiltinDocTestError![]u8 {
     return switch (block.kind) {
         .expects_only => try std.fmt.allocPrint(allocator, "module []\n\n{s}\n", .{block.source}),
         .module_with_def => blk: {
@@ -937,7 +946,7 @@ fn eintrTestSignalHandler(_: std.c.SIG) callconv(.c) void {
 /// parent to interrupt its `waitpid`, then crashes via `abort()`. The parent
 /// must report `.crashed` — without the EINTR retry, `waitpid` would return
 /// -1 with `status` left at 0 and the harness would falsely report `.success`.
-fn eintrTestChildWork(_: Allocator, _: []const u8) anyerror!?[]u8 {
+fn eintrTestChildWork(_: Allocator, _: []const u8) BuiltinDocTestError!?[]u8 {
     if (comptime !has_fork) return null;
     const fifty_ms: std.c.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
     // Give the parent a moment to enter waitpid before we interrupt it.

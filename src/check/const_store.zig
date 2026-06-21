@@ -487,7 +487,7 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
     // no leak and no double-free (the testing allocator panics on a double-free, so
     // this would have caught the prior `defer free` + caller `errdefer free` overlap).
     const Helper = struct {
-        fn run(allocator: Allocator) anyerror!void {
+        fn run(allocator: Allocator) Allocator.Error!void {
             var store = ConstStore.init(allocator);
             defer store.deinit();
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });

@@ -36,9 +36,31 @@ pub const TestProcessDirs = struct {
     }
 };
 
+/// Path to the locally built `roc` executable used by CLI tests.
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
-fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []const u8) anyerror![]u8 {
+/// Errors that can occur while setting up a temporary CLI test directory.
+pub const TestDirError = std.mem.Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || std.Io.Dir.RealPathFileAllocError;
+/// Errors that can occur while waiting for child process output in tests.
+pub const ChildTimeoutError = std.mem.Allocator.Error || std.process.SpawnError || std.Thread.SpawnError || std.process.Child.WaitError || std.Io.File.MultiReader.UnendingError || error{
+    StreamTooLong,
+    Timeout,
+    WriteFailed,
+};
+/// Errors that can occur while constructing test environment variables.
+pub const EnvMapError = TestDirError || std.mem.Allocator.Error;
+/// Errors that can occur while running a Roc CLI test command.
+pub const RocRunError = TestDirError || EnvMapError || ChildTimeoutError;
+/// Errors that can occur while validating CLI test results.
+pub const ResultCheckError = error{
+    MemoryError,
+    RunFailed,
+    SegFault,
+    TestFailed,
+    UnexpectedSuccess,
+};
+
+fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []const u8) TestDirError![]u8 {
     const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test", namespace });
     defer allocator.free(cache_parent_rel);
 
@@ -113,7 +135,7 @@ fn appendTimeoutMessage(
     stderr: *std.ArrayList(u8),
     argv: []const []const u8,
     timeout_ms: u64,
-) anyerror!void {
+) (std.mem.Allocator.Error || error{WriteFailed})!void {
     var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, stderr);
     defer stderr.* = aw.toArrayList();
     try aw.writer.print(
@@ -137,7 +159,7 @@ pub fn runChildWithTimeout(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     options: ChildRunOptions,
-) anyerror!std.process.RunResult {
+) ChildTimeoutError!std.process.RunResult {
     const Watch = struct {
         child_id: std.process.Child.Id,
         io: std.Io,
@@ -239,7 +261,7 @@ pub fn runChildWithTimeout(
 }
 
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
-pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) anyerror!IsolatedCacheDirs {
+pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) TestDirError!IsolatedCacheDirs {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
@@ -261,7 +283,7 @@ pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) any
 }
 
 /// Create unique Roc cache, Zig local cache, and work directories for one CLI test job.
-pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) anyerror!TestProcessDirs {
+pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) TestDirError!TestProcessDirs {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
@@ -295,7 +317,7 @@ pub fn buildIsolatedTestEnvMap(
     io: std.Io,
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
-) anyerror!std.process.Environ.Map {
+) EnvMapError!std.process.Environ.Map {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB on use) and
     // PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -343,7 +365,7 @@ fn runChild(
     argv: []const []const u8,
     cwd_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) anyerror!RocResult {
+) RocRunError!RocResult {
     var env_map = try buildIsolatedTestEnvMap(io, allocator, extra_env);
     defer env_map.deinit();
 
@@ -361,7 +383,7 @@ fn runChild(
 }
 
 /// Helper to run roc with arguments that don't require a test file
-pub fn runRocCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) anyerror!RocResult {
+pub fn runRocCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) RocRunError!RocResult {
     return runRocCommandWithEnv(io, allocator, args, null);
 }
 
@@ -371,7 +393,7 @@ pub fn runRocCommandWithEnv(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) anyerror!RocResult {
+) RocRunError!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -390,7 +412,7 @@ pub fn runRocCommandWithEnv(
 }
 
 /// Helper to set up and run roc with arbitrary arguments
-pub fn runRoc(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) anyerror!RocResult {
+pub fn runRoc(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) RocRunError!RocResult {
     return runRocWithEnv(io, allocator, args, test_file_path, null);
 }
 
@@ -401,7 +423,7 @@ pub fn runRocWithEnv(
     args: []const []const u8,
     test_file_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) anyerror!RocResult {
+) RocRunError!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -429,13 +451,13 @@ pub fn runRocWithEnv(
 /// Runs a roc app with --test mode using the given IO spec.
 /// Spec format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 /// Returns success if the app's IO matches the spec exactly.
-pub fn runRocTest(io: std.Io, allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) anyerror!RocResult {
+pub fn runRocTest(io: std.Io, allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) RocRunError!RocResult {
     return runRocCommand(io, allocator, &.{ roc_file, "--", "--test", spec });
 }
 
 /// Check if a run result indicates success (exit code 0).
 /// Also checks for GPA memory errors in stderr.
-pub fn checkSuccess(result: RocResult) anyerror!void {
+pub fn checkSuccess(result: RocResult) ResultCheckError!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -469,7 +491,7 @@ pub fn checkSuccess(result: RocResult) anyerror!void {
 
 /// Check if a run result indicates failure (non-zero exit code).
 /// Verifies the process exited cleanly with a non-zero code, NOT that it crashed.
-pub fn checkFailure(result: RocResult) anyerror!void {
+pub fn checkFailure(result: RocResult) ResultCheckError!void {
     switch (result.term) {
         .exited => |code| {
             if (code == 0) {
@@ -494,7 +516,7 @@ pub fn checkFailure(result: RocResult) anyerror!void {
 
 /// Check if a test mode run succeeded (exit code 0).
 /// Also checks for GPA memory errors.
-pub fn checkTestSuccess(result: RocResult) anyerror!void {
+pub fn checkTestSuccess(result: RocResult) ResultCheckError!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -523,7 +545,7 @@ pub fn checkTestSuccess(result: RocResult) anyerror!void {
 }
 
 /// Helper to run roc with stdin input (for REPL testing)
-pub fn runRocWithStdin(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) anyerror!RocResult {
+pub fn runRocWithStdin(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) RocRunError!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);

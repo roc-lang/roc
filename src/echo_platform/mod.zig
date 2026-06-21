@@ -25,7 +25,7 @@ pub const echo_module_source = @embedFile("platform/Echo.roc");
 /// object's hosted symbol.
 pub const run_shim_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "roc_main": main_for_host! }
@@ -36,7 +36,7 @@ pub const run_shim_platform_main_source =
     \\main_for_host! : List(Str) => I8
     \\main_for_host! = |args|
     \\    match main!(args) {
-    \\        Ok({}) => 0
+    \\        Ok(_) => 0
     \\        Err(Exit(code)) => code
     \\        Err(other) => {
     \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
@@ -191,7 +191,7 @@ fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
 /// Unix behavior), crash on other errors.
-fn handleStdoutError(err: anyerror) noreturn {
+fn handleStdoutError(err: std.Io.File.Writer.Error) noreturn {
     if (comptime is_wasm) {
         @trap();
     } else {

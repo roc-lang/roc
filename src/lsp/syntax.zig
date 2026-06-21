@@ -37,6 +37,15 @@ const Region = base.Region;
 
 pub const DebugFlags = @import("debug.zig").DebugFlags;
 
+/// Errors that can occur while preparing the syntax check build environment.
+pub const SyntaxBuildEnvError = Allocator.Error || std.Io.Dir.RealPathFileAllocError || eval.BuiltinModules.InitError;
+/// Errors that can occur while preparing a document for syntax checking.
+pub const SyntaxPrepareDocumentError = SyntaxBuildEnvError;
+/// Errors that can occur while checking syntax for a document.
+pub const SyntaxCheckError = SyntaxPrepareDocumentError || error{WriteFailed};
+/// Errors that can occur while answering syntax-backed LSP queries.
+pub const SyntaxQueryError = SyntaxPrepareDocumentError || error{WriteFailed};
+
 const MethodOwnerLookup = struct {
     owner: CIR.Statement.Idx,
     type_ident: base.Ident.Idx,
@@ -67,6 +76,8 @@ pub const SyntaxChecker = struct {
     const owner_build = "build_env";
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
+    pub const CheckError = SyntaxCheckError;
+    pub const QueryError = SyntaxQueryError;
 
     const DocumentIdentity = struct {
         absolute_path: [:0]u8,
@@ -191,7 +202,7 @@ pub const SyntaxChecker = struct {
         return false;
     }
 
-    fn prepareDocumentBuild(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8) anyerror!DocumentBuild {
+    fn prepareDocumentBuild(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8) SyntaxPrepareDocumentError!DocumentBuild {
         var identity: ?DocumentIdentity = if (override_text) |text|
             try self.documentIdentityFromText(uri, text)
         else
@@ -241,7 +252,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) anyerror![]Diagnostics.PublishDiagnostics {
+    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
         self.mutex.lockUncancelable(self.std_io);
@@ -375,7 +386,7 @@ pub const SyntaxChecker = struct {
 
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
-    fn createFreshBuildEnv(self: *SyntaxChecker) anyerror!*BuildEnvHandle {
+    fn createFreshBuildEnv(self: *SyntaxChecker) SyntaxBuildEnvError!*BuildEnvHandle {
         self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
 
         // Release the previous_build_env owner first.
@@ -420,7 +431,7 @@ pub const SyntaxChecker = struct {
         return handle;
     }
 
-    fn sharedBuiltinModules(self: *SyntaxChecker) anyerror!*eval.BuiltinModules {
+    fn sharedBuiltinModules(self: *SyntaxChecker) (Allocator.Error || eval.BuiltinModules.InitError)!*eval.BuiltinModules {
         if (self.builtin_modules) |builtin_modules| return builtin_modules;
 
         const builtin_modules = try self.allocator.create(eval.BuiltinModules);
@@ -844,7 +855,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) anyerror!?HoverResult {
+    ) QueryError!?HoverResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -1384,7 +1395,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) anyerror!?DefinitionResult {
+    ) QueryError!?DefinitionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -2007,7 +2018,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) anyerror!?HighlightResult {
+    ) QueryError!?HighlightResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -2058,7 +2069,7 @@ pub const SyntaxChecker = struct {
         allocator: std.mem.Allocator,
         uri: []const u8,
         source: []const u8,
-    ) anyerror![]document_symbol_handler.SymbolInformation {
+    ) QueryError![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
         self.mutex.lockUncancelable(self.std_io);
@@ -2395,7 +2406,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) anyerror!?completion_handler.CompletionResult {
+    ) QueryError!?completion_handler.CompletionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 

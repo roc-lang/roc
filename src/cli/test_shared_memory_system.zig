@@ -11,9 +11,14 @@ const cli_context = @import("CliCtx.zig");
 const CliCtx = cli_context.CliCtx;
 const Io = cli_context.Io;
 
+const SharedMemorySystemTestError = test_helpers.TestHelperError || eval.BuiltinModules.InitError || lir.LirImage.ImageError || error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 
-fn sharedPrePublishedBuiltin() anyerror!test_helpers.PrePublishedBuiltin {
+fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePublishedBuiltin {
     if (shared_test_builtins == null) {
         shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
     }
@@ -156,7 +161,7 @@ fn compileLirImageForSharedTest(
     allocator: std.mem.Allocator,
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
-) anyerror!test_helpers.CompiledTargetProgram {
+) SharedMemorySystemTestError!test_helpers.CompiledTargetProgram {
     return compileLirImageForSharedTestTarget(allocator, source, imports, .native);
 }
 
@@ -165,7 +170,7 @@ fn compileLirImageForSharedTestTarget(
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
     target_usize: base.target.TargetUsize,
-) anyerror!test_helpers.CompiledTargetProgram {
+) SharedMemorySystemTestError!test_helpers.CompiledTargetProgram {
     return test_helpers.compileProgramForTargetWithBuiltin(
         allocator,
         std.testing.io,
@@ -177,7 +182,7 @@ fn compileLirImageForSharedTestTarget(
     );
 }
 
-fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) anyerror!void {
+fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) SharedMemorySystemTestError!void {
     const used = compiled.lowered.shm.getUsedSize();
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
@@ -193,7 +198,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
-fn expectPublishedImportArtifactCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) anyerror!void {
+fn expectPublishedImportArtifactCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) SharedMemorySystemTestError!void {
     const borrowed_builtin_count: usize = if (compiled.resources.borrowed_builtin_artifact != null) 1 else 0;
     try testing.expectEqual(expected, compiled.resources.import_artifacts.len + borrowed_builtin_count);
 }

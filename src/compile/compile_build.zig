@@ -30,6 +30,16 @@ const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
 pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
+/// Errors that can occur while initializing build inputs.
+pub const InitError = Allocator.Error || BuiltinModules.InitError;
+/// Errors that can occur while compiling discovered modules.
+pub const CompileDiscoveredError = Allocator.Error || std.Thread.SpawnError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, HasUserErrors, CompileTimeProblem };
+/// Errors that can occur while building a root module.
+pub const BuildRootError = BuildError || CompileDiscoveredError;
+/// Errors that can occur while building an app module.
+pub const BuildAppError = BuildRootError || error{NotAnApp};
+/// Errors that can occur while building with an explicit main module.
+pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
 const ModuleEnv = can.ModuleEnv;
 const PackageEnv = compile_package.PackageEnv;
@@ -222,7 +232,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) anyerror!BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -452,7 +462,7 @@ pub const BuildEnv = struct {
     }
 
     /// Build an app file specifically (validates it's an app)
-    pub fn buildApp(self: *BuildEnv, app_file: []const u8) anyerror!void {
+    pub fn buildApp(self: *BuildEnv, app_file: []const u8) BuildAppError!void {
         // Build and let the main function handle everything
         // The build function accepts both apps and modules
         try self.build(app_file);
@@ -473,9 +483,51 @@ pub const BuildEnv = struct {
     //
     // Uses the actor model coordinator for both single-threaded and multi-threaded modes.
     // The coordinator uses message passing to eliminate race conditions.
-    pub fn build(self: *BuildEnv, root_file: []const u8) anyerror!void {
+    pub fn build(self: *BuildEnv, root_file: []const u8) BuildRootError!void {
         try self.discoverDependencies(root_file);
         try self.compileDiscovered();
+    }
+
+    pub fn buildWithMain(self: *BuildEnv, root_file: []const u8, main_file: []const u8) BuildWithMainError!void {
+        try self.discoverDependencies(main_file);
+        try self.replaceDiscoveredRootFile(root_file);
+        try self.compileDiscovered();
+    }
+
+    fn replaceDiscoveredRootFile(self: *BuildEnv, root_file: []const u8) BuildError!void {
+        const pkg_name = self.discovered_pkg_name orelse return error.Internal;
+        const pkg = self.packages.getPtr(pkg_name) orelse return error.Internal;
+
+        const root_abs = try self.makeAbsolute(root_file);
+        errdefer self.gpa.free(root_abs);
+
+        var header_info = try self.parseHeaderDeps(root_abs);
+        defer header_info.deinit(self.gpa);
+
+        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
+            return error.UnsupportedHeader;
+        }
+
+        freeSlice(self.gpa, pkg.root_file);
+        pkg.root_file = root_abs;
+        pkg.kind = header_info.kind;
+
+        for (pkg.provides_entries.items) |entry| {
+            freeConstSlice(self.gpa, entry.roc_ident);
+            freeConstSlice(self.gpa, entry.ffi_symbol);
+        }
+        pkg.provides_entries.deinit(self.gpa);
+        pkg.provides_entries = .empty;
+        if (pkg.targets_config) |tc| tc.deinit(self.gpa);
+        pkg.targets_config = null;
+
+        if (header_info.kind == .platform or header_info.kind == .app or header_info.kind == .default_app) {
+            pkg.provides_entries = header_info.provides_entries;
+            header_info.provides_entries = .empty;
+            pkg.targets_config = header_info.targets_config;
+            header_info.targets_config = null;
+        }
     }
 
     /// Initialize the actor model coordinator.
@@ -569,7 +621,7 @@ pub const BuildEnv = struct {
     /// Phase 2: Initialize the Coordinator, create coordinator packages from the
     /// discovered BuildEnv packages, and run compilation to completion.
     /// Must be called after discoverDependencies().
-    pub fn compileDiscovered(self: *BuildEnv) anyerror!void {
+    pub fn compileDiscovered(self: *BuildEnv) CompileDiscoveredError!void {
         const pkg_name = self.discovered_pkg_name orelse unreachable; // Must call discoverDependencies() first
 
         // Initialize coordinator if not already done
@@ -1415,7 +1467,7 @@ pub const BuildEnv = struct {
         };
     }
 
-    fn makeAbsolute(self: *BuildEnv, path: []const u8) Allocator.Error![]const u8 {
+    fn makeAbsolute(self: *BuildEnv, path: []const u8) Allocator.Error![]u8 {
         if (std.fs.path.isAbsolute(path)) return try std.fs.path.resolve(self.gpa, &.{path});
         return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
@@ -2062,6 +2114,82 @@ pub const BuildEnv = struct {
             return coord.getBuildStats();
         }
         return .{};
+    }
+
+    pub fn freeWatchInputs(self: *BuildEnv, inputs: []const []const u8) void {
+        for (inputs) |path| self.gpa.free(path);
+        self.gpa.free(inputs);
+    }
+
+    fn appendWatchInput(
+        self: *BuildEnv,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+    ) Allocator.Error!void {
+        const owned = try self.gpa.dupe(u8, path);
+        errdefer self.gpa.free(owned);
+        const gop = try seen.getOrPut(self.gpa, owned);
+        if (gop.found_existing) {
+            self.gpa.free(owned);
+            return;
+        }
+        try paths.append(self.gpa, owned);
+    }
+
+    fn appendFileDependencyWatchInputs(
+        self: *BuildEnv,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        module_path: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        const source_dir = std.fs.path.dirname(module_path) orelse ".";
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInput(paths, seen, full_path);
+        }
+    }
+
+    /// Collect exact filesystem inputs read by the current build. Returned paths
+    /// are owned by the BuildEnv allocator and must be released with
+    /// `freeWatchInputs`.
+    pub fn collectWatchInputs(self: *BuildEnv) Allocator.Error![]const []const u8 {
+        var paths = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (paths.items) |path| self.gpa.free(path);
+            paths.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg_name = entry.key_ptr.*;
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            try self.appendWatchInput(&paths, &seen, pkg.root_file);
+
+            if (self.schedulers.get(pkg_name)) |sched| {
+                for (sched.modules.items) |*sched_mod| {
+                    try self.appendWatchInput(&paths, &seen, sched_mod.path);
+
+                    if (sched_mod.semantic) |*semantic| {
+                        if (semantic.checked_artifact) |*artifact| {
+                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.path, artifact.moduleEnv());
+                        } else if (semantic.module_env) |env| {
+                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.path, env);
+                        }
+                    }
+                }
+            }
+        }
+
+        return paths.toOwnedSlice(self.gpa);
     }
 
     /// Information about a compiled module, ready for serialization.

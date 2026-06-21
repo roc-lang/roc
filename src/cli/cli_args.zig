@@ -4,6 +4,9 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
 
+/// Errors that can occur while parsing CLI arguments.
+pub const ParseError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error;
+
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
 /// but defining a struct per command means that we can easily take that type and pass it into the function that implements each command.
@@ -118,6 +121,7 @@ pub const RunArgs = struct {
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
+    watch: bool = false, // hot reload when source inputs change
     timings: bool = false, // always show the per-phase timing breakdown
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
@@ -131,6 +135,8 @@ pub const CheckArgs = struct {
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    watch: bool = false, // rerun check when source inputs change
+    watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
@@ -169,6 +175,8 @@ pub const TestArgs = struct {
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
+    watch: bool = false, // rerun tests when source inputs change
+    watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
@@ -226,7 +234,7 @@ pub const GlueArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
+pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
     // "run" is not a valid subcommand - give a helpful error
@@ -282,6 +290,7 @@ const main_help =
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
+    \\      --watch                        Hot reload when source inputs change
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
@@ -307,6 +316,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var timings: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var watch: bool = false;
+    var watch_inputs_file: ?[]const u8 = null;
     var max_threads: ?usize = null;
     var resolve_limits: ResolveLimitArgs = .{};
 
@@ -326,6 +337,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --timings      Show how long each compilation phase took (shown automatically when checking is slow)
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
+            \\      --watch        Re-run when source inputs change
             \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
             ++ "\n" ++ resolve_limit_help ++ "\n" ++
                 \\  -h, --help         Print help
@@ -350,6 +362,14 @@ fn parseCheck(args: []const []const u8) CliArgs {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--watch")) {
+            watch = true;
+        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
+            if (getFlagValue(arg)) |value| {
+                watch_inputs_file = value;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {
@@ -375,7 +395,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .timings = timings, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .timings = timings, .no_cache = no_cache, .verbose = verbose, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -583,7 +603,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
     } };
 }
 
-fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
+fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
     var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {
@@ -692,6 +712,8 @@ fn parseTest(args: []const []const u8) CliArgs {
     var main: ?[]const u8 = null;
     var verbose: bool = false;
     var no_cache: bool = false;
+    var watch: bool = false;
+    var watch_inputs_file: ?[]const u8 = null;
     var max_threads: ?usize = null;
     var resolve_limits: ResolveLimitArgs = .{};
     for (args) |arg| {
@@ -709,6 +731,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
+            \\      --watch                         Re-run when source inputs change
             \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help                          Print help
             \\
@@ -738,6 +761,14 @@ fn parseTest(args: []const []const u8) CliArgs {
             verbose = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
+        } else if (mem.eql(u8, arg, "--watch")) {
+            watch = true;
+        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
+            if (getFlagValue(arg)) |value| {
+                watch_inputs_file = value;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {
@@ -762,7 +793,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -1043,6 +1074,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
+    var watch: bool = false;
     var timings: bool = false;
     var max_threads: ?usize = null;
     var resolve_limits: ResolveLimitArgs = .{};
@@ -1098,6 +1130,8 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             no_cache = true;
         } else if (mem.eql(u8, arg, "--allow-errors")) {
             allow_errors = true;
+        } else if (mem.eql(u8, arg, "--watch")) {
+            watch = true;
         } else if (mem.eql(u8, arg, "--timings")) {
             timings = true;
         } else if (mem.startsWith(u8, arg, "--jobs")) {
@@ -1129,7 +1163,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -1165,6 +1199,12 @@ test "default roc command" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqual(true, result.run.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--watch", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expect(result.run.watch);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{"-v"});
@@ -1436,6 +1476,17 @@ test "roc test" {
         try testing.expectEqual(.speed, result.test_cmd.opt);
     }
     {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--watch", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
+        try testing.expect(result.test_cmd.watch);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--watch-inputs-file=/tmp/roc-watch-inputs", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("/tmp/roc-watch-inputs", result.test_cmd.watch_inputs_file.?);
+    }
+    {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--opt" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
@@ -1486,6 +1537,17 @@ test "roc check" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqual(true, result.check.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--watch", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expect(result.check.watch);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--watch-inputs-file=/tmp/roc-watch-inputs", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("/tmp/roc-watch-inputs", result.check.watch_inputs_file.?);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--main=mymain.roc", "foo.roc" });

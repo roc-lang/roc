@@ -100,7 +100,20 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
-        const source_hash = hashBytes(source);
+        return computeFromSourceHash(
+            hashBytes(source),
+            module_identity,
+            checking_context_identity,
+            direct_import_artifact_keys,
+        );
+    }
+
+    pub fn computeFromSourceHash(
+        source_hash: [32]u8,
+        module_identity: ModuleIdentity,
+        checking_context_identity: CheckingContextIdentity,
+        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    ) CheckedModuleArtifactKey {
         const compiler_artifact_hash = build_options.compiler_artifact_hash;
         const module_identity_hash = hashModuleIdentity(module_identity);
         const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
@@ -200,6 +213,24 @@ fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
     hashU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
+}
+
+fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashByteSlice(&hasher, "roc-module-source-inputs-v2");
+    hashByteSlice(&hasher, module_env.getSourceAll());
+    const deps = module_env.file_dependencies.items.items;
+    hashU32(&hasher, @intCast(deps.len));
+    for (deps) |dep| {
+        hashByteSlice(&hasher, module_env.fileDependencyRelativePath(dep));
+        hasher.update(&.{@intFromEnum(dep.state)});
+        switch (dep.state) {
+            .present => hasher.update(&dep.content_hash),
+            .missing, .unreadable => {},
+            .pending => unreachable,
+        }
+    }
+    return hasher.finalResult();
 }
 
 fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
@@ -405,6 +436,8 @@ pub const PublishInputs = struct {
 
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
+    pub const Error = Allocator.Error || error{CompileTimeProblem};
+
     context: ?*anyopaque = null,
     finalize: *const fn (
         context: ?*anyopaque,
@@ -414,7 +447,7 @@ pub const CompileTimeFinalizer = struct {
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
         problem_store: ?*problem.Store,
-    ) anyerror!void,
+    ) Error!void,
 
     pub fn run(
         self: CompileTimeFinalizer,
@@ -424,7 +457,7 @@ pub const CompileTimeFinalizer = struct {
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
         problem_store: ?*problem.Store,
-    ) anyerror!void {
+    ) Error!void {
         try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts, problem_store);
     }
 };
@@ -24336,8 +24369,8 @@ pub fn checkedModuleKeyFromTypedModule(
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
     defer allocator.free(direct_import_artifact_keys);
 
-    return CheckedModuleArtifactKey.compute(
-        module_env.getSourceAll(),
+    return CheckedModuleArtifactKey.computeFromSourceHash(
+        hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
         direct_import_artifact_keys,
@@ -24350,7 +24383,7 @@ pub fn publishFromTypedModule(
     modules: *const TypedCIR.Modules,
     module_idx: u32,
     inputs: PublishInputs,
-) anyerror!CheckedModuleArtifact {
+) CompileTimeFinalizer.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
     const idents = module.identStoreConst();
@@ -24386,8 +24419,8 @@ pub fn publishFromTypedModule(
 
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
     errdefer allocator.free(direct_import_artifact_keys);
-    const artifact_key = CheckedModuleArtifactKey.compute(
-        module_env.getSourceAll(),
+    const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
+        hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
         direct_import_artifact_keys,
@@ -24806,7 +24839,7 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) anyerror!void {
+) (@import("test/TestEnv.zig").TestEnvError || Allocator.Error)!void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
@@ -25716,7 +25749,7 @@ fn isSliceField(comptime FT: type) bool {
 /// slices, allocate + byte-fill each field, serialize, deserialize, and assert
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
-fn expectAllSliceStoreRoundTrips(comptime Store: type) anyerror!void {
+fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (std.meta.fields(Store)) |field| {
@@ -26081,6 +26114,43 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqualSlices(u8, &ty1_key.bytes, &loaded.checked_types.roots.items[1].key.bytes);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_record, loaded.checked_types.payloads.items[0]);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_tag_union, loaded.checked_types.payloads.items[1]);
+}
+
+test "module source input hash uses explicit file dependency state" {
+    const gpa = std.testing.allocator;
+
+    var missing_env = try ModuleEnv.init(gpa, "module []\n");
+    defer missing_env.deinit();
+    try missing_env.initCIRFields("Test");
+    const missing_idx = try missing_env.recordFileDependency("data.txt");
+    missing_env.setFileDependencyMissing(missing_idx);
+    const missing_hash = hashModuleSourceInputs(&missing_env);
+
+    missing_env.file_dependencies.items.items[@intFromEnum(missing_idx)].content_hash = [_]u8{0xFE} ** 32;
+    const missing_hash_after_payload_change = hashModuleSourceInputs(&missing_env);
+    try std.testing.expectEqualSlices(u8, &missing_hash, &missing_hash_after_payload_change);
+
+    var unreadable_env = try ModuleEnv.init(gpa, "module []\n");
+    defer unreadable_env.deinit();
+    try unreadable_env.initCIRFields("Test");
+    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt");
+    unreadable_env.setFileDependencyUnreadable(unreadable_idx);
+    const unreadable_hash = hashModuleSourceInputs(&unreadable_env);
+
+    var present_env = try ModuleEnv.init(gpa, "module []\n");
+    defer present_env.deinit();
+    try present_env.initCIRFields("Test");
+    const present_idx = try present_env.recordFileDependency("data.txt");
+    present_env.setFileDependencyContentHash(present_idx, [_]u8{0} ** 32);
+    const present_hash = hashModuleSourceInputs(&present_env);
+
+    const missing_bits: u256 = @bitCast(missing_hash);
+    const unreadable_bits: u256 = @bitCast(unreadable_hash);
+    const present_bits: u256 = @bitCast(present_hash);
+
+    try std.testing.expect(missing_bits != unreadable_bits);
+    try std.testing.expect(missing_bits != present_bits);
+    try std.testing.expect(unreadable_bits != present_bits);
 }
 
 test "SERIALIZED_VERSION_HASH golden value" {

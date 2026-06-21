@@ -5675,9 +5675,21 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
 
     // Resolve the file path from the StringPart token text
     const path_text = self.parse_ir.resolve(fi.path_tok);
+    if (isAbsoluteFileImportPath(path_text)) {
+        const path_string = try self.env.insertString(path_text);
+        const err_expr = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .file_import_absolute_path = .{
+            .path = path_string,
+            .region = region,
+        } });
+        try self.createFileImportDef(name_ident, err_expr, region);
+        return;
+    }
+
+    const dependency_idx = try self.env.recordFileDependency(path_text);
 
     // File imports require filesystem access, which is not available on wasm32.
     if (comptime builtin.cpu.arch == .wasm32) {
+        self.env.setFileDependencyUnreadable(dependency_idx);
         const path_string = try self.env.insertString(path_text);
         const err_expr = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .file_import_io_error = .{
             .path = path_string,
@@ -5706,14 +5718,20 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {
             error.OutOfMemory => unreachable,
-            error.FileNotFound => .{ .file_import_not_found = .{
-                .path = path_string,
-                .region = region,
-            } },
-            error.AccessDenied, error.StreamTooLong, error.IoError => .{ .file_import_io_error = .{
-                .path = path_string,
-                .region = region,
-            } },
+            error.FileNotFound => blk: {
+                self.env.setFileDependencyMissing(dependency_idx);
+                break :blk .{ .file_import_not_found = .{
+                    .path = path_string,
+                    .region = region,
+                } };
+            },
+            error.AccessDenied, error.StreamTooLong, error.IoError => blk: {
+                self.env.setFileDependencyUnreadable(dependency_idx);
+                break :blk .{ .file_import_io_error = .{
+                    .path = path_string,
+                    .region = region,
+                } };
+            },
         };
         // Create a runtime error expression for the def (this also pushes the diagnostic)
         const err_expr = try self.env.pushMalformed(Expr.Idx, diag);
@@ -5721,6 +5739,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         return;
     };
     defer self.env.gpa.free(file_contents);
+    self.env.setFileDependencyContentHash(dependency_idx, sha256Bytes(file_contents));
 
     // Create the expression based on type
     const expr_idx = if (!fi.is_bytes) blk: {
@@ -5746,6 +5765,27 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     };
 
     try self.createFileImportDef(name_ident, expr_idx, region);
+}
+
+fn isAbsoluteFileImportPath(path: []const u8) bool {
+    return std.fs.path.isAbsolutePosix(path) or std.fs.path.isAbsoluteWindows(path);
+}
+
+test "absolute file import path classifier rejects platform absolute paths" {
+    try std.testing.expect(isAbsoluteFileImportPath("/tmp/data.txt"));
+    try std.testing.expect(isAbsoluteFileImportPath("C:\\tmp\\data.txt"));
+    try std.testing.expect(isAbsoluteFileImportPath("\\\\server\\share\\data.txt"));
+    try std.testing.expect(isAbsoluteFileImportPath("\\tmp\\data.txt"));
+
+    try std.testing.expect(!isAbsoluteFileImportPath("data.txt"));
+    try std.testing.expect(!isAbsoluteFileImportPath("../data.txt"));
+    try std.testing.expect(!isAbsoluteFileImportPath("C:relative.txt"));
+}
+
+fn sha256Bytes(bytes: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return hasher.finalResult();
 }
 
 /// Helper to create a def for a file import binding

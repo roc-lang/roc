@@ -36,10 +36,13 @@ const coordination = @import("coordination.zig");
 
 const SharedMemoryAllocator = @This();
 
+const HEADER_MAGIC: u32 = 0x524F4353;
+const HEADER_VERSION: u32 = 1;
+
 /// Header stored at the beginning of shared memory to communicate metadata
 pub const Header = extern struct {
-    magic: u32 = 0x524F4353, // "ROCS"
-    version: u32 = 1,
+    magic: u32 = HEADER_MAGIC, // "ROCS"
+    version: u32 = HEADER_VERSION,
     used_size: u64 = 0,
     total_size: u64 = 0,
     data_offset: u64 = @sizeOf(Header),
@@ -254,6 +257,29 @@ pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryEr
         .is_owner = false,
         .page_size = page_size,
     };
+}
+
+/// Creates a SharedMemoryAllocator from an existing file descriptor and resumes
+/// allocation at the used size recorded in the shared-memory header.
+pub fn fromFdWithHeaderOffset(
+    fd: Handle,
+    size: usize,
+    page_size: usize,
+) (platform.SharedMemoryError || error{InvalidSharedMemory})!SharedMemoryAllocator {
+    var shm = try fromFd(fd, size, page_size);
+    errdefer shm.deinit(std.heap.page_allocator);
+
+    const header_ptr: *const Header = @ptrCast(@alignCast(shm.base_ptr));
+    if (header_ptr.magic != HEADER_MAGIC or header_ptr.version != HEADER_VERSION) {
+        return error.InvalidSharedMemory;
+    }
+    const used_size: usize = @intCast(header_ptr.used_size);
+    if (used_size < @sizeOf(Header) or used_size > shm.total_size) {
+        return error.InvalidSharedMemory;
+    }
+
+    shm.offset.store(used_size, .monotonic);
+    return shm;
 }
 
 /// Updates the header with the current used size.
@@ -546,7 +572,7 @@ test "shared memory allocator thread safety" {
     };
 
     const thread_fn = struct {
-        fn run(ctx: ThreadContext) anyerror!void {
+        fn run(ctx: ThreadContext) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
             var i: usize = 0;
             while (i < ctx.allocations_per_thread) : (i += 1) {
                 // Allocate various sizes

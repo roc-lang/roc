@@ -8,6 +8,8 @@ const protocol = @import("../protocol.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");
 const can = @import("can");
+
+const FormatSourceError = Allocator.Error || fmt.FormatAstError || error{ParseError};
 /// Handler for `textDocument/formatting` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
@@ -115,7 +117,7 @@ const Position = struct {
 };
 
 /// Format source code and return the formatted result.
-fn formatSource(allocator: std.mem.Allocator, source: []const u8) anyerror![]u8 {
+fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceError![]u8 {
     // Create ModuleEnv for parsing
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();

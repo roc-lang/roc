@@ -1116,6 +1116,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_absolute_path = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .file_import_not_utf8 = .{
             .path = rand_idx(StringLiteral.Idx),
             .region = rand_region(),

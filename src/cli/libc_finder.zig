@@ -16,6 +16,12 @@ const Io = cli_ctx.Io;
 const fs = std.fs;
 const process = std.process;
 
+/// Errors that can occur while locating a libc installation.
+pub const FindLibcError = Allocator.Error || process.RunError || error{
+    LibcNotFound,
+    UnrecognisedArch,
+};
+
 /// Information about the system's libc installation
 pub const LibcInfo = struct {
     /// Path to the dynamic linker (e.g., /lib64/ld-linux-x86-64.so.2)
@@ -55,7 +61,7 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
 
 /// finds libc and dynamic linker
 /// Solely allocates into the arena
-pub fn findLibc(ctx: *CliCtx) anyerror!LibcInfo {
+pub fn findLibc(ctx: *CliCtx) FindLibcError!LibcInfo {
     const std_io = ctx.io.std_io;
     // Try compiler-based detection first (most reliable)
     if (try findViaCompiler(ctx.arena, std_io)) |info|
@@ -66,7 +72,7 @@ pub fn findLibc(ctx: *CliCtx) anyerror!LibcInfo {
 }
 
 /// Find libc using compiler queries (gcc/clang)
-fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) anyerror!?LibcInfo {
+fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) FindLibcError!?LibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
     // Get architecture first
@@ -121,7 +127,7 @@ fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) anyerror!?LibcInfo 
 }
 
 /// Find libc by searching the filesystem
-fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) anyerror!LibcInfo {
+fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) FindLibcError!LibcInfo {
     const arch = try getArchitecture(arena, std_io);
     const search_paths = try getSearchPaths(arena, std_io, arch);
 
@@ -216,7 +222,7 @@ fn findDynamicLinker(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8,
 }
 
 /// Get system architecture using uname
-fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
+fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) FindLibcError![]const u8 {
     const result = try process.run(arena, std_io, .{
         .argv = &[_][]const u8{ "uname", "-m" },
     });
@@ -225,7 +231,7 @@ fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) anyerror![]const u8
 }
 
 /// Get library search paths for the given architecture
-fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) anyerror![]const []const u8 {
+fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) FindLibcError![]const []const u8 {
     const triplet = getMultiarchTriplet(arena, std_io, arch) catch |err| blk: {
         switch (err) {
             error.UnrecognisedArch => break :blk arch,
@@ -281,7 +287,7 @@ fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) an
 }
 
 /// Get multiarch triplet (e.g., x86_64-linux-gnu)
-fn getMultiarchTriplet(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) anyerror![]const u8 {
+fn getMultiarchTriplet(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) FindLibcError![]const u8 {
     // Try to get from gcc first
     const result = process.run(arena, std_io, .{
         .argv = &[_][]const u8{ "gcc", "-dumpmachine" },

@@ -45,6 +45,20 @@ const AST = parse.AST;
 
 var allocator: Allocator = std.heap.wasm_allocator;
 
+const PlaygroundCompileError =
+    Allocator.Error ||
+    fmt.FormatAstError ||
+    eval.test_helpers.TestHelperError ||
+    check.CheckedArtifact.CompileTimeFinalizer.Error ||
+    error{
+        ErrFinalizingHTMLWriter,
+        Internal,
+        TypeCheckError,
+        WriteFailed,
+    };
+
+const PlaygroundEvaluateTestsError = PlaygroundCompileError || lir.CheckedPipeline.LowerResourceError || eval.LirInterpreter.Error;
+
 /// Playground-specific std options, including a freestanding-safe log sink.
 pub const std_options: std.Options = .{
     .log_level = .warn,
@@ -952,7 +966,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
     return null;
 }
 
-fn compileReplInspectedModule(source: []const u8) anyerror!ReplCompiledModule {
+fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCompiledModule {
     var checked_module = try compileCheckedReplModuleSource(source);
     errdefer checked_module.deinit();
 
@@ -1026,7 +1040,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     return false;
 }
 
-fn compileCheckedReplModuleSource(source: []const u8) anyerror!CompilerStageData {
+fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
     var data = try compileSource(source, "main");
     errdefer data.deinit();
 
@@ -1050,7 +1064,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
     compiler_data = new_data;
 }
 
-fn replaceCompilerDataFromReplSource(source: []const u8) anyerror!void {
+fn replaceCompilerDataFromReplSource(source: []const u8) PlaygroundCompileError!void {
     replaceCompilerData(try compileSource(source, "main"));
 }
 
@@ -1181,7 +1195,7 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
-fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerStageData {
+fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1813,7 +1827,7 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn buildEvaluateTestsHtml(data: CompilerStageData) anyerror![]u8 {
+fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
     var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,

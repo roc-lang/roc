@@ -601,6 +601,8 @@ builtin_statements: CIR.Statement.Span,
 external_decls: CIR.ExternalDecl.SafeList,
 /// Store for interned module imports
 imports: CIR.Import.Store,
+/// Source-relative file imports read while canonicalizing this module.
+file_dependencies: FileDependency.SafeList,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
@@ -710,6 +712,28 @@ pub const RequiredType = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// File import dependency state for watch mode and checked-cache identity.
+/// The content hash is meaningful only when the state is `present`.
+pub const FileDependencyState = enum(u8) {
+    pending,
+    missing,
+    unreadable,
+    present,
+};
+
+/// Source-relative file import dependency for watch mode and checked-cache
+/// identity. `relative_path` is interpreted relative to the module source
+/// directory by higher-level build code; it is never an absolute or realpathed
+/// host path.
+pub const FileDependency = extern struct {
+    relative_path: StringLiteral.Idx,
+    state: FileDependencyState,
+    _padding: [3]u8,
+    content_hash: [32]u8,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used by serialized compiler artifacts whose internal pointers are
 /// stored relative to the artifact buffer.
@@ -723,6 +747,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provides_entries.relocate(offset);
     self.hosted_entries.relocate(offset);
     self.imports.relocate(offset);
+    self.file_dependencies.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
@@ -792,6 +817,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
+        .file_dependencies = try FileDependency.SafeList.initCapacity(gpa, 2),
         .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
@@ -821,6 +847,7 @@ pub fn deinit(self: *Self) void {
     self.provides_entries.deinit(self.gpa);
     self.hosted_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
+    self.file_dependencies.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
@@ -876,6 +903,43 @@ pub fn deinitCachedModule(self: *Self) void {
     // that needs to be freed. The interner.deinit checks supports_inserts internally
     // and will only free if memory was actually allocated (not for pure cached data).
     self.common.idents.interner.deinit(self.gpa);
+}
+
+/// Record a relative file dependency before its final read state is known.
+pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Error!FileDependency.SafeList.Idx {
+    const path_idx = try self.insertString(relative_path);
+    return try self.file_dependencies.append(self.gpa, .{
+        .relative_path = path_idx,
+        .state = .pending,
+        ._padding = .{ 0, 0, 0 },
+        .content_hash = [_]u8{0} ** 32,
+    });
+}
+
+/// Mark a previously recorded file dependency as missing.
+pub fn setFileDependencyMissing(self: *Self, idx: FileDependency.SafeList.Idx) void {
+    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    dep.state = .missing;
+    dep.content_hash = [_]u8{0} ** 32;
+}
+
+/// Mark a previously recorded file dependency as unreadable.
+pub fn setFileDependencyUnreadable(self: *Self, idx: FileDependency.SafeList.Idx) void {
+    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    dep.state = .unreadable;
+    dep.content_hash = [_]u8{0} ** 32;
+}
+
+/// Set the content hash for a previously recorded file dependency.
+pub fn setFileDependencyContentHash(self: *Self, idx: FileDependency.SafeList.Idx, content_hash: [32]u8) void {
+    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    dep.state = .present;
+    dep.content_hash = content_hash;
+}
+
+/// Return the relative path string stored for a file dependency.
+pub fn fileDependencyRelativePath(self: *const Self, dep: FileDependency) []const u8 {
+    return self.getString(dep.relative_path);
 }
 
 // Module compilation functionality
@@ -2193,6 +2257,18 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
+        .file_import_absolute_path => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportAbsolutePathReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .file_import_not_utf8 => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             const path_text = self.common.getString(data.path);
@@ -3107,6 +3183,7 @@ pub const Serialized = extern struct {
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
+    file_dependencies: FileDependency.SafeList.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
     qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
@@ -3155,6 +3232,7 @@ pub const Serialized = extern struct {
         try self.hosted_entries.serialize(&env.hosted_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
+        try self.file_dependencies.serialize(&env.file_dependencies, allocator, writer);
 
         self.diagnostics = env.diagnostics;
 
@@ -3225,6 +3303,7 @@ pub const Serialized = extern struct {
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
+            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .module_name = module_name,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
@@ -3281,6 +3360,7 @@ pub const Serialized = extern struct {
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
+            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .module_name = module_name,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),

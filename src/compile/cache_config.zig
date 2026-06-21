@@ -26,7 +26,8 @@ pub const Constants = struct {
     /// top-level-field hash can't see (e.g. a node-payload layout edit).
     /// 3: annotation node payload gained mentions/introduces-type-var flags.
     /// 4: numeric suffix metadata was renamed to suffix targets.
-    pub const CACHE_VERSION = 4;
+    /// 5: ModuleEnv stores source-relative file-import dependency metadata.
+    pub const CACHE_VERSION = 6;
 };
 
 /// Configuration for the Roc cache system.

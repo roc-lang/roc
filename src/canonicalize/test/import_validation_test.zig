@@ -79,6 +79,50 @@ fn parseAndCanonicalizeSource(
     };
 }
 
+test "file imports reject absolute paths before recording dependencies" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+
+    const source =
+        \\module [main]
+        \\
+        \\import "/tmp/data.txt" as data : Str
+        \\
+        \\main = data
+    ;
+
+    var result = try parseAndCanonicalizeSource(allocator, source, null);
+    defer {
+        result.can.deinit();
+        allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
+        result.ast.deinit();
+        result.parse_env.deinit();
+        allocator.destroy(result.parse_env);
+    }
+
+    try result.can.canonicalizeFile();
+
+    const diagnostics = try result.parse_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    var found_absolute_path = false;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .file_import_absolute_path => |data| {
+                found_absolute_path = true;
+                try testing.expectEqualStrings("/tmp/data.txt", result.parse_env.getString(data.path));
+            },
+            .file_import_not_found, .file_import_io_error => return error.UnexpectedFileImportReadDiagnostic,
+            else => {},
+        }
+    }
+
+    try testing.expect(found_absolute_path);
+    try expectEqual(@as(usize, 0), result.parse_env.file_dependencies.items.items.len);
+}
+
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);

@@ -2321,7 +2321,9 @@ test "erased callable layouts use explicit erased-callable RC helper plans" {
     );
 }
 
-fn expectBoolOrdinaryTagUnion() anyerror!void {
+const LayoutStoreTestError = Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
+
+fn expectBoolOrdinaryTagUnion() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2337,7 +2339,7 @@ fn expectBoolOrdinaryTagUnion() anyerror!void {
     }
 }
 
-fn expectZstContainerAbi() anyerror!void {
+fn expectZstContainerAbi() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2353,7 +2355,7 @@ fn expectZstContainerAbi() anyerror!void {
     try testing.expectEqual(@as(u32, 0), list_abi.elem_size);
 }
 
-fn expectCanonicalStructOrdering() anyerror!void {
+fn expectCanonicalStructOrdering() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2376,7 +2378,7 @@ fn expectCanonicalStructOrdering() anyerror!void {
     try testing.expectEqual(@as(u16, 3), fields.get(3).index);
 }
 
-fn expectTagUnionShapeInterning() anyerror!void {
+fn expectTagUnionShapeInterning() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2388,7 +2390,7 @@ fn expectTagUnionShapeInterning() anyerror!void {
     try testing.expectEqual(LayoutTag.tag_union, store.getLayout(a).tag);
 }
 
-fn expectRecursiveGraphInterning() anyerror!void {
+fn expectRecursiveGraphInterning() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2428,7 +2430,7 @@ fn expectRecursiveGraphInterning() anyerror!void {
     }
 }
 
-fn expectNestedOrdinaryDataGraph() anyerror!void {
+fn expectNestedOrdinaryDataGraph() LayoutStoreTestError!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();

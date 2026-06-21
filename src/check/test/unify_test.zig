@@ -30,6 +30,8 @@ const Tag = types_mod.Tag;
 const Desc = types_mod.Descriptor;
 const Slot = types_mod.Slot;
 
+const UnifyTestError = Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult, VarNotRoot };
+
 /// A lightweight test harness used in unification and type inference tests.
 ///
 /// `TestEnv` bundles together the following components:
@@ -2020,7 +2022,7 @@ test "unify order - resulting type is order-independent for recursive types" {
     // regardless of order.
     const gpa = std.testing.allocator;
     const Helper = struct {
-        fn run(e_first: bool) anyerror!bool {
+        fn run(e_first: bool) UnifyTestError!bool {
             var env = try TestEnv.init(gpa);
             defer env.deinit();
             const ts = &env.module_env.types;
@@ -2059,7 +2061,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
     const gpa = std.testing.allocator;
     const Helper = struct {
         // Resolved root var-id that the deferred constraint is attached to.
-        fn run(flex_first: bool) anyerror!u32 {
+        fn run(flex_first: bool) UnifyTestError!u32 {
             var env = try TestEnv.init(gpa);
             defer env.deinit();
             const ts = &env.module_env.types;

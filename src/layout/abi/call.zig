@@ -216,7 +216,7 @@ fn testStruct(store: *Store, field_idxs: []const Idx) std.mem.Allocator.Error!Id
     return store.putStructFields(fields[0..field_idxs.len]);
 }
 
-fn expectRegisters(expected: []const RegPiece, actual: Placement) anyerror!void {
+fn expectRegisters(expected: []const RegPiece, actual: Placement) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     try testing.expect(actual == .registers);
     try testing.expectEqualSlices(RegPiece, expected, actual.registers);
 }

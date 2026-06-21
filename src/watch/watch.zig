@@ -246,13 +246,24 @@ pub const WatchEvent = struct {
 /// Callback function type for handling file change events
 pub const WatchCallback = *const fn (event: WatchEvent) void;
 
+/// Callback function type for handling file change events with caller-owned context.
+pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
+
+const EventFilter = enum {
+    roc_files,
+    all_files,
+};
+
 /// High-performance filesystem watcher for .roc files
 /// Monitors directories recursively and invokes callbacks on file changes
 pub const Watcher = struct {
     allocator: std.mem.Allocator,
     std_io: std.Io,
     paths: [][]const u8,
-    callback: WatchCallback,
+    callback: ?WatchCallback,
+    callback_with_context: ?WatchCallbackWithContext,
+    callback_context: ?*anyopaque,
+    event_filter: EventFilter,
     should_stop: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
     thread: ?std.Thread,
@@ -294,6 +305,41 @@ pub const Watcher = struct {
 
     /// Initialize a new file watcher
     pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) Allocator.Error!*Watcher {
+        return initWithFilter(allocator, std_io, paths, .{
+            .callback = callback,
+            .event_filter = .roc_files,
+        });
+    }
+
+    /// Initialize a file watcher that reports every file event under `paths`.
+    /// This is intended for callers that perform their own exact path filtering.
+    pub fn initAllFiles(
+        allocator: std.mem.Allocator,
+        std_io: std.Io,
+        paths: []const []const u8,
+        context: ?*anyopaque,
+        callback: WatchCallbackWithContext,
+    ) Allocator.Error!*Watcher {
+        return initWithFilter(allocator, std_io, paths, .{
+            .callback_with_context = callback,
+            .callback_context = context,
+            .event_filter = .all_files,
+        });
+    }
+
+    const InitOptions = struct {
+        callback: ?WatchCallback = null,
+        callback_with_context: ?WatchCallbackWithContext = null,
+        callback_context: ?*anyopaque = null,
+        event_filter: EventFilter,
+    };
+
+    fn initWithFilter(
+        allocator: std.mem.Allocator,
+        std_io: std.Io,
+        paths: []const []const u8,
+        options: InitOptions,
+    ) Allocator.Error!*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
@@ -308,7 +354,10 @@ pub const Watcher = struct {
             .allocator = allocator,
             .std_io = std_io,
             .paths = paths_copy,
-            .callback = callback,
+            .callback = options.callback,
+            .callback_with_context = options.callback_with_context,
+            .callback_context = options.callback_context,
+            .event_filter = options.event_filter,
             .should_stop = std.atomic.Value(bool).init(false),
             .is_ready = std.atomic.Value(bool).init(false),
             .thread = null,
@@ -332,6 +381,22 @@ pub const Watcher = struct {
         };
 
         return watcher;
+    }
+
+    fn shouldEmitPath(self: *Watcher, path: []const u8, is_dir: bool) bool {
+        if (is_dir) return false;
+        return switch (self.event_filter) {
+            .roc_files => std.mem.endsWith(u8, path, ".roc"),
+            .all_files => true,
+        };
+    }
+
+    fn emitEvent(self: *Watcher, event: WatchEvent) void {
+        if (self.callback_with_context) |callback| {
+            callback(self.callback_context, event);
+        } else if (self.callback) |callback| {
+            callback(event);
+        }
     }
 
     /// Clean up all resources
@@ -601,10 +666,9 @@ pub const Watcher = struct {
             const path = paths[i];
             const path_len = std.mem.len(path);
 
-            // Check if it's a .roc file
-            if (path_len > 4 and std.mem.endsWith(u8, path[0..path_len], ".roc")) {
+            if (self.shouldEmitPath(path[0..path_len], false)) {
                 const event = WatchEvent{ .path = path[0..path_len] };
-                self.callback(event);
+                self.emitEvent(event);
             }
         }
     }
@@ -678,7 +742,8 @@ pub const Watcher = struct {
                 const name_bytes = buffer[offset + @sizeOf(std.os.linux.inotify_event) .. offset + event_size - 1];
                 const name = std.mem.sliceTo(name_bytes, 0);
 
-                if (std.mem.endsWith(u8, name, ".roc")) {
+                const is_dir = event.mask & std.os.linux.IN.ISDIR != 0;
+                if (self.shouldEmitPath(name, is_dir)) {
                     for (self.impl.watch_descriptors.items) |wd| {
                         if (wd.wd == event.wd) {
                             const full_path = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch |err| switch (err) {
@@ -688,7 +753,7 @@ pub const Watcher = struct {
                                 },
                             };
                             defer self.allocator.free(full_path);
-                            self.callback(.{ .path = full_path });
+                            self.emitEvent(.{ .path = full_path });
                             break;
                         }
                     }
@@ -708,13 +773,13 @@ pub const Watcher = struct {
                                 std.log.err("Failed to watch new directory: {}", .{err});
                             };
 
-                            // Check if there are already .roc files in the new directory
+                            // Check if there are already matching files in the new directory
                             // This handles the case where files are created immediately after the directory
                             var dir = std.Io.Dir.openDirAbsolute(self.std_io, new_dir, .{ .iterate = true }) catch break;
                             defer dir.close(self.std_io);
                             var it = dir.iterate();
                             while (it.next(self.std_io) catch null) |entry| {
-                                if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+                                if (entry.kind == .file and self.shouldEmitPath(entry.name, false)) {
                                     const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch |err| switch (err) {
                                         error.OutOfMemory => {
                                             std.log.err("Out of memory building path for file in new directory: {s}", .{entry.name});
@@ -722,7 +787,7 @@ pub const Watcher = struct {
                                         },
                                     };
                                     defer self.allocator.free(full_path);
-                                    self.callback(.{ .path = full_path });
+                                    self.emitEvent(.{ .path = full_path });
                                 }
                             }
                             break;
@@ -750,6 +815,10 @@ pub const Watcher = struct {
             return error.InotifyAddWatchFailed;
         }
         const wd = @as(i32, @intCast(add_result));
+
+        for (self.impl.watch_descriptors.items) |existing| {
+            if (existing.wd == wd) return;
+        }
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
@@ -1042,8 +1111,7 @@ pub const Watcher = struct {
             };
             const filename_utf8 = filename_utf8_buf[0..filename_utf8_len];
 
-            // Check if it's a .roc file
-            if (std.mem.endsWith(u8, filename_utf8, ".roc")) {
+            if (self.shouldEmitPath(filename_utf8, false)) {
                 // Create full path
                 const full_path = std.fs.path.join(self.allocator, &.{ base_path, filename_utf8 }) catch |err| switch (err) {
                     error.OutOfMemory => {
@@ -1057,7 +1125,7 @@ pub const Watcher = struct {
                 defer self.allocator.free(full_path);
 
                 const event = WatchEvent{ .path = full_path };
-                self.callback(event);
+                self.emitEvent(event);
             }
 
             // Move to next notification
@@ -1085,7 +1153,7 @@ fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms
     }
 }
 
-fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) anyerror!void {
+fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) error{TestUnexpectedResult}!void {
     if (use_stubs) {
         // When using stubs, skip the event count check
         return;

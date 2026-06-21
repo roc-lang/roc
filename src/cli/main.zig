@@ -65,6 +65,27 @@ const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
 const progress = @import("progress.zig");
+const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
+    pub const WatchEvent = struct { path: []const u8 };
+    pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
+    pub const Watcher = struct {
+        pub fn initAllFiles(
+            _: std.mem.Allocator,
+            _: std.Io,
+            _: []const []const u8,
+            _: ?*anyopaque,
+            _: WatchCallbackWithContext,
+        ) error{OutOfMemory}!*Watcher {
+            return error.OutOfMemory;
+        }
+
+        pub fn start(_: *Watcher) error{UnsupportedWatchMode}!void {
+            return error.UnsupportedWatchMode;
+        }
+
+        pub fn deinit(_: *Watcher) void {}
+    };
+} else @import("watch");
 
 const cli_args = @import("cli_args.zig");
 const host_symbols = @import("host_symbols.zig");
@@ -119,6 +140,145 @@ const backend = @import("backend");
 const layout = @import("layout");
 const docs = @import("docs");
 const RocTarget = @import("target.zig").RocTarget;
+
+const CliMainError =
+    cli_problem.ReportedError ||
+    CliError ||
+    Allocator.Error ||
+    cli_args.ParseError ||
+    libc_finder.FindLibcError ||
+    linker.LinkError ||
+    bundle.BundleError ||
+    unbundle.UnbundleError ||
+    unbundle.download.DownloadError ||
+    fmt.FormatPathError ||
+    fmt.FormatStdinError ||
+    ReplLine.ReadLineError ||
+    eval.BuiltinModules.InitError ||
+    eval.test_helpers.TestHelperError ||
+    ipc.CoordinationError ||
+    ipc.platform.SharedMemoryError ||
+    lir.LirImage.ImageError ||
+    lir.CheckedPipeline.LowerResourceError ||
+    backend.wasm.WasmModule.NoLinkObjectContractError ||
+    backend.wasm.WasmModule.RelocatableEncodeError ||
+    backend.wasm.WasmModule.SymbolLookupError ||
+    backend.RunImage.WriteError ||
+    backend.RunImage.ImageError ||
+    backend.CompilationError ||
+    compile.build.InitError ||
+    compile.build.BuildError ||
+    compile.build.CompileDiscoveredError ||
+    compile.build.BuildWithMainError ||
+    compile.package.TypeCheckModuleError ||
+    compile.package_resolution.FetchError ||
+    CoreCtx.ReadError ||
+    CoreCtx.WriteError ||
+    CoreCtx.FetchUrlError ||
+    CoreCtx.MakePathError ||
+    lsp.server.RunWithStdIoError ||
+    glue.GlueError ||
+    RocCheckError ||
+    RocTestError ||
+    WatchCommandError ||
+    std.Thread.SpawnError ||
+    std.process.SpawnError ||
+    std.process.Child.WaitError ||
+    std.process.RunError ||
+    std.process.Args.Iterator.InitError ||
+    std.process.Args.ToSliceError ||
+    std.process.ExecutablePathError ||
+    std.Io.Dir.AccessError ||
+    std.Io.Dir.CopyFileError ||
+    std.Io.Dir.CreateDirError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.DeleteFileError ||
+    std.Io.Dir.Iterator.Error ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.ReadFileAllocError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    std.Io.Dir.StatFileError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.OpenError ||
+    std.Io.File.ReadPositionalError ||
+    std.Io.File.ReadStreamingError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.StatError ||
+    std.Io.File.SyncError ||
+    std.Io.File.Writer.Error ||
+    std.Io.File.MultiReader.UnendingError ||
+    std.Io.net.Ip4Address.ParseError ||
+    std.Io.net.Ip6Address.ParseError ||
+    std.Io.net.IpAddress.ListenError ||
+    std.Io.net.Server.AcceptError ||
+    std.Io.net.Stream.Reader.Error ||
+    std.Io.net.Stream.Writer.Error ||
+    std.Io.Reader.Error ||
+    std.Io.Timeout.Error ||
+    std.Io.Writer.Error ||
+    error{
+        ArchiveWriteFailed,
+        BrokenDocLinks,
+        BuiltinsExtractionFailed,
+        CheckFailed,
+        CompilationFailed,
+        ComptimeExhaustiveness,
+        Crash,
+        DivisionByZero,
+        DocsFailed,
+        EmptyArchive,
+        EntrypointNotFound,
+        ExpectErr,
+        ExpectedAppHeader,
+        ExpectedPlatformString,
+        ExpectedString,
+        FailedToCreateUniqueTempDir,
+        FdConfigFailed,
+        FileNotFound,
+        FormattingFailed,
+        HandleInheritanceFailed,
+        HashMismatch,
+        Internal,
+        InvalidArguments,
+        InvalidDependency,
+        InvalidFilename,
+        InvalidLirImage,
+        InvalidMagic,
+        InvalidPackageName,
+        InvalidPath,
+        InvalidSharedMemory,
+        InvalidTarget,
+        LLVMCompilationFailed,
+        LLVMNotAvailable,
+        MissingBundleFiles,
+        MissingFilesDirectory,
+        MissingTargetFile,
+        MissingTargetsSection,
+        NativeCompilationFailed,
+        NoCacheDir,
+        NoPlatformSource,
+        NotAnAppHeader,
+        PathAlreadyExists,
+        PlatformNotSupported,
+        ProcessCreationFailed,
+        ProcessExitCodeFailed,
+        ProcessWaitFailed,
+        ReadFailed,
+        ResolutionFailed,
+        RuntimeError,
+        TempDirCreation,
+        TestsFailed,
+        TypeCheckingFailed,
+        UnbundleFailed,
+        Unexpected,
+        UnresolvedBuiltinImport,
+        UnsupportedCrossCompilation,
+        UnsupportedHeader,
+        UnsupportedTarget,
+        UnsupportedWatchMode,
+        WasmOutputWriteFailed,
+        WriteFailed,
+    };
 
 /// Shim archive kind used by cached host executables.
 const ShimLibraryKind = enum {
@@ -592,7 +752,7 @@ fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
 /// Create a unique temporary directory under roc/{version}/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
 /// Uses system temp directory to avoid race conditions when cache is cleared.
-pub fn createUniqueTempDir(ctx: *CliCtx) anyerror![]const u8 {
+pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{FailedToCreateUniqueTempDir})![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
     const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
 
@@ -626,7 +786,10 @@ pub fn createUniqueTempDir(ctx: *CliCtx) anyerror![]const u8 {
 
 /// Write shared memory coordination file (.txt) next to the executable.
 /// This is the file that the child process reads to find the shared memory fd.
-pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) anyerror!void {
+const WriteFdCoordinationFileError = Allocator.Error || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.File.SyncError || error{InvalidPath};
+
+/// Write the shared memory coordination file used by POSIX fd inheritance.
+pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) WriteFdCoordinationFileError!void {
     // The coordination file is at {temp_dir}.txt where temp_dir is the directory containing the exe
     const temp_dir = std.fs.path.dirname(temp_exe_path) orelse return error.InvalidPath;
 
@@ -831,7 +994,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
 }
 
-fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -870,6 +1033,13 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.create(std_io);
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], hot_reload_dev_command)) {
+        var ctx = CliCtx.init(gpa, arena, &io, .run);
+        ctx.initIo();
+        defer ctx.deinit();
+        return rocInternalHotReloadDev(&ctx, args[2..]);
+    }
 
     const parsed_args = try cli_args.parse(arena, std_io, args[1..]);
 
@@ -922,14 +1092,14 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args) catch |err| switch (err) {
+            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
                 error.CliError => {
                     // Problems already recorded in context, render them below
                 },
                 else => return err,
             };
         },
-        .check => |check_args| rocCheck(&ctx, check_args),
+        .check => |check_args| rocCheck(&ctx, check_args, args[0]),
         .build => |build_args| rocBuild(&ctx, build_args) catch |err| switch (err) {
             error.CliError => {
                 // Problems already recorded in context, render them below
@@ -939,7 +1109,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
-        .test_cmd => |test_args| try rocTest(&ctx, test_args),
+        .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
         .glue => |glue_args| try rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
@@ -1195,7 +1365,7 @@ fn generatePlatformHostShim(
     );
 }
 
-fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void {
+fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
@@ -1790,27 +1960,35 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
     return error.UnsupportedTarget;
 }
 
-fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    if (args.watch and args.opt != .dev) {
+        try ctx.io.stderr().print(
+            "Error: `roc --watch` currently supports only the dev backend.\n",
+            .{},
+        );
+        return error.UnsupportedWatchMode;
+    }
+
     return switch (args.opt) {
-        .interpreter, .dev => rocRunSharedMemoryShim(ctx, args),
+        .interpreter, .dev => rocRunSharedMemoryShim(ctx, args, arg0),
         .size, .speed => rocRunBuildAndExec(ctx, args),
     };
 }
 
-fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
-        if (useDefaultAppSharedMemoryShim(args)) {
-            return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
+        if (args.watch or useDefaultAppSharedMemoryShim(args)) {
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, arg0, source);
         }
         return rocRunDefaultApp(ctx, args, source);
     }
 
-    if (args.opt == .dev and args.no_cache) {
+    if (args.opt == .dev and args.no_cache and !args.watch) {
         return rocRunBuildAndExec(ctx, args);
     }
 
@@ -2273,7 +2451,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     if (args.opt == .dev) {
         const result = if (lowered_result) |*value| value else unreachable;
         const lowered = successfulLoweredProgram(result, "default roc command");
-        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, args.watch);
     }
 
     const shm_handle = shm_handle_opt orelse {
@@ -2284,7 +2462,26 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     };
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
-    if (comptime is_windows) {
+    if (args.watch) {
+        const result = if (lowered_result) |*value| value else {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
+            }
+            unreachable;
+        };
+        try runHotReloadDevShim(
+            ctx,
+            arg0,
+            exe_path,
+            shm_handle,
+            args,
+            selected_target,
+            checked_host_identity,
+            result.watch_inputs,
+            null,
+            warning_count,
+        );
+    } else if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
@@ -2302,7 +2499,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 }
 
-fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2506,10 +2703,30 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
 
 /// State for the CLI echo platform's virtual I/O context.
 /// Intercepts reads for the synthetic app source and embedded platform files.
+const default_app_run_header =
+    "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+    "import pf.Echo\n\n" ++
+    "echo! = |msg| Echo.line!(msg)\n\n";
+
+fn writeDefaultAppSyntheticRunSource(ctx: *CliCtx, app_path: []const u8, original_source: []const u8) CliMainError!void {
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ default_app_run_header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+}
+
+fn rewriteDefaultAppSyntheticRunSourceFromFile(ctx: *CliCtx, app_path: []const u8, original_source_path: []const u8) CliMainError!void {
+    const max_source_size = 256 * 1024 * 1024;
+    const original_source = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, original_source_path, ctx.gpa, .limited(max_source_size));
+    defer ctx.gpa.free(original_source);
+
+    try writeDefaultAppSyntheticRunSource(ctx, app_path, original_source);
+}
+
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app through checked artifacts and executes the resulting
 /// LIR image with the echo platform host function.
-fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
+fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     // Write synthetic app + echo platform files into a unique temp directory.
@@ -2533,14 +2750,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
     const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
-    const header =
-        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
-        "import pf.Echo\n\n" ++
-        "echo! = |msg| Echo.line!(msg)\n\n";
-    const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
-    defer ctx.gpa.free(synthetic_source);
-
-    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source }) catch |err| {
+    writeDefaultAppSyntheticRunSource(ctx, app_path, original_source) catch |err| {
         ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ app_path, err }) catch {};
         return err;
     };
@@ -2590,7 +2800,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     if (echo_env.inline_expect_failed) std.process.exit(1);
 }
 
-fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
+fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     const native_target = RocTarget.detectNative();
@@ -2655,14 +2865,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
-    const header =
-        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
-        "import pf.Echo\n\n" ++
-        "echo! = |msg| Echo.line!(msg)\n\n";
-    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
-    defer ctx.gpa.free(synthetic_source);
-
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try writeDefaultAppSyntheticRunSource(ctx, app_path, original_source);
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
@@ -2699,7 +2902,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
 
     const lowered = successfulLoweredProgram(&lowered_result, "default app run");
     const enable_debug = builtin.mode == .Debug;
-    const checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
+    const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
     const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
         libc_finder.findLibc(ctx) catch |err| {
             try ctx.io.stderr().print(
@@ -2718,7 +2921,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         .shim_kind = .machine_code,
         .target = selected_target,
         .debug = enable_debug,
-        .checked_host_identity = checked_host_identity,
+        .checked_host_identity = exe_checked_host_identity,
         .link_inputs_identity = link_inputs_identity,
     });
     const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
@@ -2816,10 +3019,35 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, args.watch);
     defer closeSharedMemoryHandle(shm_handle);
 
-    if (comptime is_windows) {
+    if (args.watch) {
+        const hot_reload_checked_host_identity = lowered_result.checked_host_identity orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("default app hot reload invariant violated: missing checked host identity", .{});
+            }
+            unreachable;
+        };
+        var hot_args = args;
+        hot_args.path = app_path;
+        try runHotReloadDevShim(
+            ctx,
+            arg0,
+            exe_path,
+            shm_handle,
+            hot_args,
+            selected_target,
+            hot_reload_checked_host_identity,
+            lowered_result.watch_inputs,
+            .{
+                .source_path = args.path,
+                .synthetic_app_path = app_path,
+                .source_dir_override = original_source_dir,
+            },
+            lowered_result.counts.warnings,
+        );
+    } else if (comptime is_windows) {
         try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
     } else {
         try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
@@ -3146,6 +3374,401 @@ fn runWithPosixFdInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handle: Sha
     }
 }
 
+const HotShimChild = struct {
+    child: std.process.Child,
+    thread: std.Thread,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    term: ?std.process.Child.Term = null,
+    wait_error: ?std.process.Child.WaitError = null,
+
+    fn waitThread(self: *HotShimChild, io: std.Io) void {
+        self.term = self.child.wait(io) catch |err| {
+            self.wait_error = err;
+            self.done.store(true, .seq_cst);
+            return;
+        };
+        self.done.store(true, .seq_cst);
+    }
+};
+
+fn makeSharedMemoryHandleInheritable(ctx: *CliCtx, shm_handle: SharedMemoryHandle) CliError!void {
+    if (comptime is_windows) {
+        if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "set handle inheritable",
+                .err = error.HandleInheritanceFailed,
+            } });
+        }
+    } else {
+        const current_flags = std.c.fcntl(shm_handle.fd, std.c.F.GETFD);
+        if (current_flags == -1) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "get fd flags",
+                .err = error.FdConfigFailed,
+            } });
+        }
+
+        const new_flags = current_flags & ~@as(c_int, 1);
+        if (std.c.fcntl(shm_handle.fd, std.c.F.SETFD, new_flags) == -1) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "set fd flags",
+                .err = error.FdConfigFailed,
+            } });
+        }
+    }
+}
+
+fn spawnHotShimChild(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    shm_handle: SharedMemoryHandle,
+    app_args: []const []const u8,
+) (CliError || Allocator.Error || std.Thread.SpawnError || std.process.SpawnError)!*HotShimChild {
+    if (comptime !is_windows) {
+        writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+            const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+            const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
+            return ctx.fail(.{ .file_write_failed = .{
+                .path = fd_file_path,
+                .err = err,
+            } });
+        };
+    }
+    try makeSharedMemoryHandleInheritable(ctx, shm_handle);
+
+    const coordination_arg_count: usize = if (comptime is_windows) 2 else 0;
+    const argv = try ctx.arena.alloc([]const u8, 1 + coordination_arg_count + app_args.len);
+    argv[0] = exe_path;
+    var app_arg_offset: usize = 1;
+    if (comptime is_windows) {
+        argv[1] = try std.fmt.allocPrint(ctx.arena, "{}", .{@intFromPtr(shm_handle.fd)});
+        argv[2] = try std.fmt.allocPrint(ctx.arena, "{}", .{shm_handle.size});
+        app_arg_offset = 3;
+    }
+    for (app_args, 0..) |arg, i| {
+        argv[app_arg_offset + i] = arg;
+    }
+
+    const child = std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .cwd = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    const watched = try ctx.gpa.create(HotShimChild);
+    watched.* = .{
+        .child = child,
+        .thread = undefined,
+    };
+    watched.thread = std.Thread.spawn(.{}, HotShimChild.waitThread, .{ watched, ctx.io.std_io }) catch |err| {
+        watched.child.kill(ctx.io.std_io);
+        ctx.gpa.destroy(watched);
+        return err;
+    };
+    return watched;
+}
+
+fn terminateHotShimChild(child: *HotShimChild) void {
+    if (child.child.id) |pid| {
+        switch (builtin.os.tag) {
+            .windows => {
+                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
+            },
+            .wasi => {},
+            else => std.posix.kill(pid, .KILL) catch {},
+        }
+    }
+}
+
+fn destroyHotShimChild(ctx: *CliCtx, child: *HotShimChild) void {
+    ctx.gpa.destroy(child);
+}
+
+const HotReloadRebuild = struct {
+    child: *WatchChild,
+    argv: WatchChildArgv,
+    inputs_path: []const u8,
+    generation: u64,
+
+    fn cancelAndJoin(self: *HotReloadRebuild) void {
+        terminateWatchChild(self.child);
+        joinWatchChild(self.child);
+    }
+
+    fn deinit(self: *HotReloadRebuild, ctx: *CliCtx) void {
+        destroyWatchChild(ctx, self.child);
+        self.argv.deinit(ctx.gpa);
+        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, self.inputs_path) catch {};
+        ctx.gpa.free(self.inputs_path);
+    }
+};
+
+const HotReloadSourceRewrite = struct {
+    source_path: []const u8,
+    synthetic_app_path: []const u8,
+    source_dir_override: []const u8,
+};
+
+fn buildHotReloadChildArgv(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    shm_handle: SharedMemoryHandle,
+    expected_host_identity: [32]u8,
+    generation: u64,
+    inputs_path: []const u8,
+    source_rewrite: ?HotReloadSourceRewrite,
+) Allocator.Error!WatchChildArgv {
+    var argv = std.ArrayList([]const u8).empty;
+    errdefer argv.deinit(ctx.gpa);
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (owned.items) |arg| ctx.gpa.free(arg);
+        owned.deinit(ctx.gpa);
+    }
+
+    const expected_hex = std.fmt.bytesToHex(expected_host_identity, .lower);
+
+    try argv.append(ctx.gpa, arg0);
+    try argv.append(ctx.gpa, hot_reload_dev_command);
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
+    if (comptime is_windows) {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
+    } else {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{shm_handle.fd});
+    }
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-size={}", .{shm_handle.mapped_size});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--expected-host={s}", .{expected_hex[0..]});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+    if (source_rewrite) |rewrite| {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-source={s}", .{rewrite.source_path});
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-output={s}", .{rewrite.synthetic_app_path});
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--source-dir={s}", .{rewrite.source_dir_override});
+    }
+    if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+    try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+
+    return .{
+        .argv = try argv.toOwnedSlice(ctx.gpa),
+        .owned = try owned.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn spawnHotReloadRebuild(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    shm_handle: SharedMemoryHandle,
+    expected_host_identity: [32]u8,
+    generation: u64,
+    source_rewrite: ?HotReloadSourceRewrite,
+) CliMainError!HotReloadRebuild {
+    try makeSharedMemoryHandleInheritable(ctx, shm_handle);
+
+    const inputs_path = try createWatchInputsPath(ctx);
+    errdefer ctx.gpa.free(inputs_path);
+    errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
+
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, inputs_path, source_rewrite);
+    errdefer argv.deinit(ctx.gpa);
+
+    const child = try spawnWatchChild(ctx, argv.argv);
+    errdefer {
+        terminateWatchChild(child);
+        joinWatchChild(child);
+        destroyWatchChild(ctx, child);
+    }
+
+    return .{
+        .child = child,
+        .argv = argv,
+        .inputs_path = inputs_path,
+        .generation = generation,
+    };
+}
+
+fn hotReloadRebuildSucceeded(child: *const WatchChild) bool {
+    const term = child.term orelse return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
+}
+
+fn finishHotReloadRebuild(
+    ctx: *CliCtx,
+    state: *WatchState,
+    signal: *WatchEventSignal,
+    rebuild: *HotReloadRebuild,
+) CliMainError!bool {
+    joinWatchChild(rebuild.child);
+    if (rebuild.child.output_error) |err| return err;
+
+    try replayWatchChildOutput(ctx, rebuild.child, true);
+
+    const new_inputs = readWatchInputsFile(ctx, rebuild.inputs_path, &.{}) catch |err| switch (err) {
+        error.WatchInputsMissing,
+        error.WatchInputsReadFailed,
+        error.WatchInputsMalformed,
+        => return false,
+        else => |e| return e,
+    };
+    const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
+
+    if (hotReloadRebuildSucceeded(rebuild.child)) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+        ctx.io.flush();
+    }
+
+    return changed_during_refresh;
+}
+
+fn reportHotReloadAcknowledgement(
+    ctx: *CliCtx,
+    control: *const ipc.hot_reload.Control,
+    last_reported_ack: *u64,
+) CliOutputWriteError!void {
+    const generation = ipc.hot_reload.acknowledgedGeneration(control);
+    if (generation == 0 or generation <= last_reported_ack.*) return;
+
+    const status = ipc.hot_reload.acknowledgedStatus(control);
+    switch (status) {
+        .none => return,
+        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
+        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+    }
+    ctx.io.flush();
+    last_reported_ack.* = generation;
+}
+
+fn runHotReloadDevShim(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    exe_path: []const u8,
+    shm_handle: SharedMemoryHandle,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    expected_host_identity: [32]u8,
+    initial_watch_inputs: []const []const u8,
+    source_rewrite: ?HotReloadSourceRewrite,
+    warning_count: usize,
+) CliMainError!void {
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(ctx);
+
+    var initial_input_set = try collectHotReloadWatchInputSet(ctx, initial_watch_inputs, source_rewrite);
+    var initial_input_set_needs_deinit = true;
+    errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
+
+    var child_handle = shm_handle;
+    child_handle.size = shm_handle.mapped_size;
+
+    const host_child = try spawnHotShimChild(ctx, exe_path, child_handle, args.app_args);
+    var host_child_joined = false;
+    errdefer {
+        if (!host_child_joined) {
+            terminateHotShimChild(host_child);
+            host_child.thread.join();
+        }
+        destroyHotShimChild(ctx, host_child);
+    }
+
+    initial_input_set_needs_deinit = false;
+    var pending_rebuild = try refreshWatchState(ctx, &state, &signal, initial_input_set);
+    initial_input_set = .{ .inputs = &.{}, .snapshot = &.{} };
+
+    var next_generation: u64 = 2;
+    const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
+    var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
+    var active_rebuild: ?HotReloadRebuild = null;
+    defer {
+        if (active_rebuild) |*rebuild| {
+            rebuild.cancelAndJoin();
+            rebuild.deinit(ctx);
+        }
+    }
+
+    while (!host_child.done.load(.seq_cst)) {
+        try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
+
+        if (active_rebuild) |*rebuild| {
+            if (rebuild.child.done.load(.seq_cst)) {
+                pending_rebuild = (try finishHotReloadRebuild(ctx, &state, &signal, rebuild)) or pending_rebuild;
+                rebuild.deinit(ctx);
+                active_rebuild = null;
+            }
+        }
+
+        if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
+            if (active_rebuild) |*rebuild| {
+                rebuild.cancelAndJoin();
+                rebuild.deinit(ctx);
+                active_rebuild = null;
+            }
+            pending_rebuild = true;
+        }
+
+        if (pending_rebuild and active_rebuild == null) {
+            active_rebuild = try spawnHotReloadRebuild(
+                ctx,
+                arg0,
+                args,
+                selected_target,
+                shm_handle,
+                expected_host_identity,
+                next_generation,
+                source_rewrite,
+            );
+            next_generation += 1;
+            pending_rebuild = false;
+        }
+
+        std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    }
+
+    host_child.thread.join();
+    host_child_joined = true;
+    defer destroyHotShimChild(ctx, host_child);
+    try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
+
+    if (active_rebuild) |*rebuild| {
+        rebuild.cancelAndJoin();
+        rebuild.deinit(ctx);
+        active_rebuild = null;
+    }
+
+    if (host_child.wait_error) |err| {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    }
+
+    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
+    }
+
+    const term = host_child.term orelse {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessWaitFailed,
+        } });
+    };
+    try finishCompiledRun(ctx, exe_path, term, warning_count);
+}
+
 /// Handle for cross-platform shared memory operations.
 /// Contains the file descriptor/handle, memory pointer, and size.
 pub const SharedMemoryHandle = struct {
@@ -3181,12 +3804,20 @@ const LoweredCoordinatorResult = struct {
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: ?[32]u8,
+    watch_inputs: []const []const u8,
+    watch_inputs_allocator: Allocator,
     counts: CoordinatorReportCounts,
 
     fn deinit(self: *LoweredCoordinatorResult) void {
         if (self.lowered) |*lowered| {
             lowered.deinit();
         }
+        self.deinitWatchInputs();
+    }
+
+    fn deinitWatchInputs(self: *LoweredCoordinatorResult) void {
+        freeOwnedPathSlice(self.watch_inputs_allocator, self.watch_inputs);
+        self.watch_inputs = &.{};
     }
 };
 
@@ -3305,12 +3936,193 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
     };
 }
 
-fn publishDevRunImage(
+const DevRunImagePublication = struct {
+    header: *backend.RunImage.Header,
+    image_offset: usize,
+    image_bound: usize,
+};
+
+const hot_reload_dev_command = "__roc_hot_reload_dev";
+
+const HotReloadDevWorkerArgs = struct {
+    path: []const u8,
+    target: []const u8,
+    generation: u64,
+    shm_handle: []const u8,
+    shm_size: usize,
+    expected_host_identity: [32]u8,
+    watch_inputs_file: []const u8,
+    synthetic_source_path: ?[]const u8,
+    synthetic_output_path: ?[]const u8,
+    source_dir_override: ?[]const u8,
+    max_threads: ?usize,
+    resolve_limits: cli_args.ResolveLimitArgs,
+};
+
+fn parseHotReloadDigest(hex: []const u8) error{InvalidArguments}![32]u8 {
+    if (hex.len != 64) return error.InvalidArguments;
+
+    var digest: [32]u8 = undefined;
+    for (&digest, 0..) |*byte, i| {
+        const hi = hexNibble(hex[i * 2]) orelse return error.InvalidArguments;
+        const lo = hexNibble(hex[i * 2 + 1]) orelse return error.InvalidArguments;
+        byte.* = (hi << 4) | lo;
+    }
+    return digest;
+}
+
+fn hotReloadFlagValue(arg: []const u8, flag: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, arg, flag)) return null;
+    if (arg.len <= flag.len or arg[flag.len] != '=') return null;
+    return arg[flag.len + 1 ..];
+}
+
+fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}!HotReloadDevWorkerArgs {
+    var path: ?[]const u8 = null;
+    var target: ?[]const u8 = null;
+    var generation: ?u64 = null;
+    var shm_handle: ?[]const u8 = null;
+    var shm_size: ?usize = null;
+    var expected_host_identity: ?[32]u8 = null;
+    var watch_inputs_file: ?[]const u8 = null;
+    var synthetic_source_path: ?[]const u8 = null;
+    var synthetic_output_path: ?[]const u8 = null;
+    var source_dir_override: ?[]const u8 = null;
+    var max_threads: ?usize = null;
+    var resolve_limits = cli_args.ResolveLimitArgs{};
+
+    for (args) |arg| {
+        if (hotReloadFlagValue(arg, "--path")) |value| {
+            path = value;
+        } else if (hotReloadFlagValue(arg, "--target")) |value| {
+            target = value;
+        } else if (hotReloadFlagValue(arg, "--generation")) |value| {
+            generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
+            shm_handle = value;
+        } else if (hotReloadFlagValue(arg, "--shm-size")) |value| {
+            shm_size = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--expected-host")) |value| {
+            expected_host_identity = try parseHotReloadDigest(value);
+        } else if (hotReloadFlagValue(arg, "--watch-inputs-file")) |value| {
+            watch_inputs_file = value;
+        } else if (hotReloadFlagValue(arg, "--synthetic-source")) |value| {
+            synthetic_source_path = value;
+        } else if (hotReloadFlagValue(arg, "--synthetic-output")) |value| {
+            synthetic_output_path = value;
+        } else if (hotReloadFlagValue(arg, "--source-dir")) |value| {
+            source_dir_override = value;
+        } else if (hotReloadFlagValue(arg, "--jobs")) |value| {
+            max_threads = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--max-package-mb")) |value| {
+            resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
+            resolve_limits.max_transitive_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else {
+            return error.InvalidArguments;
+        }
+    }
+
+    return .{
+        .path = path orelse return error.InvalidArguments,
+        .target = target orelse return error.InvalidArguments,
+        .generation = generation orelse return error.InvalidArguments,
+        .shm_handle = shm_handle orelse return error.InvalidArguments,
+        .shm_size = shm_size orelse return error.InvalidArguments,
+        .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
+        .watch_inputs_file = watch_inputs_file orelse return error.InvalidArguments,
+        .synthetic_source_path = synthetic_source_path,
+        .synthetic_output_path = synthetic_output_path,
+        .source_dir_override = source_dir_override,
+        .max_threads = max_threads,
+        .resolve_limits = resolve_limits,
+    };
+}
+
+fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainError!void {
+    const args = parseHotReloadDevWorkerArgs(raw_args) catch |err| {
+        try ctx.io.stderr().print("Error: invalid internal hot-reload compiler arguments: {}\n", .{err});
+        return err;
+    };
+
+    const selected_target = RocTarget.fromString(args.target) orelse {
+        try ctx.io.stderr().print("Error: invalid internal hot-reload target: {s}\n", .{args.target});
+        return error.InvalidTarget;
+    };
+
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    const handle = try ipc.coordination.parseHandle(args.shm_handle);
+    var shm = try SharedMemoryAllocator.fromFdWithHeaderOffset(handle, args.shm_size, page_size);
+    defer shm.deinit(ctx.gpa);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    if (!ipc.hot_reload.initialized(control)) {
+        try ctx.io.stderr().writeAll("Error: hot-reload shared memory control block is not initialized.\n");
+        return error.InvalidSharedMemory;
+    }
+
+    const source_rewrite: ?HotReloadSourceRewrite = if (args.synthetic_source_path) |source_path| blk: {
+        const synthetic_output_path = args.synthetic_output_path orelse return error.InvalidArguments;
+        const source_dir_override = args.source_dir_override orelse return error.InvalidArguments;
+        try rewriteDefaultAppSyntheticRunSourceFromFile(ctx, synthetic_output_path, source_path);
+        break :blk .{
+            .source_path = source_path,
+            .synthetic_app_path = synthetic_output_path,
+            .source_dir_override = source_dir_override,
+        };
+    } else blk: {
+        if (args.synthetic_output_path != null or args.source_dir_override != null) return error.InvalidArguments;
+        break :blk null;
+    };
+
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        ctx.gpa,
+        args.path,
+        if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
+        args.max_threads,
+        debugEffectsForOpt(.dev),
+        resolutionConfigFromLimits(args.resolve_limits),
+        null,
+    );
+    defer lowered_result.deinit();
+
+    try writeHotReloadWatchPathsFile(ctx, args.watch_inputs_file, lowered_result.watch_inputs, source_rewrite);
+
+    if (lowered_result.counts.errors > 0) {
+        return error.TypeCheckingFailed;
+    }
+
+    const checked_host_identity = lowered_result.checked_host_identity orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("hot reload invariant violated: missing checked host identity after successful rebuild", .{});
+        }
+        unreachable;
+    };
+    if (!std.mem.eql(u8, &checked_host_identity, &args.expected_host_identity)) {
+        try ctx.io.stderr().writeAll("Error: hot reload changed the platform host interface; restart `roc --watch`.\n");
+        return error.TypeCheckingFailed;
+    }
+
+    const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
+    const publication = try writeDevRunImageToSharedMemory(
+        ctx,
+        &shm,
+        selected_target,
+        lowered_result.entrypoint_names,
+        lowered,
+    );
+    ipc.hot_reload.publish(control, args.generation, publication.image_offset, publication.image_bound);
+    shm.updateHeader();
+}
+
+fn writeDevRunImageToSharedMemory(
     ctx: *CliCtx,
+    shm: *SharedMemoryAllocator,
     selected_target: RocTarget,
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) anyerror!SharedMemoryHandle {
+) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
         try ctx.io.stderr().print(
             "Error: The dev backend cannot run in memory on this host architecture.\n",
@@ -3372,11 +4184,7 @@ fn publishDevRunImage(
             };
         }
 
-        const page_size = try SharedMemoryAllocator.getSystemPageSize();
-        var shm = try createSharedMemory(ctx.io.std_io, page_size);
-        errdefer shm.deinit(ctx.gpa);
-
-        _ = try backend.RunImage.writeToSharedMemory(
+        const header = try backend.RunImage.writeToSharedMemory(
             ctx.gpa,
             shm.allocator(),
             shm.base_ptr,
@@ -3385,14 +4193,37 @@ fn publishDevRunImage(
             codegen.getRelocations(),
             static_strings.exports,
         );
-        shm.updateHeader();
+        const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         return .{
-            .fd = shm.handle,
-            .ptr = shm.base_ptr,
-            .size = shm.getUsedSize(),
-            .mapped_size = shm.total_size,
+            .header = header,
+            .image_offset = image_offset,
+            .image_bound = @intCast(header.image_size),
         };
     }
+}
+
+fn publishDevRunImage(
+    ctx: *CliCtx,
+    selected_target: RocTarget,
+    entrypoint_names: []const []const u8,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    enable_hot_reload: bool,
+) CliMainError!SharedMemoryHandle {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered);
+    if (enable_hot_reload) {
+        ipc.hot_reload.init(ipc.hot_reload.controlFromBase(shm.base_ptr), publication.image_offset, publication.image_bound);
+    }
+    shm.updateHeader();
+    return .{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+        .mapped_size = shm.total_size,
+    };
 }
 
 fn argLayoutsForProc(
@@ -3460,7 +4291,7 @@ fn lowerLirWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
-) anyerror!LoweredCoordinatorResult {
+) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
@@ -3599,17 +4430,22 @@ fn lowerLirWithCoordinator(
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
         if (reporter) |r| r.fail();
+        const watch_inputs = try coord.collectWatchInputs();
         return .{
             .lowered = null,
             .entrypoint_names = &.{},
             .hosted_symbols = &.{},
             .checked_host_identity = null,
+            .watch_inputs = watch_inputs,
+            .watch_inputs_allocator = ctx.gpa,
             .counts = counts,
         };
     }
 
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
+    const watch_inputs = try coord.collectWatchInputs();
+    errdefer coord.freeWatchInputs(watch_inputs);
     if (finalized_counts.errors > 0) {
         if (reporter) |r| r.fail();
         return .{
@@ -3617,6 +4453,8 @@ fn lowerLirWithCoordinator(
             .entrypoint_names = &.{},
             .hosted_symbols = &.{},
             .checked_host_identity = null,
+            .watch_inputs = watch_inputs,
+            .watch_inputs_allocator = ctx.gpa,
             .counts = finalized_counts,
         };
     }
@@ -3672,6 +4510,8 @@ fn lowerLirWithCoordinator(
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_table.symbols,
         .checked_host_identity = checked_host_identity,
+        .watch_inputs = watch_inputs,
+        .watch_inputs_allocator = ctx.gpa,
         .counts = finalized_counts,
     };
 }
@@ -3690,7 +4530,7 @@ pub fn buildLirImageWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
-) anyerror!SharedMemoryResult {
+) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -3710,6 +4550,7 @@ pub fn buildLirImageWithCoordinator(
         resolution_config,
         reporter,
     );
+    defer lowered_result.deinitWatchInputs();
 
     if (lowered_result.counts.errors > 0) {
         shm.updateHeader();
@@ -3744,7 +4585,7 @@ pub fn buildLirImageWithCoordinator(
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
-pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
+pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
     return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
 }
 
@@ -4104,7 +4945,7 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
 }
 
 /// Extract the selected embedded shim library to the specified path for the given target.
-fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) anyerror!void {
+fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) (std.Io.File.OpenError || std.Io.File.Writer.Error)!void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
@@ -4184,7 +5025,7 @@ fn discoverAndAddBundleModules(
     file_paths: *std.ArrayList([]const u8),
     uncompressed_size: *u64,
     stderr: anytype,
-) anyerror!void {
+) CliMainError!void {
     // Resolve the entry point to an absolute path
     const abs_entry = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, first_roc_file, ctx.gpa) catch |err| {
         try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
@@ -4347,7 +5188,7 @@ fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []con
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
-pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) anyerror!void {
+pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -4590,7 +5431,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) anyerror!void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) anyerror!void {
+fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
     const cwd = std.Io.Dir.cwd();
@@ -4681,7 +5522,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) anyerror!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     // Handle the --z-bench-tokenize flag
     if (args.z_bench_tokenize) |file_path| {
         try benchTokenizer(ctx.gpa, ctx.io.std_io, file_path);
@@ -4707,7 +5548,7 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 }
 
-fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) anyerror!void {
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -4962,7 +5803,7 @@ fn verifyHostInputSymbols(
     hosted_symbols: []const []const u8,
     target_name: []const u8,
     synthetic_default_platform: bool,
-) anyerror!void {
+) CliMainError!void {
     if (host_input_paths.len == 0 and synthetic_default_platform) {
         return;
     }
@@ -4980,7 +5821,7 @@ fn verifyHostInputSymbols(
     }
 }
 
-fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
+fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
     const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
@@ -5025,7 +5866,7 @@ fn writeArchiveOutput(
     final_output_path: []const u8,
     link_inputs: PlatformLinkInputs,
     object_files: []const []const u8,
-) anyerror!void {
+) CliMainError!void {
     var inputs = try std.array_list.Managed([]const u8).initCapacity(
         ctx.arena,
         link_inputs.platform_files_pre.len + object_files.len + link_inputs.platform_files_post.len,
@@ -5114,7 +5955,7 @@ fn collectPlatformLinkInputs(
     };
 }
 
-fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) anyerror![]const u8 {
+fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) CliMainError![]const u8 {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .unlimited);
     errdefer ctx.gpa.free(bytes);
     try owned_inputs.append(ctx.gpa, bytes);
@@ -5182,7 +6023,7 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) CliMainError!void {
     try module.exportGlobalSymbols();
 }
 
@@ -5214,7 +6055,7 @@ fn addWasmInput(
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
     loaded_module: *bool,
-) anyerror!void {
+) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
@@ -5262,7 +6103,7 @@ fn appendWasmObjectExportNames(
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
-) anyerror!void {
+) CliMainError!void {
     var module = try preloadWasmObject(ctx, path, member_name, bytes);
     defer module.deinit();
 
@@ -5279,7 +6120,7 @@ fn appendWasmInputExportNames(
     exports: *std.array_list.Managed([]const u8),
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
-) anyerror!void {
+) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
@@ -5318,7 +6159,7 @@ fn collectWasmPlatformExports(
     ctx: *CliCtx,
     link_inputs: PlatformLinkInputs,
     owned_inputs: *std.ArrayList([]u8),
-) anyerror![]const []const u8 {
+) CliMainError![]const []const u8 {
     var exports = std.array_list.Managed([]const u8).init(ctx.arena);
 
     for (link_inputs.platform_files_pre) |path| {
@@ -5336,7 +6177,7 @@ fn writeDevWasmObject(
     build_cache_dir: []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) anyerror![]const u8 {
+) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("wasm object invariant violated: no exported platform entrypoints", .{});
@@ -5430,7 +6271,7 @@ fn rocBuildWasmSurgical(
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) anyerror!void {
+) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
@@ -5699,7 +6540,7 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     };
 }
 
-fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
+fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) std.zig.system.DetectError!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
     const query = std.Target.Query{
@@ -5748,7 +6589,7 @@ fn compileLlvmAppObject(
     entrypoints: []const backend.Entrypoint,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
-) anyerror!LlvmObjectPaths {
+) CliMainError!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
@@ -5851,7 +6692,7 @@ fn mergeLlvmStaticDataWasmModule(
     module: *backend.wasm.WasmModule,
     static_data_exports: []const backend.StaticDataExport,
     mode: backend.wasm.WasmModule.MergeMode,
-) anyerror!void {
+) CliMainError!void {
     if (static_data_exports.len == 0) return;
 
     try validateWasmStaticFunctionRelocations(module, static_data_exports);
@@ -5873,7 +6714,7 @@ fn writeCombinedLlvmWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
-) anyerror![]const u8 {
+) CliMainError![]const u8 {
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     defer wasm_module.deinit();
     wasm_module.addMemoryImport();
@@ -5912,7 +6753,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
-) anyerror!void {
+) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
@@ -6041,7 +6882,7 @@ fn rocBuildWasmLlvm(
     loaded_module = false;
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6370,7 +7211,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 }
 
-fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6722,7 +7563,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6990,7 +7831,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
 /// Dump linker inputs to a temp directory for debugging linking issues.
 /// Creates a directory with all input files copied and a README with the linker command.
-fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) anyerror!void {
+fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) CliMainError!void {
     const stderr = ctx.io.stderr();
 
     // Create temp directory with unique name based on timestamp
@@ -7601,7 +8442,7 @@ fn runInterpreterTestRoots(
 fn appendCompilerErrorsForRuns(
     ctx: *CliCtx,
     mode: CliTestExecutionMode,
-    err: anyerror,
+    err: CliMainError,
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
@@ -7795,9 +8636,812 @@ fn runCheckedArtifactTests(
     return summary;
 }
 
-fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
+const watch_debounce_ms = 25;
+const watch_file_hash_limit = 256 * 1024 * 1024;
+const watch_inputs_file_limit = 64 * 1024 * 1024;
+const watch_inputs_magic = "roc-watch-inputs-v1";
+const watch_separator = "\n--- roc watch: change detected; rerunning ---\n\n";
+
+const WatchCommand = union(enum) {
+    check: cli_args.CheckArgs,
+    test_cmd: cli_args.TestArgs,
+};
+
+const WatchPathError = Allocator.Error || std.Io.Dir.RealPathFileAllocError;
+const WatchCollectPathsError = WatchPathError;
+const WatchSnapshotError = Allocator.Error;
+const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
+const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
+const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
+const WatchDirectoryError = Allocator.Error;
+const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode };
+const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
+const WatchChangeError = WatchSnapshotError;
+const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
+const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
+const CliOutputWriteError = error{WriteFailed};
+const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Timeout.Error || std.process.Child.WaitError;
+const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
+const ReportRenderError = Allocator.Error || CliOutputWriteError;
+const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
+const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
+const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || error{CheckFailed};
+
+const WatchEventSignal = struct {
+    dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+const WatchFileState = union(enum) {
+    hash: [32]u8,
+    missing,
+    unreadable,
+
+    fn eql(a: WatchFileState, b: WatchFileState) bool {
+        return switch (a) {
+            .hash => |a_hash| switch (b) {
+                .hash => |b_hash| std.mem.eql(u8, &a_hash, &b_hash),
+                else => false,
+            },
+            .missing => b == .missing,
+            .unreadable => b == .unreadable,
+        };
+    }
+};
+
+const WatchSnapshotEntry = struct {
+    state: WatchFileState,
+};
+
+const WatchInputSet = struct {
+    inputs: []const []const u8,
+    snapshot: []WatchSnapshotEntry,
+
+    fn deinit(self: *WatchInputSet, ctx: *CliCtx) void {
+        freeOwnedPathSlice(ctx.gpa, self.inputs);
+        self.inputs = &.{};
+        ctx.gpa.free(self.snapshot);
+        self.snapshot = &.{};
+    }
+};
+
+const WatchState = struct {
+    inputs: []const []const u8 = &.{},
+    snapshot: []WatchSnapshotEntry = &.{},
+    watcher: ?*watch_mod.Watcher = null,
+
+    fn deinit(self: *WatchState, ctx: *CliCtx) void {
+        if (self.watcher) |watcher| {
+            watcher.deinit();
+            self.watcher = null;
+        }
+        freeOwnedPathSlice(ctx.gpa, self.inputs);
+        self.inputs = &.{};
+        ctx.gpa.free(self.snapshot);
+        self.snapshot = &.{};
+    }
+};
+
+const WatchChild = struct {
+    child: std.process.Child,
+    id: std.process.Child.Id,
+    thread: std.Thread,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    term: ?std.process.Child.Term = null,
+    stdout: []u8 = &.{},
+    stderr: []u8 = &.{},
+    output_error: ?WatchChildOutputError = null,
+
+    fn waitThread(self: *WatchChild, io: std.Io, gpa: Allocator) void {
+        self.captureOutputAndWait(io, gpa) catch |err| {
+            self.output_error = err;
+            self.child.kill(io);
+        };
+        self.done.store(true, .seq_cst);
+    }
+
+    fn captureOutputAndWait(self: *WatchChild, io: std.Io, gpa: Allocator) WatchChildOutputError!void {
+        var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var multi_reader: std.Io.File.MultiReader = undefined;
+        multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ self.child.stdout.?, self.child.stderr.? });
+        defer multi_reader.deinit();
+
+        while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+            error.EndOfStream => {},
+            else => |e| return e,
+        }
+        try multi_reader.checkAnyError();
+
+        self.term = try self.child.wait(io);
+
+        self.stdout = try multi_reader.toOwnedSlice(0);
+        errdefer {
+            gpa.free(self.stdout);
+            self.stdout = &.{};
+        }
+
+        self.stderr = try multi_reader.toOwnedSlice(1);
+    }
+
+    fn deinit(self: *WatchChild, gpa: Allocator) void {
+        gpa.free(self.stdout);
+        gpa.free(self.stderr);
+    }
+};
+
+const WatchChildArgv = struct {
+    argv: []const []const u8,
+    owned: []const []const u8,
+
+    fn deinit(self: *WatchChildArgv, gpa: Allocator) void {
+        for (self.owned) |arg| gpa.free(arg);
+        gpa.free(self.owned);
+        gpa.free(self.argv);
+    }
+};
+
+fn watchCommandPath(command: WatchCommand) []const u8 {
+    return switch (command) {
+        .check => |args| args.path,
+        .test_cmd => |args| args.path,
+    };
+}
+
+fn watchCommandMain(command: WatchCommand) ?[]const u8 {
+    return switch (command) {
+        .check => |args| args.main,
+        .test_cmd => |args| args.main,
+    };
+}
+
+fn watchCallback(context: ?*anyopaque, _: watch_mod.WatchEvent) void {
+    const signal: *WatchEventSignal = @ptrCast(@alignCast(context.?));
+    signal.dirty.store(true, .seq_cst);
+}
+
+fn freeOwnedPathSlice(gpa: Allocator, paths: []const []const u8) void {
+    for (paths) |path| gpa.free(path);
+    gpa.free(paths);
+}
+
+fn absolutePathFromCwd(ctx: *CliCtx, path: []const u8) WatchPathError![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return std.fs.path.resolve(ctx.gpa, &.{path});
+    }
+
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    return std.fs.path.resolve(ctx.gpa, &.{ cwd, path });
+}
+
+fn appendOwnedWatchPath(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchCollectPathsError!bool {
+    const absolute = try absolutePathFromCwd(ctx, path);
+    errdefer ctx.gpa.free(absolute);
+
+    if (seen.contains(absolute)) {
+        ctx.gpa.free(absolute);
+        return false;
+    }
+
+    try paths.append(ctx.gpa, absolute);
+    errdefer _ = paths.pop();
+    try seen.put(ctx.gpa, absolute, {});
+
+    return true;
+}
+
+fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    if (build_env) |env| {
+        const inputs = try env.collectWatchInputs();
+        defer env.freeWatchInputs(inputs);
+
+        for (inputs) |path| {
+            _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+        }
+    }
+
+    for (extra_paths) |path| {
+        _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+    }
+
+    return paths.toOwnedSlice(ctx.gpa);
+}
+
+fn captureWatchInputSet(ctx: *CliCtx, inputs: []const []const u8) WatchCollectInputSetError!WatchInputSet {
+    errdefer freeOwnedPathSlice(ctx.gpa, inputs);
+
+    const snapshot = try computeWatchSnapshot(ctx, inputs);
+    errdefer ctx.gpa.free(snapshot);
+
+    return .{
+        .inputs = inputs,
+        .snapshot = snapshot,
+    };
+}
+
+fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectInputSetError!WatchInputSet {
+    const paths = try collectWatchPaths(ctx, build_env, extra_paths);
+    return captureWatchInputSet(ctx, paths);
+}
+
+fn collectHotReloadWatchInputSet(
+    ctx: *CliCtx,
+    paths_in: []const []const u8,
+    source_rewrite: ?HotReloadSourceRewrite,
+) WatchCollectInputSetError!WatchInputSet {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    const synthetic_abs = if (source_rewrite) |rewrite|
+        try absolutePathFromCwd(ctx, rewrite.synthetic_app_path)
+    else
+        null;
+    defer if (synthetic_abs) |path| ctx.gpa.free(path);
+
+    for (paths_in) |path| {
+        if (synthetic_abs) |synthetic_path| {
+            const path_abs = try absolutePathFromCwd(ctx, path);
+            defer ctx.gpa.free(path_abs);
+            if (std.mem.eql(u8, path_abs, synthetic_path)) {
+                _ = try appendOwnedWatchPath(ctx, &paths, &seen, source_rewrite.?.source_path);
+                continue;
+            }
+        }
+        _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+    }
+
+    if (source_rewrite) |rewrite| {
+        _ = try appendOwnedWatchPath(ctx, &paths, &seen, rewrite.source_path);
+    }
+
+    return captureWatchInputSet(ctx, try paths.toOwnedSlice(ctx.gpa));
+}
+
+fn appendSerializedWatchFileState(gpa: Allocator, bytes: *std.ArrayList(u8), state: WatchFileState) Allocator.Error!void {
+    switch (state) {
+        .hash => |hash| {
+            const hex = std.fmt.bytesToHex(hash, .lower);
+            try bytes.append(gpa, 'h');
+            try bytes.appendSlice(gpa, hex[0..]);
+        },
+        .missing => try bytes.append(gpa, 'm'),
+        .unreadable => try bytes.append(gpa, 'u'),
+    }
+}
+
+fn hexNibble(byte: u8) ?u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'f' => byte - 'a' + 10,
+        'A'...'F' => byte - 'A' + 10,
+        else => null,
+    };
+}
+
+fn parseSerializedWatchFileState(serialized: []const u8) WatchReadInputsError!WatchFileState {
+    if (serialized.len == 0) return error.WatchInputsMalformed;
+
+    return switch (serialized[0]) {
+        'h' => blk: {
+            if (serialized.len != 65) return error.WatchInputsMalformed;
+            var hash: [32]u8 = undefined;
+            for (&hash, 0..) |*byte, i| {
+                const hi = hexNibble(serialized[1 + i * 2]) orelse return error.WatchInputsMalformed;
+                const lo = hexNibble(serialized[2 + i * 2]) orelse return error.WatchInputsMalformed;
+                byte.* = (hi << 4) | lo;
+            }
+            break :blk .{ .hash = hash };
+        },
+        'm' => if (serialized.len == 1) .missing else error.WatchInputsMalformed,
+        'u' => if (serialized.len == 1) .unreadable else error.WatchInputsMalformed,
+        else => error.WatchInputsMalformed,
+    };
+}
+
+fn appendWatchInputWithState(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+    state: WatchFileState,
+) WatchReadInputsError!void {
+    if (path.len == 0) return error.WatchInputsMalformed;
+
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        try snapshot.append(ctx.gpa, .{ .state = state });
+    }
+}
+
+fn appendCurrentWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchReadInputsError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        const absolute_path = paths.items[paths.items.len - 1];
+        try snapshot.append(ctx.gpa, .{ .state = try readWatchFileState(ctx, absolute_path) });
+    }
+}
+
+fn writeWatchInputSetFile(ctx: *CliCtx, file_path: []const u8, input_set: *const WatchInputSet) WatchWriteInputsError!void {
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(ctx.gpa);
+
+    try bytes.appendSlice(ctx.gpa, watch_inputs_magic);
+    try bytes.append(ctx.gpa, 0);
+
+    for (input_set.inputs, input_set.snapshot) |path, snapshot| {
+        try bytes.appendSlice(ctx.gpa, path);
+        try bytes.append(ctx.gpa, 0);
+        try appendSerializedWatchFileState(ctx.gpa, &bytes, snapshot.state);
+        try bytes.append(ctx.gpa, 0);
+    }
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = file_path, .data = bytes.items });
+}
+
+fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchWriteInputsError!void {
+    var input_set = try collectWatchInputSet(ctx, build_env, extra_paths);
+    defer input_set.deinit(ctx);
+    try writeWatchInputSetFile(ctx, file_path, &input_set);
+}
+
+fn writeHotReloadWatchPathsFile(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    paths: []const []const u8,
+    source_rewrite: ?HotReloadSourceRewrite,
+) WatchWriteInputsError!void {
+    var input_set = try collectHotReloadWatchInputSet(ctx, paths, source_rewrite);
+    defer input_set.deinit(ctx);
+    try writeWatchInputSetFile(ctx, file_path, &input_set);
+}
+
+fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchReadInputsError!WatchInputSet {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
+        error.FileNotFound => return error.WatchInputsMissing,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WatchInputsReadFailed,
+    };
+    defer ctx.gpa.free(bytes);
+
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    if (!std.mem.startsWith(u8, bytes, watch_inputs_magic)) return error.WatchInputsMalformed;
+    var offset: usize = watch_inputs_magic.len;
+    if (offset >= bytes.len or bytes[offset] != 0) return error.WatchInputsMalformed;
+    offset += 1;
+
+    while (offset < bytes.len) {
+        const path_end = std.mem.findScalarPos(u8, bytes, offset, 0) orelse return error.WatchInputsMalformed;
+        const path = bytes[offset..path_end];
+        offset = path_end + 1;
+
+        const state_end = std.mem.findScalarPos(u8, bytes, offset, 0) orelse return error.WatchInputsMalformed;
+        const serialized_state = bytes[offset..state_end];
+        offset = state_end + 1;
+
+        try appendWatchInputWithState(
+            ctx,
+            &paths,
+            &snapshot,
+            &seen,
+            path,
+            try parseSerializedWatchFileState(serialized_state),
+        );
+    }
+
+    for (extra_paths) |path| {
+        try appendCurrentWatchInput(ctx, &paths, &snapshot, &seen, path);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFileState {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .unreadable,
+    };
+    defer ctx.gpa.free(bytes);
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return .{ .hash = hasher.finalResult() };
+}
+
+fn computeWatchSnapshot(ctx: *CliCtx, paths: []const []const u8) WatchSnapshotError![]WatchSnapshotEntry {
+    const snapshot = try ctx.gpa.alloc(WatchSnapshotEntry, paths.len);
+    errdefer ctx.gpa.free(snapshot);
+
+    for (paths, 0..) |path, i| {
+        snapshot[i] = .{ .state = try readWatchFileState(ctx, path) };
+    }
+
+    return snapshot;
+}
+
+fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotEntry) bool {
+    if (a.len != b.len) return true;
+    for (a, b) |old, new| {
+        if (!old.state.eql(new.state)) return true;
+    }
+    return false;
+}
+
+fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
+    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
+    dir.close(ctx.io.std_io);
+    return true;
+}
+
+fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
+    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
+    errdefer ctx.gpa.free(candidate);
+
+    while (!existingDirectory(ctx, candidate)) {
+        const parent = std.fs.path.dirname(candidate) orelse break;
+        if (parent.len == candidate.len) break;
+
+        const parent_copy = try ctx.gpa.dupe(u8, parent);
+        ctx.gpa.free(candidate);
+        candidate = parent_copy;
+    }
+
+    return candidate;
+}
+
+fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
+    var dirs = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (dirs.items) |dir| ctx.gpa.free(dir);
+        dirs.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    for (paths) |path| {
+        const dir = try nearestExistingAncestor(ctx, path);
+        errdefer ctx.gpa.free(dir);
+
+        if (seen.contains(dir)) {
+            ctx.gpa.free(dir);
+            continue;
+        }
+
+        try seen.put(ctx.gpa, dir, {});
+        try dirs.append(ctx.gpa, dir);
+    }
+
+    return dirs.toOwnedSlice(ctx.gpa);
+}
+
+fn refreshWatchState(
+    ctx: *CliCtx,
+    state: *WatchState,
+    signal: *WatchEventSignal,
+    new_input_set: WatchInputSet,
+) WatchRefreshError!bool {
+    var owned_input_set = new_input_set;
+    errdefer owned_input_set.deinit(ctx);
+
+    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
+    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
+
+    var new_watcher: ?*watch_mod.Watcher = null;
+    if (watch_dirs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
+        errdefer if (new_watcher) |watcher| watcher.deinit();
+        try new_watcher.?.start();
+    }
+
+    const current_snapshot = try computeWatchSnapshot(ctx, owned_input_set.inputs);
+    errdefer ctx.gpa.free(current_snapshot);
+
+    const changed_during_refresh = watchSnapshotChanged(owned_input_set.snapshot, current_snapshot);
+    ctx.gpa.free(owned_input_set.snapshot);
+    owned_input_set.snapshot = &.{};
+
+    state.deinit(ctx);
+    state.inputs = owned_input_set.inputs;
+    owned_input_set.inputs = &.{};
+    state.snapshot = current_snapshot;
+    state.watcher = new_watcher;
+    new_watcher = null;
+
+    return changed_during_refresh;
+}
+
+fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
+    if (state.inputs.len == 0) return true;
+    const current = try computeWatchSnapshot(ctx, state.inputs);
+    defer ctx.gpa.free(current);
+    return watchSnapshotChanged(state.snapshot, current);
+}
+
+fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
+    if (!signal.dirty.swap(false, .seq_cst)) return false;
+    std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    _ = signal.dirty.swap(false, .seq_cst);
+    return try watchStateHasByteChanges(ctx, state);
+}
+
+fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
+    while (true) {
+        if (try consumeDebouncedWatchChange(ctx, signal, state)) return;
+        std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    }
+}
+
+fn createWatchInputsPath(ctx: *CliCtx) WatchInputsPathError![]const u8 {
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, ".zig-cache");
+
+    var random: [16]u8 = undefined;
+    ctx.io.std_io.random(&random);
+    const hex = std.fmt.bytesToHex(random, .lower);
+
+    return std.fmt.allocPrint(ctx.gpa, ".zig-cache/roc-watch-{s}.inputs", .{hex[0..]});
+}
+
+fn watchExtraPaths(command: WatchCommand) [2]?[]const u8 {
+    return .{ watchCommandPath(command), watchCommandMain(command) };
+}
+
+fn appendExtraWatchPaths(command: WatchCommand, buffer: *[2][]const u8) []const []const u8 {
+    var len: usize = 0;
+    const extras = watchExtraPaths(command);
+    for (extras) |path| {
+        if (path) |p| {
+            buffer[len] = p;
+            len += 1;
+        }
+    }
+    return buffer[0..len];
+}
+
+fn appendOwnedArg(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    comptime fmt_str: []const u8,
+    args: anytype,
+) Allocator.Error!void {
+    const arg = try std.fmt.allocPrint(gpa, fmt_str, args);
+    errdefer gpa.free(arg);
+    try argv.append(gpa, arg);
+    try owned.append(gpa, arg);
+}
+
+fn appendResolveLimitArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    limits: cli_args.ResolveLimitArgs,
+) Allocator.Error!void {
+    if (limits.max_package_mb) |limit| {
+        try appendOwnedArg(gpa, argv, owned, "--max-package-mb={}", .{limit});
+    }
+    if (limits.max_transitive_mb) |limit| {
+        try appendOwnedArg(gpa, argv, owned, "--max-transitive-mb={}", .{limit});
+    }
+}
+
+fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, inputs_path: []const u8) Allocator.Error!WatchChildArgv {
+    var argv = std.ArrayList([]const u8).empty;
+    errdefer argv.deinit(ctx.gpa);
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (owned.items) |arg| ctx.gpa.free(arg);
+        owned.deinit(ctx.gpa);
+    }
+
+    try argv.append(ctx.gpa, arg0);
+
+    switch (command) {
+        .check => |args| {
+            try argv.append(ctx.gpa, "check");
+            if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.time) try argv.append(ctx.gpa, "--time");
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+        .test_cmd => |args| {
+            try argv.append(ctx.gpa, "test");
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
+            if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+    }
+
+    return .{
+        .argv = try argv.toOwnedSlice(ctx.gpa),
+        .owned = try owned.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn spawnWatchChild(ctx: *CliCtx, argv: []const []const u8) WatchSpawnChildError!*WatchChild {
+    var child = try std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .stdin = .inherit,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+
+    const child_id = child.id.?;
+    const watched = ctx.gpa.create(WatchChild) catch |err| {
+        child.kill(ctx.io.std_io);
+        return err;
+    };
+
+    watched.* = .{
+        .child = child,
+        .id = child_id,
+        .thread = undefined,
+    };
+
+    watched.thread = std.Thread.spawn(.{}, WatchChild.waitThread, .{ watched, ctx.io.std_io, ctx.gpa }) catch |err| {
+        watched.child.kill(ctx.io.std_io);
+        ctx.gpa.destroy(watched);
+        return err;
+    };
+
+    return watched;
+}
+
+fn terminateWatchChild(child: *WatchChild) void {
+    switch (builtin.os.tag) {
+        .windows => {
+            _ = std.os.windows.ntdll.NtTerminateProcess(child.id, @enumFromInt(1));
+        },
+        .wasi => {},
+        else => {
+            std.posix.kill(child.id, .KILL) catch {};
+        },
+    }
+}
+
+fn joinWatchChild(child: *WatchChild) void {
+    child.thread.join();
+}
+
+fn destroyWatchChild(ctx: *CliCtx, child: *WatchChild) void {
+    child.deinit(ctx.gpa);
+    ctx.gpa.destroy(child);
+}
+
+fn replayWatchChildOutput(ctx: *CliCtx, child: *WatchChild, print_separator: bool) CliOutputWriteError!void {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    if (print_separator) try stderr.writeAll(watch_separator);
+    if (child.stdout.len > 0) try stdout.writeAll(child.stdout);
+    if (child.stderr.len > 0) try stderr.writeAll(child.stderr);
+    ctx.io.flush();
+}
+
+fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchCommandError!void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        ctx.io.stderr().writeAll("Error: --watch is not supported in WebAssembly builds of the Roc CLI.\n") catch {};
+        return error.UnsupportedWatchMode;
+    }
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(ctx);
+
+    var extra_buf: [2][]const u8 = undefined;
+    const extra_paths = appendExtraWatchPaths(command, &extra_buf);
+
+    var first_run = true;
+    while (true) {
+        const inputs_path = try createWatchInputsPath(ctx);
+        defer ctx.gpa.free(inputs_path);
+        defer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
+
+        var child_argv = try buildWatchChildArgv(ctx, arg0, command, inputs_path);
+        defer child_argv.deinit(ctx.gpa);
+
+        {
+            const child = try spawnWatchChild(ctx, child_argv.argv);
+            defer destroyWatchChild(ctx, child);
+
+            var restart_now = false;
+            if (state.inputs.len == 0) {
+                const initial_inputs = try collectWatchInputSet(ctx, null, extra_paths);
+                if (try refreshWatchState(ctx, &state, &signal, initial_inputs)) {
+                    terminateWatchChild(child);
+                    restart_now = true;
+                }
+            }
+
+            if (!restart_now) {
+                while (!child.done.load(.seq_cst)) {
+                    if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
+                        terminateWatchChild(child);
+                        restart_now = true;
+                        break;
+                    }
+                    std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+                }
+            }
+
+            joinWatchChild(child);
+
+            if (restart_now) {
+                first_run = false;
+                continue;
+            }
+
+            if (child.output_error) |err| return err;
+            try replayWatchChildOutput(ctx, child, !first_run);
+        }
+
+        const new_inputs = try readWatchInputsFile(ctx, inputs_path, extra_paths);
+        const changed_during_refresh = try refreshWatchState(ctx, &state, &signal, new_inputs);
+
+        first_run = false;
+        if (changed_during_refresh) continue;
+        try waitForWatchChange(ctx, &signal, &state);
+    }
+}
+
+fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .test_cmd = args });
+    }
 
     // Start timing
     const start_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -7842,16 +9486,38 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
         build_env.setCacheManager(cache_manager);
     }
 
-    build_env.discoverDependencies(args.path) catch |err| {
-        _ = try build_env.renderDiagnostics(stderr);
-        return err;
-    };
-    build_env.compileDiscovered() catch |err| {
-        _ = try build_env.renderDiagnostics(stderr);
-        return err;
-    };
+    var extra_buf: [2][]const u8 = undefined;
+    const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
+
+    if (args.main) |main_path| {
+        build_env.buildWithMain(args.path, main_path) catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+    } else {
+        build_env.discoverDependencies(args.path) catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+        build_env.compileDiscovered() catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+    }
 
     const diag = try build_env.renderDiagnostics(stderr);
+    if (args.watch_inputs_file) |file_path| {
+        try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+    }
     if (diag.errors > 0) return error.CompilationFailed;
 
     const modules = try build_env.getCompiledModules(ctx.gpa);
@@ -7934,7 +9600,7 @@ fn renderTestResultBodies(
     stderr_body: *std.Io.Writer,
     module_results: []const CliModuleTestResult,
     verbose: bool,
-) anyerror!void {
+) ReportRenderError!void {
     // Verbose PASS lines go to stdout in every case; problem blocks go to
     // stderr. This matches the pre-refactor layout.
     for (module_results) |module_result| {
@@ -7991,7 +9657,7 @@ fn printTestProblem(
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility,
     verbose: bool,
-) anyerror!void {
+) ReportRenderError!void {
     const src = env.getSourceAll();
 
     var report = reporting.Report.init(allocator, label, severity);
@@ -8047,7 +9713,7 @@ const REPL_PROMPT_PLAIN = "» ";
 const REPL_CONT_PROMPT_COLOR = "\x1b[1;36m…\x1b[0m ";
 const REPL_CONT_PROMPT_PLAIN = "… ";
 
-fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
+fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const backend_kind = repl_args.opt.toBackend();
     const stdin = std.Io.File.stdin();
@@ -8149,7 +9815,7 @@ fn processReplInput(
     input: []const u8,
     report_config: reporting.ReportingConfig,
     had_diagnostics: *bool,
-) anyerror!bool {
+) CliMainError!bool {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -8225,7 +9891,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) anyerror!void {
+fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8387,7 +10053,7 @@ fn nsToMs(ns: u64) u32 {
     return @intCast((ns + 500_000) / 1_000_000);
 }
 
-fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) anyerror!void {
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @TypeOf(err)!void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
@@ -8467,6 +10133,15 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
+fn buildForCheckWithOptionalMain(build_env: *BuildEnv, filepath: []const u8, main_filepath: ?[]const u8) CheckFileWithBuildEnvPreservedError!void {
+    if (main_filepath) |main_path| {
+        try build_env.buildWithMain(filepath, main_path);
+    } else {
+        try build_env.discoverDependencies(filepath);
+        try build_env.compileDiscovered();
+    }
+}
+
 /// Returns true when `filepath` is the compiler-owned builtin module (`Builtin.roc`).
 ///
 /// We deliberately do NOT compare against the absolute path of the builtin source
@@ -8491,11 +10166,12 @@ fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, io: std.Io, filepath: []cons
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
     filepath: []const u8,
+    main_filepath: ?[]const u8,
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
-) anyerror!CheckResultWithBuildEnv {
+) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8523,8 +10199,7 @@ fn checkFileWithBuildEnvPreserved(
         // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
     }
 
-    // Build the file (works for both app and module files)
-    build_env.build(filepath) catch |err| {
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {},
@@ -8557,6 +10232,7 @@ fn checkFileWithBuildEnvPreserved(
             CheckTimingInfo{}
         else
             build_env.getTimingInfo();
+        const cache_stats = build_env.getBuildStats();
 
         return CheckResultWithBuildEnv{
             .check_result = .{
@@ -8564,6 +10240,13 @@ fn checkFileWithBuildEnvPreserved(
                 .timing = timing,
                 .error_count = error_count,
                 .warning_count = warning_count,
+                .modules_total = cache_stats.modules_total,
+                .cache_hits = cache_stats.cache_hits,
+                .cache_misses = cache_stats.cache_misses,
+                .modules_compiled = cache_stats.modules_compiled,
+                .module_time_min_ns = cache_stats.module_time_min_ns,
+                .module_time_max_ns = cache_stats.module_time_max_ns,
+                .module_time_sum_ns = cache_stats.module_time_sum_ns,
             },
             .build_env = build_env,
         };
@@ -8625,164 +10308,9 @@ fn checkFileWithBuildEnvPreserved(
         CheckTimingInfo{}
     else
         build_env.getTimingInfo();
-
-    const check_result = CheckResult{
-        .reports = reports,
-        .timing = timing,
-        .error_count = error_count,
-        .warning_count = warning_count,
-    };
-
-    return CheckResultWithBuildEnv{
-        .check_result = check_result,
-        .build_env = build_env,
-    };
-}
-
-/// Check a Roc file using the BuildEnv system
-fn checkFileWithBuildEnv(
-    ctx: *CliCtx,
-    filepath: []const u8,
-    _: bool,
-    cache_config: CacheConfig,
-    max_threads: ?usize,
-    resolution_config: compile.package_resolution.Config,
-) anyerror!CheckResult {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Determine threading mode and thread count
-    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
-    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
-    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
-
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
-    defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
-    build_env.resolution_config = resolution_config;
-
-    build_env.compiler_version = build_options.compiler_version;
-    defer build_env.deinit();
-
-    // Set up cache manager if caching is enabled
-    if (cache_config.enabled) {
-        const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-        build_env.setCacheManager(cache_manager);
-        // Note: BuildEnv.deinit() will clean up the cache manager
-    }
-    build_env.setPostCheckPublicationMode(.platform_relations);
-
-    // When checking the Builtin module itself, mark it as such so the
-    // canonicalizer skips loading the pre-compiled builtin types into its
-    // scope (which would cause shadowing errors for every type it defines).
-    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
-        build_env.setRootModuleRole(.builtin);
-    }
-
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
-    }
-
-    // Build the file (works for both app and module files)
-    build_env.build(filepath) catch {
-        // Even on error, drain reports to show what went wrong
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        // Count errors and warnings
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                switch (report.severity) {
-                    .info => {},
-                    .runtime_error, .fatal => error_count += 1,
-                    .warning => warning_count += 1,
-                }
-            }
-        }
-
-        // Convert BuildEnv drained reports to our format
-        // Note: Transfer ownership of reports since drainReports() already transferred them
-        var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports, // Transfer ownership
-            };
-        }
-
-        // Get cache stats even on error
-        const cache_stats = build_env.getBuildStats();
-
-        return CheckResult{
-            .reports = reports,
-            .error_count = error_count,
-            .warning_count = warning_count,
-            .modules_total = cache_stats.modules_total,
-            .cache_hits = cache_stats.cache_hits,
-            .cache_misses = cache_stats.cache_misses,
-            .modules_compiled = cache_stats.modules_compiled,
-            .module_time_min_ns = cache_stats.module_time_min_ns,
-            .module_time_max_ns = cache_stats.module_time_max_ns,
-            .module_time_sum_ns = cache_stats.module_time_sum_ns,
-        };
-    };
-
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Build complete, draining reports...\n", .{});
-    }
-
-    // Drain all reports
-    const drained = try build_env.drainReports();
-
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Reports drained: {} modules\n", .{drained.len});
-    }
-
-    // Count errors and warnings
-    var error_count: u32 = 0;
-    var warning_count: u32 = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |report| {
-            switch (report.severity) {
-                .info => {},
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
-        }
-    }
-
-    // Convert BuildEnv drained reports to our format
-    var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-    for (drained, 0..) |mod, i| {
-        reports[i] = .{
-            .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership
-        };
-    }
-
-    // Free the original drained reports (abs_path strings and outer slice only)
-    // Note: reports ownership was transferred above, abs_path was duped
-    build_env.freeDrainedReportsPathsOnly(drained);
-
-    // Get timing information from BuildEnv
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
-
-    // Get cache stats from coordinator
     const cache_stats = build_env.getBuildStats();
 
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
-    }
-
-    return CheckResult{
+    const check_result = CheckResult{
         .reports = reports,
         .timing = timing,
         .error_count = error_count,
@@ -8795,11 +10323,20 @@ fn checkFileWithBuildEnv(
         .module_time_max_ns = cache_stats.module_time_max_ns,
         .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
+
+    return CheckResultWithBuildEnv{
+        .check_result = check_result,
+        .build_env = build_env,
+    };
 }
 
-fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
+fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .check = args });
+    }
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
@@ -8817,21 +10354,28 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
         .roc_ctx = ctx.coreCtx(),
     };
 
+    var extra_buf: [2][]const u8 = undefined;
+    const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
+
     // Use BuildEnv to check the file
     reporter.begin("Type Checking");
-    var check_result = checkFileWithBuildEnv(
+    var result_with_env = checkFileWithBuildEnvPreserved(
         ctx,
         args.path,
+        args.main,
         args.time,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
     ) catch |err| {
         reporter.fail();
-        try handleProcessFileError(err, stderr, args.path);
-        return;
+        if (args.watch_inputs_file) |file_path| {
+            try writeWatchInputsFile(ctx, file_path, null, extra_paths);
+        }
+        return handleProcessFileError(err, stderr, args.path);
     };
-    defer check_result.deinit(ctx.gpa);
+    defer result_with_env.deinit(ctx.gpa);
+    const check_result = &result_with_env.check_result;
 
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
@@ -8841,6 +10385,10 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     reporter.finish();
 
     const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
+
+    if (args.watch_inputs_file) |file_path| {
+        try writeWatchInputsFile(ctx, file_path, &result_with_env.build_env, extra_paths);
+    }
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -8865,7 +10413,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
         // Print verbose stats if requested
         if (args.verbose) {
-            printVerboseStats(stderr, &check_result);
+            printVerboseStats(stderr, check_result);
         }
 
         // Flush before exit
@@ -8884,7 +10432,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
         // Print verbose stats if requested
         if (args.verbose) {
-            printVerboseStats(stdout, &check_result);
+            printVerboseStats(stdout, check_result);
         }
 
         ctx.io.flush();
@@ -8955,7 +10503,7 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 ///
 /// Single-threaded blocking accept loop on 127.0.0.1:8080. GET-only.
 /// Files are streamed up to a 10 MB cap; anything larger returns 500.
-fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) anyerror!void {
+fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) CliMainError!void {
     const stdout = ctx.io.stdout();
     const io = ctx.io.std_io;
 
@@ -8981,7 +10529,7 @@ fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) anyerror!void {
 }
 
 /// Handle a single HTTP connection. Closes the stream before returning.
-fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) anyerror!void {
+fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) CliMainError!void {
     const io = ctx.io.std_io;
     defer stream.close(io);
 
@@ -9102,7 +10650,7 @@ fn sendResponse(
     try w.flush();
 }
 
-fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
+fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9122,6 +10670,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
     var result_with_env = checkFileWithBuildEnvPreserved(
         ctx,
         args.path,
+        null,
         args.time,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
@@ -9191,7 +10740,7 @@ fn generateDocs(
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
-) anyerror!void {
+) CliMainError!void {
     const DocModel = docs.DocModel;
     const extract = docs.extract;
 
@@ -9310,12 +10859,180 @@ test {
     _ = @import("linker.zig");
 }
 
+test "readWatchInputsFile reports missing child watch input output" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const missing_path = try std.fs.path.join(allocator, &.{ tmp_root, "missing-watch-inputs" });
+    defer allocator.free(missing_path);
+
+    try testing.expectError(error.WatchInputsMissing, readWatchInputsFile(&ctx, missing_path, &.{}));
+}
+
+test "readWatchInputsFile parses path states and explicit extras" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const inputs_path = try std.fs.path.join(allocator, &.{ tmp_root, "watch-inputs" });
+    defer allocator.free(inputs_path);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.roc" });
+    defer allocator.free(watched_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
+    defer allocator.free(main_path);
+
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(allocator);
+    try bytes.appendSlice(allocator, watch_inputs_magic);
+    try bytes.append(allocator, 0);
+    try bytes.appendSlice(allocator, watched_path);
+    try bytes.append(allocator, 0);
+    try appendSerializedWatchFileState(allocator, &bytes, .missing);
+    try bytes.append(allocator, 0);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watch-inputs", .data = bytes.items });
+
+    var input_set = try readWatchInputsFile(&ctx, inputs_path, &.{ watched_path, main_path });
+    defer input_set.deinit(&ctx);
+
+    try testing.expectEqual(@as(usize, 2), input_set.inputs.len);
+    try testing.expectEqual(@as(usize, 2), input_set.snapshot.len);
+    try testing.expectEqualStrings(watched_path, input_set.inputs[0]);
+    try testing.expectEqualStrings(main_path, input_set.inputs[1]);
+    try testing.expect(input_set.snapshot[0].state.eql(.missing));
+    try testing.expect(input_set.snapshot[1].state.eql(.missing));
+}
+
+test "refreshWatchState reports stale snapshot for newly discovered input" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    const inputs = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(inputs);
+    inputs[0] = try allocator.dupe(u8, watched_path);
+    errdefer allocator.free(inputs[0]);
+
+    const snapshot = try allocator.alloc(WatchSnapshotEntry, 1);
+    errdefer allocator.free(snapshot);
+    snapshot[0] = .{ .state = try readWatchFileState(&ctx, watched_path) };
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+
+    const changed = try refreshWatchState(&ctx, &state, &signal, .{
+        .inputs = inputs,
+        .snapshot = snapshot,
+    });
+
+    try testing.expect(changed);
+}
+
+test "refreshWatchState reports stale snapshot for existing watch set" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+
+    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
+
+    const refreshed_inputs = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(refreshed_inputs);
+    refreshed_inputs[0] = try allocator.dupe(u8, watched_path);
+    errdefer allocator.free(refreshed_inputs[0]);
+
+    const refreshed_snapshot = try allocator.alloc(WatchSnapshotEntry, 1);
+    errdefer allocator.free(refreshed_snapshot);
+    refreshed_snapshot[0] = state.snapshot[0];
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    const changed = try refreshWatchState(&ctx, &state, &signal, .{
+        .inputs = refreshed_inputs,
+        .snapshot = refreshed_snapshot,
+    });
+
+    try testing.expect(changed);
+}
+
 test "appendWindowsQuotedArg" {
     const testing = std.testing;
 
     // Helper to test the quoting function
     const testQuote = struct {
-        fn run(input: []const u8, expected: []const u8) anyerror!void {
+        fn run(input: []const u8, expected: []const u8) CliMainError!void {
             var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);
@@ -9365,7 +11082,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
 
     const expectClassified = struct {
-        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) anyerror!void {
+        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) CliMainError!void {
             try dir.writeFile(t_io, .{ .sub_path = name, .data = data });
             const path = try std.fs.path.join(gpa, &.{ root, name });
             defer gpa.free(path);

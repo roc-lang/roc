@@ -18,6 +18,11 @@ const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const LowLevel = lir.LowLevel;
 
+const TrmcLirTestError = Allocator.Error || eval.Interpreter.Error || RuntimeHostEnv.LeakError || lir.DebugPrint.Error || error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 /// Tracks created locals so the proc's frame_locals span (which the
 /// interpreter binary-searches) can be built complete and sorted.
 const ProcBuilder = struct {
@@ -32,13 +37,13 @@ const ProcBuilder = struct {
         self.locals.deinit(allocator);
     }
 
-    fn addLocal(self: *ProcBuilder, allocator: Allocator, layout_idx: layout.Idx) anyerror!LocalId {
+    fn addLocal(self: *ProcBuilder, allocator: Allocator, layout_idx: layout.Idx) TrmcLirTestError!LocalId {
         const id = try self.store.addLocal(.{ .layout_idx = layout_idx });
         try self.locals.append(allocator, id);
         return id;
     }
 
-    fn finishProc(self: *ProcBuilder, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) anyerror!LIR.LirProcSpecId {
+    fn finishProc(self: *ProcBuilder, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) TrmcLirTestError!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.store.addLocalSpan(args),
@@ -49,7 +54,7 @@ const ProcBuilder = struct {
     }
 };
 
-fn lowLevelStmt(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, next: CFStmtId) anyerror!CFStmtId {
+fn lowLevelStmt(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, next: CFStmtId) TrmcLirTestError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
@@ -68,7 +73,7 @@ fn freshJoinPointId(next: *u32) LIR.JoinPointId {
     return id;
 }
 
-fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) anyerror!u64 {
+fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) TrmcLirTestError!u64 {
     var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
@@ -242,7 +247,7 @@ const PeanoLayouts = struct {
     box_u: layout.Idx,
     payload: layout.Idx,
 
-    fn build(layouts: *layout.Store) anyerror!PeanoLayouts {
+    fn build(layouts: *layout.Store) TrmcLirTestError!PeanoLayouts {
         const u = try layouts.reserveLayout(layout.Layout.zst());
         const box_u = try layouts.insertBox(u);
         const payload = try layouts.putStructFields(&.{.{ .index = 0, .layout = box_u }});
@@ -277,7 +282,7 @@ fn buildRepeatProc(
     b: *ProcBuilder,
     store: *LirStore,
     peano: PeanoLayouts,
-) anyerror!LIR.LirProcSpecId {
+) TrmcLirTestError!LIR.LirProcSpecId {
     const a_n = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -367,7 +372,7 @@ fn buildRepeatProc(
     return proc;
 }
 
-fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirProcSpecId) anyerror!bool {
+fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirProcSpecId) TrmcLirTestError!bool {
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(allocator);
     var visited = std.AutoHashMap(CFStmtId, void).init(allocator);
@@ -416,7 +421,7 @@ fn runProcU64Args(
     proc: LIR.LirProcSpecId,
     runtime_env: *RuntimeHostEnv,
     args: []const u64,
-) anyerror!u64 {
+) TrmcLirTestError!u64 {
     var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
     defer interp.deinit();
     const arg_layouts = [_]layout.Idx{.u64} ** 4;
@@ -574,7 +579,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
 
 /// Direct-ret tail-recursive countdown:
 ///   count = |n, acc| if n == 0 { acc } else { count(n - 1, acc + 1) }
-fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) anyerror!LIR.LirProcSpecId {
+fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) TrmcLirTestError!LIR.LirProcSpecId {
     const a_n = try b.addLocal(allocator, .u64);
     const a_acc = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
@@ -864,7 +869,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     try std.testing.expectEqual(@as(usize, 1000), peano.depth(&layouts, result.value.ptr));
 }
 
-fn dumpProcText(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId) anyerror![]u8 {
+fn dumpProcText(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId) TrmcLirTestError![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();
     try lir.DebugPrint.writeProc(allocator, store, layouts, proc, &buffer.writer);

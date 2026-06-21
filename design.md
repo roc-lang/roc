@@ -3182,6 +3182,112 @@ natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted
 dispatch order for that table is the `hosted` section's declaration order.
 
+## Watch Mode For Check And Test
+
+`roc check --watch` and `roc test --watch` are long-running compiler commands.
+They run once immediately, then watch the exact source inputs discovered by that
+run. A later filesystem event causes a new run only when at least one watched
+input's source file state changes: its bytes change, it appears after being
+missing, disappears after existing, or changes between readable and unreadable.
+Metadata-only changes such as `touch` do not rerun checking or tests and do not
+reprint diagnostics.
+
+The watch set is exact-file based. The implementation may watch directories
+because operating systems expose directory-level notification APIs, but directory
+events are filtered against the explicit file input set. Files merely present in
+a filesystem package or platform directory are not watched unless the compiler
+read them as part of the current run. If a source edit adds a new import, the
+importing file is already in the watch set; the next run discovers the new input
+and refreshes the watch set. URL package files are excluded even when they live
+in the local package cache, because their source identity is immutable.
+
+Watch inputs are explicit compiler output. A watch consumer must not recover
+module dependencies by scanning source text or reconstruct file imports from
+diagnostics. `BuildEnv` owns the shared watch-input collection used by
+`roc check --watch` and `roc test --watch`, because both commands already use
+`BuildEnv` and because compilation results are transferred there after the
+coordinator finishes. After every run, successful or failed, watch mode replaces
+the active watch set with the newly discovered explicit input set. Early
+failures still include the root source path and any other inputs discovered
+before the failure. Missing file imports are included so creating the missing
+file can trigger the next run.
+
+File imports are stored in `ModuleEnv` as source-relative dependencies. The
+stored path is the literal file-import path interpreted relative to that
+module's source directory. It must not be an absolute path, a realpath, a
+symlink-resolved path, a cwd-dependent path, or any other host-specific value.
+Checked module cache entries include these relative file dependencies so a cache
+hit can contribute watch inputs with string concatenation only:
+
+```text
+module_source_dir + cached_relative_file_dependency
+```
+
+Because file imports are source input to the checked module, their content
+identity also participates in the checked module cache key. Changing an imported
+file while the importing `.roc` source bytes stay unchanged must miss the
+checked module cache and produce fresh checked module data. The cache key input is
+the ordered source-relative dependency list plus each dependency's content
+digest, never an absolute path or resolved filesystem identity.
+
+When a watched file's parent directory no longer exists, or when a missing file's
+parent directory does not exist yet, the watcher registers the nearest existing
+ancestor directory and filters events by the unresolved relative suffix. This
+keeps watch coverage for later directory creation without widening the logical
+watch set.
+
+Filesystem event bursts are debounced for 25ms before re-reading watched inputs.
+If another filesystem event with changed bytes arrives while a check/test rerun
+is in progress, the in-progress run is cancelled and superseded by the newest
+run. Diagnostics and test output are printed for completed runs only. Repeated
+runs print a separator before their output instead of clearing the terminal.
+
+## Hot Loading For Default Dev-Shim Runs
+
+`roc --watch` enables hot loading for the default `roc` dev backend execution
+path. It does not introduce a run subcommand. Non-watch default `roc` execution
+keeps the existing one-shot behavior.
+
+The initial compile lowers checked modules to LIR in the compiler process, then
+serializes only the dev backend `RunImage` bytes into shared memory. LIR and
+compiler IR are never allocated into the shared-memory allocator on this path.
+The shared memory contains `RunImage` code section bytes, readonly data bytes,
+entrypoint metadata, relocation records, symbol names, and a small hot-load
+control block in the existing shared-memory header padding.
+
+The compiler launches the host shim first, then installs directory watches for
+the exact file input set reported by the coordinator. Coordinator watch inputs
+are normalized through the same watch-input collector used by `roc check
+--watch` and `roc test --watch`, so relative module paths become logical
+absolute paths before reaching the watcher. URL package files are excluded;
+filesystem modules, platform/package files, and file imports discovered by the
+latest compile are included. After each completed rebuild, the parent refreshes
+the watch set from the rebuild worker's serialized watch-input file.
+
+Rebuilds run in short-lived internal compiler child processes. This keeps
+cancellation at a process boundary: when a byte-changing filesystem event
+arrives while a rebuild is active, the parent kills that rebuild, discards its
+captured stdout/stderr text and any uncommitted `RunImage` bytes, and starts a newer generation. A
+successful rebuild validates that the checked host interface identity still
+matches the already-linked host shim. If the interface changes, the rebuild
+reports that the user must restart `roc --watch` and leaves the previous
+`RunImage` active.
+
+Successful rebuild workers append a new dev `RunImage` to the same shared-memory
+mapping and write its generation, header offset, and image bound through the
+hot-load control block with release/acquire atomics. The host shim checks that
+control block at Roc entrypoint boundaries. If a newer generation is available,
+the shim validates and loads the replacement `RunImage` into host-callable memory, swaps to it
+under the runtime-state mutex, deallocates the previous machine-code allocation,
+and acknowledges the generation as accepted. If validation or loading fails, it
+acknowledges rejection and keeps using the previous `RunImage`.
+
+Headerless default apps and Windows hot loading are intentionally not part of
+the first implementation. Headerless default apps compile through synthetic
+temporary source files, so their watch roots and rebuild source rewriting need a
+separate design. Windows requires explicit shared-memory handle inheritance for
+the internal rebuild worker.
+
 ## Relationship To Cor LSS
 
 The post-check design mirrors Cor's LSS experiment after solving, adapted for

@@ -235,6 +235,7 @@ pub const Tag = enum {
     diag_tuple_elem_not_canonicalized,
     diag_file_import_not_found,
     diag_file_import_io_error,
+    diag_file_import_absolute_path,
     diag_file_import_not_utf8,
     diag_module_not_found,
     diag_value_not_exposed,

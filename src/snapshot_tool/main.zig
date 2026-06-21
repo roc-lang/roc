@@ -80,6 +80,52 @@ var snapshot_temp_counter = std.atomic.Value(usize).init(0);
 
 const rand = prng.random();
 
+const SnapshotError =
+    Allocator.Error ||
+    Error ||
+    fmt.FormatAstError ||
+    eval_mod.BuiltinModules.InitError ||
+    eval_mod.test_helpers.TestHelperError ||
+    compile.build.InitError ||
+    compile.build.BuildError ||
+    compile.build.CompileDiscoveredError ||
+    compile.package.TypeCheckModuleError ||
+    docs_mod.render_html.RenderError ||
+    std.Thread.SpawnError ||
+    std.process.Args.ToSliceError ||
+    std.process.CurrentPathError ||
+    std.Io.Dir.AccessError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.DeleteFileError ||
+    std.Io.Dir.Iterator.Error ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.ReadFileAllocError ||
+    std.Io.Dir.StatFileError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.OpenError ||
+    std.Io.File.ReadPositionalError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.StatError ||
+    std.Io.File.Writer.Error ||
+    error{
+        BuiltinModuleLeakedInSnapshots,
+        BufferTooSmall,
+        CacheRoundTripValidationFailed,
+        CacheVersionHashMismatch,
+        ErrFinalizingHTMLWriter,
+        InvalidMagicNumber,
+        MissingBuiltinModule,
+        MonoFormattingFailed,
+        MonoValidationFailed,
+        NoSpaceLeft,
+        NotDir,
+        ParseFailed,
+        SnapshotValidationFailed,
+        TempDirUnavailable,
+        TypeCheckError,
+        WriteFailed,
+    };
+
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
     if (verbose_log) {
@@ -88,7 +134,7 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 }
 
 /// Returns an absolute, normalized path without calling libc `realpath`.
-fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) anyerror![]u8 {
+fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) SnapshotError![]u8 {
     if (std.fs.path.isAbsolute(sub_path)) {
         return std.fs.path.resolve(allocator, &.{sub_path});
     }
@@ -98,7 +144,7 @@ fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) any
     return std.fs.path.resolve(allocator, &.{ cwd, sub_path });
 }
 
-fn currentPathAllocSafe(io: std.Io, allocator: Allocator) anyerror![]u8 {
+fn currentPathAllocSafe(io: std.Io, allocator: Allocator) SnapshotError![]u8 {
     var buffer: [std.fs.max_path_bytes]u8 = @splat(0);
     const n = try std.process.currentPath(io, &buffer);
     return allocator.dupe(u8, buffer[0..n]);
@@ -125,7 +171,7 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
     return error.TempDirUnavailable;
 }
 
-fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) anyerror![]u8 {
+fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) SnapshotError![]u8 {
     const temp_root = try getTempRoot(allocator);
     defer allocator.free(temp_root);
 
@@ -596,7 +642,7 @@ fn defaultSnapshotThreadCount() usize {
 }
 
 /// cli entrypoint for snapshot tool
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) SnapshotError!void {
     app_io = init.io;
 
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
@@ -804,7 +850,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     }
 }
 
-fn checkSnapshotExpectations(gpa: Allocator) anyerror!bool {
+fn checkSnapshotExpectations(gpa: Allocator) SnapshotError!bool {
     // Load builtin modules using the same code path as roc check
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
@@ -858,7 +904,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     return .file; // unreachable if isMultiFileSnapshot was checked first
 }
 
-fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) anyerror!bool {
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) SnapshotError!bool {
     var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
@@ -991,7 +1037,7 @@ fn processSnapshotContent(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
@@ -1410,7 +1456,7 @@ fn processRocFileAsSnapshotWithExpected(
     meta: Meta,
     expected_content: ?[]const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     // Create content structure
     const content = Content{
         .meta = meta,
@@ -1525,7 +1571,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) anyerror!void {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) SnapshotError!void {
     const canonical_path = absolutePathAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
@@ -2327,7 +2373,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 }
 
 /// Generate FORMATTED section for both markdown and HTML
-fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) anyerror!void {
+fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) SnapshotError!void {
     var formatted: std.Io.Writer.Allocating = .init(output.gpa);
     defer formatted.deinit();
 
@@ -3074,7 +3120,7 @@ fn validateMonoFormatting(allocator: Allocator, mono_source: []const u8, source_
 }
 
 /// Parse Roc source and return formatted output.
-fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) anyerror![]const u8 {
+fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) SnapshotError![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -3557,7 +3603,7 @@ fn processDocsSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     log("Processing docs snapshot: {s}", .{output_path});
 
     // 1. Parse multi-file source
@@ -4005,7 +4051,7 @@ fn processDevObjectSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     log("Processing dev_object snapshot: {s}", .{output_path});
 
     const source_files = try parseMultiFileSource(allocator, content.source);
@@ -4551,7 +4597,7 @@ fn compileSnapshotReplInspectedModule(
     allocator: Allocator,
     source: []const u8,
     config: *const Config,
-) anyerror!eval_mod.test_helpers.CompiledProgram {
+) SnapshotError!eval_mod.test_helpers.CompiledProgram {
     if (config.builtin_modules_ref) |bm| {
         return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
             allocator,
@@ -4569,7 +4615,7 @@ fn compileSnapshotReplInspectedModule(
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
 }
 
-fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) anyerror!eval_mod.test_helpers.CompiledProgram {
+fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) SnapshotError!eval_mod.test_helpers.CompiledProgram {
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .expr, source, &.{});
 }
 
@@ -4578,7 +4624,7 @@ fn renderSnapshotReplTypeProblems(
     source_kind: eval_mod.test_helpers.SourceKind,
     source: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
     var module_env = try single_module.ModuleEnv.init(allocator, source);
@@ -4670,7 +4716,7 @@ fn renderSnapshotReplTypeProblems(
     checker.fixupTypeWriter();
     defer checker.deinit();
 
-    const check_result: anyerror!void = switch (source_kind) {
+    const check_result: SnapshotError!void = switch (source_kind) {
         .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
         .module => checker.checkFile(),
     };
@@ -4724,7 +4770,7 @@ fn snapshotReplDefinitionStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
     const identity = maybe_identity orelse
         return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
@@ -4773,7 +4819,7 @@ fn compileAndEvaluateSnapshotReplExpr(
     allocator: Allocator,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
         return switch (expr_err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
@@ -4793,7 +4839,7 @@ fn snapshotReplExpressionStep(
     input: []const u8,
     config: *const Config,
     statement_body: bool,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const main_source = if (statement_body)
         try std.fmt.allocPrint(allocator, "main = {{\n    {s}\n}}", .{input})
     else
@@ -4853,7 +4899,7 @@ fn snapshotReplStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
@@ -4868,7 +4914,7 @@ fn snapshotReplStep(
     };
 }
 
-fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) anyerror!bool {
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) SnapshotError!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -4916,7 +4962,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) anyerror!bool {
+fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) SnapshotError!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -5122,7 +5168,7 @@ fn searchDirectoryForBuiltin(
     dir: *std.Io.Dir,
     relative_path: []const u8,
     files_with_builtin: *std.array_list.Managed([]const u8),
-) anyerror!void {
+) SnapshotError!void {
     var iter = dir.iterate();
     while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)

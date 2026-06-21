@@ -1694,7 +1694,7 @@ pub const Tokenizer = struct {
     }
 };
 
-fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) anyerror!void {
+fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     var messages: [10]Diagnostic = undefined;
 
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
