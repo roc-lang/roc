@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const check = @import("check");
 const layout = @import("layout");
 const hosted = @import("hosted.zig");
 
@@ -68,6 +69,8 @@ pub const ComptimeSiteId = enum(u32) {
     _,
 };
 
+pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -79,6 +82,7 @@ pub const ComptimeSiteKind = enum {
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
     region: base.Region,
+    checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
     branch_regions: []const base.Region = &.{},
 };

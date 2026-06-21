@@ -263,6 +263,7 @@ pub const ComptimeSiteKind = enum {
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
     region: base.Region,
+    checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
 };
 
@@ -529,8 +530,12 @@ pub const Program = struct {
     source_files: std.ArrayList([]const u8),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per expression, parallel to `exprs`.
+    expr_regions: std.ArrayList(base.Region),
     /// Source location per statement, parallel to `stmts`.
     stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per statement, parallel to `stmts`.
+    stmt_regions: std.ArrayList(base.Region),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; owned by this program).
     local_names: std.ArrayList([]const u8),
@@ -538,6 +543,8 @@ pub const Program = struct {
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
     current_loc: base.SourceLoc,
+    /// Ambient checked source region recorded by `addExpr`/`addStmt`.
+    current_region: base.Region,
 
     pub fn init(allocator: std.mem.Allocator) Program {
         return .{
@@ -569,9 +576,12 @@ pub const Program = struct {
             .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
+            .expr_regions = .empty,
             .stmt_locs = .empty,
+            .stmt_regions = .empty,
             .local_names = .empty,
             .current_loc = base.SourceLoc.none,
+            .current_region = base.Region.zero(),
         };
     }
 
@@ -580,7 +590,9 @@ pub const Program = struct {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
+        self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
+        self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
@@ -630,6 +642,7 @@ pub const Program = struct {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
+        try self.expr_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -656,9 +669,19 @@ pub const Program = struct {
         return self.expr_locs.items[@intFromEnum(id)];
     }
 
+    /// Checked source region of an expression.
+    pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
+        return self.expr_regions.items[@intFromEnum(id)];
+    }
+
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
         return self.stmt_locs.items[@intFromEnum(id)];
+    }
+
+    /// Checked source region of a statement.
+    pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
+        return self.stmt_regions.items[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -671,6 +694,7 @@ pub const Program = struct {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
+        try self.stmt_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -678,6 +702,7 @@ pub const Program = struct {
         self: *Program,
         kind: ComptimeSiteKind,
         region: base.Region,
+        checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
@@ -686,6 +711,7 @@ pub const Program = struct {
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .region = region,
+            .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
         });
         return id;

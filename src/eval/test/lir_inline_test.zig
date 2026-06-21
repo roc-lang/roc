@@ -1323,8 +1323,8 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\        .collect()
         \\}
         \\
-        \\main : List(Plant)
-        \\main = starting_plants()
+        \\main : () -> List(Plant)
+        \\main = || starting_plants()
     );
 }
 
@@ -1357,8 +1357,8 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\random_plant : I64 -> Plant
         \\random_plant = |seed| { seed: seed }
         \\
-        \\main : List(Plant)
-        \\main =
+        \\main : () -> List(Plant)
+        \\main = ||
         \\    Iter.collect(
         \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
@@ -1858,6 +1858,7 @@ test "LIR statements and procs carry resolved source locations" {
 
     const store = &lowered_source.lowered.lir_result.store;
     try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_regions.items.len);
     try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
     try std.testing.expect(store.proc_debug_names.items.len > 0);
     for (store.proc_debug_names.items) |entry| {
@@ -1866,13 +1867,48 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
-        switch (stmt) {
-            .incref, .decref, .free => try std.testing.expect(!loc.hasLocation()),
-            else => {},
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items, store.cf_stmts.items) |loc, region, stmt| {
+        const has_source = switch (stmt) {
+            .incref,
+            .decref,
+            .free,
+            => false,
+
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => true,
+        };
+        if (!has_source) {
+            try std.testing.expect(!loc.hasLocation());
+            try std.testing.expect(region.isEmpty());
         }
         if (loc.hasLocation()) {
             located += 1;
+            try std.testing.expect(!region.isEmpty());
             try std.testing.expect(loc.file < store.sourceFileCount());
             try std.testing.expect(loc.line >= 1);
             try std.testing.expect(loc.column >= 1);
@@ -1949,8 +1985,9 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.items) |loc| {
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items) |loc, region| {
         if (loc.hasLocation()) located += 1;
+        if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
     try std.testing.expect(located > 0);
 }
