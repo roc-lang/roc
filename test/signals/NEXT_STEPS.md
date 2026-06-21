@@ -30,16 +30,20 @@ history.
 - Non-structural dirty updates patch only matching text/value/checked/disabled
   sinks. Structural dirty updates patch DOM incrementally, reuse/move surviving
   keyed row DOM, and patch event bindings by changed slot.
-- Changed `when`/`each` outputs still rebuild an active descriptor stream before
-  patching. Unchanged keyed row items can reuse their retained row descriptor
-  subtree unless a descendant structural descriptor depends on the dirty source.
+- Changed `Ui.when` outputs retain their branch bodies in host-owned descriptors,
+  collect only the selected branch scope, and splice that branch into the active
+  descriptor stream before patching. Changed `Ui.each` outputs still rebuild an
+  active descriptor stream before patching. Unchanged keyed row items can reuse
+  their retained row descriptor subtree unless a descendant structural
+  descriptor depends on the dirty source.
 
 ## Remaining Design Gaps
 
-1. **Structural no-rebuild is still incomplete.** Current structural updates are
-   DOM patches rather than DOM resets, but changed structural outputs still
-   rebuild descriptor streams. Structural sites need host-owned records so dirty
-   work updates only the affected branch/row scopes.
+1. **Structural no-rebuild is still incomplete for `Ui.each`.** `Ui.when`
+   branch flips now update the affected branch scope without rebuilding from the
+   root `Elem`, but changed `Ui.each` key sets still rebuild descriptor streams.
+   Row sites need host-owned records so dirty work updates only affected row
+   scopes.
 2. **Effects and subscriptions are unimplemented.** `Signal.from_task`,
    `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` should wait until
    structural site ownership is stable enough to avoid cleanup tied to whole
@@ -52,9 +56,8 @@ history.
 
 Take one slice at a time and commit each green result.
 
-1. **Structural site record.** Convert one `Ui.when` or `Ui.each` site so a dirty
-   source updates that site without rebuilding the whole active descriptor
-   stream.
+1. **Each structural site record.** Convert `Ui.each` so a dirty source updates
+   row scopes without rebuilding the whole active descriptor stream.
 2. **Effect lifecycle scaffold.** Add the smallest host-owned subscription
    lifecycle needed for one cleanup-safe effect source after structural updates
    no longer rebuild the whole active descriptor stream.

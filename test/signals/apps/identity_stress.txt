@@ -15,7 +15,7 @@ expect_absent role:region name:"Delta"
 mark_metrics
 click role:button name:"Bump Alpha"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
-expect_metric_delta rows_reused 3
+expect_metric_delta rows_reused 0
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 0
 expect_metric_delta scopes_disposed 1
@@ -33,7 +33,7 @@ mark_metrics
 click role:button name:"Bump Gamma"
 expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
-expect_metric_delta rows_reused 3
+expect_metric_delta rows_reused 0
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 0
 expect_metric_delta scopes_disposed 1
@@ -53,7 +53,7 @@ click role:button name:"Bump Delta"
 expect_text text:"Delta detail count: 1" "Delta detail count: 1"
 expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
-expect_metric_delta rows_reused 4
+expect_metric_delta rows_reused 0
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 0
 expect_metric_delta scopes_disposed 1
