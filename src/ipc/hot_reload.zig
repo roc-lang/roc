@@ -20,12 +20,14 @@ pub const Status = enum(u32) {
 pub const Control = extern struct {
     magic: u32 = MAGIC,
     format_version: u32 = FORMAT_VERSION,
+    publish_sequence: u64 = 0,
     published_generation: u64 = 0,
     image_offset: u64 = 0,
     image_size: u64 = 0,
+    ack_sequence: u64 = 0,
     acknowledged_generation: u64 = 0,
     status: u32 = @intFromEnum(Status.none),
-    reserved: [28]u8 = [_]u8{0} ** 28,
+    reserved: [12]u8 = [_]u8{0} ** 12,
 };
 
 comptime {
@@ -72,48 +74,123 @@ pub fn init(control: *Control, image_offset: usize, image_size: usize) void {
 
 /// Publish a replacement image for the host shim to load at the next safe point.
 pub fn publish(control: *Control, generation: u64, image_offset: usize, image_size: usize) void {
-    control.image_offset = @intCast(image_offset);
-    control.image_size = @intCast(image_size);
-    control.status = @intFromEnum(Status.none);
+    const start = nextOddSequence(@atomicLoad(u64, &control.publish_sequence, .acquire));
+    @atomicStore(u64, &control.publish_sequence, start, .release);
+    @atomicStore(u64, &control.image_offset, @intCast(image_offset), .release);
+    @atomicStore(u64, &control.image_size, @intCast(image_size), .release);
     @atomicStore(u64, &control.published_generation, generation, .release);
+    @atomicStore(u64, &control.publish_sequence, start +% 1, .release);
+}
+
+fn nextOddSequence(sequence: u64) u64 {
+    return (sequence +% 1) | 1;
+}
+
+fn stableSequence(sequence: u64) bool {
+    return sequence & 1 == 0;
+}
+
+/// Coherent snapshot of a published executable image.
+pub const PublishedImage = struct {
+    generation: u64,
+    image_offset: usize,
+    image_size: usize,
+};
+
+/// Return a coherent snapshot of the latest published image, if one is stable.
+pub fn publishedImage(control: *const Control) ?PublishedImage {
+    if (!initialized(control)) return null;
+
+    for (0..16) |_| {
+        const start = @atomicLoad(u64, &control.publish_sequence, .acquire);
+        if (!stableSequence(start)) continue;
+
+        const generation = @atomicLoad(u64, &control.published_generation, .acquire);
+        const image_offset = @atomicLoad(u64, &control.image_offset, .acquire);
+        const image_size = @atomicLoad(u64, &control.image_size, .acquire);
+
+        const end = @atomicLoad(u64, &control.publish_sequence, .acquire);
+        if (start == end and stableSequence(end)) {
+            return .{
+                .generation = generation,
+                .image_offset = @intCast(image_offset),
+                .image_size = @intCast(image_size),
+            };
+        }
+    }
+
+    return null;
 }
 
 /// Acquire-load the latest generation published by the compiler parent.
 pub fn publishedGeneration(control: *const Control) u64 {
-    if (!initialized(control)) return 0;
-    return @atomicLoad(u64, &control.published_generation, .acquire);
+    return if (publishedImage(control)) |image| image.generation else 0;
 }
 
 /// Return the shared-memory byte offset of the currently published image.
 pub fn imageOffset(control: *const Control) usize {
-    return @intCast(control.image_offset);
+    return @intCast(@atomicLoad(u64, &control.image_offset, .acquire));
 }
 
 /// Return the byte length of the currently published image.
 pub fn imageSize(control: *const Control) usize {
-    return @intCast(control.image_size);
+    return @intCast(@atomicLoad(u64, &control.image_size, .acquire));
 }
 
 /// Publish the host shim's acknowledgement for a generation.
 pub fn acknowledge(control: *Control, generation: u64, status: Status) void {
-    control.status = @intFromEnum(status);
+    const start = nextOddSequence(@atomicLoad(u64, &control.ack_sequence, .acquire));
+    @atomicStore(u64, &control.ack_sequence, start, .release);
+    @atomicStore(u32, &control.status, @intFromEnum(status), .release);
     @atomicStore(u64, &control.acknowledged_generation, generation, .release);
+    @atomicStore(u64, &control.ack_sequence, start +% 1, .release);
 }
 
-/// Acquire-load the latest generation acknowledged by the host shim.
-pub fn acknowledgedGeneration(control: *const Control) u64 {
-    if (!initialized(control)) return 0;
-    return @atomicLoad(u64, &control.acknowledged_generation, .acquire);
+/// Coherent snapshot of the host shim acknowledgement.
+pub const Acknowledgement = struct {
+    generation: u64,
+    status: Status,
+};
+
+/// Return a coherent acknowledgement snapshot, if one is stable.
+pub fn acknowledgement(control: *const Control) ?Acknowledgement {
+    if (!initialized(control)) return null;
+
+    for (0..16) |_| {
+        const start = @atomicLoad(u64, &control.ack_sequence, .acquire);
+        if (!stableSequence(start)) continue;
+
+        const generation = @atomicLoad(u64, &control.acknowledged_generation, .acquire);
+        const status_raw = @atomicLoad(u32, &control.status, .acquire);
+
+        const end = @atomicLoad(u64, &control.ack_sequence, .acquire);
+        if (start == end and stableSequence(end)) {
+            return .{
+                .generation = generation,
+                .status = statusFromRaw(status_raw),
+            };
+        }
+    }
+
+    return null;
 }
 
-/// Return the acknowledgement status associated with the latest acknowledgement.
-pub fn acknowledgedStatus(control: *const Control) Status {
-    if (!initialized(control)) return .none;
-    return switch (@atomicLoad(u32, &control.status, .acquire)) {
+fn statusFromRaw(raw: u32) Status {
+    return switch (raw) {
         @intFromEnum(Status.accepted) => .accepted,
         @intFromEnum(Status.rejected) => .rejected,
         else => .none,
     };
+}
+
+/// Acquire-load the latest generation acknowledged by the host shim.
+pub fn acknowledgedGeneration(control: *const Control) u64 {
+    return if (acknowledgement(control)) |ack| ack.generation else 0;
+}
+
+/// Return the acknowledgement status associated with the latest acknowledgement.
+pub fn acknowledgedStatus(control: *const Control) Status {
+    return if (acknowledgement(control)) |ack| ack.status else .none;
 }
 
 test "hot reload control publishes and acknowledges generations" {
@@ -136,6 +213,38 @@ test "hot reload control publishes and acknowledges generations" {
     acknowledge(&control, 2, .accepted);
     try std.testing.expectEqual(@as(u64, 2), acknowledgedGeneration(&control));
     try std.testing.expectEqual(Status.accepted, acknowledgedStatus(&control));
+}
+
+test "hot reload publication snapshots reject in-progress writes" {
+    var control = std.mem.zeroes(Control);
+    init(&control, 512, 4096);
+
+    @atomicStore(u64, &control.publish_sequence, 3, .release);
+    @atomicStore(u64, &control.image_offset, 8192, .release);
+    @atomicStore(u64, &control.image_size, 16384, .release);
+    @atomicStore(u64, &control.published_generation, 2, .release);
+    try std.testing.expect(publishedImage(&control) == null);
+
+    @atomicStore(u64, &control.publish_sequence, 4, .release);
+    const image = publishedImage(&control).?;
+    try std.testing.expectEqual(@as(u64, 2), image.generation);
+    try std.testing.expectEqual(@as(usize, 8192), image.image_offset);
+    try std.testing.expectEqual(@as(usize, 16384), image.image_size);
+}
+
+test "hot reload acknowledgement snapshots reject in-progress writes" {
+    var control = std.mem.zeroes(Control);
+    init(&control, 512, 4096);
+
+    @atomicStore(u64, &control.ack_sequence, 5, .release);
+    @atomicStore(u32, &control.status, @intFromEnum(Status.accepted), .release);
+    @atomicStore(u64, &control.acknowledged_generation, 2, .release);
+    try std.testing.expect(acknowledgement(&control) == null);
+
+    @atomicStore(u64, &control.ack_sequence, 6, .release);
+    const ack = acknowledgement(&control).?;
+    try std.testing.expectEqual(@as(u64, 2), ack.generation);
+    try std.testing.expectEqual(Status.accepted, ack.status);
 }
 
 test "hot reload control block fits in shared memory reserved header bytes" {

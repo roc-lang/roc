@@ -2625,7 +2625,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("build_options", roc_modules.build_options);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2664,6 +2664,7 @@ pub fn build(b: *std.Build) void {
             write_compiled_builtins,
             llvm_codegen_module,
             null, // No tracy
+            false,
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -4806,6 +4807,7 @@ fn addMainExe(
     write_compiled_builtins: *Step.WriteFile,
     llvm_codegen_module: *std.Build.Module,
     flag_enable_tracy: ?[]const u8,
+    add_machine_code_shim_test: bool,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -4996,6 +4998,49 @@ fn addMainExe(
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     machine_code_shim_lib.bundle_compiler_rt = true;
+
+    if (add_machine_code_shim_test) {
+        const machine_code_shim_test = b.addTest(.{
+            .name = "machine_code_shim",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/machine_code_shim/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        configureBackend(machine_code_shim_test, target);
+        roc_modules.addAll(machine_code_shim_test);
+        machine_code_shim_test.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        machine_code_shim_test.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        machine_code_shim_test.root_module.addImport("shim_io", b.addModule("shim_io_machine_code_test", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        machine_code_shim_test.root_module.addImport("shim_host_abi", shim_host_abi_module);
+        machine_code_shim_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        machine_code_shim_test.step.dependOn(&write_compiled_builtins.step);
+        machine_code_shim_test.root_module.addObjectFile(builtins_obj.getEmittedBin());
+        const machine_code_shim_test_host = b.addObject(.{
+            .name = "machine_code_shim_test_host",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/machine_code_shim/test_host.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(machine_code_shim_test_host, target);
+        machine_code_shim_test_host.root_module.addImport("builtins", roc_modules.builtins);
+        machine_code_shim_test.root_module.addObject(machine_code_shim_test_host);
+        machine_code_shim_test.bundle_compiler_rt = true;
+        add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
+
+        const run_machine_code_shim_test = b.addRunArtifact(machine_code_shim_test);
+        const run_machine_code_shim_test_step = b.step(
+            "run-test-zig-machine-code-shim",
+            "Run machine-code shim Zig tests",
+        );
+        run_machine_code_shim_test_step.dependOn(&run_machine_code_shim_test.step);
+    }
 
     const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
     b.getInstallStep().dependOn(&install_machine_code_shim.step);

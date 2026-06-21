@@ -3801,11 +3801,11 @@ fn reportHotReloadAcknowledgement(
     control: *const ipc.hot_reload.Control,
     last_reported_ack: *u64,
 ) CliOutputWriteError!?u64 {
-    const generation = ipc.hot_reload.acknowledgedGeneration(control);
+    const ack = ipc.hot_reload.acknowledgement(control) orelse return null;
+    const generation = ack.generation;
     if (generation == 0 or generation <= last_reported_ack.*) return null;
 
-    const status = ipc.hot_reload.acknowledgedStatus(control);
-    switch (status) {
+    switch (ack.status) {
         .none => return null,
         .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
         .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
@@ -3835,10 +3835,7 @@ fn runHotReloadDevShim(
     var initial_input_set_needs_deinit = true;
     errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
 
-    var child_handle = shm_handle;
-    child_handle.size = shm_handle.mapped_size;
-
-    const host_child = try spawnHotShimChild(ctx, exe_path, child_handle, args.app_args);
+    const host_child = try spawnHotShimChild(ctx, exe_path, hotReloadHostChildHandle(shm_handle), args.app_args);
     var host_child_joined = false;
     errdefer {
         if (!host_child_joined) {
@@ -3854,7 +3851,8 @@ fn runHotReloadDevShim(
 
     var next_generation: u64 = 2;
     const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
-    const hot_reload_reclaim_offset = ipc.hot_reload.imageSize(hot_reload_control);
+    const initial_image = ipc.hot_reload.publishedImage(hot_reload_control) orelse return error.InvalidSharedMemory;
+    const hot_reload_reclaim_offset = initial_image.image_size;
     var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
     var last_reclaimed_ack = last_reported_ack;
     var last_finished_generation: u64 = 1;
@@ -3973,6 +3971,31 @@ pub const SharedMemoryHandle = struct {
     /// a large virtual address region upfront.
     mapped_size: usize,
 };
+
+fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
+    var child_handle = handle;
+    child_handle.size = handle.mapped_size;
+    return child_handle;
+}
+
+test "hot reload host child maps the full shared-memory reservation" {
+    const fd = if (comptime is_windows)
+        @as(*anyopaque, @ptrFromInt(0x1234))
+    else
+        @as(c_int, 1234);
+    const original = SharedMemoryHandle{
+        .fd = fd,
+        .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
+        .size = 4096,
+        .mapped_size = 8192,
+    };
+
+    const child = hotReloadHostChildHandle(original);
+    try std.testing.expectEqual(original.fd, child.fd);
+    try std.testing.expectEqual(original.ptr, child.ptr);
+    try std.testing.expectEqual(@as(usize, 8192), child.size);
+    try std.testing.expectEqual(@as(usize, 8192), child.mapped_size);
+}
 
 /// Result of setting up shared memory with type checking information.
 /// Contains the shared memory handle for the compiled modules and

@@ -1,3 +1,5 @@
+//! Watch-mode filesystem inputs recorded by compiler runs for refresh checks.
+
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;

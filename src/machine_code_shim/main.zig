@@ -33,12 +33,14 @@ const ExecutableMemory = backend.ExecutableMemory;
 const dev_wrappers = builtins.dev_wrappers;
 
 const DevProgram = struct {
-    view: RunImage.ProgramView,
+    entrypoints: []RunImage.Entrypoint,
     executable: ExecutableMemory,
     generation: u64,
     refs: std.atomic.Value(usize),
 
-    fn deinit(self: *DevProgram) void {
+    fn deinit(self: *DevProgram, gpa: Allocator) void {
+        gpa.free(self.entrypoints);
+        self.entrypoints = &.{};
         self.executable.deinit();
     }
 };
@@ -112,9 +114,13 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
     const control = hot_reload.controlFromBase(shm.base_ptr);
     const has_hot_reload = hot_reload.initialized(control);
-    const generation = if (has_hot_reload) hot_reload.publishedGeneration(control) else 0;
-    const image_offset = if (has_hot_reload) hot_reload.imageOffset(control) else header_offset;
-    const image_bound = if (has_hot_reload) hot_reload.imageSize(control) else shm.total_size;
+    const published_image = if (has_hot_reload)
+        hot_reload.publishedImage(control) orelse return error.InvalidDevRunImage
+    else
+        null;
+    const generation = if (published_image) |image| image.generation else 0;
+    const image_offset = if (published_image) |image| image.image_offset else header_offset;
+    const image_bound = if (published_image) |image| image.image_size else shm.total_size;
 
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
     const program = try createDevProgram(gpa, &view, generation);
@@ -279,8 +285,12 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProg
     );
     try executable.finishWrite();
 
+    const entrypoints = try gpa.alloc(RunImage.Entrypoint, view.entrypoints.len);
+    errdefer gpa.free(entrypoints);
+    @memcpy(entrypoints, view.entrypoints);
+
     return .{
-        .view = view.*,
+        .entrypoints = entrypoints,
         .executable = executable,
         .generation = 0,
         .refs = std.atomic.Value(usize).init(1),
@@ -297,7 +307,7 @@ fn createDevProgram(gpa: Allocator, view: *const RunImage.ProgramView, generatio
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
-    program.deinit();
+    program.deinit(gpa);
     gpa.destroy(program);
 }
 
@@ -385,8 +395,8 @@ fn movkX16(imm: u16, shift: u6) u32 {
     return 0xF280_0000 | (@as(u32, shift / 16) << 21) | (@as(u32, imm) << 5) | 16;
 }
 
-fn devEntrypointForOrdinal(view: *const RunImage.ProgramView, ordinal: u32) ?RunImage.Entrypoint {
-    for (view.entrypoints) |entrypoint| {
+fn devEntrypointForOrdinal(entrypoints: []const RunImage.Entrypoint, ordinal: u32) ?RunImage.Entrypoint {
+    for (entrypoints) |entrypoint| {
         if (entrypoint.ordinal == ordinal) return entrypoint;
     }
     return null;
@@ -399,7 +409,7 @@ fn executeDevEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
-    const entrypoint = devEntrypointForOrdinal(&program.view, entry_idx) orelse {
+    const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
         }
@@ -485,27 +495,27 @@ fn refreshRuntimeProgramIfNeeded(
     state: *RuntimeState,
 ) void {
     const control = state.control orelse return;
-    const published_generation = hot_reload.publishedGeneration(control);
-    if (published_generation <= state.program.generation) return;
+    const published_image = hot_reload.publishedImage(control) orelse return;
+    if (published_image.generation <= state.program.generation) return;
 
     const view = viewRuntimeImage(
         &state.shm,
-        hot_reload.imageOffset(control),
-        hot_reload.imageSize(control),
+        published_image.image_offset,
+        published_image.image_size,
     ) catch {
-        hot_reload.acknowledge(control, published_generation, .rejected);
+        hot_reload.acknowledge(control, published_image.generation, .rejected);
         return;
     };
 
     const gpa = allocator();
-    const next_program = createDevProgram(gpa, &view, published_generation) catch {
-        hot_reload.acknowledge(control, published_generation, .rejected);
+    const next_program = createDevProgram(gpa, &view, published_image.generation) catch {
+        hot_reload.acknowledge(control, published_image.generation, .rejected);
         return;
     };
 
     state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
         destroyDevProgram(gpa, next_program);
-        hot_reload.acknowledge(control, published_generation, .rejected);
+        hot_reload.acknowledge(control, published_image.generation, .rejected);
         return;
     };
 
@@ -513,7 +523,7 @@ fn refreshRuntimeProgramIfNeeded(
     state.program = next_program;
     state.retired_programs.appendAssumeCapacity(old_program);
     releaseDevProgramRefLocked(state, old_program);
-    hot_reload.acknowledge(control, published_generation, .accepted);
+    hot_reload.acknowledge(control, published_image.generation, .accepted);
 }
 
 fn evaluateEntrypoint(
@@ -594,4 +604,35 @@ export fn roc_shim_default_main(argc: usize, argv: [*][*:0]const u8) callconv(.c
         => return 1,
     };
     return result;
+}
+
+test "loaded dev program owns entrypoint metadata" {
+    const code: []const u8 = switch (builtin.cpu.arch) {
+        .x86_64 => &[_]u8{0xC3},
+        .aarch64, .aarch64_be => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
+        else => return error.SkipZigTest,
+    };
+    var source_entrypoints = [_]RunImage.Entrypoint{
+        .{ .ordinal = 0, .code_offset = 0 },
+    };
+
+    const view = RunImage.ProgramView{
+        .code = code,
+        .entrypoints = &source_entrypoints,
+        .relocations = &.{},
+        .symbol_names = &.{},
+        .data = &.{},
+        .data_symbols = &.{},
+    };
+
+    var program = try loadDevProgram(std.testing.allocator, &view);
+    defer program.deinit(std.testing.allocator);
+
+    try std.testing.expect(program.entrypoints.ptr != source_entrypoints[0..].ptr);
+    try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
+
+    source_entrypoints[0] = .{ .ordinal = 99, .code_offset = 999 };
+    try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
+    try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
 }
