@@ -1233,11 +1233,12 @@ fn interpolationDispatcherTypeId(
     checked_types: anytype,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!CheckedTypeId {
-    const suffix_type = module.moduleEnvConst().numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
+    const suffix_target = module.moduleEnvConst().numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
         return checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx));
 
-    return switch (suffix_type.target()) {
+    return switch (suffix_target.target()) {
         .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
+        .invalid => checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
         .builtin, .external => if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
         } else unreachable,

@@ -111,7 +111,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
         .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
         .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .numeric_suffix_types = serialized_ptr.numeric_suffix_types.deserializeInto(base_ptr),
+        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
     };
 
     return LoadedModule{
