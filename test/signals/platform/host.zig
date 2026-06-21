@@ -528,6 +528,12 @@ const HostSignalRecordTokenEntry = struct {
     record: *HostSignalRecord,
 };
 
+const HostActiveSignalGraphNode = struct {
+    record: *HostSignalRecord,
+    rank: u64 = 0,
+    dependents: []u64 = &.{},
+};
+
 const HostNodeDescriptorStream = struct {
     render_nodes: std.ArrayListUnmanaged(HostRenderNode) = .empty,
     elements: std.ArrayListUnmanaged(HostElementDesc) = .empty,
@@ -1420,6 +1426,8 @@ const HostEnv = struct {
     node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
     dom_identities: std.ArrayListUnmanaged(HostDomIdentity) = .empty,
     active_stream: HostNodeDescriptorStream = .{},
+    active_signal_graph: std.ArrayListUnmanaged(HostActiveSignalGraphNode) = .empty,
+    active_source_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u64)) = .empty,
     active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
     active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
     active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
@@ -1757,8 +1765,21 @@ const HostEnv = struct {
         self.signal_cache.items.len = 0;
     }
 
+    fn clearActiveSignalGraph(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.active_signal_graph.items) |node| {
+            allocator.free(node.dependents);
+        }
+        self.active_signal_graph.items.len = 0;
+    }
+
     fn clearActiveSignalRoutes(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
+        for (self.active_source_signal_routes.items) |*route| {
+            route.deinit(allocator);
+        }
+        self.active_source_signal_routes.items.len = 0;
+
         for (self.active_text_signal_routes.items) |*route| {
             route.deinit(allocator);
         }
@@ -1775,87 +1796,212 @@ const HostEnv = struct {
         self.active_structural_signal_routes.items.len = 0;
     }
 
-    fn ensureActiveTextSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
-        if (source_node_id >= self.node_identities.items.len) failHost("active text signal route referenced an unknown source node");
+    fn activeSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) ?u64 {
+        for (self.active_signal_graph.items, 0..) |node, index| {
+            if (node.record == record) return @intCast(index);
+        }
+        return null;
+    }
+
+    fn requireActiveSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) u64 {
+        return self.activeSignalRecordId(record) orelse failHost("active signal graph referenced a record that was not registered");
+    }
+
+    fn appendActiveSignalRecordTree(self: *HostEnv, record: *HostSignalRecord) u64 {
+        if (self.activeSignalRecordId(record)) |record_id| return record_id;
+
+        switch (record.payload) {
+            .ref, .const_value => {},
+            .map => |payload| _ = self.appendActiveSignalRecordTree(payload.input),
+            .map2 => |payload| {
+                _ = self.appendActiveSignalRecordTree(payload.left);
+                _ = self.appendActiveSignalRecordTree(payload.right);
+            },
+            .combine => |payload| {
+                for (payload.children) |child| {
+                    _ = self.appendActiveSignalRecordTree(child);
+                }
+            },
+        }
+
+        const allocator = self.gpa.allocator();
+        const record_id: u64 = @intCast(self.active_signal_graph.items.len);
+        self.active_signal_graph.append(allocator, .{ .record = record }) catch std.process.exit(1);
+        return record_id;
+    }
+
+    fn appendActiveSignalDependent(self: *HostEnv, route_lists: []std.ArrayListUnmanaged(u64), input_record: *HostSignalRecord, dependent_record_id: u64) void {
+        const allocator = self.gpa.allocator();
+        const input_record_id = self.requireActiveSignalRecordId(input_record);
+        const input_index: usize = @intCast(input_record_id);
+        if (!u64SliceContains(route_lists[input_index].items, dependent_record_id)) {
+            route_lists[input_index].append(allocator, dependent_record_id) catch std.process.exit(1);
+        }
+    }
+
+    fn rebuildActiveSignalGraphDependents(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        const record_count = self.active_signal_graph.items.len;
+        const route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), record_count) catch std.process.exit(1);
+        defer allocator.free(route_lists);
+
+        for (route_lists) |*list| {
+            list.* = .empty;
+        }
+        errdefer {
+            for (route_lists) |*list| {
+                list.deinit(allocator);
+            }
+        }
+
+        for (self.active_signal_graph.items, 0..) |*node, index| {
+            const record_id: u64 = @intCast(index);
+            var rank: u64 = 0;
+            switch (node.record.payload) {
+                .ref, .const_value => {},
+                .map => |payload| {
+                    const input_id = self.requireActiveSignalRecordId(payload.input);
+                    rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
+                    self.appendActiveSignalDependent(route_lists, payload.input, record_id);
+                },
+                .map2 => |payload| {
+                    const left_id = self.requireActiveSignalRecordId(payload.left);
+                    const right_id = self.requireActiveSignalRecordId(payload.right);
+                    rank = @max(
+                        self.active_signal_graph.items[@intCast(left_id)].rank,
+                        self.active_signal_graph.items[@intCast(right_id)].rank,
+                    ) + 1;
+                    self.appendActiveSignalDependent(route_lists, payload.left, record_id);
+                    self.appendActiveSignalDependent(route_lists, payload.right, record_id);
+                },
+                .combine => |payload| {
+                    for (payload.children) |child| {
+                        const child_id = self.requireActiveSignalRecordId(child);
+                        rank = @max(rank, self.active_signal_graph.items[@intCast(child_id)].rank + 1);
+                        self.appendActiveSignalDependent(route_lists, child, record_id);
+                    }
+                },
+            }
+            node.rank = rank;
+        }
+
+        for (self.active_signal_graph.items, route_lists) |*node, *route_list| {
+            node.dependents = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
+        }
+    }
+
+    fn ensureActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
+        if (source_node_id >= self.node_identities.items.len) failHost("active source signal route referenced an unknown source node");
         const allocator = self.gpa.allocator();
         const route_index: usize = @intCast(source_node_id);
+        while (self.active_source_signal_routes.items.len <= route_index) {
+            self.active_source_signal_routes.append(allocator, .empty) catch std.process.exit(1);
+        }
+        return &self.active_source_signal_routes.items[route_index];
+    }
+
+    fn ensureActiveTextSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active text signal route referenced an unknown signal record");
+        const allocator = self.gpa.allocator();
+        const route_index: usize = @intCast(record_id);
         while (self.active_text_signal_routes.items.len <= route_index) {
             self.active_text_signal_routes.append(allocator, .empty) catch std.process.exit(1);
         }
         return &self.active_text_signal_routes.items[route_index];
     }
 
-    fn ensureActiveBoolSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
-        if (source_node_id >= self.node_identities.items.len) failHost("active bool signal route referenced an unknown source node");
+    fn ensureActiveBoolSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active bool signal route referenced an unknown signal record");
         const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(source_node_id);
+        const route_index: usize = @intCast(record_id);
         while (self.active_bool_signal_routes.items.len <= route_index) {
             self.active_bool_signal_routes.append(allocator, .empty) catch std.process.exit(1);
         }
         return &self.active_bool_signal_routes.items[route_index];
     }
 
-    fn ensureActiveStructuralSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
-        if (source_node_id >= self.node_identities.items.len) failHost("active structural signal route referenced an unknown source node");
+    fn ensureActiveStructuralSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active structural signal route referenced an unknown signal record");
         const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(source_node_id);
+        const route_index: usize = @intCast(record_id);
         while (self.active_structural_signal_routes.items.len <= route_index) {
             self.active_structural_signal_routes.append(allocator, .empty) catch std.process.exit(1);
         }
         return &self.active_structural_signal_routes.items[route_index];
     }
 
-    fn rebuildActiveSignalRoutesFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
+    fn rebuildActiveSignalGraphFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
         const allocator = self.gpa.allocator();
         self.clearActiveSignalRoutes();
+        self.clearActiveSignalGraph();
+
+        for (stream.signal_text_nodes.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.signal.record);
+        }
+        for (stream.signal_text_attrs.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.signal.record);
+        }
+        for (stream.signal_bool_attrs.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.signal.record);
+        }
+        for (stream.whens.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.condition.record);
+        }
+        for (stream.eaches.items) |*desc| {
+            _ = self.appendActiveSignalRecordTree(desc.items.record);
+        }
+
+        self.rebuildActiveSignalGraphDependents();
+
+        for (self.active_signal_graph.items, 0..) |node, record_id| {
+            switch (node.record.payload) {
+                .ref => |source_node_id| {
+                    const route = self.ensureActiveSourceSignalRoute(source_node_id);
+                    if (!u64SliceContains(route.items, @intCast(record_id))) {
+                        route.append(allocator, @intCast(record_id)) catch std.process.exit(1);
+                    }
+                },
+                .const_value, .map, .map2, .combine => {},
+            }
+        }
 
         for (stream.signal_text_nodes.items, 0..) |desc, index| {
-            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
-                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
-                self.ensureActiveTextSignalRoute(source_node_id).append(allocator, .{
-                    .kind = .text_node,
-                    .index = index,
-                }) catch std.process.exit(1);
-            }
+            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+            self.ensureActiveTextSignalRoute(record_id).append(allocator, .{
+                .kind = .text_node,
+                .index = index,
+            }) catch std.process.exit(1);
         }
 
         for (stream.signal_text_attrs.items, 0..) |desc, index| {
-            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
-                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
-                self.ensureActiveTextSignalRoute(source_node_id).append(allocator, .{
-                    .kind = .text_attr,
-                    .index = index,
-                }) catch std.process.exit(1);
-            }
+            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+            self.ensureActiveTextSignalRoute(record_id).append(allocator, .{
+                .kind = .text_attr,
+                .index = index,
+            }) catch std.process.exit(1);
         }
 
         for (stream.signal_bool_attrs.items, 0..) |desc, index| {
-            for (desc.signal.source_node_ids, 0..) |source_node_id, source_index| {
-                if (u64SliceContains(desc.signal.source_node_ids[0..source_index], source_node_id)) continue;
-                self.ensureActiveBoolSignalRoute(source_node_id).append(allocator, .{
-                    .index = index,
-                }) catch std.process.exit(1);
-            }
+            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+            self.ensureActiveBoolSignalRoute(record_id).append(allocator, .{
+                .index = index,
+            }) catch std.process.exit(1);
         }
 
         for (stream.whens.items, 0..) |desc, index| {
-            for (desc.condition.source_node_ids, 0..) |source_node_id, source_index| {
-                if (u64SliceContains(desc.condition.source_node_ids[0..source_index], source_node_id)) continue;
-                self.ensureActiveStructuralSignalRoute(source_node_id).append(allocator, .{
-                    .kind = .when,
-                    .index = index,
-                }) catch std.process.exit(1);
-            }
+            const record_id = self.requireActiveSignalRecordId(desc.condition.record);
+            self.ensureActiveStructuralSignalRoute(record_id).append(allocator, .{
+                .kind = .when,
+                .index = index,
+            }) catch std.process.exit(1);
         }
 
         for (stream.eaches.items, 0..) |desc, index| {
-            for (desc.items.source_node_ids, 0..) |source_node_id, source_index| {
-                if (u64SliceContains(desc.items.source_node_ids[0..source_index], source_node_id)) continue;
-                self.ensureActiveStructuralSignalRoute(source_node_id).append(allocator, .{
-                    .kind = .each,
-                    .index = index,
-                }) catch std.process.exit(1);
-            }
+            const record_id = self.requireActiveSignalRecordId(desc.items.record);
+            self.ensureActiveStructuralSignalRoute(record_id).append(allocator, .{
+                .kind = .each,
+                .index = index,
+            }) catch std.process.exit(1);
         }
     }
 
@@ -2048,6 +2194,67 @@ const HostEnv = struct {
         const signal_ids = dirty_signal_ids.toOwnedSlice(allocator) catch std.process.exit(1);
         self.sortSignalIdsByRank(signal_ids);
         return signal_ids;
+    }
+
+    fn activeSignalRank(self: *HostEnv, record_id: u64) u64 {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active signal record id has no graph node");
+        return self.active_signal_graph.items[@intCast(record_id)].rank;
+    }
+
+    fn dependentActiveSignalRecordIds(self: *HostEnv, record_id: u64) []const u64 {
+        if (record_id >= self.active_signal_graph.items.len) failHost("active signal record id has no dependent table");
+        return self.active_signal_graph.items[@intCast(record_id)].dependents;
+    }
+
+    fn appendActiveSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
+        if (!u64SliceContains(record_ids.items, record_id)) {
+            record_ids.append(allocator, record_id) catch std.process.exit(1);
+        }
+
+        var index: usize = 0;
+        while (index < record_ids.items.len) : (index += 1) {
+            const current_record_id = record_ids.items[index];
+            for (self.dependentActiveSignalRecordIds(current_record_id)) |dependent_record_id| {
+                if (!u64SliceContains(record_ids.items, dependent_record_id)) {
+                    record_ids.append(allocator, dependent_record_id) catch std.process.exit(1);
+                }
+            }
+        }
+    }
+
+    fn sortActiveSignalRecordIdsByRank(self: *HostEnv, record_ids: []u64) void {
+        var index: usize = 1;
+        while (index < record_ids.len) : (index += 1) {
+            const value = record_ids[index];
+            const value_rank = self.activeSignalRank(value);
+            var insert_index = index;
+            while (insert_index > 0) {
+                const previous = record_ids[insert_index - 1];
+                const previous_rank = self.activeSignalRank(previous);
+                if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
+                record_ids[insert_index] = previous;
+                insert_index -= 1;
+            }
+            record_ids[insert_index] = value;
+        }
+    }
+
+    fn dirtyActiveSignalRecordIdsForSources(self: *HostEnv, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
+        var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+        errdefer dirty_record_ids.deinit(allocator);
+
+        for (dirty_source_node_ids) |source_node_id| {
+            const route_index: usize = @intCast(source_node_id);
+            if (route_index >= self.active_source_signal_routes.items.len) continue;
+
+            for (self.active_source_signal_routes.items[route_index].items) |record_id| {
+                self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
+            }
+        }
+
+        const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch std.process.exit(1);
+        self.sortActiveSignalRecordIdsByRank(record_ids);
+        return record_ids;
     }
 
     fn recordDispatch(self: *HostEnv) void {
@@ -3098,6 +3305,13 @@ const HostEnv = struct {
     fn deinit(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
 
+        self.clearActiveSignalRoutes();
+        self.active_source_signal_routes.deinit(allocator);
+        self.active_text_signal_routes.deinit(allocator);
+        self.active_bool_signal_routes.deinit(allocator);
+        self.active_structural_signal_routes.deinit(allocator);
+        self.clearActiveSignalGraph();
+        self.active_signal_graph.deinit(allocator);
         self.active_stream.deinit(allocator, self.roc_host.?, &self.pending_roc_metrics);
         self.clearActiveEvents();
         self.active_events.deinit(allocator);
@@ -3129,10 +3343,6 @@ const HostEnv = struct {
         self.scopes.deinit(allocator);
         self.node_identities.deinit(allocator);
         self.dom_identities.deinit(allocator);
-        self.clearActiveSignalRoutes();
-        self.active_text_signal_routes.deinit(allocator);
-        self.active_bool_signal_routes.deinit(allocator);
-        self.active_structural_signal_routes.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -4003,6 +4213,25 @@ fn evalDirtyHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *H
     return evalDirtyHostSignalRecord(host, roc_host, signal.record, dirty_source_node_ids, dirty_generation);
 }
 
+fn propagateDirtyActiveSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
+    const dirty_record_ids = host.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
+    defer allocator.free(dirty_record_ids);
+
+    var changed_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+    errdefer changed_record_ids.deinit(allocator);
+
+    for (dirty_record_ids) |record_id| {
+        const record = host.active_signal_graph.items[@intCast(record_id)].record;
+        const result = evalDirtyHostSignalRecord(host, roc_host, record, dirty_source_node_ids, dirty_generation);
+        if (result.changed) {
+            changed_record_ids.append(allocator, record_id) catch std.process.exit(1);
+        }
+        dropHostSignalRecordValue(host, roc_host, record, result.value);
+    }
+
+    return changed_record_ids.toOwnedSlice(allocator) catch std.process.exit(1);
+}
+
 fn hostSignalRecordEqCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
     return switch (record.payload) {
         .ref => |node_id| host.stateEqCallable(node_id),
@@ -4092,9 +4321,9 @@ fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
     return false;
 }
 
-fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
-    for (dirty_source_node_ids) |source_node_id| {
-        const route_index: usize = @intCast(source_node_id);
+fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) bool {
+    for (changed_record_ids) |record_id| {
+        const route_index: usize = @intCast(record_id);
         if (route_index >= host.active_structural_signal_routes.items.len) continue;
 
         for (host.active_structural_signal_routes.items[route_index].items) |route| {
@@ -4123,11 +4352,11 @@ fn dirtyStructuralRenderRequired(host: *HostEnv, roc_host: *abi.RocHost, dirty_s
     return false;
 }
 
-fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64) CommandCounts {
+fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) CommandCounts {
     var counts: CommandCounts = .{};
 
-    for (dirty_source_node_ids) |source_node_id| {
-        const route_index: usize = @intCast(source_node_id);
+    for (changed_record_ids) |record_id| {
+        const route_index: usize = @intCast(record_id);
         if (route_index < host.active_text_signal_routes.items.len) {
             for (host.active_text_signal_routes.items[route_index].items) |route| {
                 switch (route.kind) {
@@ -4282,7 +4511,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         counts.addEventBinding();
     }
 
-    host.rebuildActiveSignalRoutesFromStream(stream);
+    host.rebuildActiveSignalGraphFromStream(stream);
     host.render_metrics.patches_emitted += counts.total;
     return counts;
 }
@@ -4417,7 +4646,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
 
     applyStructuralEventBindings(host, stream, seen, &counts);
 
-    host.rebuildActiveSignalRoutesFromStream(stream);
+    host.rebuildActiveSignalGraphFromStream(stream);
     host.render_metrics.patches_emitted += counts.total;
     return counts;
 }
@@ -4692,11 +4921,13 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     if (stats) |s| {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
         const dirty_generation = host.nextDirtySignalGeneration();
-        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, dirty_generation)) {
+        const changed_record_ids = propagateDirtyActiveSignals(host, roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+        defer host.gpa.allocator().free(changed_record_ids);
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation)) {
             renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, &s.dispatch_apply_ns, &s.commands);
         } else {
             const apply_start_ns = benchmarkNowNs();
-            const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, dirty_generation);
+            const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
             s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
             s.commands.addAll(counts);
             finishHostMetrics(host);
@@ -4705,10 +4936,12 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     } else {
         const dirty_source_node_ids = [_]u64{desc.target_node_id};
         const dirty_generation = host.nextDirtySignalGeneration();
-        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, dirty_generation)) {
+        const changed_record_ids = propagateDirtyActiveSignals(host, roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+        defer host.gpa.allocator().free(changed_record_ids);
+        if (dirtyStructuralRenderRequired(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation)) {
             renderActiveRootMeasured(host, roc_host, &dirty_source_node_ids, null, null);
         } else {
-            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, dirty_generation);
+            _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
             finishHostMetrics(host);
         }
     }
@@ -5977,10 +6210,12 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
 
     const dirty_source_node_ids = [_]u64{state_id};
     const dirty_generation = host.nextDirtySignalGeneration();
-    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation));
 
     const patch_start = host.render_metrics.patches_emitted;
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
@@ -5991,7 +6226,9 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     try std.testing.expectEqualStrings("second", host.dom_elements.items[1].text.?);
 
     const unchanged_generation = host.nextDirtySignalGeneration();
-    const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, unchanged_generation);
+    const unchanged_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, unchanged_generation);
+    defer host.gpa.allocator().free(unchanged_record_ids);
+    const unchanged_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, unchanged_record_ids, unchanged_generation);
     try std.testing.expectEqual(@as(u64, 0), unchanged_counts.total);
 }
 
@@ -6033,7 +6270,9 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
     const dirty_source_node_ids = [_]u64{state_id};
     const prune_start = host.pending_roc_metrics.propagation_prunes;
     const dirty_generation = host.nextDirtySignalGeneration();
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
@@ -6075,8 +6314,26 @@ test "signals host evaluates shared dirty record once per batch" {
     try std.testing.expectEqualStrings("stable", host.dom_elements.items[2].text.?);
     try std.testing.expectEqualStrings("stable", host.dom_elements.items[3].text.?);
     try std.testing.expect(host.active_stream.signal_text_nodes.items[0].signal.record == host.active_stream.signal_text_nodes.items[1].signal.record);
+    try std.testing.expectEqual(@as(usize, 2), host.active_signal_graph.items.len);
+
+    const shared_record = host.active_stream.signal_text_nodes.items[0].signal.record;
+    const shared_record_id = host.requireActiveSignalRecordId(shared_record);
+    const source_record = switch (shared_record.payload) {
+        .map => |payload| payload.input,
+        else => failHost("shared label test expected a map signal record"),
+    };
+    const source_record_id = host.requireActiveSignalRecordId(source_record);
+    try std.testing.expectEqual(@as(u64, 0), host.activeSignalRank(source_record_id));
+    try std.testing.expectEqual(@as(u64, 1), host.activeSignalRank(shared_record_id));
+    const expected_dependents = [_]u64{shared_record_id};
+    try std.testing.expectEqualSlices(u64, &expected_dependents, host.dependentActiveSignalRecordIds(source_record_id));
 
     const state_id = host.active_stream.scope_sites.items[0].node_id;
+    try std.testing.expectEqual(@as(usize, @intCast(state_id + 1)), host.active_source_signal_routes.items.len);
+    const expected_source_routes = [_]u64{source_record_id};
+    try std.testing.expectEqualSlices(u64, &expected_source_routes, host.active_source_signal_routes.items[@intCast(state_id)].items);
+    try std.testing.expectEqual(@as(usize, 2), host.active_text_signal_routes.items[@intCast(shared_record_id)].items.len);
+
     const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
     host.states.items[state_index].cell.value = testHostValueI64(2);
@@ -6086,7 +6343,9 @@ test "signals host evaluates shared dirty record once per batch" {
     const prune_start = host.pending_roc_metrics.propagation_prunes;
     const derived_start = host.pending_roc_metrics.derived_calls_into_roc;
     const dirty_generation = host.nextDirtySignalGeneration();
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
@@ -6133,7 +6392,9 @@ test "signals host skips parent transform when dirty child output is unchanged" 
     const prune_start = host.pending_roc_metrics.propagation_prunes;
     const derived_start = host.pending_roc_metrics.derived_calls_into_roc;
     const dirty_generation = host.nextDirtySignalGeneration();
-    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, dirty_generation);
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.total);
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
@@ -6208,7 +6469,9 @@ test "signals host marks dirty structural sources for structural patching" {
     host.states.items[state_index].version += 1;
     const dirty_source_node_ids = [_]u64{state_id};
     const dirty_generation = host.nextDirtySignalGeneration();
-    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation));
 
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);
@@ -6267,7 +6530,9 @@ test "signals host prunes structural render when retained condition equality is 
     const prune_start = host.pending_roc_metrics.propagation_prunes;
 
     const dirty_generation = host.nextDirtySignalGeneration();
-    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    try std.testing.expect(!dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation));
     try std.testing.expectEqual(prune_start + 1, host.pending_roc_metrics.propagation_prunes);
     try std.testing.expect(activeTextElementId(&host, "true branch") != null);
     try std.testing.expect(activeTextElementId(&host, "false branch") == null);
@@ -6392,7 +6657,9 @@ test "signals host rebuilds unchanged row when nested structural source is dirty
 
     const dirty_source_node_ids = [_]u64{state_id};
     const dirty_generation = host.nextDirtySignalGeneration();
-    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, dirty_generation));
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    try std.testing.expect(dirtyStructuralRenderRequired(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation));
 
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, root, &dirty_source_node_ids);

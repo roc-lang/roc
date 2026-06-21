@@ -23,9 +23,10 @@ history.
 - Shared signal records retain their transform/equality/drop thunks and cache
   their current opaque typed output. Dirty evaluation memoizes each record once
   per dirty batch and prunes parent transforms when a child output is unchanged.
-- Dirty leaf and structural checks route by source node id through
-  `active_text_signal_routes`, `active_bool_signal_routes`, and
-  `active_structural_signal_routes`.
+- The host rebuilds an active signal graph from retained signal records after
+  each descriptor stream. Dirty source node ids route to source signal records,
+  then walk explicit dependent edges in rank order. Leaf and structural sinks
+  fan out from the changed terminal signal record ids.
 - Non-structural dirty updates patch only matching text/value/checked/disabled
   sinks. Structural dirty updates patch DOM incrementally, reuse/move surviving
   keyed row DOM, and patch event bindings by changed slot.
@@ -35,20 +36,15 @@ history.
 
 ## Remaining Design Gaps
 
-1. **Signal records are not yet the final graph node table.** The host now shares
-   derived records by explicit token and memoizes dirty evaluation per batch, but
-   propagation is still route-driven and recursively entered from
-   sinks/structural sites. The design requires explicit input ids, dependent
-   edges, ranks, and cached typed values in a host graph table.
-2. **Structural no-rebuild is still incomplete.** Current structural updates are
+1. **Structural no-rebuild is still incomplete.** Current structural updates are
    DOM patches rather than DOM resets, but changed structural outputs still
    rebuild descriptor streams. Structural sites need host-owned records so dirty
    work updates only the affected branch/row scopes.
-3. **Effects and subscriptions are unimplemented.** `Signal.from_task`,
+2. **Effects and subscriptions are unimplemented.** `Signal.from_task`,
    `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` should wait until
    structural site ownership is stable enough to avoid cleanup tied to whole
    stream rebuilds.
-4. **Optimized benchmark validation is blocked.** `zig build run-signals-bench`
+3. **Optimized benchmark validation is blocked.** `zig build run-signals-bench`
    still hits roc-lang/roc#9717 in the optimized ops-dashboard build. Keep the
    benchmark case visible; do not skip it or silently downgrade it to dev mode.
 
@@ -56,13 +52,10 @@ history.
 
 Take one slice at a time and commit each green result.
 
-1. **Dependency graph for shared signal records.** Add explicit dependent
-   edges/ranks so a dirty source walks affected records directly, then fans out
-   to sinks/structural sites from each record's equality result.
-2. **Structural site record.** Convert one `Ui.when` or `Ui.each` site so a dirty
+1. **Structural site record.** Convert one `Ui.when` or `Ui.each` site so a dirty
    source updates that site without rebuilding the whole active descriptor
    stream.
-3. **Effect lifecycle scaffold.** Add the smallest host-owned subscription
+2. **Effect lifecycle scaffold.** Add the smallest host-owned subscription
    lifecycle needed for one cleanup-safe effect source after structural updates
    no longer rebuild the whole active descriptor stream.
 
