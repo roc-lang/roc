@@ -1,6 +1,6 @@
 //! Shared utilities for module discovery during compilation.
 //!
-//! These functions are used by both the IPC path (roc run) and the BuildEnv path (roc check/build)
+//! These functions are used by both the IPC path (default `roc` command) and the BuildEnv path (`roc check`/`roc build`)
 //! to ensure consistent behavior when discovering and loading sibling modules.
 
 const std = @import("std");

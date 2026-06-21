@@ -211,7 +211,7 @@ pub fn runNative(
 /// Run a Roc app with --test mode and IO spec verification.
 /// When backend is set, builds the executable first with `roc build --opt=<name>`
 /// then runs the resulting binary with `--test <spec>`.
-/// When backend is null, uses `roc run --test=<spec>` (interpreter).
+/// When backend is null, uses the default `roc` command with `--test=<spec>` (interpreter).
 pub fn runWithIoSpec(
     allocator: Allocator,
     std_io: std.Io,
