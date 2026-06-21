@@ -40,6 +40,9 @@ history.
   Preserved-order `Ui.each` churn splices only removed/changed/new row scopes
   before applying one DOM patch to the affected each site; reorder churn uses an
   explicit whole-site replacement because row order actually changed.
+  **Caveat (foundation gap):** the DOM patch is local, but the signal-graph
+  maintenance underneath it is not — every structural splice still calls a full
+  clear-and-rebuild of the active signal graph. See *Foundation Gaps* below.
 - `Ui.component` introduces reusable local scopes for helper-owned state. The
   component app proves multiple stateful instances keep separate construction
   identities across keyed row movement and dispose state when the owning row
@@ -53,34 +56,117 @@ history.
   cancellation when the owning scope is disposed, and cleanup descriptor
   execution.
 
-## Remaining Design Gaps
+## Foundation Gaps (the current frontier)
 
-No remaining design gaps are tracked here after the timer subscription slice.
-Keep this file for newly discovered gaps only.
+Functional correctness is green on the small fixtures. The next frontier is
+data-structure quality, telemetry, and benchmark coverage — the work that makes
+the scaling claim true *in the code*, not just on paper. Each gap below is a
+violation of the Complexity Discipline budget in `DESIGN.md` and is invisible to
+the current metrics, so each must ship with the counter and spec assertion that
+would have caught it.
 
-## Next Green Slices
+Severity order (highest first). Take one slice at a time and commit each green
+result. Each slice lands its fix *and* the assertion that locks it in.
 
-Take one slice at a time and commit each green result.
+### G-F1 — Incremental signal-graph maintenance (Critical)
 
-No implementation slices remain in this work queue.
+- **Problem:** every structural change clears and rebuilds the entire active
+  signal graph, and the record→id step inside the rebuild is a linear pointer
+  scan over the node table, so reconstruction is O(N²) in total records.
+- **Fix:** give each `HostSignalRecord` a stored dense id (or a
+  `Dict(*record → id)`) so identity resolution is O(1); on a splice, edit only
+  the affected scope's records and patch adjacency/rank in place instead of
+  clear-and-rebuild. Initial ingestion may be O(N); nothing after it may be.
+- **Counter + assertion:** add `active_graph_records_rebuilt`; a generated
+  large-N each app asserts `expect_metric_delta active_graph_records_rebuilt 0`
+  on a single-row item change and a bound proportional to moved rows on reorder.
 
-### Capability apps (add alongside the slices, smallest proof only)
+### G-F2 — O(1) descriptor lookup (Critical)
 
-Each app maps to exactly one Definition-of-Done capability. Keep them minimal and
-assertion-tight; no catalog fixtures.
+- **Problem:** `findElementDesc`/`findTextNodeDesc`/`findSignalTextNodeDesc`/
+  `streamHasTextField`/`streamHasBoolField` are linear scans over the stream and
+  are called inside loops over all render nodes, yielding O(render_nodes²)
+  structural patch paths; `applySplicedStructuralNodeDescriptorTarget` also scans
+  the whole active stream gated only by a `seen[]` bit.
+- **Fix:** index descriptors by `elem_id` (dense array keyed by elem id);
+  restrict structural patching to the spliced subtree's nodes, not the whole
+  stream.
+- **Counter + assertion:** add `stream_nodes_scanned`; assert it is bounded by
+  the changed set on a single-row update in the large-N app.
 
-- **Async / effects app** — implemented in `async_effects.roc`; keep it minimal
-  and focused on task results, change-triggered commands, pending cancellation,
-  interval subscription ticks/cancellation, and cleanup execution.
+### G-F3 — Key-hash-indexed `Ui.each` diff (High)
 
-Avoid broad fixture catalogs, extra DOM polish, new metric counters, or coverage
-around already-solved identity behavior unless it is the smallest proof for one
-of these gaps.
+- **Problem:** keyed diff matches by linear `is_eq` scan (O(L²)), and the
+  duplicate-key check is a second O(L²) pass; the implemented `Ui.each` API does
+  not even carry the `key.hash` constraint `DESIGN.md` specifies.
+- **Fix:** add the `key.hash`/`Hasher` constraint to the `Ui.each` API (an API
+  addition, not a host workaround) and build a `HashMap(key → row scope id)` per
+  each site for both the diff and the duplicate check.
+- **Counter + assertion:** add `each_key_compares`; assert it tracks L (not L²)
+  under churn in the large-N app.
+
+### G-F4 — Moves-only reorder (High)
+
+- **Problem:** a pure permutation of surviving rows re-collects and re-splices
+  every row at the site (whole-site replacement) instead of emitting only the
+  displaced moves.
+- **Fix:** compute a longest-stable-subsequence keep set and emit DOM moves only
+  for displaced rows; do not re-collect descriptors or rebuild the site graph for
+  a permutation. Whole-site replacement stays reserved for genuine set changes
+  that cannot be expressed as moves-plus-local-splices, named explicitly and
+  asserted, never reached by fallthrough.
+- **Counter + assertion:** the large-N reorder spec asserts `create_element 0`,
+  bounded `append_child` proportional to displaced rows, and bounded
+  `active_graph_records_rebuilt`.
+
+### G-F5 — O(1) allocation free (High)
+
+- **Problem:** the allocation ledger scans all live allocations on every free, so
+  session allocation cost is O(allocs²); this also inflates `dispatch_apply_ns`
+  and the allocation telemetry, conflating harness overhead with framework cost.
+- **Fix:** store the ledger index in the allocation header (or use a
+  pointer-keyed hash set) so free is O(1).
+- **Counter + assertion:** add per-event `allocs_this_event`/`deallocs_this_event`;
+  assert flat per-event allocations across N in the large-N app.
+
+### G-F6 — Telemetry and benchmark-gate coverage (High)
+
+- **Problem:** the current counters measure emitted patches and recomputed nodes
+  but not scanned nodes, rebuilt records, key compares, or per-event allocations;
+  the benchmark gate (`run-signals-bench`) excludes `identity_stress`,
+  `component_composition`, and `async_effects` — the apps that exercise structural
+  churn, reorder, and async lifecycle.
+- **Fix:** land the four new counters (G-F1, G-F2, G-F3, G-F5) and the CSV
+  columns for them; flip `bench = true` for the three excluded apps with explicit
+  regression thresholds. Keep timing as corroborating CSV evidence only — never a
+  gate, since a timing-only check can pass while real work grows.
+- **Spec-vs-CSV split:** scaling invariants go in `expect_metric_delta`
+  assertions; timing/aggregate evidence stays CSV-only (see `DESIGN.md` →
+  Metrics).
+
+### G-F7 — Foundation coverage apps and assertions (Medium, lands alongside the fixes)
+
+- **Generated large-N each app** (the one place large N is allowed, because it is
+  generated systematically, not a handwritten catalog). N is a build parameter;
+  specs assert the budget for single-row update / append / remove / filter /
+  reorder using the new counters. This is the primary proof for G-F1..G-F5.
+- **`kanban_board`** reorder and filter steps gain `mark_metrics` /
+  `expect_metric_delta` blocks bounding work.
+- **`async_effects`** gains a `retained_alloc_delta` / closure-balance assertion
+  after the open/close cancel cycle to prove no lifecycle leak.
+- **`ops_dashboard`** gains a real-event fanout assertion (not just the synthetic
+  no-op) bounding `nodes_recomputed` / `derived_calls_into_roc`.
+- **Long-session leak experiment:** reuse one `HostEnv` across many replayed
+  events and assert the live `allocs − deallocs` gauge is flat after warmup
+  (`retained_alloc_delta` as currently computed cannot prove this — it resets per
+  iteration).
 
 ## Green Gates
 
 Use the smallest gate that proves the slice, then run the full signal gate before
-committing code changes.
+committing code changes. Each foundation slice (G-F1..G-F7) must land its fix and
+its locking assertion together; a fix without the counter/spec that would catch a
+regression is not done.
 
 - Focused Zig host work:
   `zig test test/signals/platform/host.zig`

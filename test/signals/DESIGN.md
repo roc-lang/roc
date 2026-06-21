@@ -25,7 +25,13 @@ Every part of this design must respect them.
 3. **Work scales with the number of changed nodes, not with tree size.** This is
    the entire point of signals. Per event, the host re-invokes only the Roc
    transform closures whose inputs actually changed, in dependency order. There
-   is no full-tree re-walk and no full re-render per event.
+   is no full-tree re-walk and no full re-render per event. **This constraint
+   binds the data structures, not just the algorithm.** A path that is "linear in
+   the changed set" on paper but reaches that set through a linear scan of all
+   nodes, a linear pointer→id lookup, or a full graph rebuild is a violation, not
+   an implementation detail. Identity→id resolution, descriptor lookup, and
+   dependency-graph maintenance must be O(1) or O(changed), never O(total). See
+   *Complexity Discipline* below for the precise budget every code path owes.
 4. **Mutation lives only in the host.** Roc is pure and value-oriented. The
    reactive runtime — the dirty set, the scheduler, the in-place node table — is
    intrinsically mutable, so it lives in the Zig host, which is the one place
@@ -579,6 +585,63 @@ Adjacency, ranks, and the dirty set are dense integer-indexed structures. No
 string keys, no scans to rediscover identity, no `Dict(Str, _)`; identity is
 dense integers throughout.
 
+### Complexity Discipline (the foundation budget)
+
+The scaling claim must be true *in the data structures*, not only in the
+algorithm. Every host path owes an explicit complexity budget, and a path that
+exceeds its budget is a defect of the same severity as a wrong output — it
+silently breaks Constraint 3. A path that is "linear in the changed set" on paper
+but reaches that set through a linear scan of all nodes, a linear pointer→id
+lookup, or a full graph rebuild does not meet its budget.
+
+The budgets, by operation (N = total live signal records/render nodes in the
+active tree; C = changed set for this event; K = rows touched by a structural
+change; L = rows at the affected `Ui.each` site):
+
+| Operation | Required budget | Forbidden |
+|---|---|---|
+| record/elem identity → id lookup | O(1) | linear pointer scan over the node table |
+| descriptor lookup by `elem_id` | O(1) | linear scan over the descriptor arrays |
+| non-structural event propagation | O(C + fanout) | O(N); O(fanout²) dedup/sort |
+| `Ui.when` branch flip | O(changed subtree) | O(N) field/route/graph rebuild |
+| `Ui.each` keyed diff | O(L) via key hash index | O(L²) `is_eq` scan |
+| `Ui.each` append/remove/filter | O(K) | O(N) per touched row |
+| `Ui.each` reorder | O(K moved) DOM moves | O(L) whole-site re-collect + rebuild |
+| dependency-graph maintenance after a splice | O(affected scope) | full clear-and-rebuild of the active graph over N |
+| host allocation / free bookkeeping | O(1) per alloc/free | O(live allocations) scan per free |
+| spec/bench action target resolution | acceptable O(DOM) for the *harness*, but excluded from `dispatch_apply_ns` | folding harness lookup time into measured framework cost |
+
+Non-negotiable structural rules that follow from the budget:
+
+- **Identity is resolved through stored ids, never rediscovered.** A signal
+  record, a render node, and a DOM element each carry (or index into) their dense
+  id directly. The host must never answer "what id is this record?" by walking a
+  list comparing pointers, and never answer "what descriptor owns this elem_id?"
+  by scanning a descriptor array. Both are the "scan to rediscover identity" that
+  Constraint 2 forbids, restated as a performance invariant.
+- **The dependency graph is maintained incrementally.** A structural splice
+  edits only the records in the affected scope and patches their adjacency/rank
+  in place. There is no clear-and-rebuild of the whole active signal graph on a
+  structural change. Initial ingestion may be O(N); nothing after it may be.
+- **`Ui.each` carries a key hash index.** The `key.hash` constraint in the API is
+  load-bearing, not decorative: the host builds a `HashMap(key → row scope id)`
+  for each `each` site and uses it for the keyed diff and the duplicate-key
+  check. Linear `is_eq` matching is a budget violation. If the implemented API
+  ever drops `key.hash`, that is a regression to fix in the API, not a host
+  workaround to absorb.
+- **Reorder moves, it does not rebuild.** A pure permutation of surviving rows
+  must emit only DOM moves for displaced rows (computed against a longest-stable
+  subsequence so unmoved rows cost nothing) and must not re-collect row
+  descriptors or rebuild the site's signal graph. Whole-site replacement is
+  reserved for the case where the *set* of rows changed in a way that genuinely
+  cannot be expressed as moves-plus-local-splices, and that case must be named
+  explicitly and asserted, never reached by falling through.
+- **Allocation bookkeeping is O(1).** The host's allocation ledger (used for
+  leak accounting and the allocation metrics) must support O(1) free; storing the
+  ledger index in the allocation header is the expected shape. An O(live) scan
+  per free makes session cost O(allocs²) and poisons the very allocation
+  telemetry it feeds.
+
 ### Propagation algorithm (push-based, glitch-free, value-pruned)
 
 On a source update:
@@ -657,6 +720,49 @@ update. These counters are what the simulated host buys us: they let a spec
 assert *exactly* how much work an event caused, which is the property we most
 need to prove and which a real browser would not expose.
 
+Counters that measure update amplification (`patches_emitted`,
+`nodes_recomputed`) are necessary but not sufficient: they count *emitted* and
+*recomputed* work, so an O(N²) splice or a full graph rebuild can sit underneath a
+low patch count undetected. The telemetry must therefore also expose the
+foundation-level work the Complexity Discipline budget governs — *scanned* nodes,
+*rebuilt* graph records, key compares, and allocations per event — each named so a
+spec can assert a hard bound:
+
+- **`active_graph_records_rebuilt`** — number of signal-graph records whose
+  adjacency/rank was (re)constructed this event. For a non-structural event this
+  is `0`; for a local structural splice it is bounded by the affected scope, not
+  by N. A spec asserting `expect_metric_delta active_graph_records_rebuilt 0` on a
+  single-row item change is the canary that fails loudly if a full
+  clear-and-rebuild path is introduced.
+- **`stream_nodes_scanned`** — number of descriptor/render-node entries visited
+  while applying this event's patches. This is the counter that exposes
+  full-stream scans hiding behind a low `patches_emitted`.
+- **`each_key_compares`** — `is_eq`/hash probes performed in keyed diffs this
+  event. With a hash index this tracks L; linear matching makes it track L²,
+  which a spec can pin.
+- **`allocs_this_event` / `deallocs_this_event`** — per-event allocation deltas,
+  so "allocations per event are flat" is an assertion rather than an assumption.
+
+Telemetry placement is deliberate:
+
+- **Spec assertions (`expect_metric_delta`)** carry the scaling *invariants* that
+  must hold regardless of timing: `nodes_recomputed`, `patches_emitted`,
+  `derived_calls_into_roc`, `rows_reused/created/removed`,
+  `active_graph_records_rebuilt`, `stream_nodes_scanned`, `each_key_compares`,
+  and per-event allocation deltas. These fail the build when a path does O(N)
+  work where the budget allows only O(changed).
+- **Benchmark CSV only** carries the *timing and aggregate* evidence:
+  `dispatch_roc_ns`, `dispatch_apply_ns`, total allocs/deallocs, command
+  category counts. Timing corroborates but never gates — a check that can pass
+  while real work grows is worse than no check, so timing is never the primary
+  guard.
+
+`retained_alloc_delta` measures the allocation residue of a single init-and-replay
+cycle, not growth across a long session. Proving "retained memory over a long
+session is flat" requires a distinct experiment that reuses one `HostEnv` across
+many events and watches the live `allocs − deallocs` gauge over time (see Success
+Metrics); per-iteration deltas cannot establish it.
+
 ## Glitch Freedom, Ordering, and Async
 
 - **Glitch freedom:** topological-rank scheduling, computed once at ingestion.
@@ -722,6 +828,22 @@ each proven by a spec or host test that fails if the property regresses:
 5. **The success metrics below are all green** across the representative apps and
    the capability apps, and **the same spec produces the same patch sequence
    every run.**
+6. **The Complexity Discipline budget holds, proven not argued.** Every operation
+   in the budget table meets its bound, verified by:
+   - a generated large-N `Ui.each` app (N a build parameter, generated
+     systematically — never a handwritten catalog) whose single-row item change
+     asserts `expect_metric_delta active_graph_records_rebuilt 0`,
+     `stream_nodes_scanned <= O(changed)`, bounded `patches_emitted`, and flat
+     per-event allocations across N ∈ {small, large};
+   - a reorder step on that app asserting only displaced rows produce DOM moves
+     and `active_graph_records_rebuilt` stays bounded by moved rows;
+   - the keyed diff backed by a `key.hash` index, with `each_key_compares`
+     tracking L (not L²) under churn;
+   - an O(1) allocation free path, proven by a long-session experiment that
+     reuses one `HostEnv` and shows the live `allocs − deallocs` gauge flat after
+     warmup;
+   - the benchmark gate (`run-signals-bench`) including the structural/reorder/
+     async apps with explicit regression thresholds, not just the scalar apps.
 
 Explicitly **out of scope** for "done": a real-browser host, uncontrolled native
 state reconciliation (focus/IME/selection/scroll), animation/high-frequency
@@ -764,17 +886,44 @@ and the tightest `expect_metric_delta` assertions that prove the scaling
 property. Avoid catalog-style fixtures and avoid re-proving already-green
 identity behavior.
 
+**Foundation coverage the suite must carry.** Proving behavior is not enough; the
+suite must also assert *work*, so a regression to O(N) work fails the build rather
+than passing silently. The required proofs, each the smallest that establishes its
+property:
+
+- A **generated large-N `Ui.each` app** (the scaling fixture). N is a build
+  parameter; the rows are generated programmatically, not handwritten. It is the
+  one place where large N is allowed, precisely because it is systematic rather
+  than a catalog. Its specs assert the budget for single-row update, append,
+  remove, filter, and reorder — including the `active_graph_records_rebuilt`,
+  `stream_nodes_scanned`, `each_key_compares`, and per-event allocation counters.
+- **Work assertions on the structural apps.** `kanban_board` reorder and filter
+  steps, and the `async_effects` cancel cycle, carry `mark_metrics` /
+  `expect_metric_delta` blocks that bound work and prove no retained-closure or
+  allocation leak across the async open/close cycle.
+- **Real-event fanout assertions in `ops_dashboard`.** Beyond any synthetic
+  "no-op fanout" probe, the real fanout events bound `nodes_recomputed` /
+  `derived_calls_into_roc` so diamond/shared-signal amplification is pinned on the
+  live path.
+- **A reorder host test at large N** that fails if reorder degrades from
+  moves-only to whole-site re-collect.
+
+These are tight, assertion-first additions, not new UI surface.
+
 ## Retired Risks
 
 The original gating risks are green on the simulated host: retained closures are
 in-process and refcount-correct, construction-site identity survives dynamic
-shape changes, `Ui.each` structural work is locally spliced, debug/safe builds
-assert carrier type tags at the erasure boundary, and effects/timers enter the
-same propagation path as user events. The optimized benchmark gate now builds
-and runs the representative benchmark apps.
+shape changes, debug/safe builds assert carrier type tags at the erasure
+boundary, and effects/timers enter the same propagation path as user events.
 
-The remaining risks are future-stage questions, not gates on the simulated-host
-Definition of Done; see Open Questions.
+The Complexity Discipline budget and its telemetry are part of the Definition of
+Done (criterion 6), not a separate risk register: a path that exceeds its budget,
+or a counter that would let O(N) work pass unnoticed, is a defect to fix, held to
+the same bar as a wrong output.
+
+The remaining *external* risks are future-stage questions, not gates on the
+simulated-host Definition of Done; see Open Questions.
 
 ## Success Metrics
 
