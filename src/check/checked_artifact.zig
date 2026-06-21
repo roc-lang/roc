@@ -14793,8 +14793,6 @@ const PlatformAppRelationTypeResolver = struct {
                 } };
             },
         };
-        self.finalizing.getPtr(root).?.* = finalized;
-        return finalized;
     }
 
     fn mergeAliasPayload(
