@@ -672,9 +672,15 @@ const Lowerer = struct {
 
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = switch (source_fn.body) {
             .roc => |body_id| self.solved.lifted.exprLoc(body_id),
             .hosted => base.SourceLoc.none,
+        };
+        self.result.store.current_region = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprRegion(body_id),
+            .hosted => base.Region.zero(),
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
@@ -904,10 +910,28 @@ const Lowerer = struct {
                         .ty = try self.lowerType(backing.ty),
                         .use = backing.use,
                     } else null,
+                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
             .lambda_set => |members| .{ .callable = try self.lowerFnMembers(members, .finite) },
         };
+    }
+
+    /// Re-materializes a nominal record's declared field order from the Lambda
+    /// Solved store into this lowerer's Lambda Mono store. Named entries copy the
+    /// shared field-name id; padding entries re-lower their reserved type.
+    fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Common.LowerError!Type.Span {
+        const source = self.solved.types.declaredFieldSpan(span);
+        if (source.len == 0) return Type.Span.empty();
+        const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
+        defer self.allocator.free(lowered);
+        for (source, 0..) |entry, i| {
+            lowered[i] = switch (entry) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = try self.lowerType(ty) },
+            };
+        }
+        return try self.types.addDeclaredFields(lowered);
     }
 
     fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Common.LowerError!Type.Span {
@@ -974,7 +998,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, proc, source.branch_regions);
+        }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -1481,7 +1505,10 @@ const Lowerer = struct {
         const expr_ty = try self.lowerExprTy(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -2546,7 +2573,10 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.result.store.current_region = self.solved.lifted.stmtRegion(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
@@ -3052,6 +3082,15 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const elems = self.solved.lifted.patSpan(list.patterns);
         const fixed_count: i64 = @intCast(elems.len);
+
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
 
         // The list length is read by the length test, by the indices of fixed
         // elements that match from the back, and by the rest slice. It is
@@ -3885,6 +3924,28 @@ const Lowerer = struct {
 
             switch (self.lowerer.types.get(ty)) {
                 .named => |named| if (named.backing) |backing| {
+                    // A nominal or opaque record lays out its fields in declared
+                    // order. The declared-order channel carries that order (the
+                    // backing row stays lexicographic for name resolution); build
+                    // the struct node from it and mark it nominal so the shared
+                    // commit keeps declared order, repaired only for padding.
+                    // Reserve the node first (mapping both the named type and its
+                    // backing) so a recursive backing field resolves to it.
+                    if (named.kind != .alias and named.declared_order.len != 0 and
+                        self.lowerer.types.get(backing.ty) == .record)
+                    {
+                        const node = try self.graph.reserveNode(self.lowerer.allocator);
+                        self.local_nodes[index] = node;
+                        self.local_nodes[@intFromEnum(backing.ty)] = node;
+                        if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
+                            self.graph.setNode(node, .{ .struct_ = field_span });
+                            try self.graph.markNominalStruct(self.lowerer.allocator, node);
+                        } else {
+                            self.graph.setNode(node, try self.nodeForType(backing.ty));
+                        }
+                        return layout.localGraphInput(node);
+                    }
+
                     const backing_input = try self.inputForType(backing.ty);
                     if (layout.graphInputCommitted(backing_input)) |layout_idx| return layout.committedGraphInput(layout_idx);
                     if (layout.graphInputLocal(backing_input)) |node| {
@@ -3956,6 +4017,61 @@ const Lowerer = struct {
             defer self.lowerer.allocator.free(fields);
             for (items, 0..) |item, i| {
                 fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.ty) };
+            }
+            return try self.graph.appendFields(self.lowerer.allocator, fields);
+        }
+
+        /// Builds graph fields for a nominal record in declared order from its
+        /// declared-order channel. Each named entry maps to the matching backing
+        /// field, keeping `.index` = the field's lexicographic position so
+        /// name-resolution (which indexes the lexicographic backing row) and the
+        /// layout offset map stay consistent. Returns null when the backing is
+        /// not a record or the declared order does not cover the backing fields,
+        /// so the caller falls back to the structural path.
+        fn declaredOrderStructFields(
+            self: *LayoutGraphBuilder,
+            declared_order: Type.Span,
+            backing_ty: Type.TypeId,
+        ) Common.LowerError!?layout.GraphFieldSpan {
+            const backing_fields = switch (self.lowerer.types.get(backing_ty)) {
+                .record => |span| self.lowerer.types.fieldSpan(span),
+                else => return null,
+            };
+            const entries = self.lowerer.types.declaredFieldSpan(declared_order);
+
+            var named_count: usize = 0;
+            for (entries) |entry| {
+                if (entry == .named) named_count += 1;
+            }
+            if (named_count != backing_fields.len) return null;
+
+            const fields = try self.lowerer.allocator.alloc(layout.GraphField, entries.len);
+            defer self.lowerer.allocator.free(fields);
+            // Padding spacers carry an index past every named field so they never
+            // collide with a named field's original (lexicographic) index, which
+            // is what `getStructFieldOffsetByOriginalIndex` looks up.
+            var padding_ordinal: u16 = 0;
+            for (entries, 0..) |entry, i| {
+                switch (entry) {
+                    .named => |name| {
+                        var lexicographic_index: ?u16 = null;
+                        var field_ty: Type.TypeId = undefined;
+                        for (backing_fields, 0..) |field, idx| {
+                            if (field.name == name) {
+                                lexicographic_index = @intCast(idx);
+                                field_ty = field.ty;
+                                break;
+                            }
+                        }
+                        const idx = lexicographic_index orelse return null;
+                        fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
+                    },
+                    .padding => |ty| {
+                        const pad_index: u16 = @intCast(backing_fields.len + padding_ordinal);
+                        padding_ordinal += 1;
+                        fields[i] = .{ .index = pad_index, .child = try self.inputForType(ty), .is_padding = true };
+                    },
+                }
             }
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }
@@ -4330,7 +4446,9 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .comptime_sites = try cloneComptimeSites(allocator, &program.comptime_sites),
         .source_files = source_files,
         .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .expr_regions = try cloneArrayList(base.Region, allocator, &program.expr_regions),
         .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .stmt_regions = try cloneArrayList(base.Region, allocator, &program.stmt_regions),
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -4346,6 +4464,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
             break :blk names;
         },
         .current_loc = program.current_loc,
+        .current_region = program.current_region,
     };
 }
 
@@ -4360,6 +4479,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: *const std.ArrayList
         cloned.appendAssumeCapacity(.{
             .kind = site.kind,
             .region = site.region,
+            .checked_site = site.checked_site,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
         });
     }
@@ -4427,6 +4547,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
         .spans = try cloneArrayList(MonoType.TypeId, allocator, &source.spans),
         .fields = try cloneArrayList(MonoType.Field, allocator, &source.fields),
         .tags = try cloneArrayList(MonoType.Tag, allocator, &source.tags),
+        .declared_fields = try cloneArrayList(MonoType.DeclaredField, allocator, &source.declared_fields),
     };
 }
 
@@ -4439,6 +4560,7 @@ fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.
         .tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags),
         .captures = try cloneArrayList(SolvedType.Capture, allocator, &source.captures),
         .fn_members = try cloneArrayList(SolvedType.FnMember, allocator, &source.fn_members),
+        .declared_fields = try cloneArrayList(SolvedType.DeclaredField, allocator, &source.declared_fields),
     };
 }
 

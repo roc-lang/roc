@@ -1955,7 +1955,10 @@ fn registerTypeDecl(
             if (ast_stmt_idx) |idx| self.parserTypePathForAstStatement(idx) else null,
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     // Canonicalize where clauses if present
@@ -4960,19 +4963,51 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
     return null;
 }
 
+fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
+    const import_idx = external.import_idx orelse return false;
+    const import_name_idx = self.env.imports.imports.items.items[@intFromEnum(import_idx)];
+    return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
+}
+
 /// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
-/// `5.Foo`), what its suffix type resolves to in the current scope. The type
+/// `5.Foo`), what its suffix target resolves to in the current scope. The type
 /// checker consumes this so it can unify the literal against the right concrete
 /// type without re-running scope resolution. The caller has already verified
 /// `type_ident` names a type binding in scope.
 fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
     const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
-    if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
+        if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+        } else {
+            try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+        }
         return;
-    }
-    if (try self.scopeLookupOrPrepareTypeDecl(type_ident)) |stmt_idx| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+    };
+    switch (binding_location.binding.*) {
+        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
+        },
+        .external_nominal => |external| {
+            if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+                    return;
+                }
+            }
+            const import_idx = external.import_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } });
+        },
     }
 }
 
@@ -8064,7 +8099,10 @@ fn canonicalizeBlockTypeDeclStatement(
             self.parserTypePathForAstStatement(ast_stmt_idx),
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     const type_decl_stmt: Statement = switch (type_decl.kind) {
@@ -12298,10 +12336,33 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         },
     }, region);
 
+    if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
+        const bool_stmt_idx = bool_info.statement_idx orelse {
+            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+        };
+        const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
+            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+        };
+        const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
+        const import_idx = try self.env.imports.getOrPutWithIdent(
+            self.env.gpa,
+            self.env.common.getStringStore(),
+            CIR.Import.compiler_builtin_import_name,
+            builtin_ident,
+        );
+        return try self.env.addExpr(CIR.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region);
+    }
+
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
         @panic("Bool type binding was absent during boolean operator canonicalization");
     };
-
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
@@ -16197,6 +16258,12 @@ fn scopeIntroduceVar(
 const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
+    /// When this annotation is the top-level backing of a nominal (or opaque)
+    /// type declaration, this holds that backing annotation's AST index. A
+    /// record annotation may contain unnamed fields (`_` / `_name`) only when it
+    /// is exactly this node; nested records (e.g. a field's type) never match,
+    /// so the comparison is self-scoping with no need to clear on descent.
+    nominal_backing_anno: ?AST.TypeAnno.Idx = null,
 
     const TypeAnnoCtxType = enum(u2) {
         /// Regular type declarations - no new type vars can be introduced
@@ -16209,6 +16276,10 @@ const TypeAnnoCtx = struct {
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
         return .{ .type = typ, .found_underscore = false };
+    }
+
+    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx) TypeAnnoCtx {
+        return .{ .type = .type_decl_anno, .found_underscore = false, .nominal_backing_anno = backing_anno };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
@@ -16227,6 +16298,28 @@ const TypeAnnoCtx = struct {
 
 fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
     var ctx = TypeAnnoCtx.init(type_anno_ctx_type);
+    return runTypeAnnoKernel(self, anno_idx, &ctx);
+}
+
+/// Canonicalize the top-level backing annotation of a nominal/opaque type
+/// declaration, allowing unnamed record fields (`_` / `_name`) directly inside
+/// that backing record. Used in place of `canonicalizeTypeAnno(.type_decl_anno)`
+/// for nominal/opaque declarations (aliases keep the plain entry point so they
+/// reject unnamed fields).
+fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+    // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
+    // The kernel descends through parens and compares each record against the
+    // backing AST index, so point the comparison at the unwrapped node it will
+    // actually reach — otherwise the inner record's unnamed fields are mistaken
+    // for a structural record and rejected.
+    var backing_anno = anno_idx;
+    while (true) {
+        switch (self.parse_ir.store.getTypeAnno(backing_anno)) {
+            .parens => |parens| backing_anno = parens.anno,
+            else => break,
+        }
+    }
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
@@ -16288,6 +16381,9 @@ const TypeAnnoKernelRecordNextWork = struct {
     field_index: usize,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    /// True when this record is the top-level backing of a nominal/opaque
+    /// declaration, where unnamed fields (`_` / `_name`) are permitted.
+    is_nominal_backing: bool,
 };
 const TypeAnnoKernelRecordAfterFieldWork = struct {
     record: @TypeOf(@as(AST.TypeAnno, undefined).record),
@@ -16297,6 +16393,10 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     scratch_record_fields_top: u32,
     field_name: Ident.Idx,
     field_region: Region,
+    is_nominal_backing: bool,
+    /// True when this field is unnamed padding (kept in the canonical record
+    /// annotation but excluded from the backing record row).
+    is_unnamed: bool,
 };
 const TypeAnnoKernelRecordAfterNamedExtWork = struct {
     region: Region,
@@ -16731,12 +16831,17 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     }
                 },
                 .record => |record| {
+                    const is_nominal_backing = if (type_anno_ctx.nominal_backing_anno) |backing|
+                        backing == current_idx
+                    else
+                        false;
                     try stacks.pushRecordNext(frame_allocator, .{
                         .record = record,
                         .region = self.parse_ir.tokenizedRegionToRegion(record.region),
                         .field_index = 0,
                         .scratch_top = self.env.store.scratchAnnoRecordFieldTop(),
                         .scratch_record_fields_top = self.scratch_record_fields.top(),
+                        .is_nominal_backing = is_nominal_backing,
                     });
                 },
                 .tag_union => |tag_union| {
@@ -16959,10 +17064,31 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
                             .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .is_nominal_backing = state.is_nominal_backing,
                         });
                         continue :typeannokernel_loop .dispatch;
                     },
                 };
+
+                const name_tag = self.parse_ir.tokens.tokenTag(ast_field.name);
+                const is_unnamed = name_tag == .Underscore or name_tag == .NamedUnderscore;
+                if (is_unnamed and !state.is_nominal_backing) {
+                    // Unnamed fields are only permitted in nominal record
+                    // declarations; in a structural record they are rejected and
+                    // the field is dropped (it can never be referenced anyway).
+                    try self.env.pushDiagnostic(Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    try stacks.pushRecordNext(frame_allocator, .{
+                        .record = state.record,
+                        .region = state.region,
+                        .field_index = state.field_index + 1,
+                        .scratch_top = state.scratch_top,
+                        .scratch_record_fields_top = state.scratch_record_fields_top,
+                        .is_nominal_backing = state.is_nominal_backing,
+                    });
+                    continue :typeannokernel_loop .dispatch;
+                }
 
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
                 try stacks.pushRecordAfterField(frame_allocator, .{
@@ -16973,6 +17099,8 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .scratch_record_fields_top = state.scratch_record_fields_top,
                     .field_name = field_name,
                     .field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    .is_nominal_backing = state.is_nominal_backing,
+                    .is_unnamed = is_unnamed,
                 });
                 try stacks.pushParse(frame_allocator, ast_field.ty);
             }
@@ -16985,18 +17113,26 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
+                .is_unnamed = state.is_unnamed,
             }, state.field_region);
             try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-            try self.scratch_record_fields.append(types.RecordField{
-                .name = state.field_name,
-                .var_ = ModuleEnv.varFrom(field_cir_idx),
-            });
+            // Unnamed fields stay in the canonical record annotation (so the
+            // nominal declaration keeps its declared field order, including
+            // padding) but are excluded from the backing record row, so they
+            // are never name-resolved, unified, or required at construction.
+            if (!state.is_unnamed) {
+                try self.scratch_record_fields.append(types.RecordField{
+                    .name = state.field_name,
+                    .var_ = ModuleEnv.varFrom(field_cir_idx),
+                });
+            }
             try stacks.pushRecordNext(frame_allocator, .{
                 .record = state.record,
                 .region = state.region,
                 .field_index = state.field_index + 1,
                 .scratch_top = state.scratch_top,
                 .scratch_record_fields_top = state.scratch_record_fields_top,
+                .is_nominal_backing = state.is_nominal_backing,
             });
 
             continue :typeannokernel_loop .dispatch;
@@ -17541,19 +17677,6 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
             .region = region,
         } });
     };
-
-    // Check if this is a builtin type
-    // Allow builtin type names to be redeclared in the Builtin module
-    // (e.g., Str := ... within Builtin.roc)
-    // Use identifier index comparison instead of string comparison for efficiency
-    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
-        if (self.env.module_role != .builtin) {
-            return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
-                .ident = name_ident,
-                .region = region,
-            } });
-        }
-    }
 
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
@@ -18283,9 +18406,18 @@ pub fn introduceType(
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    const shadowed_external_region: ?Region = if (current_scope.type_bindings.get(name_ident)) |binding| switch (binding) {
+        .external_nominal => |external| external.origin_region,
+        else => null,
+    } else null;
+
+    const ShadowedType = union(enum) {
+        statement: Statement.Idx,
+        region: Region,
+    };
 
     // Check for shadowing in parent scopes
-    var shadowed_in_parent: ?Statement.Idx = null;
+    var shadowed_in_parent: ?ShadowedType = null;
     if (self.scopes.items.len > 1) {
         var i = self.scopes.items.len - 1;
         while (i > 0) {
@@ -18293,12 +18425,12 @@ pub fn introduceType(
             const scope = &self.scopes.items[i];
             if (scope.type_bindings.get(name_ident)) |binding| {
                 shadowed_in_parent = switch (binding) {
-                    .local_nominal => |stmt| stmt,
-                    .local_alias => |stmt| stmt,
-                    .associated_nominal => |stmt| stmt,
-                    .external_nominal => null,
+                    .local_nominal => |stmt| .{ .statement = stmt },
+                    .local_alias => |stmt| .{ .statement = stmt },
+                    .associated_nominal => |stmt| .{ .statement = stmt },
+                    .external_nominal => |external| .{ .region = external.origin_region },
                 };
-                if (shadowed_in_parent) |_| break;
+                break;
             }
         }
     }
@@ -18306,13 +18438,32 @@ pub fn introduceType(
     // Determine if this is an alias or nominal type based on the statement
     const stmt = self.env.store.getStatement(type_decl_stmt);
     const is_alias = stmt == .s_alias_decl;
+    if (shadowed_external_region) |original_region| {
+        try current_scope.type_bindings.put(
+            gpa,
+            name_ident,
+            if (is_alias) Scope.TypeBinding{ .local_alias = type_decl_stmt } else Scope.TypeBinding{ .local_nominal = type_decl_stmt },
+        );
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = name_ident,
+                .region = region,
+                .original_region = original_region,
+            },
+        });
+        return;
+    }
+
     const result = try current_scope.introduceTypeDeclWithKind(gpa, name_ident, type_decl_stmt, is_alias, null);
 
     switch (result) {
         .success => {
             // Check if we're shadowing a type in a parent scope
-            if (shadowed_in_parent) |shadowed_stmt| {
-                const original_region = self.env.store.getStatementRegion(shadowed_stmt);
+            if (shadowed_in_parent) |shadowed| {
+                const original_region = switch (shadowed) {
+                    .statement => |shadowed_stmt| self.env.store.getStatementRegion(shadowed_stmt),
+                    .region => |original_region| original_region,
+                };
                 try self.env.pushDiagnostic(Diagnostic{
                     .shadowing_warning = .{
                         .ident = name_ident,

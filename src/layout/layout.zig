@@ -170,6 +170,13 @@ pub const StructField = struct {
     index: u16,
     /// The layout of the field's value
     layout: Idx,
+    /// True for unnamed nominal-record padding spacers. Such a field reserves
+    /// `sizeof(layout)` bytes at alignment 1 (its layout's own alignment is
+    /// ignored) and is excluded from every semantic field operation — name
+    /// resolution, equality, refcounting, inspect, glue, and construction — while
+    /// still occupying its bytes for offsets and total struct size. It never
+    /// contributes its alignment to the struct.
+    is_padding: bool = false,
 
     /// A SafeMultiList for storing struct fields
     pub const SafeMultiList = collections.SafeMultiList(StructField);

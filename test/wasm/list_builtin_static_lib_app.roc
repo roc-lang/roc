@@ -39,7 +39,7 @@ refcounted_list_ops_ok = {
         and str_byte_count_at(dropped, 1, 3)
 }
 
-main! = || {
+main! = |_seed| {
     if flat_list_ops_ok and refcounted_list_ops_ok {
         "ok"
     } else {

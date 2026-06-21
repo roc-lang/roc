@@ -307,6 +307,14 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
+    /// Source location of the LIR statement currently being interpreted.
+    active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
+    /// Checked source region of the LIR statement currently being interpreted.
+    active_stmt_region: base.Region = base.Region.zero(),
+    /// Source location captured when the current evaluation first failed.
+    failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
+    /// Checked source region captured when the current evaluation first failed.
+    failed_stmt_region: base.Region = base.Region.zero(),
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
 
@@ -649,6 +657,16 @@ pub const Interpreter = struct {
         return self.failed_call_stack.items;
     }
 
+    pub fn getFailedSourceLoc(self: *const LirInterpreter) ?base.SourceLoc {
+        if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_loc;
+        return null;
+    }
+
+    pub fn getFailedCheckedRegion(self: *const LirInterpreter) ?base.Region {
+        if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_region;
+        return null;
+    }
+
     pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
         return self.comptime_failed_site;
     }
@@ -662,6 +680,44 @@ pub const Interpreter = struct {
         try self.failed_call_stack.appendSlice(self.evalAllocator(), self.call_stack.items);
     }
 
+    fn recordActiveFailureLocIfUnset(self: *LirInterpreter) void {
+        if (self.failed_stmt_loc.hasLocation()) return;
+        if (self.active_stmt_loc.hasLocation()) {
+            self.failed_stmt_loc = self.active_stmt_loc;
+            self.failed_stmt_region = self.active_stmt_region;
+        }
+    }
+
+    fn recordCallerFailureLocForSourcelessCallee(
+        self: *LirInterpreter,
+        call_loc: base.SourceLoc,
+        call_region: base.Region,
+    ) void {
+        if (!call_loc.hasLocation()) return;
+        if (!self.failed_stmt_loc.hasLocation()) {
+            self.failed_stmt_loc = call_loc;
+            self.failed_stmt_region = call_region;
+        }
+    }
+
+    fn recordCallerFailureLocForCalleeError(
+        self: *LirInterpreter,
+        call_loc: base.SourceLoc,
+        call_region: base.Region,
+        err: Error,
+    ) void {
+        switch (err) {
+            error.Crash,
+            error.DivisionByZero,
+            error.RuntimeError,
+            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region),
+            error.OutOfMemory,
+            error.ComptimeExhaustiveness,
+            error.ExpectErr,
+            => {},
+        }
+    }
+
     /// Release ownership of an evaluated result value.
     /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
     /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
@@ -670,6 +726,7 @@ pub const Interpreter = struct {
     }
 
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
+        self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
     }
@@ -704,6 +761,7 @@ pub const Interpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
+        self.recordActiveFailureLocIfUnset();
         self.roc_env.reportCrash(message);
         return error.Crash;
     }
@@ -872,6 +930,10 @@ pub const Interpreter = struct {
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
+        self.active_stmt_loc = base.SourceLoc.none;
+        self.active_stmt_region = base.Region.zero();
+        self.failed_stmt_loc = base.SourceLoc.none;
+        self.failed_stmt_region = base.Region.zero();
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
 
@@ -881,6 +943,7 @@ pub const Interpreter = struct {
             defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
             const sj = setjmp(&eval_jmp_buf);
             if (sj != 0) {
+                self.recordActiveFailureLocIfUnset();
                 self.recordFailedCallStackIfUnset() catch {};
                 return error.Crash;
             }
@@ -1157,6 +1220,9 @@ pub const Interpreter = struct {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
+                    // Padding spacers hold uninitialized bytes; there is no value
+                    // to validate against their (size-only) layout.
+                    if (field.is_padding) continue;
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
                     if (next_len < path_buf.len) {
@@ -1718,6 +1784,8 @@ pub const Interpreter = struct {
         var current = start_stmt;
         while (true) {
             const stmt = self.store.getCFStmt(current);
+            self.active_stmt_loc = self.store.stmtLoc(current);
+            self.active_stmt_region = self.store.stmtRegion(current);
             switch (stmt) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
@@ -1740,7 +1808,12 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    const result = try self.evalProcById(assign.proc, arg_values, arg_layouts);
+                    const call_loc = self.active_stmt_loc;
+                    const call_region = self.active_stmt_region;
+                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        return err;
+                    };
                     self.setLocalChecked(
                         frame,
                         current,
@@ -1756,13 +1829,18 @@ pub const Interpreter = struct {
                 .assign_call_erased => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const result = try self.evalErasedCall(
+                    const call_loc = self.active_stmt_loc;
+                    const call_region = self.active_stmt_region;
+                    const result = self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
                         try self.localLayouts(arg_locals),
                         self.store.getLocal(assign.target).layout_idx,
-                    );
+                    ) catch |err| {
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        return err;
+                    };
                     self.setLocalChecked(
                         frame,
                         current,
@@ -2931,6 +3009,9 @@ pub const Interpreter = struct {
         var expected_field_count: usize = 0;
         for (0..expected_info.fields.len) |i| {
             const field = expected_info.fields.get(@intCast(i));
+            // Padding spacers carry indices past every named field and are never
+            // constructed, so they must not raise the expected named-field count.
+            if (field.is_padding) continue;
             expected_field_count = @max(expected_field_count, @as(usize, @intCast(field.index)) + 1);
         }
         if (builtin.mode == .Debug and field_locals.len < expected_field_count) {
@@ -3535,7 +3616,8 @@ pub const Interpreter = struct {
         if (self.struct_field_plans.get(id)) |plan| return plan;
 
         const field_layout_idx = self.layout_store.getStructFieldLayout(struct_plan.struct_idx, field_index);
-        const plan: ?layout_mod.RcFieldPlan = if (!self.layoutContainsRc(field_layout_idx) or
+        const plan: ?layout_mod.RcFieldPlan = if (self.layout_store.getStructFieldIsPadding(struct_plan.struct_idx, field_index) or
+            !self.layoutContainsRc(field_layout_idx) or
             self.layout_store.getStructFieldSize(struct_plan.struct_idx, field_index) == 0)
             null
         else
@@ -3661,6 +3743,8 @@ pub const Interpreter = struct {
             .struct_ => blk: {
                 const sd = self.layout_store.getStructData(layout_val.getStruct().idx);
                 for (0..sd.fields.count) |i| {
+                    // Padding spacers hold uninitialized bytes, never a refcounted value.
+                    if (self.layout_store.getStructFieldIsPadding(layout_val.getStruct().idx, @intCast(i))) continue;
                     const field_layout = self.layout_store.getStructFieldLayout(layout_val.getStruct().idx, @intCast(i));
                     if (self.layoutContainsRc(field_layout)) break :blk true;
                 }
@@ -5715,6 +5799,9 @@ pub const Interpreter = struct {
                 var field_index: usize = 0;
                 while (field_index < fields.len) : (field_index += 1) {
                     const field = fields.get(@intCast(field_index));
+                    // Padding spacers hold uninitialized bytes; they are not part
+                    // of a value's identity and must never be compared.
+                    if (field.is_padding) continue;
                     const field_layout = field.layout;
                     const field_size = self.helper.sizeOf(field_layout);
                     if (field_size == 0) continue;

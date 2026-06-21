@@ -97,6 +97,7 @@ comptime {
     }
 }
 const bench = @import("bench.zig");
+const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -119,42 +120,66 @@ const layout = @import("layout");
 const docs = @import("docs");
 const RocTarget = @import("target.zig").RocTarget;
 
-/// Embedded interpreter shim library for the native host target.
-/// Used by `roc run` after the parent process has lowered checked artifacts to
-/// an ARC-inserted LIR image in shared memory.
+/// Shim archive kind used by cached host executables.
+const ShimLibraryKind = enum {
+    lir,
+    machine_code,
+};
+
+/// Embedded shim libraries for the native host target.
+/// LIR mode interprets shared-memory or embedded LIR images. Machine-code mode
+/// executes dev backend run images directly from shared memory.
 const ShimLibraries = struct {
-    const native = if (builtin.is_test)
+    const interpreter_native = if (builtin.is_test)
         &[_]u8{}
     else if (builtin.target.os.tag == .windows)
         @embedFile("roc_interpreter_shim.lib")
     else
         @embedFile("libroc_interpreter_shim.a");
 
-    pub fn forTarget(_: RocTarget) []const u8 {
-        return native;
+    const machine_code_native = if (builtin.is_test)
+        &[_]u8{}
+    else if (builtin.target.os.tag == .windows)
+        @embedFile("roc_machine_code_shim.lib")
+    else
+        @embedFile("libroc_machine_code_shim.a");
+
+    pub fn forTarget(kind: ShimLibraryKind, _: RocTarget) []const u8 {
+        return switch (kind) {
+            .lir => interpreter_native,
+            .machine_code => machine_code_native,
+        };
     }
 };
 
-fn interpreterShimBytes(target: ?RocTarget) []const u8 {
-    return if (target) |t| ShimLibraries.forTarget(t) else ShimLibraries.native;
+fn shimLibraryBytes(kind: ShimLibraryKind, target: ?RocTarget) []const u8 {
+    return if (target) |t| ShimLibraries.forTarget(kind, t) else switch (kind) {
+        .lir => ShimLibraries.interpreter_native,
+        .machine_code => ShimLibraries.machine_code_native,
+    };
 }
 
-fn interpreterShimDigest(target: ?RocTarget) [32]u8 {
+fn shimLibraryDigest(kind: ShimLibraryKind, target: ?RocTarget) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc-interpreter-shim-cache-v1");
-    hasher.update(interpreterShimBytes(target));
+    updateHashBytes(&hasher, "roc-shim-library-cache-v1");
+    updateHashBytes(&hasher, @tagName(kind));
+    hasher.update(shimLibraryBytes(kind, target));
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
 }
 
-fn interpreterShimCacheFilename(ctx: *CliCtx, target: RocTarget) Allocator.Error![]const u8 {
-    const digest = interpreterShimDigest(target);
+fn shimLibraryCacheFilename(ctx: *CliCtx, kind: ShimLibraryKind, target: RocTarget) Allocator.Error![]const u8 {
+    const digest = shimLibraryDigest(kind, target);
     const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    const stem = switch (kind) {
+        .lir => "roc_interpreter_shim",
+        .machine_code => "roc_machine_code_shim",
+    };
     return if (target.isWindows())
-        std.fmt.allocPrint(ctx.arena, "roc_interpreter_shim_{s}_{s}.lib", .{ @tagName(target), digest_hex[0..] })
+        std.fmt.allocPrint(ctx.arena, "{s}_{s}_{s}.lib", .{ stem, @tagName(target), digest_hex[0..] })
     else
-        std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}_{s}.a", .{ @tagName(target), digest_hex[0..] });
+        std.fmt.allocPrint(ctx.arena, "lib{s}_{s}_{s}.a", .{ stem, @tagName(target), digest_hex[0..] });
 }
 
 /// Embedded pre-compiled builtins object files for each target.
@@ -806,12 +831,14 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
 }
 
-fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
+    return switch (args) {
+        .run, .build, .check, .test_cmd, .docs, .glue, .experimental_lsp => true,
+        .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
+    };
+}
 
-    ensureWindowsConsoleSupportsAnsiAndUtf8();
-
+fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
     // Start background cache cleanup on a separate thread.
     // This is a fire-and-forget thread that:
     // - Cleans up stale temp directories (>5 min old)
@@ -826,27 +853,35 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     // writer uses, so cleanup can never target a different directory than where
     // artifacts are written. The background thread itself is CoreCtx-free and
     // allocation-free; it only borrows these base paths (copied in by value).
-    {
-        const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-        const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
-        const cache_base: []const u8 = blk: {
-            const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-            break :blk cfg.getEffectiveCacheDir(arena) catch "";
-        };
-        if (temp_base.len != 0 or cache_base.len != 0) {
-            if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
-                // Thread started successfully, will run in background
-            } else |_| {
-                // Non-fatal: cleanup failure shouldn't prevent compilation
-                std.log.debug("Failed to start background cleanup thread", .{});
-            }
+    const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
+    const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
+    const cache_base: []const u8 = blk: {
+        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+        break :blk cfg.getEffectiveCacheDir(arena) catch "";
+    };
+    if (temp_base.len != 0 or cache_base.len != 0) {
+        if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+            // Thread started successfully, will run in background.
+        } else |_| {
+            // Non-fatal: cleanup failure shouldn't prevent compilation.
+            std.log.debug("Failed to start background cleanup thread", .{});
         }
     }
+}
+
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.create(std_io);
 
     const parsed_args = try cli_args.parse(arena, std_io, args[1..]);
+    if (parsedArgsStartBackgroundCleanup(parsed_args)) {
+        startBackgroundCacheCleanup(gpa, arena, std_io);
+    }
 
     // Determine command for context
     const command: Command = switch (parsed_args) {
@@ -950,18 +985,57 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     }
 }
 
-/// Generate platform host shim object file using LLVM.
+fn buildShimEntrypoints(
+    ctx: *CliCtx,
+    store: *const lir.LirStore,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    entrypoint_names: []const []const u8,
+) (Allocator.Error || CliError)![]llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint {
+    if (platform_entrypoints.len != entrypoint_names.len) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+
+    var shim_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint, platform_entrypoints.len);
+    for (platform_entrypoints) |entrypoint| {
+        const ordinal: usize = @intCast(entrypoint.ordinal);
+        if (ordinal >= entrypoint_names.len) {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+        }
+
+        const spec = store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = store.getLocalSpan(spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = store.getLocal(local_id).layout_idx;
+        }
+        shim_entrypoints[ordinal] = .{
+            .symbol_name = entrypoint_names[ordinal],
+            .entry_index = entrypoint.ordinal,
+            .arg_layouts = arg_layouts,
+            .ret_layout = spec.ret_layout,
+        };
+    }
+
+    return shim_entrypoints;
+}
+
+/// Generate platform host shim object file using LLVM from already-lowered LIR data.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-/// If `lir_image` is present, embed the already-lowered LIR image
+/// If `embedded_lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(
+fn generatePlatformHostShimFromLirData(
     ctx: *CliCtx,
     cache_dir: []const u8,
     entrypoint_names: []const []const u8,
+    checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
-    lir_image: []const u8,
-    embed_image: bool,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    embedded_lir_image: ?[]const u8,
+    image_cache_len: usize,
+    default_run_start: bool,
     debug: bool,
 ) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
@@ -977,63 +1051,28 @@ fn generatePlatformHostShim(
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
-    // View the LIR image to derive the entrypoint ABI, the hosted dispatch
-    // table, and the layout store the C-ABI lowering needs.
-    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-    };
-
-    if (view.platform_entrypoints.len != entrypoint_names.len) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-
-    var shim_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint, view.platform_entrypoints.len);
-    for (view.platform_entrypoints) |entrypoint| {
-        const spec = view.store.getProcSpec(entrypoint.root_proc);
-        const arg_locals = view.store.getLocalSpan(spec.args);
-        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
-            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
-        }
-        shim_entrypoints[entrypoint.ordinal] = .{
-            .symbol_name = entrypoint_names[entrypoint.ordinal],
-            .entry_index = entrypoint.ordinal,
-            .arg_layouts = arg_layouts,
-            .ret_layout = spec.ret_layout,
-        };
-    }
+    const shim_entrypoints = try buildShimEntrypoints(
+        ctx,
+        store,
+        platform_entrypoints,
+        entrypoint_names,
+    );
 
     // Hosted dispatch table symbols, ordered by dispatch index. Multiple proc
     // specs may share a dispatch index (specializations of the same hosted
     // function); they all carry the same symbol.
-    var hosted_count: usize = 0;
-    for (view.store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
-        hosted_count = @max(hosted_count, @as(usize, hosted.dispatch_index) + 1);
-    }
-    const hosted_symbols = try ctx.arena.alloc([]const u8, hosted_count);
-    for (hosted_symbols) |*symbol| symbol.* = "";
-    for (view.store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
-        hosted_symbols[hosted.dispatch_index] = view.store.getString(hosted.symbol);
-    }
-    // Hosted functions the app never references have no LIR proc spec and
-    // leave gaps; the interpreter can only dispatch through existing hosted
-    // procs, so gap entries are never called and stay null in the table.
+    const hosted_symbols = checked_hosted_symbols orelse try hostedSymbolsFromLirDispatch(ctx.arena, store);
 
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, &view.store, std_target);
-    codegen.layout_store = &view.layouts;
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, store, std_target);
+    codegen.layout_store = layouts;
     defer codegen.deinit();
 
     var bitcode_result = codegen.generateInterpreterShimModule(
         "roc_platform_shim",
         shim_entrypoints,
         hosted_symbols,
-        if (embed_image) lir_image else null,
+        embedded_lir_image,
+        default_run_start,
     ) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
@@ -1044,16 +1083,17 @@ fn generatePlatformHostShim(
     // hash the derived entrypoint ABI, the hosted table, and the image length
     // instead of the bytes themselves.
     var hash = std.hash.Crc32.init();
-    const abi_digest = try entrypointAbiDigest(ctx, lir_image, target);
+    const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
     for (hosted_symbols) |symbol| {
         hash.update(symbol);
         hash.update(&[_]u8{0});
     }
     var image_len_bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &image_len_bytes, lir_image.len, .little);
+    std.mem.writeInt(u64, &image_len_bytes, @intCast(image_cache_len), .little);
     hash.update(&image_len_bytes);
-    hash.update(if (embed_image) "embed" else "dispatch");
+    hash.update(if (embedded_lir_image != null) "embed" else "dispatch");
+    hash.update(if (default_run_start) "default-run-start" else "host-provided-start");
     for (entrypoint_names) |name| {
         hash.update(name);
         hash.update(&[_]u8{0});
@@ -1115,6 +1155,54 @@ fn generatePlatformHostShim(
     std.log.debug("Generated platform host shim: {s}", .{object_path});
 
     return object_path;
+}
+
+/// Generate platform host shim object file using LLVM.
+/// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
+/// If `lir_image` is present, embed the already-lowered LIR image
+/// and call the interpreter shim entrypoint that views the image directly.
+/// If debug is true, include debug information in the generated object file.
+fn generatePlatformHostShim(
+    ctx: *CliCtx,
+    cache_dir: []const u8,
+    entrypoint_names: []const []const u8,
+    checked_hosted_symbols: ?[]const []const u8,
+    target: RocTarget,
+    lir_image: []const u8,
+    embed_image: bool,
+    default_run_start: bool,
+    debug: bool,
+) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
+    // Check if LLVM is available before viewing the image.
+    if (!llvm_available) {
+        std.log.debug("LLVM not available, skipping platform host shim generation", .{});
+        return null;
+    }
+
+    // View the LIR image to derive the entrypoint ABI, the hosted dispatch
+    // table, and the layout store the C-ABI lowering needs.
+    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    };
+
+    return generatePlatformHostShimFromLirData(
+        ctx,
+        cache_dir,
+        entrypoint_names,
+        checked_hosted_symbols,
+        target,
+        &view.store,
+        &view.layouts,
+        view.platform_entrypoints,
+        if (embed_image) lir_image else null,
+        lir_image.len,
+        default_run_start,
+        debug,
+    );
 }
 
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void {
@@ -1194,6 +1282,12 @@ const HostedCacheEntry = struct {
     external_symbol_name: []const u8,
     def_idx: u32,
     deterministic_index: u32,
+    dispatch_index: u32 = 0,
+};
+
+const CheckedHostedTable = struct {
+    entries: []const HostedCacheEntry,
+    symbols: []const []const u8,
 };
 
 fn checkedModuleKeySeen(seen_keys: []const [32]u8, key: [32]u8) bool {
@@ -1223,14 +1317,94 @@ fn appendHostedCacheEntriesFromView(
     }
 }
 
-fn checkedInterpreterHostIdentity(
+const HostedSectionMap = struct {
+    keys: []const []const u8,
+    symbols: []const []const u8,
+};
+
+fn hostedSectionMapFromEnv(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!HostedSectionMap {
+    const section = env.hosted_entries.items.items;
+    const keys = try allocator.alloc([]const u8, section.len);
+    errdefer {
+        for (keys) |key| allocator.free(key);
+        allocator.free(keys);
+    }
+    const symbols = try allocator.alloc([]const u8, section.len);
+    errdefer allocator.free(symbols);
+
+    for (section, 0..) |entry, index| {
+        var func_text = env.getIdentText(entry.func_ident);
+        if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
+            func_text = func_text[0 .. func_text.len - 1];
+        }
+        keys[index] = if (entry.module_ident) |module_ident|
+            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ env.getIdentText(module_ident), func_text })
+        else
+            try allocator.dupe(u8, func_text);
+        symbols[index] = env.getString(entry.symbol);
+    }
+
+    return .{ .keys = keys, .symbols = symbols };
+}
+
+fn deinitHostedSectionMap(allocator: Allocator, map: HostedSectionMap) void {
+    for (map.keys) |key| allocator.free(key);
+    allocator.free(map.keys);
+    allocator.free(map.symbols);
+}
+
+fn findHostedSectionEnv(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+) ?*const ModuleEnv {
+    const root_env = root_artifact.moduleEnvConst();
+    if (root_env.hosted_entries.items.items.len != 0) return root_env;
+    for (imported_artifacts) |view| {
+        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+    }
+    for (relation_artifacts) |view| {
+        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+    }
+    return null;
+}
+
+fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) void {
+    if (entries.len != map.keys.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("default roc command invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
+        }
+        unreachable;
+    }
+
+    for (entries) |*entry| {
+        const dispatch_index = blk: {
+            for (map.keys, 0..) |key, index| {
+                if (std.mem.eql(u8, key, entry.order_key)) break :blk index;
+            }
+            if (builtin.mode == .Debug) {
+                std.debug.panic("default roc command invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
+            }
+            unreachable;
+        };
+        entry.dispatch_index = @intCast(dispatch_index);
+        entry.external_symbol_name = map.symbols[dispatch_index];
+    }
+
+    const DispatchSort = struct {
+        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
+            return a.dispatch_index < b.dispatch_index;
+        }
+    };
+    std.mem.sort(HostedCacheEntry, entries, {}, DispatchSort.lessThan);
+}
+
+fn checkedHostedTable(
     allocator: Allocator,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-    entrypoint_names: []const []const u8,
-    target_usize: base.target.TargetUsize,
-) Allocator.Error![32]u8 {
+) Allocator.Error!CheckedHostedTable {
     var hosted_entries = std.ArrayList(HostedCacheEntry).empty;
     defer hosted_entries.deinit(allocator);
     var seen_keys = std.ArrayList([32]u8).empty;
@@ -1263,6 +1437,42 @@ fn checkedInterpreterHostIdentity(
     };
     std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
 
+    for (hosted_entries.items, 0..) |*entry, index| {
+        entry.dispatch_index = @intCast(index);
+    }
+
+    if (findHostedSectionEnv(root_artifact, imported_artifacts, relation_artifacts)) |env| {
+        const map = try hostedSectionMapFromEnv(allocator, env);
+        defer deinitHostedSectionMap(allocator, map);
+        applyHostedSectionMap(hosted_entries.items, map);
+    }
+
+    const entries = try hosted_entries.toOwnedSlice(allocator);
+    errdefer allocator.free(entries);
+
+    const symbols = try allocator.alloc([]const u8, entries.len);
+    errdefer allocator.free(symbols);
+    var stable_symbol_count: usize = 0;
+    errdefer for (symbols[0..stable_symbol_count]) |symbol| allocator.free(symbol);
+    for (entries, symbols) |*entry, *symbol| {
+        const stable_symbol = try allocator.dupe(u8, entry.external_symbol_name);
+        entry.external_symbol_name = stable_symbol;
+        symbol.* = stable_symbol;
+        stable_symbol_count += 1;
+    }
+
+    return .{
+        .entries = entries,
+        .symbols = symbols,
+    };
+}
+
+fn checkedInterpreterHostIdentity(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    entrypoint_names: []const []const u8,
+    target_usize: base.target.TargetUsize,
+    hosted_table: CheckedHostedTable,
+) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v1");
     updateHashU32(&hasher, @intFromEnum(target_usize));
@@ -1275,9 +1485,9 @@ fn checkedInterpreterHostIdentity(
         updateHashBytes(&hasher, name);
     }
 
-    updateHashU32(&hasher, @intCast(hosted_entries.items.len));
-    for (hosted_entries.items, 0..) |entry, dispatch_index| {
-        updateHashU32(&hasher, @intCast(dispatch_index));
+    updateHashU32(&hasher, @intCast(hosted_table.entries.len));
+    for (hosted_table.entries) |entry| {
+        updateHashU32(&hasher, entry.dispatch_index);
         hasher.update(&entry.module_key);
         updateHashBytes(&hasher, entry.order_key);
         updateHashBytes(&hasher, entry.external_symbol_name);
@@ -1302,12 +1512,13 @@ fn updateInterpreterExeFileLinkInput(
 
 fn updateInterpreterExeAppLinkInput(
     hasher: *std.crypto.hash.sha2.Sha256,
+    shim_kind: ShimLibraryKind,
     target: RocTarget,
     entrypoint_names: []const []const u8,
     debug: bool,
 ) void {
     updateHashBytes(hasher, "app");
-    const shim_digest = interpreterShimDigest(target);
+    const shim_digest = shimLibraryDigest(shim_kind, target);
     hasher.update(&shim_digest);
     updateHashBool(hasher, llvm_available);
     if (llvm_available) {
@@ -1319,15 +1530,13 @@ fn updateInterpreterExeAppLinkInput(
 /// Digest of the entrypoint C ABI and hosted dispatch table baked into the
 /// generated interpreter shim. Part of the interpreter executable cache key:
 /// the cached exe's marshalling code must match the program's entrypoint ABI.
-fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (Allocator.Error || CliError)![32]u8 {
-    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-    }
-    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-    };
-
+fn entrypointAbiDigestFromLirData(
+    ctx: *CliCtx,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    target: RocTarget,
+) (Allocator.Error || CliError)![32]u8 {
     const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
         .aarch64 => .aarch64,
         .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
@@ -1356,15 +1565,15 @@ fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (
         }
     }.go;
 
-    updateHashU32(&hasher, @intCast(view.platform_entrypoints.len));
-    for (view.platform_entrypoints) |entrypoint| {
-        const spec = view.store.getProcSpec(entrypoint.root_proc);
-        const arg_locals = view.store.getLocalSpan(spec.args);
+    updateHashU32(&hasher, @intCast(platform_entrypoints.len));
+    for (platform_entrypoints) |entrypoint| {
+        const spec = store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = store.getLocalSpan(spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
         for (arg_locals, 0..) |local_id, i| {
-            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
+            arg_layouts[i] = store.getLocal(local_id).layout_idx;
         }
-        const lowered = layout.abi.lower(ctx.arena, &view.layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+        const lowered = layout.abi.lower(ctx.arena, layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
         updateHashU32(&hasher, entrypoint.ordinal);
         hashPlacement(&hasher, lowered.ret);
         updateHashU32(&hasher, @intCast(lowered.args.len));
@@ -1373,10 +1582,10 @@ fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (
         }
     }
 
-    for (view.store.getProcSpecs()) |spec| {
+    for (store.getProcSpecs()) |spec| {
         const hosted = spec.hosted orelse continue;
         updateHashU32(&hasher, hosted.dispatch_index);
-        updateHashBytes(&hasher, view.store.getString(hosted.symbol));
+        updateHashBytes(&hasher, store.getString(hosted.symbol));
     }
 
     return hasher.finalResult();
@@ -1384,18 +1593,17 @@ fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (
 
 fn interpreterExeLinkInputsIdentity(
     ctx: *CliCtx,
+    shim_kind: ShimLibraryKind,
     link_spec: roc_target.TargetLinkSpec,
     platform_dir: []const u8,
     files_dir: []const u8,
     target: RocTarget,
     entrypoint_names: []const []const u8,
-    entrypoint_abi: [32]u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v2");
+    updateHashBytes(&hasher, "roc-run-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
-    updateHashBytes(&hasher, &entrypoint_abi);
 
     const target_name = @tagName(target);
     for (link_spec.items) |item| {
@@ -1405,7 +1613,7 @@ fn interpreterExeLinkInputsIdentity(
                 const content_digest = try fileContentsDigest(ctx, full_path);
                 updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content_digest);
             },
-            .app => updateInterpreterExeAppLinkInput(&hasher, target, entrypoint_names, debug),
+            .app => updateInterpreterExeAppLinkInput(&hasher, shim_kind, target, entrypoint_names, debug),
             .win_gui => updateHashBytes(&hasher, "win_gui"),
         }
     }
@@ -1413,31 +1621,86 @@ fn interpreterExeLinkInputsIdentity(
     return hasher.finalResult();
 }
 
-const InterpreterExeCacheInputs = struct {
+fn defaultRunCheckedHostIdentity(
+    target: RocTarget,
+    entrypoint_names: []const []const u8,
+    hosted_symbols: []const []const u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
+    updateHashBytes(&hasher, @tagName(target));
+    updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
+    updateHashBytes(&hasher, echo_platform.echo_module_source);
+
+    updateHashU32(&hasher, @intCast(entrypoint_names.len));
+    for (entrypoint_names) |name| {
+        updateHashBytes(&hasher, name);
+    }
+
+    updateHashU32(&hasher, @intCast(hosted_symbols.len));
+    for (hosted_symbols) |symbol| {
+        updateHashBytes(&hasher, symbol);
+    }
+
+    return hasher.finalResult();
+}
+
+fn defaultRunLinkInputsIdentity(
+    ctx: *CliCtx,
+    target: RocTarget,
+    libc_info: ?libc_finder.LibcInfo,
+) CliError!?[32]u8 {
+    const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-default-link-inputs-v2");
+    updateHashBytes(&hasher, @tagName(target));
+    hasher.update(&bytesDigest(runtime_bytes));
+
+    if (libc_info) |info| {
+        updateHashBytes(&hasher, "libc");
+        updateHashBytes(&hasher, info.arch);
+        updateHashBytes(&hasher, info.dynamic_linker);
+        const dynamic_linker_digest = try fileContentsDigest(ctx, info.dynamic_linker);
+        hasher.update(&dynamic_linker_digest);
+        updateHashBytes(&hasher, info.lib_dir);
+        updateHashBytes(&hasher, info.libc_path);
+        const libc_digest = try fileContentsDigest(ctx, info.libc_path);
+        hasher.update(&libc_digest);
+    } else {
+        updateHashBytes(&hasher, "no-libc");
+    }
+
+    return hasher.finalResult();
+}
+
+const ShimHostExeCacheInputs = struct {
+    shim_kind: ShimLibraryKind,
     target: RocTarget,
     debug: bool,
     checked_host_identity: [32]u8,
     link_inputs_identity: [32]u8,
 };
 
-fn interpreterExeCacheDigest(inputs: InterpreterExeCacheInputs) [32]u8 {
+fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-lir-shared-memory-v2");
+    updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
     updateHashBytes(&hasher, build_options.compiler_version);
+    updateHashBytes(&hasher, @tagName(inputs.shim_kind));
     updateHashBytes(&hasher, @tagName(inputs.target));
     updateHashBool(&hasher, inputs.debug);
-    const shim_digest = interpreterShimDigest(inputs.target);
+    const shim_digest = shimLibraryDigest(inputs.shim_kind, inputs.target);
     hasher.update(&shim_digest);
     hasher.update(&inputs.checked_host_identity);
     hasher.update(&inputs.link_inputs_identity);
     return hasher.finalResult();
 }
 
-fn interpreterExeCacheName(
+fn shimHostExeCacheName(
     ctx: *CliCtx,
-    inputs: InterpreterExeCacheInputs,
+    inputs: ShimHostExeCacheInputs,
 ) (Allocator.Error || error{CliError})![]const u8 {
-    const digest = interpreterExeCacheDigest(inputs);
+    const digest = shimHostExeCacheDigest(inputs);
     const digest_hex = std.fmt.bytesToHex(digest, .lower);
     return std.fmt.allocPrint(ctx.arena, "roc_{s}", .{digest_hex[0..]}) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
@@ -1449,7 +1712,8 @@ fn testDigest(byte: u8) [32]u8 {
 }
 
 fn testCacheDigest(checked_host_identity: [32]u8, link_inputs_identity: [32]u8) [32]u8 {
-    return interpreterExeCacheDigest(.{
+    return shimHostExeCacheDigest(.{
+        .shim_kind = .lir,
         .target = .x64linux,
         .debug = false,
         .checked_host_identity = checked_host_identity,
@@ -1530,7 +1794,7 @@ test "interpreter executable cache digest changes for platform host shim entrypo
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
     const native_target = RocTarget.detectNative();
     try ctx.io.stderr().print(
-        "Error: unsupported target for roc run: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
+        "Error: unsupported target for the default roc command: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
         .{ @tagName(target), @tagName(native_target), @tagName(target) },
     );
     return error.UnsupportedTarget;
@@ -1538,19 +1802,26 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
 
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     return switch (args.opt) {
-        .interpreter => rocRunInterpreter(ctx, args),
-        .dev, .size, .speed => rocRunBuildAndExec(ctx, args),
+        .interpreter, .dev => rocRunSharedMemoryShim(ctx, args),
+        .size, .speed => rocRunBuildAndExec(ctx, args),
     };
 }
 
-fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
+        if (useDefaultAppSharedMemoryShim(args)) {
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
+        }
         return rocRunDefaultApp(ctx, args, source);
+    }
+
+    if (args.opt == .dev and args.no_cache) {
+        return rocRunBuildAndExec(ctx, args);
     }
 
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
@@ -1659,38 +1930,88 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         return error.PlatformNotSupported;
     };
 
-    // Build the viewable LIR image in shared memory before linking the
-    // host executable. The same lowered root metadata supplies the platform
-    // entrypoint names used by the shim, so `roc run` does not rediscover roots
-    // from platform source syntax after checking.
-    var reporter = makeReporter(ctx, "roc run", args.timings);
+    // Lower before linking so the host shim uses checked entrypoint metadata
+    // rather than rediscovering roots from platform source syntax after checking.
+    var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
-    const shm_handle = shm_result.handle;
-    defer closeSharedMemoryHandle(shm_handle);
 
-    if (shm_result.error_count > 0) {
+    var lowered_result: ?LoweredCoordinatorResult = null;
+    defer if (lowered_result) |*result| result.deinit();
+
+    var shm_handle_opt: ?SharedMemoryHandle = null;
+    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
+
+    var entrypoint_names: []const []const u8 = &.{};
+    var hosted_symbols: []const []const u8 = &.{};
+    var checked_host_identity_opt: ?[32]u8 = null;
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    switch (args.opt) {
+        .dev => {
+            lowered_result = try lowerLirWithCoordinator(
+                ctx,
+                ctx.gpa,
+                args.path,
+                null,
+                args.max_threads,
+                debugEffectsForOpt(args.opt),
+                resolutionConfigFromLimits(args.resolve_limits),
+                &reporter,
+            );
+            const result = if (lowered_result) |*value| value else unreachable;
+            entrypoint_names = result.entrypoint_names;
+            hosted_symbols = result.hosted_symbols;
+            checked_host_identity_opt = result.checked_host_identity;
+            error_count = result.counts.errors;
+            warning_count = result.counts.warnings;
+        },
+        .interpreter => {
+            const shm_result = try buildLirImageWithCoordinator(
+                ctx,
+                args.path,
+                null,
+                args.max_threads,
+                debugEffectsForOpt(args.opt),
+                resolutionConfigFromLimits(args.resolve_limits),
+                &reporter,
+            );
+            shm_handle_opt = shm_result.handle;
+            entrypoint_names = shm_result.entrypoint_names;
+            hosted_symbols = shm_result.hosted_symbols;
+            checked_host_identity_opt = shm_result.checked_host_identity;
+            error_count = shm_result.error_count;
+            warning_count = shm_result.warning_count;
+        },
+        .size, .speed => unreachable,
+    }
+
+    if (error_count > 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
     reporter.finish();
 
-    const entrypoint_names = shm_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("roc run invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+            std.debug.panic("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
         }
         unreachable;
     }
 
     const selected_target = validated_link_spec.target;
     const enable_debug = builtin.mode == .Debug;
+    const shim_kind: ShimLibraryKind = switch (args.opt) {
+        .dev => .machine_code,
+        .interpreter => .lir,
+        .size, .speed => unreachable,
+    };
 
-    const checked_host_identity = shm_result.checked_host_identity orelse {
+    const checked_host_identity = checked_host_identity_opt orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("roc run invariant violated: missing checked host identity after successful LIR image build", .{});
+            std.debug.panic("default roc command invariant violated: missing checked host identity after successful LIR image build", .{});
         }
         unreachable;
     };
@@ -1702,20 +2023,19 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const files_dir = if (targets_config) |cfg| cfg.inputs_dir orelse "targets" else "targets";
     const target_name = @tagName(selected_target);
 
-    const shm_image_for_abi = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-    const entrypoint_abi = try entrypointAbiDigest(ctx, shm_image_for_abi, selected_target);
     const link_inputs_identity = try interpreterExeLinkInputsIdentity(
         ctx,
+        shim_kind,
         validated_link_spec,
         platform_dir,
         files_dir,
         selected_target,
         entrypoint_names,
-        entrypoint_abi,
         enable_debug,
     );
 
-    const exe_cache_name = try interpreterExeCacheName(ctx, .{
+    const exe_cache_name = try shimHostExeCacheName(ctx, .{
+        .shim_kind = shim_kind,
         .target = selected_target,
         .debug = enable_debug,
         .checked_host_identity = checked_host_identity,
@@ -1758,22 +2078,66 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     } else {
 
         // Extract shim library to temp dir to avoid race conditions
-        const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
+        const shim_filename = switch (shim_kind) {
+            .lir => if (builtin.target.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a",
+            .machine_code => if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a",
+        };
         const shim_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, shim_filename }) catch {
             return error.OutOfMemory;
         };
 
         // Always extract to temp dir (unique per process, no race condition)
         // Use the selected target's shim (which may differ from native if falling back to a compatible target)
-        extractReadRocFilePathShimLibrary(ctx, shim_path, selected_target) catch |err| {
+        extractShimLibrary(ctx, shim_kind, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
-        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, shm_image_bytes, false, enable_debug);
+        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
+        const platform_shim_path = switch (args.opt) {
+            .dev => blk: {
+                const result = if (lowered_result) |*value| value else unreachable;
+                const lowered = successfulLoweredProgram(result, "default roc command");
+                const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+                defer ctx.gpa.free(platform_entrypoints);
+                break :blk try generatePlatformHostShimFromLirData(
+                    ctx,
+                    temp_dir_path,
+                    entrypoint_names,
+                    hosted_symbols,
+                    selected_target,
+                    &lowered.lir_result.store,
+                    &lowered.lir_result.layouts,
+                    platform_entrypoints,
+                    null,
+                    0,
+                    false,
+                    enable_debug,
+                );
+            },
+            .interpreter => blk: {
+                const shm_handle = shm_handle_opt orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                    }
+                    unreachable;
+                };
+                const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+                break :blk try generatePlatformHostShim(
+                    ctx,
+                    temp_dir_path,
+                    entrypoint_names,
+                    hosted_symbols,
+                    selected_target,
+                    shm_image_bytes,
+                    false,
+                    false,
+                    enable_debug,
+                );
+            },
+            .size, .speed => unreachable,
+        };
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
@@ -1852,11 +2216,28 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         // runtime symbols compiled output would; the host inputs must define
         // them all.
         {
-            const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+            const referenced_hosted_symbols = switch (args.opt) {
+                .dev => blk: {
+                    const result = if (lowered_result) |*value| value else unreachable;
+                    const lowered = successfulLoweredProgram(result, "default roc command");
+                    break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+                },
+                .interpreter => blk: {
+                    const shm_handle = shm_handle_opt orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                        }
+                        unreachable;
+                    };
+                    const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+                    break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
+                },
+                .size, .speed => unreachable,
+            };
             try verifyHostInputSymbols(
                 ctx,
                 host_input_paths.items,
-                try hostedSymbolsFromLir(ctx.arena, &view.store),
+                referenced_hosted_symbols,
                 target_name,
                 false,
             );
@@ -1899,7 +2280,20 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         };
     }
 
-    std.log.debug("Launching interpreter executable: {s}", .{exe_path});
+    if (args.opt == .dev) {
+        const result = if (lowered_result) |*value| value else unreachable;
+        const lowered = successfulLoweredProgram(result, "default roc command");
+        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+    }
+
+    const shm_handle = shm_handle_opt orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
+        }
+        unreachable;
+    };
+
+    std.log.debug("Launching shim executable: {s}", .{exe_path});
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
@@ -1912,7 +2306,7 @@ fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     std.log.debug("Interpreter execution completed", .{});
 
     // Exit with code 2 if there were warnings (but no errors)
-    if (shm_result.warning_count > 0) {
+    if (warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -2170,7 +2564,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    var reporter = makeReporter(ctx, "roc run", args.timings);
+    var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
     const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
@@ -2204,6 +2598,248 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     const exit_code = result_buf[0];
     if (exit_code != 0) std.process.exit(exit_code);
     if (echo_env.inline_expect_failed) std.process.exit(1);
+}
+
+fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
+    defer ctx.gpa.free(original_source);
+
+    const native_target = RocTarget.detectNative();
+    const default_target = defaultRunShimTarget(native_target);
+    const selected_target = if (args.target) |target_str| blk: {
+        const requested = RocTarget.fromString(target_str) orelse {
+            try ctx.io.stderr().print("Error: invalid target for roc: {s}\n", .{target_str});
+            return error.InvalidTarget;
+        };
+        if (!devShimTargetCompatible(requested, native_target)) {
+            try rejectRunTargetNotExecutable(ctx, requested);
+            unreachable;
+        }
+        if (requested.isStatic()) {
+            try ctx.io.stderr().print(
+                "Error: shared-memory dev runs for headerless default apps require a dynamic Linux target; got {s}.\n",
+                .{@tagName(requested)},
+            );
+            return error.UnsupportedTarget;
+        }
+        break :blk requested;
+    } else default_target;
+
+    if (selected_target.toOsTag() != .linux) {
+        try ctx.io.stderr().print(
+            "Error: shared-memory dev runs for headerless default apps are currently supported only on Linux targets.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    }
+
+    if (DefaultPlatformRuntimeObjects.forTarget(selected_target) == null) {
+        return rejectRunTargetNotExecutable(ctx, selected_target);
+    }
+
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
+    };
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_temp_dir = true;
+    defer if (cleanup_temp_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    };
+
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
+
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" });
+    const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
+    const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
+
+    const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+    var reporter = makeReporter(ctx, "roc", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        ctx.gpa,
+        app_path,
+        original_source_dir,
+        args.max_threads,
+        debugEffectsForOpt(args.opt),
+        resolutionConfigFromLimits(args.resolve_limits),
+        &reporter,
+    );
+    defer lowered_result.deinit();
+
+    if (lowered_result.counts.errors > 0) {
+        reporter.fail();
+        if (args.allow_errors) return;
+        return error.TypeCheckingFailed;
+    }
+    reporter.finish();
+
+    const entrypoint_names = lowered_result.entrypoint_names;
+    if (entrypoint_names.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("default app run invariant violated: no platform entrypoints", .{});
+        }
+        unreachable;
+    }
+
+    const lowered = successfulLoweredProgram(&lowered_result, "default app run");
+    const enable_debug = builtin.mode == .Debug;
+    const checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
+    const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
+        libc_finder.findLibc(ctx) catch |err| {
+            try ctx.io.stderr().print(
+                "Error: could not find system libc for shared-memory default app run: {}\n",
+                .{err},
+            );
+            return err;
+        }
+    else
+        null;
+    const link_inputs_identity = (try defaultRunLinkInputsIdentity(ctx, selected_target, libc_info)) orelse {
+        return rejectRunTargetNotExecutable(ctx, selected_target);
+    };
+
+    const exe_cache_name = try shimHostExeCacheName(ctx, .{
+        .shim_kind = .machine_code,
+        .target = selected_target,
+        .debug = enable_debug,
+        .checked_host_identity = checked_host_identity,
+        .link_inputs_identity = link_inputs_identity,
+    });
+    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
+        try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name})
+    else
+        try ctx.arena.dupe(u8, exe_cache_name);
+    const exe_cache_path = try std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext });
+
+    const exe_display_name = std.fs.path.basename(args.path);
+    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
+        try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name})
+    else
+        try ctx.arena.dupe(u8, exe_display_name);
+    const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, exe_display_name_with_ext });
+
+    const cache_exists = if (args.no_cache) false else blk: {
+        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch break :blk false;
+        break :blk true;
+    };
+
+    if (cache_exists) {
+        createHardlink(ctx, exe_cache_path, exe_path) catch {
+            try std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{});
+        };
+    } else {
+        const shim_filename = if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
+        const shim_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, shim_filename });
+        extractShimLibrary(ctx, .machine_code, shim_path, selected_target) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+
+        const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+        defer ctx.gpa.free(platform_entrypoints);
+        const platform_shim_path = (try generatePlatformHostShimFromLirData(
+            ctx,
+            temp_dir,
+            entrypoint_names,
+            lowered_result.hosted_symbols,
+            selected_target,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            platform_entrypoints,
+            null,
+            0,
+            true,
+            enable_debug,
+        )) orelse return ctx.fail(.{ .shim_generation_failed = .{ .err = error.LLVMCompilationFailed } });
+
+        const runtime_path = (try writeDefaultPlatformRuntimeObject(ctx, temp_dir, selected_target)) orelse {
+            return rejectRunTargetNotExecutable(ctx, selected_target);
+        };
+
+        const object_files = [_][]const u8{
+            platform_shim_path,
+            shim_path,
+            runtime_path,
+        };
+        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
+        if (libc_info) |info| {
+            try extra_args.append("-dynamic-linker");
+            try extra_args.append(info.dynamic_linker);
+            try extra_args.append("-L");
+            try extra_args.append(info.lib_dir);
+            try extra_args.append("-lc");
+        }
+
+        const link_config = linker.LinkConfig{
+            .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
+            .target_abi = if (selected_target.isStatic()) .musl else .gnu,
+            .target_os = selected_target.toOsTag(),
+            .target_arch = selected_target.toCpuArch(),
+            .output_path = exe_path,
+            .object_files = &object_files,
+            .can_exit_early = false,
+            .disable_output = false,
+            .scratch_dir = temp_dir,
+            .extra_args = extra_args.items,
+        };
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = @tagName(selected_target),
+            } });
+        };
+
+        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+        };
+        createHardlink(ctx, exe_path, exe_cache_path) catch {
+            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
+                std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
+            };
+        };
+    }
+
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+    defer closeSharedMemoryHandle(shm_handle);
+
+    if (comptime is_windows) {
+        try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
+    } else {
+        try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
+    }
+    cleanup_temp_dir = false;
+
+    if (lowered_result.counts.warnings > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -2539,6 +3175,7 @@ pub const SharedMemoryHandle = struct {
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     entrypoint_names: []const []const u8,
+    hosted_symbols: []const []const u8,
     checked_host_identity: ?[32]u8,
     error_count: usize,
     warning_count: usize,
@@ -2548,6 +3185,29 @@ const CoordinatorReportCounts = struct {
     errors: usize,
     warnings: usize,
 };
+
+const LoweredCoordinatorResult = struct {
+    lowered: ?lir.CheckedPipeline.LoweredProgram,
+    entrypoint_names: []const []const u8,
+    hosted_symbols: []const []const u8,
+    checked_host_identity: ?[32]u8,
+    counts: CoordinatorReportCounts,
+
+    fn deinit(self: *LoweredCoordinatorResult) void {
+        if (self.lowered) |*lowered| {
+            lowered.deinit();
+        }
+    }
+};
+
+fn successfulLoweredProgram(result: *LoweredCoordinatorResult, label: []const u8) *lir.CheckedPipeline.LoweredProgram {
+    return if (result.lowered) |*lowered| lowered else {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("{s} invariant violated: successful coordinator lowering produced no lowered program", .{label});
+        }
+        unreachable;
+    };
+}
 
 fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []const u8) CoordinatorReportCounts {
     var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
@@ -2596,6 +3256,7 @@ fn sharedMemoryResult(
     shm: *SharedMemoryAllocator,
     counts: CoordinatorReportCounts,
     entrypoint_names: []const []const u8,
+    hosted_symbols: []const []const u8,
     checked_host_identity: ?[32]u8,
 ) SharedMemoryResult {
     return .{
@@ -2606,6 +3267,7 @@ fn sharedMemoryResult(
             .mapped_size = shm.total_size,
         },
         .entrypoint_names = entrypoint_names,
+        .hosted_symbols = hosted_symbols,
         .checked_host_identity = checked_host_identity,
         .error_count = counts.errors,
         .warning_count = counts.warnings,
@@ -2626,6 +3288,121 @@ fn viewLirImageFromHandle(handle: SharedMemoryHandle, arena: std.mem.Allocator) 
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, arena);
+}
+
+fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
+    return selected.toCpuArch() == native.toCpuArch() and
+        selected.toOsTag() == native.toOsTag() and
+        selected.ptrBitWidth() == native.ptrBitWidth();
+}
+
+fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
+    if (args.opt != .dev) return false;
+    if (args.target != null) return true;
+
+    const native_target = RocTarget.detectNative();
+    const default_target = defaultRunShimTarget(native_target);
+    return devShimTargetCompatible(default_target, native_target) and
+        default_target.toOsTag() == .linux and
+        DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
+}
+
+fn defaultRunShimTarget(native: RocTarget) RocTarget {
+    return switch (native) {
+        .x64musl, .x64glibc, .x64linux => .x64linux,
+        .arm64musl, .arm64glibc, .arm64linux => .arm64linux,
+        else => native,
+    };
+}
+
+fn publishDevRunImage(
+    ctx: *CliCtx,
+    selected_target: RocTarget,
+    entrypoint_names: []const []const u8,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror!SharedMemoryHandle {
+    if (comptime !backend.host_lir_codegen_available) {
+        try ctx.io.stderr().print(
+            "Error: The dev backend cannot run in memory on this host architecture.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    } else {
+        const native_target = backend.HostLirCodeGen.roc_target;
+        if (!devShimTargetCompatible(selected_target, native_target)) {
+            try rejectRunTargetNotExecutable(ctx, selected_target);
+            unreachable;
+        }
+
+        const store = &lowered.lir_result.store;
+        const layouts = &lowered.lir_result.layouts;
+
+        var static_strings = try backend.StaticStringData.build(ctx.gpa, store, native_target);
+        defer static_strings.deinit();
+
+        var codegen = try backend.HostLirCodeGen.init(
+            ctx.gpa,
+            store,
+            layouts,
+            static_strings.entries,
+        );
+        defer codegen.deinit();
+        codegen.generation_mode = .shim_execution;
+
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+        const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+        defer ctx.gpa.free(platform_entrypoints);
+
+        const entrypoints = try ctx.gpa.alloc(backend.RunImage.EntrypointInput, platform_entrypoints.len);
+        defer ctx.gpa.free(entrypoints);
+
+        for (platform_entrypoints, 0..) |platform_entrypoint, i| {
+            const ordinal: usize = @intCast(platform_entrypoint.ordinal);
+            if (ordinal >= entrypoint_names.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
+                }
+                unreachable;
+            }
+
+            const proc = store.getProcSpec(platform_entrypoint.root_proc);
+            const arg_layouts = try argLayoutsForProc(ctx.gpa, store, platform_entrypoint.root_proc);
+            defer ctx.gpa.free(arg_layouts);
+
+            const exported = try codegen.generateEntrypointWrapper(
+                entrypoint_names[ordinal],
+                platform_entrypoint.root_proc,
+                arg_layouts,
+                proc.ret_layout,
+            );
+            entrypoints[i] = .{
+                .ordinal = platform_entrypoint.ordinal,
+                .code_offset = exported.offset,
+            };
+        }
+
+        const page_size = try SharedMemoryAllocator.getSystemPageSize();
+        var shm = try createSharedMemory(ctx.io.std_io, page_size);
+        errdefer shm.deinit(ctx.gpa);
+
+        _ = try backend.RunImage.writeToSharedMemory(
+            ctx.gpa,
+            shm.allocator(),
+            shm.base_ptr,
+            codegen.getGeneratedCode(),
+            entrypoints,
+            codegen.getRelocations(),
+            static_strings.exports,
+        );
+        shm.updateHeader();
+        return .{
+            .fd = shm.handle,
+            .ptr = shm.base_ptr,
+            .size = shm.getUsedSize(),
+            .mapped_size = shm.total_size,
+        };
+    }
 }
 
 fn argLayoutsForProc(
@@ -2684,31 +3461,17 @@ fn evaluateLirImageEntrypoint(
     };
 }
 
-/// Build shared memory containing a viewable ARC-inserted LIR image.
-///
-/// The parent process owns parse, canonicalization, checking, checked module
-/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
-/// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
-/// modules, or post-check IRs.
-pub fn buildLirImageWithCoordinator(
+fn lowerLirWithCoordinator(
     ctx: *CliCtx,
+    lir_allocator: Allocator,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
-) anyerror!SharedMemoryResult {
+) anyerror!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
-
-    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
-    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(ctx.io.std_io, page_size);
-    // Don't defer deinit here - we need to keep the shared memory alive
-
-    const shm_allocator = shm.allocator();
-    const image_header = try shm_allocator.create(lir.LirImage.Header);
 
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
     defer builtin_modules.deinit();
@@ -2846,16 +3609,26 @@ pub fn buildLirImageWithCoordinator(
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
         if (reporter) |r| r.fail();
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, counts, &.{}, null);
+        return .{
+            .lowered = null,
+            .entrypoint_names = &.{},
+            .hosted_symbols = &.{},
+            .checked_host_identity = null,
+            .counts = counts,
+        };
     }
 
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (finalized_counts.errors > 0) {
         if (reporter) |r| r.fail();
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, finalized_counts, &.{}, null);
+        return .{
+            .lowered = null,
+            .entrypoint_names = &.{},
+            .hosted_symbols = &.{},
+            .checked_host_identity = null,
+            .counts = finalized_counts,
+        };
     }
     if (reporter) |r| {
         r.endWithBreakdown(&.{
@@ -2875,8 +3648,8 @@ pub fn buildLirImageWithCoordinator(
     defer ctx.gpa.free(lir_roots);
 
     if (reporter) |r| r.begin("Specializing");
-    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        shm_allocator,
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        lir_allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
@@ -2887,19 +3660,79 @@ pub fn buildLirImageWithCoordinator(
             .debug_effects = debug_effects,
         },
     );
+    errdefer lowered.deinit();
     if (reporter) |r| r.end();
 
-    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
-    const checked_host_identity = try checkedInterpreterHostIdentity(
-        ctx.gpa,
+    const hosted_table = try checkedHostedTable(
+        ctx.arena,
         root_artifact,
         imported_artifacts,
         relation_artifacts,
+    );
+    const checked_host_identity = checkedInterpreterHostIdentity(
+        root_artifact,
         entrypoint_names,
         lowered.target_usize,
+        hosted_table,
     );
 
+    return .{
+        .lowered = lowered,
+        .entrypoint_names = entrypoint_names,
+        .hosted_symbols = hosted_table.symbols,
+        .checked_host_identity = checked_host_identity,
+        .counts = finalized_counts,
+    };
+}
+
+/// Build shared memory containing a viewable ARC-inserted LIR image.
+///
+/// The parent process owns parse, canonicalization, checking, checked module
+/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
+/// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
+/// modules, or post-check IRs.
+pub fn buildLirImageWithCoordinator(
+    ctx: *CliCtx,
+    roc_file_path: []const u8,
+    source_dir_override: ?[]const u8,
+    max_threads: ?usize,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+    resolution_config: compile.package_resolution.Config,
+    reporter: ?*progress.Reporter,
+) anyerror!SharedMemoryResult {
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const shm_allocator = shm.allocator();
+    const image_header = try shm_allocator.create(lir.LirImage.Header);
+
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        shm_allocator,
+        roc_file_path,
+        source_dir_override,
+        max_threads,
+        debug_effects,
+        resolution_config,
+        reporter,
+    );
+
+    if (lowered_result.counts.errors > 0) {
+        shm.updateHeader();
+        return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
+    }
+
+    const lowered = if (lowered_result.lowered) |*program| program else {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LIR image invariant violated: successful coordinator lowering produced no lowered program", .{});
+        }
+        unreachable;
+    };
+    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     try lir.LirImage.fillHeaderInSharedMemory(
         image_header,
         shm.base_ptr,
@@ -2910,7 +3743,13 @@ pub fn buildLirImageWithCoordinator(
     );
 
     shm.updateHeader();
-    return sharedMemoryResult(&shm, finalized_counts, entrypoint_names, checked_host_identity);
+    return sharedMemoryResult(
+        &shm,
+        lowered_result.counts,
+        lowered_result.entrypoint_names,
+        lowered_result.hosted_symbols,
+        lowered_result.checked_host_identity,
+    );
 }
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
@@ -3274,11 +4113,8 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
     };
 }
 
-/// Extract the embedded roc_shim library to the specified path for the given target.
-/// This library contains the shim code that runs in child processes to read the LIR image.
-/// For native builds and roc run, use the native shim (pass null or native target).
-/// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, target: ?RocTarget) anyerror!void {
+/// Extract the selected embedded shim library to the specified path for the given target.
+fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) anyerror!void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
@@ -3290,7 +4126,7 @@ pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, 
     const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
     defer shim_file.close(ctx.io.std_io);
 
-    try shim_file.writeStreamingAll(ctx.io.std_io, interpreterShimBytes(target));
+    try shim_file.writeStreamingAll(ctx.io.std_io, shimLibraryBytes(kind, target));
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
@@ -4106,6 +4942,22 @@ fn hostedSymbolsFromLir(arena: std.mem.Allocator, store: *const lir.LirStore) st
         if (!gop.found_existing) try symbols.append(arena, try arena.dupe(u8, text));
     }
     return symbols.items;
+}
+
+fn hostedSymbolsFromLirDispatch(arena: std.mem.Allocator, store: *const lir.LirStore) std.mem.Allocator.Error![]const []const u8 {
+    var hosted_count: usize = 0;
+    for (store.getProcSpecs()) |spec| {
+        const hosted = spec.hosted orelse continue;
+        hosted_count = @max(hosted_count, @as(usize, hosted.dispatch_index) + 1);
+    }
+
+    const hosted_symbols = try arena.alloc([]const u8, hosted_count);
+    for (hosted_symbols) |*symbol| symbol.* = "";
+    for (store.getProcSpecs()) |spec| {
+        const hosted = spec.hosted orelse continue;
+        hosted_symbols[hosted.dispatch_index] = store.getString(hosted.symbol);
+    }
+    return hosted_symbols;
 }
 
 /// Pre-link check: the platform's host inputs must define every hosted symbol
@@ -5356,6 +6208,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .inline_mode = postCheckInlineModeForOpt(args.opt),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .tag_reachability = tagReachabilityForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
     );
@@ -5689,6 +6542,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .inline_mode = postCheckInlineModeForOpt(args.opt),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .tag_reachability = tagReachabilityForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
     );
@@ -6048,10 +6902,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
-    const shim_filename = try interpreterShimCacheFilename(ctx, target);
+    const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
     std.Io.Dir.cwd().access(ctx.io.std_io, shim_path, .{}) catch {
-        extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {
+        extractShimLibrary(ctx, .lir, shim_path, target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
     };
@@ -6061,9 +6915,11 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         ctx,
         build_cache_dir,
         entrypoint_names,
+        null,
         target,
         lir_image,
         true,
+        false,
         enable_debug,
     );
 
@@ -6562,6 +7418,13 @@ fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn debugEffectsForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.DebugEffectMode {
     return switch (opt) {
         .size, .speed => .erase,
@@ -6905,6 +7768,7 @@ fn runCheckedArtifactTests(
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt),
             .list_in_place_map = listInPlaceMapForOpt(opt),
+            .tag_reachability = tagReachabilityForOpt(opt),
         },
     );
     defer lowered.deinit();

@@ -72,6 +72,8 @@ pub const Solution = struct {
     member_offsets: []u32,
     member_lens: []u32,
     members: []u32,
+    /// Source local of each pure same-value alias, or `no_local`.
+    alias_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
     /// Bit set => the local is a join parameter. Join parameters carry one
@@ -101,6 +103,7 @@ pub const Solution = struct {
         self.allocator.free(self.member_offsets);
         self.allocator.free(self.member_lens);
         self.allocator.free(self.members);
+        self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
         self.join_param.deinit(self.allocator);
         self.visible.deinit(self.allocator);
@@ -160,6 +163,22 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return local;
         return @enumFromInt(self.leader[index]);
+    }
+
+    /// Local whose ownership unit can be moved by an occurrence of `local`.
+    /// Borrowed pure same-value aliases move their source's unit. Owned pure
+    /// aliases already have their own retained unit, and field/payload borrows
+    /// are not the same value as their liveness leader.
+    pub fn unitLocalOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
+        if (!self.isBorrowed(local)) return local;
+        var cursor = @intFromEnum(local);
+        var steps: usize = 0;
+        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
+            cursor = self.alias_source[cursor];
+            steps += 1;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
+        }
+        return @enumFromInt(cursor);
     }
 
     /// Members of the leader's liveness group, including the leader.
@@ -243,10 +262,15 @@ pub fn solve(
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
     var solver_sigs_kept = false;
+    var solver_alias_source_kept = false;
     defer {
         if (solver_sigs_kept) {
             // Ownership of sigs moved into the Solution.
             solver.sigs = &.{};
+        }
+        if (solver_alias_source_kept) {
+            // Ownership of alias_source moved into the Solution.
+            solver.alias_source = &.{};
         }
         if (!solver_sigs_kept) solver.pinned.deinit(allocator);
         allocator.free(solver.scc);
@@ -384,6 +408,7 @@ pub fn solve(
         .member_offsets = &.{},
         .member_lens = &.{},
         .members = &.{},
+        .alias_source = solver.alias_source,
         .sigs = solver.sigs,
         .join_param = solver.join_param,
         .visible = visible,
@@ -392,9 +417,11 @@ pub fn solve(
         .pinned = solver.pinned,
     };
     solver_sigs_kept = true;
+    solver_alias_source_kept = true;
     errdefer {
         solution.borrowed.deinit(allocator);
         allocator.free(solution.leader);
+        allocator.free(solution.alias_source);
         allocator.free(solution.sigs);
         solution.join_param.deinit(allocator);
         solution.visible.deinit(allocator);

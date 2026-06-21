@@ -158,9 +158,17 @@ pub const GenerationMode = enum {
     /// Code runs in-process (dev evaluator), direct function pointers are valid.
     /// The compiled code calls builtins via absolute addresses embedded in the code.
     native_execution,
+    /// Code runs in the linked shim child process from bytes produced by the
+    /// parent compiler. Internal Roc procs receive RocOps, while builtin and
+    /// readonly-data references are explicit relocation records.
+    shim_execution,
     /// Generating relocatable object files for linking.
     /// Builtin calls must use symbol references that the linker will resolve.
     object_file,
+
+    fn threadsRocOps(self: GenerationMode) bool {
+        return self != .object_file;
+    }
 };
 
 /// Builtin function identifiers for the dev backend.
@@ -7698,6 +7706,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var fi: u32 = field_count;
                     while (fi > 0) {
                         fi -= 1;
+                        // Padding spacers hold uninitialized bytes; never compare them.
+                        if (ls.getStructFieldIsPadding(struct_idx, @intCast(fi))) continue;
                         const field_size = ls.getStructFieldSize(struct_idx, @intCast(fi));
                         if (field_size == 0) continue;
                         const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(fi));
@@ -10743,10 +10753,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // In object-file mode the call goes directly to the host's linker
-            // symbol; the interpreter-internal RocOps vtable is only used for
-            // in-process (JIT) evaluation.
-            if (self.generation_mode == .native_execution) {
+            // Object-file output calls the host's linker symbol directly;
+            // RocOps-threaded modes dispatch through the hosted table.
+            if (self.generation_mode.threadsRocOps()) {
                 const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
                 const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
                 const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
@@ -10828,7 +10837,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLeaStack(.XR, ret_slot);
             }
 
-            if (self.generation_mode == .native_execution) {
+            if (self.generation_mode.threadsRocOps()) {
                 try builder.callReg(hosted_target_reg);
             } else {
                 try builder.callRelocatable(self.store.getString(hosted.symbol), self.allocator, &self.codegen.relocations);
@@ -11050,9 +11059,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
             // Pass 2: Place arguments and emit call
             const initial_arg_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-            // Only in-process evaluation threads a RocOps to procs; symbol-ABI
-            // output carries none.
-            const emit_roc_ops = self.generation_mode == .native_execution;
+            // RocOps-threaded modes pass RocOps to procs; symbol-ABI output
+            // carries none.
+            const emit_roc_ops = self.generation_mode.threadsRocOps();
             const pbp_plan = try self.computePassByPtrPlan(arg_infos, initial_arg_reg_idx, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
@@ -11333,7 +11342,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .native_execution => {
                     try builder.call(fn_addr);
                 },
-                .object_file => {
+                .shim_execution, .object_file => {
                     try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
                 },
             }
@@ -13891,11 +13900,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // In-process evaluation appends a real RocOps as the final
-            // argument, so its plan reserves one extra register slot; the
-            // symbol ABI appends nothing. This must mirror the caller-side
-            // plan in computePassByPtrPlan exactly.
-            const ops_slots: u8 = if (self.generation_mode == .native_execution) 1 else 0;
+            // RocOps-threaded modes append RocOps as the final argument, so
+            // their plan reserves one extra register slot; the symbol ABI
+            // appends nothing. This must mirror the caller-side plan in
+            // computePassByPtrPlan exactly.
+            const ops_slots: u8 = if (self.generation_mode.threadsRocOps()) 1 else 0;
             while (pre_reg_count + ops_slots > max_arg_regs) {
                 var found = false;
                 var best_idx: usize = 0;
@@ -14004,8 +14013,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 .R12;
 
-            if (self.generation_mode == .native_execution) {
-                // In-process evaluation appends a real RocOps as the final
+            if (self.generation_mode.threadsRocOps()) {
+                // RocOps-threaded modes append a real RocOps as the final
                 // argument.
                 if (reg_idx < max_arg_regs) {
                     const arg_reg = self.getArgumentRegister(reg_idx);
@@ -15311,7 +15320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         verifyStaticStringBytes(backing_bytes);
                         try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(str_bytes.ptr))));
                     },
-                    .object_file => {
+                    .shim_execution, .object_file => {
                         const symbol_name = self.staticStringSymbol(literal.backing);
                         try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
                         try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
@@ -15326,7 +15335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @intFromPtr(backing_bytes.ptr) | 1;
                         try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
                     },
-                    .object_file => {
+                    .shim_execution, .object_file => {
                         if (whole_backing) {
                             try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len << 1));
                         } else {
@@ -15442,9 +15451,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
 
-            if (self.generation_mode == .native_execution) {
-                // In-process evaluation reaches the host callbacks through the
-                // interpreter-internal RocOps vtable:
+            if (self.generation_mode.threadsRocOps()) {
+                // RocOps-threaded modes reach host callbacks through RocOps:
                 // callback(ops: *RocOps, bytes: [*]const u8, len: usize).
                 const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
                 try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
@@ -15561,9 +15569,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                if (self.generation_mode == .native_execution) {
-                    // In-process evaluation calls the wrapper with the
-                    // interpreter-internal (ops, ret_ptr, args_ptr) convention.
+                if (self.generation_mode.threadsRocOps()) {
+                    // RocOps-threaded modes call the wrapper with the
+                    // (ops, ret_ptr, args_ptr) convention.
                     try self.codegen.emit.movRegReg(.w64, .X19, .X0);
                     try self.codegen.emit.movRegReg(.w64, .X20, .X1);
                     try self.codegen.emit.movRegReg(.w64, .X21, .X2);
@@ -15652,9 +15660,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                if (self.generation_mode == .native_execution) {
-                    // In-process evaluation calls the wrapper with the
-                    // interpreter-internal (ops, ret_ptr, args_ptr) convention.
+                if (self.generation_mode.threadsRocOps()) {
+                    // RocOps-threaded modes call the wrapper with the
+                    // (ops, ret_ptr, args_ptr) convention.
                     if (target.isWindows()) {
                         try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
                         try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
@@ -15868,7 +15876,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 break :blk self.codegen.allocStackSlot(size);
             } else 0;
 
-            const emit_roc_ops = self.generation_mode == .native_execution;
+            const emit_roc_ops = self.generation_mode.threadsRocOps();
             const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
 

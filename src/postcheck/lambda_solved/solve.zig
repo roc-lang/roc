@@ -1336,6 +1336,23 @@ const TypeCloner = struct {
         return reserved;
     }
 
+    /// Re-materializes a nominal record's declared field order from the monotype
+    /// declared-field store into the Lambda Solved store. Named entries copy the
+    /// shared field-name id; padding entries re-lower their reserved type.
+    fn lowerDeclaredOrder(self: *TypeCloner, span: MonoType.Span) Allocator.Error!Type.Span {
+        const source = self.solver.program.lifted.types.declaredFieldSpan(span);
+        if (source.len == 0) return Type.Span.empty();
+        const lowered = try self.solver.allocator.alloc(Type.DeclaredField, source.len);
+        defer self.solver.allocator.free(lowered);
+        for (source, 0..) |entry, i| {
+            lowered[i] = switch (entry) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = try self.lower(ty) },
+            };
+        }
+        return try self.solver.program.types.addDeclaredFields(lowered);
+    }
+
     fn lowerContent(self: *TypeCloner, content: MonoType.Content) Allocator.Error!Type.Content {
         return switch (content) {
             .primitive => |primitive| .{ .primitive = primitive },
@@ -1382,10 +1399,11 @@ const TypeCloner = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
-                    .backing = if (named.backing) |backing| .{
-                        .ty = try self.lower(backing.ty),
-                        .use = backing.use,
+                    .backing = if (named.backing) |raw_backing| .{
+                        .ty = try self.lower(try self.structuralBackingForNamed(named.def, raw_backing.ty)),
+                        .use = raw_backing.use,
                     } else null,
+                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
             .func => |fn_ty| blk: {
@@ -1406,7 +1424,35 @@ const TypeCloner = struct {
         for (items, 0..) |item, i| lowered[i] = try self.lower(item);
         return lowered;
     }
+
+    fn structuralBackingForNamed(
+        self: *TypeCloner,
+        owner_def: MonoType.TypeDef,
+        backing: MonoType.TypeId,
+    ) Allocator.Error!MonoType.TypeId {
+        var seen = std.AutoHashMap(MonoType.TypeId, void).init(self.solver.allocator);
+        defer seen.deinit();
+        var current = backing;
+        while (true) {
+            if (seen.contains(current)) return current;
+            try seen.put(current, {});
+            switch (self.solver.program.lifted.types.get(current)) {
+                .named => |named| {
+                    if (named.kind != .alias and !sameMonoTypeDef(named.def, owner_def)) return current;
+                    const next = named.backing orelse return current;
+                    current = next.ty;
+                },
+                else => return current,
+            }
+        }
+    }
 };
+
+fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
+    return left.module_name == right.module_name and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl;
+}
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());

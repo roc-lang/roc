@@ -225,6 +225,10 @@ const Lowerer = struct {
                 .roc => |body_id| self.program.exprLoc(body_id),
                 .hosted => base.SourceLoc.none,
             };
+            self.result.store.current_region = switch (fn_.body) {
+                .roc => |body_id| self.program.exprRegion(body_id),
+                .hosted => base.Region.zero(),
+            };
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
                 .args = try self.result.store.addLocalSpan(arg_locals),
@@ -237,6 +241,7 @@ const Lowerer = struct {
                 try self.result.store.setProcDebugName(proc_id, self.program.names.exportNameText(name));
             }
             self.result.store.current_loc = base.SourceLoc.none;
+            self.result.store.current_region = base.Region.zero();
             self.fn_map[index] = proc_id;
         }
     }
@@ -286,7 +291,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, proc, source.branch_regions);
+        }, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -702,7 +707,10 @@ const Lowerer = struct {
         const expr_data = self.expr(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.program.exprLoc(expr_id);
+        self.result.store.current_region = self.program.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
@@ -1423,7 +1431,10 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: LambdaMono.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.program.stmtLoc(stmt_id);
+        self.result.store.current_region = self.program.stmtRegion(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
@@ -1956,6 +1967,16 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const elems = self.program.patSpan(list.patterns);
         const fixed_count: i64 = @intCast(elems.len);
+
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
+
         const len_local = try self.addLocalForLayout(.u64);
 
         var current = on_match;
@@ -2813,6 +2834,20 @@ const Lowerer = struct {
                     const node = try self.graph.reserveNode(self.lowerer.allocator);
                     self.local_nodes[index] = node;
                     self.local_nodes[backing_index] = node;
+
+                    // A nominal or opaque record lays out its fields in declared
+                    // order. The declared-order channel carries that order (the
+                    // backing row stays lexicographic for name resolution); build
+                    // the struct node from it and mark it nominal so the shared
+                    // commit keeps declared order, repaired only for padding.
+                    if (named.kind != .alias and named.declared_order.len != 0) {
+                        if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
+                            self.graph.setNode(node, .{ .struct_ = field_span });
+                            try self.graph.markNominalStruct(self.lowerer.allocator, node);
+                            return layout.localGraphInput(node);
+                        }
+                    }
+
                     self.graph.setNode(node, try self.nodeForType(backing.ty));
                     return layout.localGraphInput(node);
                 },
@@ -2879,6 +2914,61 @@ const Lowerer = struct {
             defer self.lowerer.allocator.free(fields);
             for (items, 0..) |item, i| {
                 fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.ty) };
+            }
+            return try self.graph.appendFields(self.lowerer.allocator, fields);
+        }
+
+        /// Builds graph fields for a nominal record in declared order from its
+        /// declared-order channel. Each named entry maps to the matching backing
+        /// field, keeping `.index` = the field's lexicographic position so
+        /// name-resolution (which indexes the lexicographic backing row) and the
+        /// layout offset map stay consistent. Returns null when the backing is
+        /// not a record or the declared order does not cover the backing fields,
+        /// so the caller falls back to the structural path.
+        fn declaredOrderStructFields(
+            self: *LayoutGraphBuilder,
+            declared_order: Type.Span,
+            backing_ty: Type.TypeId,
+        ) Common.LowerError!?layout.GraphFieldSpan {
+            const backing_fields = switch (self.lowerer.program.types.get(backing_ty)) {
+                .record => |span| self.lowerer.program.types.fieldSpan(span),
+                else => return null,
+            };
+            const entries = self.lowerer.program.types.declaredFieldSpan(declared_order);
+
+            var named_count: usize = 0;
+            for (entries) |entry| {
+                if (entry == .named) named_count += 1;
+            }
+            if (named_count != backing_fields.len) return null;
+
+            const fields = try self.lowerer.allocator.alloc(layout.GraphField, entries.len);
+            defer self.lowerer.allocator.free(fields);
+            // Padding spacers carry an index past every named field so they never
+            // collide with a named field's original (lexicographic) index, which
+            // is what `getStructFieldOffsetByOriginalIndex` looks up.
+            var padding_ordinal: u16 = 0;
+            for (entries, 0..) |entry, i| {
+                switch (entry) {
+                    .named => |name| {
+                        var lexicographic_index: ?u16 = null;
+                        var field_ty: Type.TypeId = undefined;
+                        for (backing_fields, 0..) |field, idx| {
+                            if (field.name == name) {
+                                lexicographic_index = @intCast(idx);
+                                field_ty = field.ty;
+                                break;
+                            }
+                        }
+                        const idx = lexicographic_index orelse return null;
+                        fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
+                    },
+                    .padding => |ty| {
+                        const pad_index: u16 = @intCast(backing_fields.len + padding_ordinal);
+                        padding_ordinal += 1;
+                        fields[i] = .{ .index = pad_index, .child = try self.inputForType(ty), .is_padding = true };
+                    },
+                }
             }
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }

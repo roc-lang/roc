@@ -180,6 +180,42 @@ test "typed numeric suffix still uses ordinary scope lookup" {
     try testing.expect(found_undeclared_type);
 }
 
+test "typed numeric suffix uses local shadow of builtin numeric type" {
+    const source =
+        \\{
+        \\    U64 := {}
+        \\    123.U64
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
+    try testing.expectEqual(.e_block, std.meta.activeTag(expr));
+
+    const final_expr_idx = expr.e_block.final_expr;
+    const suffix_target = test_env.module_env.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(final_expr_idx)) orelse return error.MissingSuffixTarget;
+
+    switch (suffix_target.target()) {
+        .local => {},
+        else => return error.NotLocalSuffixTarget,
+    }
+
+    const diagnostics = try test_env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+
+    var found_shadowing_warning = false;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .shadowing_warning => found_shadowing_warning = true,
+            else => {},
+        }
+    }
+
+    try testing.expect(found_shadowing_warning);
+}
+
 test "canonicalize integer literals with underscores" {
     const test_cases = [_]struct { source: []const u8, expected: i128 }{
         .{ .source = "1_000", .expected = 1000 },

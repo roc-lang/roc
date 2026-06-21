@@ -156,7 +156,7 @@ pub const BuildArgs = struct {
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
-    suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
+    suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
     source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
@@ -276,7 +276,7 @@ const main_help =
     \\Arguments:
     \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
-    \\                     e.g. `roc run -- arg1 arg2`
+    \\                     e.g. `roc app.roc -- arg1 arg2`
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
@@ -1002,6 +1002,9 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\Usage: roc experimental-lsp [OPTIONS]
             \\
             \\Options:
+            \\      --stdio            Communicate over stdio (the default and only
+            \\                         transport; accepted for compatibility with LSP
+            \\                         clients that pass it explicitly)
             \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
             \\      --debug-build      Log build environment actions to the debug log
             \\      --debug-syntax     Log syntax/type checking steps to the debug log
@@ -1009,6 +1012,10 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\  -h, --help            Print help
             \\
             };
+        } else if (mem.eql(u8, arg, "--stdio")) {
+            // LSP clients (e.g. vscode-languageclient) append a transport flag to
+            // the server command line. We only ever speak LSP over stdio, so accept
+            // `--stdio` as a no-op rather than rejecting it as an unexpected argument.
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
         } else if (mem.eql(u8, arg, "--debug-build")) {
@@ -1136,7 +1143,7 @@ fn getFlagValue(arg: []const u8) ?[]const u8 {
     return iter.next();
 }
 
-test "roc run" {
+test "default roc command" {
     const gpa = testing.allocator;
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{});
@@ -1622,6 +1629,40 @@ test "roc glue" {
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc experimental-lsp" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"experimental-lsp"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(!result.experimental_lsp.debug_io);
+    }
+    {
+        // LSP clients (e.g. vscode-languageclient) append `--stdio`; it must be
+        // accepted as a no-op since stdio is the only transport we support.
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--debug-transport", "--stdio" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.experimental_lsp, std.meta.activeTag(result));
+        try testing.expect(result.experimental_lsp.debug_io);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--bogus" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("experimental-lsp", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--bogus", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }

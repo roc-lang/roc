@@ -469,7 +469,10 @@ const Lowerer = struct {
         const expr = self.solved.lifted.exprs.items[index];
         const saved_loc = self.program.current_loc;
         defer self.program.current_loc = saved_loc;
+        const saved_region = self.program.current_region;
+        defer self.program.current_region = saved_region;
         self.program.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.program.current_region = self.solved.lifted.exprRegion(expr_id);
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
@@ -593,7 +596,7 @@ const Lowerer = struct {
         if (self.comptime_site_map[index]) |existing| return existing;
 
         const source = self.solved.lifted.comptimeSite(site);
-        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.branch_regions);
+        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.checked_site, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -817,7 +820,10 @@ const Lowerer = struct {
         if (self.stmt_map[index]) |cached| return cached;
         const saved_loc = self.program.current_loc;
         defer self.program.current_loc = saved_loc;
+        const saved_region = self.program.current_region;
+        defer self.program.current_region = saved_region;
         self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.program.current_region = self.solved.lifted.stmtRegion(stmt_id);
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
             .uninitialized => |pat| .{ .uninitialized = try self.lowerPat(pat) },
             .let_ => |let_| .{ .let_ = .{
@@ -935,12 +941,30 @@ const Lowerer = struct {
                         .ty = try self.lowerType(backing.ty),
                         .use = backing.use,
                     } else null,
+                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
             .lambda_set => |members| blk: {
                 break :blk .{ .callable = try self.lowerFnMembers(members, .finite) };
             },
         };
+    }
+
+    /// Re-materializes a nominal record's declared field order from the Lambda
+    /// Solved store into the Lambda Mono store. Named entries copy the shared
+    /// field-name id; padding entries re-lower their reserved type.
+    fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Allocator.Error!Type.Span {
+        const source = self.solved.types.declaredFieldSpan(span);
+        if (source.len == 0) return Type.Span.empty();
+        const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
+        defer self.allocator.free(lowered);
+        for (source, 0..) |entry, i| {
+            lowered[i] = switch (entry) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = try self.lowerType(ty) },
+            };
+        }
+        return try self.program.types.addDeclaredFields(lowered);
     }
 
     fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {

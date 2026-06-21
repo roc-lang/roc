@@ -43,11 +43,30 @@ Complex : {
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - type_comprehensive_scope.md:10:1:10:34
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:13:1:13:37
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
+**DUPLICATE DEFINITION**
+The name `Try` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_comprehensive_scope.md:10:1:10:34:**
+```roc
+Try(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Try` was already defined here:
+**type_comprehensive_scope.md:1:1:1:1:**
+```roc
+# Built-in types should work
+```
+^
+
+
 **MUTUALLY RECURSIVE TYPE ALIASES**
 The type alias _Tree_ and _Node_ form a recursive cycle.
 

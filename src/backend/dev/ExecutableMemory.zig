@@ -77,13 +77,36 @@ pub const ExecutableMemory = struct {
         @memcpy(memory[0..code.len], code);
 
         // Make the memory executable (and read-only)
-        try makeExecutable(memory);
+        try protectExecutable(memory);
 
         return Self{
             .memory = memory,
             .code_size = code.len,
             .entry_offset = entry_offset,
         };
+    }
+
+    /// Allocate writable memory that the caller will fill and relocate before
+    /// marking it executable.
+    pub fn initWritable(total_size: usize, code_size: usize, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, UnsupportedPlatform })!Self {
+        if (total_size == 0 or code_size == 0) {
+            return error.EmptyCode;
+        }
+
+        const page_size = std.heap.page_size_min;
+        const alloc_size = std.mem.alignForward(usize, total_size, page_size);
+        const memory = try allocateMemory(alloc_size);
+
+        return Self{
+            .memory = memory,
+            .code_size = code_size,
+            .entry_offset = entry_offset,
+        };
+    }
+
+    /// Mark a writable allocation returned by `initWritable` executable.
+    pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+        try protectExecutable(self.memory);
     }
 
     /// Free the executable memory
@@ -123,8 +146,13 @@ pub const ExecutableMemory = struct {
 
     /// Call using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) callconv(.c) void
     pub fn callRocABI(self: *const Self, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+        self.callRocABIAt(self.entry_offset, roc_ops, ret_ptr, args_ptr);
+    }
+
+    /// Call using the RocCall ABI at a specific code offset.
+    pub fn callRocABIAt(self: *const Self, entry_offset: usize, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
         const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
-            @ptrCast(@alignCast(self.entryPtr()));
+            @ptrCast(@alignCast(self.memory.ptr + entry_offset));
         func(roc_ops, ret_ptr, args_ptr);
     }
 };
@@ -155,7 +183,7 @@ fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAll
 }
 
 /// Make the memory executable
-fn makeExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
             const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };

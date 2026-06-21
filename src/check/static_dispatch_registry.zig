@@ -455,6 +455,16 @@ pub const StaticDispatchOperand = union(enum) {
     generated_quote: CheckedStringLiteralId,
 };
 
+/// Public `StaticDispatchResolution` declaration.
+pub const StaticDispatchResolution = union(enum) {
+    /// The dispatch target was not published as a concrete procedure target in
+    /// this checked module's static-dispatch inputs.
+    unresolved_checked_plan,
+    /// Checking proved the concrete target. Later stages must call this target
+    /// directly instead of rediscovering it from source or type names.
+    resolved_target: MethodTarget,
+};
+
 /// Public `StaticDispatchCallPlan` declaration.
 pub const StaticDispatchCallPlan = struct {
     expr: CheckedExprId,
@@ -465,6 +475,7 @@ pub const StaticDispatchCallPlan = struct {
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
+    resolution: StaticDispatchResolution,
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
@@ -595,6 +606,8 @@ pub const StaticDispatchPlanTable = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: anytype,
         checked_bodies: anytype,
+        local_method_registry: *const MethodRegistry,
+        imported_views: anytype,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer plans.deinit(allocator);
@@ -646,7 +659,7 @@ pub const StaticDispatchPlanTable = struct {
                     }
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    try plans.append(allocator, .{
+                    const plan = StaticDispatchCallPlan{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .{ .arg = 0 },
@@ -654,7 +667,9 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
-                    });
+                        .resolution = .unresolved_checked_plan,
+                    };
+                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
                 },
                 .e_interpolation => |interpolation| {
                     const checked_interpolation = switch (checked_expr_data) {
@@ -669,7 +684,7 @@ pub const StaticDispatchPlanTable = struct {
                     const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    try plans.append(allocator, .{
+                    const plan = StaticDispatchCallPlan{
                         .expr = checked_expr,
                         .method = from_interpolation,
                         .dispatcher = .type_only,
@@ -677,7 +692,9 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
                         .args = ar,
                         .result_mode = .value,
-                    });
+                        .resolution = .unresolved_checked_plan,
+                    };
+                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
                 },
                 .e_type_dispatch_call => |dispatch_call| {
                     const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
@@ -685,7 +702,7 @@ pub const StaticDispatchPlanTable = struct {
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    try plans.append(allocator, .{
+                    const plan = StaticDispatchCallPlan{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
@@ -693,14 +710,16 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
-                    });
+                        .resolution = .unresolved_checked_plan,
+                    };
+                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
                 },
                 .e_method_eq => |eq| {
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    try plans.append(allocator, .{
+                    const plan = StaticDispatchCallPlan{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
                         .dispatcher = .{ .arg = 0 },
@@ -711,7 +730,9 @@ pub const StaticDispatchPlanTable = struct {
                             .structural_allowed = true,
                             .negated = eq.negated,
                         } },
-                    });
+                        .resolution = .unresolved_checked_plan,
+                    };
+                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
                 },
                 else => unreachable,
             }
@@ -760,7 +781,7 @@ pub const StaticDispatchPlanTable = struct {
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            try plans.append(allocator, .{
+            const plan = StaticDispatchCallPlan{
                 .expr = checked_expr,
                 .method = try names.internMethodName("from_numeral"),
                 .dispatcher = .type_only,
@@ -768,7 +789,9 @@ pub const StaticDispatchPlanTable = struct {
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
                 .args = ar,
                 .result_mode = .value,
-            });
+                .resolution = .unresolved_checked_plan,
+            };
+            try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
             try numeral_by_node.put(allocator, node, plan_id);
         }
 
@@ -796,7 +819,7 @@ pub const StaticDispatchPlanTable = struct {
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            try plans.append(allocator, .{
+            const plan = StaticDispatchCallPlan{
                 .expr = checked_expr,
                 .method = try names.internMethodName("from_quote"),
                 .dispatcher = .type_only,
@@ -804,7 +827,9 @@ pub const StaticDispatchPlanTable = struct {
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
                 .args = ar,
                 .result_mode = .value,
-            });
+                .resolution = .unresolved_checked_plan,
+            };
+            try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
             try quote_by_node.put(allocator, node, plan_id);
         }
 
@@ -1065,6 +1090,129 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     };
 }
 
+fn resolveStaticDispatchPlan(
+    names: *canonical.CanonicalNameStore,
+    checked_types: anytype,
+    local_method_registry: *const MethodRegistry,
+    imported_views: anytype,
+    plan: StaticDispatchCallPlan,
+) StaticDispatchCallPlan {
+    const owner = methodOwnerForCheckedType(checked_types, plan.dispatcher_ty) orelse return plan;
+    const target = lookupCheckedMethodTarget(names, local_method_registry, imported_views, owner, plan.method) orelse {
+        if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return plan;
+        return plan;
+    };
+
+    var resolved = plan;
+    resolved.resolution = .{ .resolved_target = target };
+    return resolved;
+}
+
+fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
+    const raw = @intFromEnum(ty);
+    if (raw >= checked_types.store.payloads.items.len) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+        }
+        unreachable;
+    }
+    return methodOwnerForCheckedPayload(checked_types.store.payloads.items[raw]);
+}
+
+fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
+    return switch (payload) {
+        .nominal => |nominal| if (nominal.builtin) |builtin|
+            .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) }
+        else if (nominal.source_decl) |source_decl|
+            .{ .source_decl = .{
+                .module_name = nominal.origin_module,
+                .statement = source_decl,
+            } }
+        else
+            .{ .nominal = .{
+                .module_name = nominal.origin_module,
+                .type_name = nominal.name,
+                .source_decl = null,
+            } },
+        .alias => |alias| if (alias.source_decl) |source_decl|
+            .{ .source_decl = .{
+                .module_name = alias.origin_module,
+                .statement = source_decl,
+            } }
+        else
+            .{ .nominal = .{
+                .module_name = alias.origin_module,
+                .type_name = alias.name,
+                .source_decl = null,
+            } },
+        else => null,
+    };
+}
+
+fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
+    return switch (builtin) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .list => .list,
+        .box => .box,
+    };
+}
+
+fn lookupCheckedMethodTarget(
+    names: *canonical.CanonicalNameStore,
+    local_method_registry: *const MethodRegistry,
+    imported_views: anytype,
+    owner: MethodOwner,
+    method: canonical.MethodNameId,
+) ?MethodTarget {
+    if (local_method_registry.lookup(.{ .owner = owner, .method = method })) |target| return target;
+
+    const method_name = names.methodNameText(method);
+    for (imported_views) |imported| {
+        const imported_owner = methodOwnerInImportedNames(names, imported.canonical_names, owner) orelse continue;
+        const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
+        if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |target| {
+            switch (target.kind) {
+                .procedure => return target,
+                .local_proc => continue,
+            }
+        }
+    }
+    return null;
+}
+
+fn methodOwnerInImportedNames(
+    source_names: *const canonical.CanonicalNameStore,
+    imported_names: *const canonical.CanonicalNameStore,
+    owner: MethodOwner,
+) ?MethodOwner {
+    return switch (owner) {
+        .builtin => |builtin| .{ .builtin = builtin },
+        .source_decl => |decl| .{ .source_decl = .{
+            .module_name = imported_names.lookupModuleName(source_names.moduleNameText(decl.module_name)) orelse return null,
+            .statement = decl.statement,
+        } },
+        .nominal => |nominal| .{ .nominal = .{
+            .module_name = imported_names.lookupModuleName(source_names.moduleNameText(nominal.module_name)) orelse return null,
+            .type_name = imported_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
+            .source_decl = nominal.source_decl,
+        } },
+    };
+}
+
 fn checkedTypeIdForVar(
     _: Allocator,
     module: TypedCIR.Module,
@@ -1085,11 +1233,12 @@ fn interpolationDispatcherTypeId(
     checked_types: anytype,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!CheckedTypeId {
-    const suffix_type = module.moduleEnvConst().numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
+    const suffix_target = module.moduleEnvConst().numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
         return checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx));
 
-    return switch (suffix_type.target()) {
+    return switch (suffix_target.target()) {
         .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
+        .invalid => checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
         .builtin, .external => if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
         } else unreachable,
@@ -1182,6 +1331,7 @@ fn testPlan(expr_raw: u32, args_start: u32, args_len: u32) StaticDispatchCallPla
         .callable_ty = @enumFromInt(3),
         .args = .{ .start = args_start, .len = args_len },
         .result_mode = .value,
+        .resolution = .unresolved_checked_plan,
     };
 }
 

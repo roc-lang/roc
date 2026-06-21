@@ -78,6 +78,20 @@ pub const Tag = struct {
     payloads: Span,
 };
 
+/// One entry of a nominal record's declared layout order. The backing row is
+/// always lexicographic (for name resolution and digests); a nominal type
+/// additionally carries this declared order, which the layout commit consumes to
+/// place fields in source order with no internal padding. See design.md
+/// "Nominal Record Field Order".
+pub const DeclaredField = union(enum) {
+    /// A named backing field, matched against the lexicographic backing row by
+    /// name at layout time.
+    named: names.RecordFieldNameId,
+    /// An unnamed padding field reserving `sizeof(ty)` bytes at alignment 1. Its
+    /// bytes are uninitialized and it is not accessible.
+    padding: TypeId,
+};
+
 /// Monomorphic type content.
 pub const Content = union(enum) {
     primitive: Primitive,
@@ -88,6 +102,9 @@ pub const Content = union(enum) {
         builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?NamedBacking = null,
+        /// Declared field order for a nominal/opaque record backing; empty for
+        /// every other named type (consumed only by layout).
+        declared_order: Span = Span.empty(),
     },
     record: Span,
     tuple: Span,
@@ -109,6 +126,7 @@ pub const Store = struct {
     spans: std.ArrayList(TypeId),
     fields: std.ArrayList(Field),
     tags: std.ArrayList(Tag),
+    declared_fields: std.ArrayList(DeclaredField),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -117,10 +135,12 @@ pub const Store = struct {
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
+            .declared_fields = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
@@ -168,6 +188,17 @@ pub const Store = struct {
 
     pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
         return self.tags.items[span_.start..][0..span_.len];
+    }
+
+    pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
+        const start: u32 = @intCast(self.declared_fields.items.len);
+        try self.declared_fields.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
+        return self.declared_fields.items[span_.start..][0..span_.len];
     }
 
     pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {

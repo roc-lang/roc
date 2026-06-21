@@ -10,7 +10,8 @@ const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
-const LayoutIdx = @import("layout").Idx;
+const layout_mod = @import("layout");
+const LayoutIdx = layout_mod.Idx;
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
@@ -61,6 +62,7 @@ fn lowerModule(
 const LowerModuleOptions = struct {
     debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
     proc_debug_names: bool = false,
+    imports: []const helpers.ModuleSource = &.{},
 };
 
 fn lowerModuleWithOptions(
@@ -69,7 +71,7 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) anyerror!LoweredSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, options.imports, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -237,6 +239,164 @@ test "optimized debug effect lowering erases inline dbg and expect" {
     const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
     try std.testing.expectEqual(@as(usize, 0), erased_counts.debug);
     try std.testing.expectEqual(@as(usize, 0), erased_counts.expect);
+}
+
+test "nominal record lays out fields in declared order" {
+    const allocator = std.testing.allocator;
+    // Declared order { z: U16, y: U16, x: U32 } is padding-free, so it is kept
+    // verbatim. It differs from both alphabetical order ({ x, y, z }) and the
+    // descending-alignment sort, which would both hoist the U32 to offset 0.
+    const source =
+        \\module [main]
+        \\
+        \\Account := { z : U16, y : U16, x : U32 }
+        \\
+        \\main : Account -> Account
+        \\main = |account| account
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    // Field at memory position 0 is the first declared field z (U16); an
+    // alphabetical or alignment layout would put the U32 (x) there instead.
+    try std.testing.expectEqual(LayoutIdx.u16, lowered.lir_result.layouts.getStructFieldLayout(struct_idx, 0));
+    // z (original/lexicographic field index 2) at offset 0, x (index 0) at 4.
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 2));
+    try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+}
+
+test "imported nominal record lays out fields in declared order" {
+    const allocator = std.testing.allocator;
+    const acct_module =
+        \\module [Account]
+        \\
+        \\Account := { z : U16, y : U16, x : U32 }
+    ;
+    // An imported nominal record must lay out identically to a local one, or
+    // values would be read with the wrong offsets across module boundaries.
+    const source =
+        \\module [main]
+        \\
+        \\import Acct exposing [Account]
+        \\
+        \\main : Account -> Account
+        \\main = |account| account
+    ;
+
+    var lowered_source = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .imports = &.{.{ .name = "Acct", .source = acct_module }},
+    });
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    try std.testing.expectEqual(LayoutIdx.u16, lowered.lir_result.layouts.getStructFieldLayout(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+}
+
+test "nominal record reserves unnamed padding fields without inflating alignment" {
+    const allocator = std.testing.allocator;
+    // Mirrors a C `struct { uint8_t a; char pad[3]; uint32_t b; }`: the three
+    // unnamed bytes hold the explicit padding so `b` lands at offset 4 without
+    // the compiler inserting alignment padding of its own.
+    const source =
+        \\module [main]
+        \\
+        \\Padded := { a : U8, _ : U8, _ : U8, _ : U8, b : U32 }
+        \\
+        \\main : Padded -> Padded
+        \\main = |padded| padded
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    // The committed struct keeps the named fields plus three padding spacers.
+    try std.testing.expectEqual(@as(u16, 5), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    // Named field a (lexicographic index 0) at offset 0, b (index 1) at offset 4.
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    // Total size 8 and alignment 4 (padding bytes are alignment 1, so they do
+    // not raise the struct's alignment above the U32's).
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
+}
+
+test "generic nominal record instantiates unnamed padding to the argument's size" {
+    const allocator = std.testing.allocator;
+    // A type-parameterized unnamed field (`_ : a`) must reserve the *instantiated*
+    // size, exactly like a named field of the same type: `Foo(U64)` is 16 bytes
+    // (x:U64 @0 plus 8 bytes of padding), just as `{ x : a, y : a }(U64)` would be.
+    const source =
+        \\module [main]
+        \\
+        \\Foo(a) := { x : a, _ : a }
+        \\
+        \\main : Foo(U64) -> Foo(U64)
+        \\main = |foo| foo
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    // x (the only named field) at offset 0; padding reserves the instantiated
+    // sizeof(U64) = 8 bytes, so the whole struct is 16 bytes (not 8).
+    try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructData(struct_idx).size);
+}
+
+test "nominal record with a parenthesized backing still honors declared order and padding" {
+    const allocator = std.testing.allocator;
+    // The backing record is wrapped in parentheses. Parens are transparent here:
+    // the unnamed field must still be accepted and the layout must match the
+    // unparenthesized form (a@0, b@4, size 8, with three padding spacers).
+    const source =
+        \\module [main]
+        \\
+        \\Padded := ({ a : U8, _ : U8, _ : U8, _ : U8, b : U32 })
+        \\
+        \\main : Padded -> Padded
+        \\main = |padded| padded
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    try std.testing.expectEqual(@as(u16, 5), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
 }
 
 fn liftModuleAfterSpecConstr(
@@ -1163,8 +1323,8 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\        .collect()
         \\}
         \\
-        \\main : List(Plant)
-        \\main = starting_plants()
+        \\main : () -> List(Plant)
+        \\main = || starting_plants()
     );
 }
 
@@ -1197,8 +1357,8 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\random_plant : I64 -> Plant
         \\random_plant = |seed| { seed: seed }
         \\
-        \\main : List(Plant)
-        \\main =
+        \\main : () -> List(Plant)
+        \\main = ||
         \\    Iter.collect(
         \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
@@ -1698,6 +1858,7 @@ test "LIR statements and procs carry resolved source locations" {
 
     const store = &lowered_source.lowered.lir_result.store;
     try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_regions.items.len);
     try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
     try std.testing.expect(store.proc_debug_names.items.len > 0);
     for (store.proc_debug_names.items) |entry| {
@@ -1706,13 +1867,48 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
-        switch (stmt) {
-            .incref, .decref, .free => try std.testing.expect(!loc.hasLocation()),
-            else => {},
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items, store.cf_stmts.items) |loc, region, stmt| {
+        const has_source = switch (stmt) {
+            .incref,
+            .decref,
+            .free,
+            => false,
+
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => true,
+        };
+        if (!has_source) {
+            try std.testing.expect(!loc.hasLocation());
+            try std.testing.expect(region.isEmpty());
         }
         if (loc.hasLocation()) {
             located += 1;
+            try std.testing.expect(!region.isEmpty());
             try std.testing.expect(loc.file < store.sourceFileCount());
             try std.testing.expect(loc.line >= 1);
             try std.testing.expect(loc.column >= 1);
@@ -1789,8 +1985,9 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.items) |loc| {
+    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items) |loc, region| {
         if (loc.hasLocation()) located += 1;
+        if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
     try std.testing.expect(located > 0);
 }
