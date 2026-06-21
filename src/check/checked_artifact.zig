@@ -20126,7 +20126,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 1;
+    const serialized_layout_version: u32 = 2;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -23647,8 +23647,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x85, 0x1F, 0x43, 0x59, 0x26, 0x3D, 0x3F, 0x99, 0x41, 0x26, 0x0B, 0x0B, 0x0A, 0x60, 0xB7, 0xBC,
-        0xA3, 0xA5, 0x59, 0x7F, 0xBB, 0xA6, 0x5F, 0x28, 0xBB, 0x50, 0xBD, 0x12, 0x72, 0x2F, 0x50, 0x39,
+        0x41, 0x60, 0x1E, 0x63, 0x70, 0xD9, 0x31, 0xFD, 0x1E, 0xBB, 0x4F, 0x22, 0x8A, 0xBB, 0x61, 0x76,
+        0x88, 0x92, 0x02, 0x0A, 0x7A, 0x1E, 0xFB, 0x9C, 0x1E, 0x95, 0x34, 0xA4, 0x1F, 0x78, 0x2E, 0x4C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
