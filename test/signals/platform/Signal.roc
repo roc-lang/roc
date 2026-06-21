@@ -156,6 +156,64 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 	cleanup : Str -> Node.Cleanup
 	cleanup = |name| Node.Cleanup.Cleanup(name)
 
+	interval : U64 -> Signal(U64)
+	interval = |period_ms| {
+		source_from_tick :
+			a, (a -> a) -> Signal(a)
+				where [
+					a.is_eq : a, a -> Bool,
+				]
+		source_from_tick = |initial_value, next| {
+			token = Box.box(0)
+			tag = HostValue.new_tag({})
+
+			initial : {} -> HostValue
+			initial = |_| HostValue.store_tagged(Box.box(initial_value), tag)
+
+			tick : HostValue -> HostValue
+			tick = |current_hv| {
+				current : a
+				current = Box.unbox(HostValue.get_tagged(current_hv, tag))
+				HostValue.store_tagged(Box.box(next(current)), tag)
+			}
+
+			eq : HostValue, HostValue -> Bool
+			eq = |left_hv, right_hv| {
+				left : a
+				left = Box.unbox(HostValue.get_tagged(left_hv, tag))
+				right : a
+				right = Box.unbox(HostValue.get_tagged(right_hv, tag))
+				left.is_eq(right)
+			}
+
+			drop : HostValue -> {}
+			drop = |host_value| {
+				boxed : Box(a)
+				boxed = HostValue.take_tagged(host_value, tag)
+				_ = boxed
+				{}
+			}
+
+			{
+				expr: Box.box(
+					Node.SignalExpr.IntervalSource(
+						{
+							token,
+							period_ms,
+							initial: Box.box(initial),
+							tick: Box.box(tick),
+							eq: Box.box(eq),
+							drop: Box.box(drop),
+						},
+					),
+				),
+				tag,
+			}
+		}
+
+		source_from_tick(0, |current| current + 1)
+	}
+
 	## A constant signal.
 	const : a -> Signal(a)
 		where [

@@ -36,8 +36,9 @@ Node := [].{
 	## host can identify shared derived nodes from explicit data. `ConstValue`
 	## carries a boxed value initializer plus output equality. `Map`/`Map2`/
 	## `Combine` are derived nodes carrying boxed typed transforms (confined
-	## erasure) and a boxed `is_eq` thunk for change pruning. `TaskSource` is a
-	## host-owned effect source whose results enter the same signal graph.
+	## erasure) and a boxed `is_eq` thunk for change pruning. `TaskSource` and
+	## `IntervalSource` are host-owned effect sources whose results enter the
+	## same signal graph.
 	TaskSource : {
 		token : Box(U64),
 		name : Str,
@@ -50,6 +51,15 @@ Node := [].{
 		drop : Box((HostValue -> {})),
 	}
 
+	IntervalSource : {
+		token : Box(U64),
+		period_ms : U64,
+		initial : Box(({} -> HostValue)),
+		tick : Box((HostValue -> HostValue)),
+		eq : Box((HostValue, HostValue -> Bool)),
+		drop : Box((HostValue -> {})),
+	}
+
 	SignalExpr := [
 		Ref(BinderRef),
 		ConstValue(Box(U64), Box(({} -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
@@ -57,16 +67,19 @@ Node := [].{
 		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
 		TaskSource(TaskSource),
+		IntervalSource(IntervalSource),
 	]
 
 	Cmd := [
-		StartTask({
-			task_token : Box(U64),
-			task_name : Str,
-			request_init : Box(({} -> HostValue)),
-			request_read : Box((HostValue -> Str)),
-			request_drop : Box((HostValue -> {})),
-		}),
+		StartTask(
+			{
+				task_token : Box(U64),
+				task_name : Str,
+				request_init : Box(({} -> HostValue)),
+				request_read : Box((HostValue -> Str)),
+				request_drop : Box((HostValue -> {})),
+			},
+		),
 	]
 
 	Cleanup := [

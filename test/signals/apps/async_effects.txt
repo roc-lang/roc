@@ -3,8 +3,13 @@
 expect_visible role:heading name:"Async effects"
 expect_visible role:region name:"Async panel"
 expect_text text:"Status: loading" "Status: loading"
+expect_text text:"Ticks: 0" "Ticks: 0"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 0
+expect_interval 1000 1
+
+tick_interval 1000
+expect_text text:"Ticks: 1" "Ticks: 1"
 
 fill label:"Search" "roc"
 expect_pending_task "lookup" 1
@@ -22,6 +27,9 @@ reject_task "lookup" "offline"
 expect_pending_task "lookup" 0
 expect_text text:"Status: failed offline" "Status: failed offline"
 
+tick_interval 1000
+expect_text text:"Ticks: 2" "Ticks: 2"
+
 fill label:"Search" "cancel me"
 expect_pending_task "lookup" 1
 
@@ -30,8 +38,11 @@ expect_absent role:region name:"Async panel"
 expect_visible role:region name:"Panel closed"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 1
+expect_interval 1000 0
 
 click role:button name:"Toggle panel"
 expect_visible role:region name:"Async panel"
 expect_text text:"Status: loading" "Status: loading"
+expect_text text:"Ticks: 0" "Ticks: 0"
 expect_cleanup "async panel cleanup" 1
+expect_interval 1000 1

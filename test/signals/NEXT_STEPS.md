@@ -45,25 +45,24 @@ history.
   identities across keyed row movement and dispose state when the owning row
   scope is removed.
 - `Signal.fake_task`/`Signal.from_task`, `Signal.fold_task`, `Signal.start_str`,
-  `Ui.on_change`, and `Ui.on_cleanup` now have host-owned lifecycle support.
+  `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` now have host-owned
+  lifecycle support.
   The async effects app proves fake task result injection, `[Loading, Done,
   Failed]` rendering through a fold, pending request cancellation when the
-  owning scope is disposed, and cleanup descriptor execution.
+  owning scope is disposed, deterministic interval ticks, active interval
+  cancellation when the owning scope is disposed, and cleanup descriptor
+  execution.
 
 ## Remaining Design Gaps
 
-These map one-to-one to the Definition of Done in `DESIGN.md`. The platform is
-"done" when all are closed and the success-metric specs are green.
-
-1. **Timer subscriptions are unimplemented (DoD 4).** `Signal.interval` still
-   needs a host-owned lifecycle tied to explicit scope ownership and cleanup.
+No remaining design gaps are tracked here after the timer subscription slice.
+Keep this file for newly discovered gaps only.
 
 ## Next Green Slices
 
 Take one slice at a time and commit each green result.
 
-1. **Timer subscription lifecycle (finishes gap 4).** Add `Signal.interval`
-   as a host-owned source with explicit scope ownership and cleanup.
+No implementation slices remain in this work queue.
 
 ### Capability apps (add alongside the slices, smallest proof only)
 
@@ -72,7 +71,7 @@ assertion-tight; no catalog fixtures.
 
 - **Async / effects app** — implemented in `async_effects.roc`; keep it minimal
   and focused on task results, change-triggered commands, pending cancellation,
-  and cleanup execution.
+  interval subscription ticks/cancellation, and cleanup execution.
 
 Avoid broad fixture catalogs, extra DOM polish, new metric counters, or coverage
 around already-solved identity behavior unless it is the smallest proof for one

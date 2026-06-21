@@ -22,8 +22,8 @@ applications that use `../platform/main.roc` and are run by
   disposal still drops the removed component instance.
 - `async_effects.roc` is a Phase 2 G4 regression fixture. It is test-only, not
   part of `run-signals-bench`, and proves fake task results, `Ui.on_change`
-  commands, task-status rendering, pending request cancellation, and cleanup
-  descriptors.
+  commands, task-status rendering, deterministic interval ticks, pending request
+  cancellation, interval subscription cancellation, and cleanup descriptors.
 
 Useful checks from the repository root:
 
@@ -75,6 +75,8 @@ check label:"Accept terms"
 click role:button name:"Place order"
 resolve_task "lookup" "Roc result"
 expect_pending_task "lookup" 0
+tick_interval 1000
+expect_interval 1000 1
 expect_cleanup "async panel cleanup" 1
 ```
 
