@@ -81,7 +81,7 @@ pub const Graph = struct {
     /// ordinary `.struct_` nodes for every graph pass (cycle detection,
     /// refcounting, boxing); only the final commit differs, keeping declared
     /// order (repaired for padding) instead of sorting by alignment. See
-    /// `nominal_order` and design.md "Nominal Record Field Order".
+    /// `field_order` and design.md "Nominal Record Field Order".
     nominal_structs: std.ArrayListUnmanaged(NodeId) = .empty,
 
     /// Release all graph storage.

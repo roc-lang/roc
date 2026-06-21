@@ -74,6 +74,20 @@ type_id_to_zig = |type_table, type_id| {
 	}
 }
 
+## Render one `extern struct` field declaration for a record field. Unnamed
+## nominal-record padding fields become fixed-size byte arrays (`[size]u8`);
+## named fields use their resolved Zig type.
+zig_record_field_decl : List(TypeRepr), RecordField -> Str
+zig_record_field_decl = |type_table, field| {
+	field_name = name_to_zig_quoted_ident(field.name)
+	zig_type = if field.is_padding {
+		"[${U64.to_str(field.size)}]u8"
+	} else {
+		type_id_to_zig(type_table, field.type_id)
+	}
+	"    ${field_name}: ${zig_type},\n"
+}
+
 ## Convert a TypeRepr to its Zig type string
 type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
@@ -142,7 +156,7 @@ is_repr_refcounted = |type_table, type_repr| {
 		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
-		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
 		RocBool => Bool.False
 		RocDec => Bool.False
@@ -434,12 +448,7 @@ generate_element_type_structs = |type_table| {
 					struct_name = name_to_struct_name(rec.name)
 					var $field_strs = ""
 					for field in rec.fields {
-						zig_type = type_id_to_zig(type_table, field.type_id)
-						field_name = name_to_zig_quoted_ident(field.name)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    ${field_name}: ${zig_type},\n",
-						)
+						$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, field))
 					}
 
 					# Comptime size/alignment assertions (guarded by pointer width)
@@ -783,9 +792,13 @@ generate_record_refcount_helpers = |type_table, rec| {
 	var $incref_body = ""
 
 	for field in rec.fields {
-		field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
-		$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, field.type_id, field_expr))
-		$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, field.type_id, field_expr))
+		# Padding fields are raw bytes with no Roc type, so they are never
+		# refcounted and contribute no incref/decref statements.
+		if !field.is_padding {
+			field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, field.type_id, field_expr))
+			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, field.type_id, field_expr))
+		}
 	}
 
 	if $decref_body == "" {
@@ -1537,12 +1550,7 @@ generate_all_record_structs = |hosted_functions, type_table| {
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				zig_type = type_id_to_zig(type_table, field.type_id)
-				field_name = name_to_zig_quoted_ident(field.name)
-				$fields = Str.concat(
-					$fields,
-					"    ${field_name}: ${zig_type},\n",
-				)
+				$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1593,12 +1601,7 @@ generate_args_struct = |func, type_table| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			zig_type = type_id_to_zig(type_table, field.type_id)
-			field_name = name_to_zig_quoted_ident(field.name)
-			$fields = Str.concat(
-				$fields,
-				"    ${field_name}: ${zig_type},\n",
-			)
+			$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
 		}
 
 		assertions = if type_table_result.size > 0 {

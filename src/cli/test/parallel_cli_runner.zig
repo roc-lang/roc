@@ -2668,10 +2668,18 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    var str: abi.RocStr = undefined;
         \\    var builder_args: abi.BuilderPrint_valueArgs = undefined;
         \\    const tree: abi.HostTree = undefined;
+        \\    // Reference the nominal record `Padded` and its args struct so their
+        \\    // comptime size/alignment assertions run. `Padded := {{ z, _, a }}` must
+        \\    // lay out in declared order with the unnamed field reserved as padding
+        \\    // (z@0, _pad0@4, a@8, size 12) for these to hold.
+        \\    var padded: abi.Padded = undefined;
+        \\    var padded_args: abi.PaddedCheckArgs = undefined;
         \\    _ = &host;
         \\    _ = &box;
         \\    _ = &str;
         \\    _ = &builder_args;
+        \\    _ = &padded;
+        \\    _ = &padded_args;
         \\    abi.increfHostTree(tree, 1);
         \\    abi.decrefHostTree(tree, &host);
         \\}}
