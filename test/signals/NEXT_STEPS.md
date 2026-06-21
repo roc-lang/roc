@@ -26,6 +26,10 @@ history.
 - Shared signal records retain their transform/equality/drop thunks and cache
   their current opaque typed output. Dirty evaluation memoizes each record once
   per dirty batch and prunes parent transforms when a child output is unchanged.
+- Active signal records carry explicit dense ids while they are in the active
+  graph, and the active graph owns a retained reference to each record while it
+  points at it. Record→id lookup is O(1), and `active_graph_records_rebuilt`
+  counts graph records reconstructed by full or structural rebuilds.
 - The host rebuilds an active signal graph from retained signal records after
   each descriptor stream. Dirty source node ids route to source signal records,
   then walk explicit dependent edges in rank order. Leaf and structural sinks
@@ -75,15 +79,14 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 ### G-F1 — Incremental signal-graph maintenance (Critical)
 
 - **Problem:** every structural change clears and rebuilds the entire active
-  signal graph, and the record→id step inside the rebuild is a linear pointer
-  scan over the node table, so reconstruction is O(N²) in total records.
-- **Fix:** give each `HostSignalRecord` a stored dense id (or a
-  `Dict(*record → id)`) so identity resolution is O(1); on a splice, edit only
-  the affected scope's records and patch adjacency/rank in place instead of
-  clear-and-rebuild. Initial ingestion may be O(N); nothing after it may be.
-- **Counter + assertion:** add `active_graph_records_rebuilt`; a generated
-  large-N each app asserts `expect_metric_delta active_graph_records_rebuilt 0`
-  on a single-row item change and a bound proportional to moved rows on reorder.
+  signal graph, so reconstruction is O(total active graph records) even when the
+  structural splice touches one scope.
+- **Fix:** on a splice, edit only the affected scope's records and patch
+  adjacency/rank in place instead of clear-and-rebuild. Initial ingestion may be
+  O(N); nothing after it may be.
+- **Counter + assertion:** the generated large-N each app asserts
+  `expect_metric_delta active_graph_records_rebuilt 0` on a single-row item
+  change and a bound proportional to moved rows on reorder.
 
 ### G-F2 — O(1) descriptor lookup (Critical)
 
@@ -126,12 +129,12 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 ### G-F5 — Telemetry and benchmark-gate coverage (High)
 
 - **Problem:** the current counters measure emitted patches and recomputed nodes
-  but not scanned nodes, rebuilt records, or key compares;
+  but not scanned nodes or key compares;
   the benchmark gate (`run-signals-bench`) excludes `identity_stress`,
   `component_composition`, and `async_effects` — the apps that exercise structural
   churn, reorder, and async lifecycle.
-- **Fix:** land the remaining new counters (G-F1, G-F2, G-F3) and the CSV columns
-  for them; flip `bench = true` for the three excluded apps with explicit
+- **Fix:** land the remaining new counters (G-F2, G-F3) and the CSV columns for
+  them; flip `bench = true` for the three excluded apps with explicit
   regression thresholds. Keep timing as corroborating CSV evidence only — never
   a gate, since a timing-only check can pass while real work grows.
 - **Spec-vs-CSV split:** scaling invariants go in `expect_metric_delta`

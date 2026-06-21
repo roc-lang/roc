@@ -22,6 +22,7 @@ const host_value_type_tags_enabled = switch (builtin.mode) {
 };
 
 const RuntimeMetrics = struct {
+    active_graph_records_rebuilt: u64,
     allocs_this_event: u64,
     closure_releases: u64,
     closure_retains: u64,
@@ -372,6 +373,7 @@ const HostSignalRecordPayload = union(enum) {
 const HostSignalRecord = struct {
     ref_count: usize,
     payload: HostSignalRecordPayload,
+    active_graph_id: ?u64 = null,
     last_dirty_generation: u64 = 0,
     last_dirty_changed: bool = false,
 
@@ -403,6 +405,7 @@ const HostSignalRecord = struct {
 
     fn release(self: *HostSignalRecord, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
         if (self.ref_count == 0) failHost("host signal record release underflow");
+        if (self.ref_count == 1 and self.active_graph_id != null) failHost("active signal graph held the last signal record reference");
         self.ref_count -= 1;
         if (self.ref_count != 0) return;
 
@@ -2182,8 +2185,17 @@ const HostEnv = struct {
 
     fn clearActiveSignalGraph(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
-        for (self.active_signal_graph.items) |node| {
+        const roc_host = self.roc_host orelse {
+            if (self.active_signal_graph.items.len != 0) failHost("active signal graph cannot release records without a Roc host");
+            self.active_signal_graph.items.len = 0;
+            return;
+        };
+        for (self.active_signal_graph.items, 0..) |node, index| {
             allocator.free(node.dependents);
+            const active_graph_id = node.record.active_graph_id orelse failHost("active signal graph record was missing its dense id");
+            if (active_graph_id != index) failHost("active signal graph record dense id did not match its slot");
+            node.record.active_graph_id = null;
+            node.record.release(allocator, roc_host, &self.pending_roc_metrics);
         }
         self.active_signal_graph.items.len = 0;
     }
@@ -2217,10 +2229,12 @@ const HostEnv = struct {
     }
 
     fn activeSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) ?u64 {
-        for (self.active_signal_graph.items, 0..) |node, index| {
-            if (node.record == record) return @intCast(index);
+        const record_id = record.active_graph_id orelse return null;
+        if (record_id >= self.active_signal_graph.items.len) failHost("active signal record dense id exceeded the graph table");
+        if (self.active_signal_graph.items[@intCast(record_id)].record != record) {
+            failHost("active signal record dense id pointed at a different record");
         }
-        return null;
+        return record_id;
     }
 
     fn requireActiveSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) u64 {
@@ -2246,7 +2260,9 @@ const HostEnv = struct {
 
         const allocator = self.gpa.allocator();
         const record_id: u64 = @intCast(self.active_signal_graph.items.len);
-        self.active_signal_graph.append(allocator, .{ .record = record }) catch std.process.exit(1);
+        self.active_signal_graph.append(allocator, .{ .record = record.retain() }) catch std.process.exit(1);
+        record.active_graph_id = record_id;
+        self.pending_roc_metrics.active_graph_records_rebuilt += 1;
         return record_id;
     }
 
@@ -5191,6 +5207,7 @@ const HostEnv = struct {
 
 fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
+        .active_graph_records_rebuilt = 0,
         .allocs_this_event = 0,
         .closure_releases = 0,
         .closure_retains = 0,
@@ -5522,6 +5539,7 @@ const BenchmarkStats = struct {
 
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
+        .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
         .allocs_this_event = left.allocs_this_event + right.allocs_this_event,
         .closure_releases = left.closure_releases + right.closure_releases,
         .closure_retains = left.closure_retains + right.closure_retains,
@@ -5546,6 +5564,7 @@ fn u64MetricAsI64(value: u64) i64 {
 }
 
 fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
+    if (std.mem.eql(u8, name, "active_graph_records_rebuilt")) return u64MetricAsI64(metrics.active_graph_records_rebuilt);
     if (std.mem.eql(u8, name, "allocs_this_event")) return u64MetricAsI64(metrics.allocs_this_event);
     if (std.mem.eql(u8, name, "deallocs_this_event")) return u64MetricAsI64(metrics.deallocs_this_event);
     if (std.mem.eql(u8, name, "events_processed")) return u64MetricAsI64(metrics.events_processed);
@@ -7515,7 +7534,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,allocs_this_event,deallocs_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,allocs_this_event,deallocs_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -7553,8 +7572,9 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
         .{
+            stats.metrics.active_graph_records_rebuilt,
             stats.metrics.allocs_this_event,
             stats.metrics.deallocs_this_event,
             stats.metrics.events_processed,
@@ -8036,6 +8056,14 @@ fn deinitTestHostGraph(host: *HostEnv) void {
     if (!builtin.is_test) @compileError("deinitTestHostGraph is test-only");
 
     const allocator = host.gpa.allocator();
+    host.clearActiveSignalRoutes();
+    host.active_source_signal_routes.deinit(allocator);
+    host.active_text_signal_routes.deinit(allocator);
+    host.active_bool_signal_routes.deinit(allocator);
+    host.active_change_signal_routes.deinit(allocator);
+    host.active_structural_signal_routes.deinit(allocator);
+    host.clearActiveSignalGraph();
+    host.active_signal_graph.deinit(allocator);
     host.clearActiveEvents();
     host.active_events.deinit(allocator);
     host.clearEventDescriptors();
@@ -8103,6 +8131,7 @@ test "signals host dirty plan deduplicates diamond join by rank" {
 
 test "signals metrics accumulate propagation pruning counters" {
     var left = zeroRuntimeMetrics();
+    left.active_graph_records_rebuilt = 7;
     left.allocs_this_event = 9;
     left.deallocs_this_event = 6;
     left.events_processed = 2;
@@ -8113,6 +8142,7 @@ test "signals metrics accumulate propagation pruning counters" {
     left.patches_emitted = 7;
 
     var right = zeroRuntimeMetrics();
+    right.active_graph_records_rebuilt = 2;
     right.allocs_this_event = 4;
     right.deallocs_this_event = 5;
     right.events_processed = 1;
@@ -8124,6 +8154,7 @@ test "signals metrics accumulate propagation pruning counters" {
     right.retained_alloc_delta = -2;
 
     const total = addRuntimeMetrics(left, right);
+    try std.testing.expectEqual(@as(u64, 9), total.active_graph_records_rebuilt);
     try std.testing.expectEqual(@as(u64, 13), total.allocs_this_event);
     try std.testing.expectEqual(@as(u64, 11), total.deallocs_this_event);
     try std.testing.expectEqual(@as(u64, 3), total.events_processed);
@@ -8133,6 +8164,49 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
+}
+
+test "signals host assigns explicit active graph record ids" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const label = testNodeStableStrMapExpr(&roc_host, testNodeRefExpr(state_token));
+    const root = testNodeStateWithTokenAndInitial(
+        &roc_host,
+        state_token,
+        testHostValueI64(1),
+        testNodeTextSignal(&roc_host, label),
+    );
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.active_stream = stream;
+
+    try std.testing.expectEqual(@as(usize, 2), host.active_signal_graph.items.len);
+    try std.testing.expectEqual(@as(u64, 2), host.pending_roc_metrics.active_graph_records_rebuilt);
+
+    const first_record = host.active_signal_graph.items[0].record;
+    const second_record = host.active_signal_graph.items[1].record;
+    try std.testing.expectEqual(@as(?u64, 0), first_record.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 1), second_record.active_graph_id);
+    try std.testing.expectEqual(@as(u64, 0), host.requireActiveSignalRecordId(first_record));
+    try std.testing.expectEqual(@as(u64, 1), host.requireActiveSignalRecordId(second_record));
+
+    host.clearActiveSignalGraph();
+
+    try std.testing.expectEqual(@as(usize, 0), host.active_signal_graph.items.len);
+    try std.testing.expectEqual(@as(?u64, null), first_record.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, null), second_record.active_graph_id);
 }
 
 test "signals host allocation ledger updates moved header indexes" {
