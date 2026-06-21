@@ -7678,7 +7678,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             for (recs_anno_slice) |rec_anno_idx| {
                 const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
 
+                // Still resolve the field's annotated type (so unnamed padding
+                // fields are type-checked), but unnamed fields are layout padding,
+                // not real record fields: keep them out of the structural row so
+                // they are never unified, name-resolved, or required at
+                // construction (and so repeated `_` names cannot collide).
                 try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx);
+                if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
                 // Add the processed tag to scratch

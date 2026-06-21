@@ -26,7 +26,9 @@ pub const Constants = struct {
     /// top-level-field hash can't see (e.g. a node-payload layout edit).
     /// 3: annotation node payload gained mentions/introduces-type-var flags.
     /// 4: numeric suffix metadata was renamed to suffix targets.
-    /// 5: ModuleEnv stores source-relative file-import dependency metadata.
+    /// 5: nominal record declared-field-order and unnamed padding fields added
+    ///    node, diagnostic, and type-annotation payloads.
+    /// 6: ModuleEnv stores source-relative file-import dependency metadata.
     pub const CACHE_VERSION = 6;
 };
 

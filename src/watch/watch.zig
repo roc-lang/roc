@@ -40,6 +40,7 @@ const target_is_macos = builtin.os.tag == .macos;
 const target_is_native = build_options.target_is_native;
 const use_real_fsevents = target_is_macos and target_is_native;
 const use_stubs = !use_real_fsevents;
+const active_watcher_backend_is_stub = builtin.os.tag == .macos and use_stubs;
 
 fn bumpEventCount(comptime Global: type) void {
     const previous = Global.event_count.fetchAdd(1, .seq_cst);
@@ -1138,8 +1139,8 @@ pub const Watcher = struct {
 // TESTS
 
 fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32, io: std.Io) error{EventsNotReceived}!void {
-    // When using stubs, don't wait for events since they won't be generated
-    if (use_stubs) {
+    // When the active backend is stubbed, don't wait for events since they won't be generated.
+    if (active_watcher_backend_is_stub) {
         return;
     }
 
@@ -1154,8 +1155,8 @@ fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms
 }
 
 fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) error{TestUnexpectedResult}!void {
-    if (use_stubs) {
-        // When using stubs, skip the event count check
+    if (active_watcher_backend_is_stub) {
+        // When the active backend is stubbed, skip the event count check.
         return;
     } else {
         // When using real file watching, verify we got the expected events

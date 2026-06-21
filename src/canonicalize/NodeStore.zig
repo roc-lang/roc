@@ -417,7 +417,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 82;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 83;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
@@ -1986,6 +1986,7 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno
     return .{
         .name = @bitCast(p.name),
         .ty = @enumFromInt(p.ty),
+        .is_unnamed = p.is_unnamed,
     };
 }
 
@@ -3235,6 +3236,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
     node.setPayload(.{ .ty_record_field = .{
         .name = @bitCast(annoRecordField.name),
         .ty = @intFromEnum(annoRecordField.ty),
+        .is_unnamed = annoRecordField.is_unnamed,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -4063,6 +4065,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_open_ext_not_allowed_in_type_decl;
             region = r.region;
         },
+        .unnamed_field_not_allowed_in_structural_record => |r| {
+            node.tag = .diag_unnamed_field_not_allowed_in_structural_record;
+            region = r.region;
+        },
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
@@ -4610,6 +4616,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_unnamed_field_not_allowed_in_structural_record => return CIR.Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{

@@ -1955,7 +1955,10 @@ fn registerTypeDecl(
             if (ast_stmt_idx) |idx| self.parserTypePathForAstStatement(idx) else null,
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     // Canonicalize where clauses if present
@@ -8136,7 +8139,10 @@ fn canonicalizeBlockTypeDeclStatement(
             self.parserTypePathForAstStatement(ast_stmt_idx),
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     const type_decl_stmt: Statement = switch (type_decl.kind) {
@@ -16292,6 +16298,12 @@ fn scopeIntroduceVar(
 const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
+    /// When this annotation is the top-level backing of a nominal (or opaque)
+    /// type declaration, this holds that backing annotation's AST index. A
+    /// record annotation may contain unnamed fields (`_` / `_name`) only when it
+    /// is exactly this node; nested records (e.g. a field's type) never match,
+    /// so the comparison is self-scoping with no need to clear on descent.
+    nominal_backing_anno: ?AST.TypeAnno.Idx = null,
 
     const TypeAnnoCtxType = enum(u2) {
         /// Regular type declarations - no new type vars can be introduced
@@ -16304,6 +16316,10 @@ const TypeAnnoCtx = struct {
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
         return .{ .type = typ, .found_underscore = false };
+    }
+
+    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx) TypeAnnoCtx {
+        return .{ .type = .type_decl_anno, .found_underscore = false, .nominal_backing_anno = backing_anno };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
@@ -16322,6 +16338,28 @@ const TypeAnnoCtx = struct {
 
 fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
     var ctx = TypeAnnoCtx.init(type_anno_ctx_type);
+    return runTypeAnnoKernel(self, anno_idx, &ctx);
+}
+
+/// Canonicalize the top-level backing annotation of a nominal/opaque type
+/// declaration, allowing unnamed record fields (`_` / `_name`) directly inside
+/// that backing record. Used in place of `canonicalizeTypeAnno(.type_decl_anno)`
+/// for nominal/opaque declarations (aliases keep the plain entry point so they
+/// reject unnamed fields).
+fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+    // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
+    // The kernel descends through parens and compares each record against the
+    // backing AST index, so point the comparison at the unwrapped node it will
+    // actually reach — otherwise the inner record's unnamed fields are mistaken
+    // for a structural record and rejected.
+    var backing_anno = anno_idx;
+    while (true) {
+        switch (self.parse_ir.store.getTypeAnno(backing_anno)) {
+            .parens => |parens| backing_anno = parens.anno,
+            else => break,
+        }
+    }
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
@@ -16383,6 +16421,9 @@ const TypeAnnoKernelRecordNextWork = struct {
     field_index: usize,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    /// True when this record is the top-level backing of a nominal/opaque
+    /// declaration, where unnamed fields (`_` / `_name`) are permitted.
+    is_nominal_backing: bool,
 };
 const TypeAnnoKernelRecordAfterFieldWork = struct {
     record: @TypeOf(@as(AST.TypeAnno, undefined).record),
@@ -16392,6 +16433,10 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     scratch_record_fields_top: u32,
     field_name: Ident.Idx,
     field_region: Region,
+    is_nominal_backing: bool,
+    /// True when this field is unnamed padding (kept in the canonical record
+    /// annotation but excluded from the backing record row).
+    is_unnamed: bool,
 };
 const TypeAnnoKernelRecordAfterNamedExtWork = struct {
     region: Region,
@@ -16826,12 +16871,17 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     }
                 },
                 .record => |record| {
+                    const is_nominal_backing = if (type_anno_ctx.nominal_backing_anno) |backing|
+                        backing == current_idx
+                    else
+                        false;
                     try stacks.pushRecordNext(frame_allocator, .{
                         .record = record,
                         .region = self.parse_ir.tokenizedRegionToRegion(record.region),
                         .field_index = 0,
                         .scratch_top = self.env.store.scratchAnnoRecordFieldTop(),
                         .scratch_record_fields_top = self.scratch_record_fields.top(),
+                        .is_nominal_backing = is_nominal_backing,
                     });
                 },
                 .tag_union => |tag_union| {
@@ -17054,10 +17104,31 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
                             .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .is_nominal_backing = state.is_nominal_backing,
                         });
                         continue :typeannokernel_loop .dispatch;
                     },
                 };
+
+                const name_tag = self.parse_ir.tokens.tokenTag(ast_field.name);
+                const is_unnamed = name_tag == .Underscore or name_tag == .NamedUnderscore;
+                if (is_unnamed and !state.is_nominal_backing) {
+                    // Unnamed fields are only permitted in nominal record
+                    // declarations; in a structural record they are rejected and
+                    // the field is dropped (it can never be referenced anyway).
+                    try self.env.pushDiagnostic(Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    try stacks.pushRecordNext(frame_allocator, .{
+                        .record = state.record,
+                        .region = state.region,
+                        .field_index = state.field_index + 1,
+                        .scratch_top = state.scratch_top,
+                        .scratch_record_fields_top = state.scratch_record_fields_top,
+                        .is_nominal_backing = state.is_nominal_backing,
+                    });
+                    continue :typeannokernel_loop .dispatch;
+                }
 
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
                 try stacks.pushRecordAfterField(frame_allocator, .{
@@ -17068,6 +17139,8 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .scratch_record_fields_top = state.scratch_record_fields_top,
                     .field_name = field_name,
                     .field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    .is_nominal_backing = state.is_nominal_backing,
+                    .is_unnamed = is_unnamed,
                 });
                 try stacks.pushParse(frame_allocator, ast_field.ty);
             }
@@ -17080,18 +17153,26 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
+                .is_unnamed = state.is_unnamed,
             }, state.field_region);
             try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-            try self.scratch_record_fields.append(types.RecordField{
-                .name = state.field_name,
-                .var_ = ModuleEnv.varFrom(field_cir_idx),
-            });
+            // Unnamed fields stay in the canonical record annotation (so the
+            // nominal declaration keeps its declared field order, including
+            // padding) but are excluded from the backing record row, so they
+            // are never name-resolved, unified, or required at construction.
+            if (!state.is_unnamed) {
+                try self.scratch_record_fields.append(types.RecordField{
+                    .name = state.field_name,
+                    .var_ = ModuleEnv.varFrom(field_cir_idx),
+                });
+            }
             try stacks.pushRecordNext(frame_allocator, .{
                 .record = state.record,
                 .region = state.region,
                 .field_index = state.field_index + 1,
                 .scratch_top = state.scratch_top,
                 .scratch_record_fields_top = state.scratch_record_fields_top,
+                .is_nominal_backing = state.is_nominal_backing,
             });
 
             continue :typeannokernel_loop .dispatch;

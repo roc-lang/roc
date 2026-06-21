@@ -2535,6 +2535,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .unnamed_field_not_allowed_in_structural_record => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD", .runtime_error);
+
+            try report.document.addReflowingText("Unnamed fields (written ");
+            try report.document.addInlineCode("_");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("_name");
+            try report.document.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Unnamed fields reserve layout padding for a nominal type (declared with ");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText("). Give the field a name, or move it into a nominal type declaration.");
+
+            break :blk report;
+        },
         .type_module_missing_matching_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

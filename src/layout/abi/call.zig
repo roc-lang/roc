@@ -280,10 +280,11 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
 
     const box_idx = try store.insertLayout(layout.Layout.box(elem_idx));
     const ptr_idx = try store.insertLayout(layout.Layout.ptr(elem_idx));
-    const call = try lower(arena, &store, .aarch64, &.{ box_idx, ptr_idx }, .i32, false);
+    const call = try lower(arena, &store, .aarch64, &.{ box_idx, ptr_idx }, box_idx, false);
 
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[0]);
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[1]);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.ret);
 }
 
 test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {

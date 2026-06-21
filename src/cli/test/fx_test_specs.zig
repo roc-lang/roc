@@ -160,6 +160,16 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "String interpolation",
     },
 
+    // Host-interop layout: a nominal record with an unnamed padding field and a
+    // non-alphabetical declared order must reach the host with the matching C /
+    // extern-struct byte layout (z@0, padding@4, a@8). The host reads the fields
+    // at those offsets and returns "<z*100 + a>"; 11/22 -> "1122".
+    .{
+        .roc_file = "test/fx/host_interop_padding.roc",
+        .io_spec = "1>1122",
+        .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
+    },
+
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
