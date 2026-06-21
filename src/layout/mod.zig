@@ -60,6 +60,10 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 // Per-target C-ABI parameter/return classification.
 pub const abi = @import("abi/mod.zig");
 
+// Record field ordering, shared by the layout store and `roc glue` so the two
+// can never disagree on how a record lays out in memory.
+pub const field_order = @import("field_order.zig");
+
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
 pub const Graph = @import("graph.zig").Graph;
@@ -120,7 +124,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("graph.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("nominal_order.zig"));
+    std.testing.refAllDecls(@import("field_order.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));

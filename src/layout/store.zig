@@ -12,7 +12,7 @@ const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
 const rc_helper = @import("./rc_helper.zig");
 const work_mod = @import("./work.zig");
-const nominal_order = @import("./nominal_order.zig");
+const field_order = @import("./field_order.zig");
 
 const target = base.target;
 const Layout = layout_mod.Layout;
@@ -564,7 +564,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, fields);
-        self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
 
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -592,7 +592,7 @@ pub const Store = struct {
     /// DECLARED order. Unlike `putStructFields`, which sorts structural records
     /// and tuples by descending alignment, this keeps declared order, repairing
     /// it only as far as the no-internal-padding invariant requires (see
-    /// `nominal_order` and design.md "Nominal Record Field Order").
+    /// `field_order` and design.md "Nominal Record Field Order").
     /// `fields[i].index` is the canonical semantic field index used for
     /// name resolution; the slice order is the source declaration order.
     pub fn putNominalStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
@@ -600,7 +600,7 @@ pub const Store = struct {
             return self.getEmptyStructLayout();
         }
 
-        var shapes = std.ArrayList(nominal_order.FieldShape).empty;
+        var shapes = std.ArrayList(field_order.FieldShape).empty;
         defer shapes.deinit(self.allocator);
         try shapes.ensureTotalCapacity(self.allocator, fields.len);
         for (fields) |field| {
@@ -613,7 +613,7 @@ pub const Store = struct {
 
         const order = try self.allocator.alloc(u16, fields.len);
         defer self.allocator.free(order);
-        try nominal_order.computeNominalFieldOrder(self.allocator, shapes.items, order);
+        try field_order.computeNominalFieldOrder(self.allocator, shapes.items, order);
 
         var ordered_fields = std.ArrayList(StructField).empty;
         defer ordered_fields.deinit(self.allocator);
@@ -656,24 +656,36 @@ pub const Store = struct {
         return self.putStructFields(temp_fields.items);
     }
 
-    fn stableSortStructFieldsByLayoutAlignment(self: *Self, fields: []StructField) void {
-        const AlignmentSortCtx = struct {
-            store: *Self,
-            target_usize: target.TargetUsize,
+    /// Sort structural-record / tuple fields by descending alignment, stably.
+    /// Routes through the shared `field_order.computeStructuralFieldOrder` so the
+    /// layout store and `roc glue` order structural records by the exact same
+    /// logic. Empty field names keep the pure stable alignment sort: callers
+    /// presort by name elsewhere, so equal-alignment fields stay in input order.
+    fn stableSortStructFieldsByLayoutAlignment(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
+        if (fields.len <= 1) return;
 
-            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
-                const lhs_alignment: u64 = if (lhs.is_padding) 1 else ctx.store.getLayout(lhs.layout).alignment(ctx.target_usize).toByteUnits();
-                const rhs_alignment: u64 = if (rhs.is_padding) 1 else ctx.store.getLayout(rhs.layout).alignment(ctx.target_usize).toByteUnits();
-                return lhs_alignment > rhs_alignment;
-            }
-        };
+        const target_usize = self.targetUsize();
 
-        std.sort.block(
-            StructField,
-            fields,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
-            AlignmentSortCtx.lessThan,
-        );
+        const structural = try self.allocator.alloc(field_order.StructuralField, fields.len);
+        defer self.allocator.free(structural);
+        for (fields, structural) |field, *out| {
+            out.* = .{
+                .alignment = if (field.is_padding)
+                    1
+                else
+                    @intCast(self.getLayout(field.layout).alignment(target_usize).toByteUnits()),
+                .name = "",
+            };
+        }
+
+        const order = try self.allocator.alloc(u16, fields.len);
+        defer self.allocator.free(order);
+        field_order.computeStructuralFieldOrder(structural, order);
+
+        const scratch = try self.allocator.alloc(StructField, fields.len);
+        defer self.allocator.free(scratch);
+        for (order, scratch) |src, *dst| dst.* = fields[src];
+        @memcpy(fields, scratch);
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -727,7 +739,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, input_fields);
-        self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
 
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
