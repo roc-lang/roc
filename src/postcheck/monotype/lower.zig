@@ -1138,10 +1138,11 @@ const Builder = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
         defer body_ctx.deinit();
+        const public_constraint_fn_ty = try body_ctx.publicOpaqueFunctionUnificationType(lower_fn_ty);
         if (moduleBytesEqual(source_ty_view.key.bytes, view.key.bytes)) {
-            try body_ctx.constrainKnownType(source_fn_ty, lower_fn_ty);
+            try body_ctx.constrainKnownType(source_fn_ty, public_constraint_fn_ty);
         }
-        try body_ctx.constrainTypeToMono(template.checked_fn_root, lower_fn_ty);
+        try body_ctx.constrainTypeToMono(template.checked_fn_root, public_constraint_fn_ty);
 
         // The requested function type becomes a view of this specialization's
         // root: every later stage compares call-site and definition types for
@@ -5199,6 +5200,69 @@ const BodyContext = struct {
         return self.generatedFieldNamesBackingInfo(fields_ty) != null;
     }
 
+    const GeneratedParseTagUnionSpecBackingInfo = struct {
+        record_fields: []const Type.Field,
+    };
+
+    fn generatedParseTagUnionSpecBackingInfo(
+        self: *BodyContext,
+        spec_ty: Type.TypeId,
+    ) ?GeneratedParseTagUnionSpecBackingInfo {
+        if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return null;
+        const backing_ty = self.builder.namedBackingType(spec_ty) orelse return null;
+        const record_fields = switch (self.builder.shapeContent(backing_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
+            else => return null,
+        };
+        if (record_fields.len == 0) return null;
+        return .{ .record_fields = record_fields };
+    }
+
+    fn isGeneratedParseTagUnionSpecEvidenceType(self: *BodyContext, spec_ty: Type.TypeId) bool {
+        return self.generatedParseTagUnionSpecBackingInfo(spec_ty) != null;
+    }
+
+    fn isGeneratedOpaqueEvidenceType(self: *BodyContext, ty: Type.TypeId) bool {
+        return self.isGeneratedFieldNamesEvidenceType(ty) or self.isGeneratedParseTagUnionSpecEvidenceType(ty);
+    }
+
+    fn publicOpaqueUnificationType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (!self.isGeneratedOpaqueEvidenceType(ty)) return ty;
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| try self.builder.program.types.add(.{ .named = .{
+                .named_type = named.named_type,
+                .def = named.def,
+                .kind = named.kind,
+                .builtin_owner = named.builtin_owner,
+                .args = named.args,
+                .backing = .{
+                    .ty = try self.builder.program.types.add(.{ .record = .empty() }),
+                    .use = if (named.backing) |backing| backing.use else .runtime_layout_only,
+                },
+                .declared_order = named.declared_order,
+            } }),
+            else => ty,
+        };
+    }
+
+    fn publicOpaqueFunctionUnificationType(self: *BodyContext, fn_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const function = self.builder.functionShape(fn_ty, "public opaque unification requested for a non-function type");
+        const args = self.builder.program.types.span(function.args);
+        var changed = false;
+        const public_args = try self.allocator.alloc(Type.TypeId, args.len);
+        defer self.allocator.free(public_args);
+        for (args, 0..) |arg, index| {
+            public_args[index] = try self.publicOpaqueUnificationType(arg);
+            if (public_args[index] != arg) changed = true;
+        }
+        if (!changed) return fn_ty;
+        return try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(public_args),
+            .ret = function.ret,
+        } });
+    }
+
     fn lowerFieldNamesValueIter(
         self: *BodyContext,
         backing_fields: []const Type.Field,
@@ -5883,7 +5947,13 @@ const BodyContext = struct {
 
         switch (self.builder.shapeContent(shape_ty)) {
             .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
-            .tag_union => {},
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -6084,8 +6154,232 @@ const BodyContext = struct {
 
         switch (self.builder.shapeContent(shape_ty)) {
             .record, .zst => try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty),
-            .tag_union => {},
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+                    }
+                }
+            },
             else => {},
+        }
+    }
+
+    fn parserPrecomputedRecordShapesForTagUnion(
+        self: *BodyContext,
+        plan: ?*const ParserPrecomputedPlan,
+        union_ty: Type.TypeId,
+    ) Allocator.Error![]Type.TypeId {
+        var shapes = std.ArrayList(Type.TypeId).empty;
+        errdefer shapes.deinit(self.allocator);
+        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        try self.appendParserPrecomputedRecordShapes(plan, &shapes, &seen, union_ty);
+        return try shapes.toOwnedSlice(self.allocator);
+    }
+
+    fn appendParserPrecomputedRecordShapes(
+        self: *BodyContext,
+        plan: ?*const ParserPrecomputedPlan,
+        shapes: *std.ArrayList(Type.TypeId),
+        seen: *std.AutoHashMap(Type.TypeId, void),
+        shape_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (self.tryOptionalInfo(shape_ty)) |info| {
+            return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, info.ok_payload_ty);
+        }
+        if (self.customParserLookup(shape_ty) != null) return;
+        if (self.typeHasBuiltinOwner(shape_ty, .str) or self.typeHasBuiltinOwner(shape_ty, .u64)) return;
+
+        if (seen.contains(shape_ty)) return;
+        try seen.put(shape_ty, {});
+
+        switch (self.builder.shapeContent(shape_ty)) {
+            .record, .zst => {
+                if (plan == null or plan.?.records.contains(shape_ty)) {
+                    try shapes.append(self.allocator, shape_ty);
+                }
+                for (self.recordFieldsForShape(shape_ty)) |field| {
+                    try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, field.ty);
+                }
+            },
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, payload_ty);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn generatedParseTagUnionSpecBackingRecordFieldName(
+        self: *BodyContext,
+        index: usize,
+    ) Allocator.Error!names.RecordFieldNameId {
+        const label = try std.fmt.allocPrint(self.allocator, "record_{d}", .{index});
+        defer self.allocator.free(label);
+        return try self.builder.program.names.internRecordFieldLabel(label);
+    }
+
+    fn generatedParseTagUnionSpecBackingFieldName(
+        self: *BodyContext,
+        index: usize,
+    ) Allocator.Error!names.RecordFieldNameId {
+        const label = try std.fmt.allocPrint(self.allocator, "field_{d}", .{index});
+        defer self.allocator.free(label);
+        return try self.builder.program.names.internRecordFieldLabel(label);
+    }
+
+    fn generatedParseTagUnionSpecBackingType(
+        self: *BodyContext,
+        record_shapes: []const Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const str_ty = try self.builder.primitiveType(.str);
+        const outer_fields = try self.allocator.alloc(Type.Field, record_shapes.len);
+        defer self.allocator.free(outer_fields);
+
+        for (record_shapes, 0..) |record_shape, record_index| {
+            const record_fields = self.recordFieldsForShape(record_shape);
+            const inner_fields = try self.allocator.alloc(Type.Field, record_fields.len);
+            defer self.allocator.free(inner_fields);
+
+            for (inner_fields, 0..) |*field, field_index| {
+                field.* = .{
+                    .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
+                    .ty = str_ty,
+                };
+            }
+
+            outer_fields[record_index] = .{
+                .name = try self.generatedParseTagUnionSpecBackingRecordFieldName(record_index),
+                .ty = try self.builder.program.types.add(.{
+                    .record = try self.builder.program.types.addFields(inner_fields),
+                }),
+            };
+        }
+
+        return try self.builder.program.types.add(.{
+            .record = try self.builder.program.types.addFields(outer_fields),
+        });
+    }
+
+    fn lowerParseTagUnionSpecValue(
+        self: *BodyContext,
+        spec_ty: Type.TypeId,
+        spec_backing_ty: Type.TypeId,
+        record_shapes: []const Type.TypeId,
+        plan: *const ParserPrecomputedPlan,
+    ) Allocator.Error!Ast.ExprId {
+        const str_ty = try self.builder.primitiveType(.str);
+        const backing_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(spec_backing_ty));
+        if (backing_fields.len != record_shapes.len) Common.invariant("generated tag-union spec backing arity differed from record shape count");
+
+        const outer_values = try self.allocator.alloc(Ast.FieldExpr, record_shapes.len);
+        defer self.allocator.free(outer_values);
+
+        for (record_shapes, backing_fields, 0..) |record_shape, backing_field, record_index| {
+            const precomputed = plan.records.get(record_shape) orelse
+                Common.invariant("generated tag-union spec requested missing parser precomputed record");
+            const inner_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_field.ty));
+            if (inner_fields.len != precomputed.renamed_field_locals.len) {
+                Common.invariant("generated tag-union spec record arity differed from precomputed record");
+            }
+
+            const inner_values = try self.allocator.alloc(Ast.FieldExpr, inner_fields.len);
+            defer self.allocator.free(inner_values);
+            for (inner_fields, precomputed.renamed_field_locals, 0..) |inner_field, renamed_local, field_index| {
+                inner_values[field_index] = .{
+                    .name = inner_field.name,
+                    .value = try self.builder.localExpr(renamed_local, str_ty),
+                };
+            }
+
+            outer_values[record_index] = .{
+                .name = backing_field.name,
+                .value = try self.builder.program.addExpr(.{
+                    .ty = backing_field.ty,
+                    .data = .{ .record = try self.builder.program.addFieldExprSpan(inner_values) },
+                }),
+            };
+        }
+
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = spec_backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(outer_values) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = spec_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn buildParserPrecomputedPlanFromTagUnionSpec(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        spec_backing_local: Ast.LocalId,
+        spec_backing_ty: Type.TypeId,
+        union_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(null, union_ty);
+        defer self.allocator.free(record_shapes);
+
+        const backing_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(spec_backing_ty));
+        if (backing_fields.len != record_shapes.len) {
+            Common.invariant("generated tag-union spec backing arity differed from payload record shape count");
+        }
+
+        const str_ty = try self.builder.primitiveType(.str);
+        for (record_shapes, backing_fields) |record_shape, backing_field| {
+            if (plan.records.contains(record_shape)) continue;
+
+            const record_fields = self.recordFieldsForShape(record_shape);
+            const backing_record_fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_field.ty));
+            if (backing_record_fields.len != record_fields.len) {
+                Common.invariant("generated tag-union spec record arity differed from payload record arity");
+            }
+
+            const locals = try self.allocator.alloc(Ast.LocalId, record_fields.len);
+            const values = try self.allocator.alloc(Ast.ExprId, record_fields.len);
+            var inserted = false;
+            errdefer if (!inserted) {
+                self.allocator.free(locals);
+                self.allocator.free(values);
+            };
+
+            const record_expr = try self.builder.program.addExpr(.{
+                .ty = backing_field.ty,
+                .data = .{ .field_access = .{
+                    .receiver = try self.builder.localExpr(spec_backing_local, spec_backing_ty),
+                    .field = backing_field.name,
+                } },
+            });
+
+            for (backing_record_fields, 0..) |field, index| {
+                if (!self.sameType(field.ty, str_ty)) {
+                    Common.invariant("generated tag-union spec field name value was not Str");
+                }
+                locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
+                values[index] = try self.builder.program.addExpr(.{
+                    .ty = str_ty,
+                    .data = .{ .field_access = .{
+                        .receiver = record_expr,
+                        .field = field.name,
+                    } },
+                });
+            }
+
+            try plan.records.put(record_shape, .{
+                .renamed_field_locals = locals,
+                .renamed_field_values = values,
+                .renamed_field_lengths = null,
+                .renamed_field_texts = null,
+            });
+            inserted = true;
+
+            try self.appendParserPrecomputedCaptures(plan, record_fields, locals, values);
         }
     }
 
@@ -6203,16 +6497,42 @@ const BodyContext = struct {
         if (!self.sameType(parse_arg_tys[0], encoding_ty)) Common.invariant("parser target tag-union encoding type differed from input encoding type");
         if (!self.sameType(parse_arg_tys[2], state_ty)) Common.invariant("parser target tag-union state type differed from input state type");
 
-        const spec_expr = try self.builder.program.addExpr(.{
-            .ty = parse_arg_tys[1],
+        const record_shapes = if (precomputed_plan) |plan|
+            try self.parserPrecomputedRecordShapesForTagUnion(plan, shape_ty)
+        else
+            &.{};
+        defer if (precomputed_plan != null) self.allocator.free(record_shapes);
+
+        const has_generated_spec = precomputed_plan != null and record_shapes.len != 0;
+        const spec_ty = if (has_generated_spec) blk: {
+            const spec_backing_ty = try self.generatedParseTagUnionSpecBackingType(record_shapes);
+            break :blk try self.cloneNamedTypeWithArgs(parse_arg_tys[1], &.{shape_ty}, spec_backing_ty);
+        } else parse_arg_tys[1];
+        const callable_mono_ty = if (has_generated_spec)
+            try self.methodTargetMonoTypeFromArgsPreservingArgs(parse_lookup, &.{ encoding_ty, spec_ty, state_ty }, ret_ty)
+        else
+            parse_mono_ty;
+        const callable_fn = self.builder.functionShape(callable_mono_ty, "parser target tag-union method was not a function");
+        const callable_arg_tys = self.builder.program.types.span(callable_fn.args);
+        if (callable_arg_tys.len != 3) Common.invariant("parser target tag-union method had an unexpected arity");
+        if (!self.sameType(callable_arg_tys[0], encoding_ty)) Common.invariant("parser target tag-union encoding type differed from generated input encoding type");
+        if (!self.sameType(callable_arg_tys[1], spec_ty)) Common.invariant("parser target tag-union spec type differed from generated spec type");
+        if (!self.sameType(callable_arg_tys[2], state_ty)) Common.invariant("parser target tag-union state type differed from generated input state type");
+
+        const final_spec_expr = if (has_generated_spec) blk: {
+            const plan = precomputed_plan orelse Common.invariant("generated tag-union spec requested without a precomputed plan");
+            const spec_backing_ty = self.builder.namedBackingType(spec_ty) orelse
+                Common.invariant("generated tag-union spec had no backing type");
+            break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, record_shapes, plan);
+        } else try self.builder.program.addExpr(.{
+            .ty = spec_ty,
             .data = .unit,
         });
-        const parse_args = [_]Ast.ExprId{ encoding_expr, spec_expr, state_expr };
         return try self.builder.program.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = .{ .func = try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&parse_args),
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ encoding_expr, final_spec_expr, state_expr }),
             } },
         });
     }
@@ -7390,6 +7710,7 @@ const BodyContext = struct {
             .tag_union => |span| span,
             else => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
+        const spec_ty = arg_tys[0];
         const spec_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
         const options_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
         const options_ty = arg_tys[1];
@@ -7411,11 +7732,36 @@ const BodyContext = struct {
         const tags = try self.allocator.dupe(Type.Tag, self.builder.program.types.tagSpan(tag_span));
         defer self.allocator.free(tags);
 
+        var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        const maybe_spec_backing_ty = if (self.generatedParseTagUnionSpecBackingInfo(spec_ty) != null)
+            self.builder.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type")
+        else
+            null;
+        const spec_local = if (maybe_spec_backing_ty != null)
+            try self.builder.program.addLocal(self.builder.symbols.fresh(), spec_ty)
+        else
+            null;
+        const spec_backing_local = if (maybe_spec_backing_ty) |spec_backing_ty| blk: {
+            const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), spec_backing_ty);
+            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, local, spec_backing_ty, value_ty);
+            break :blk local;
+        } else null;
+
         var body = try self.unknownDecodedTagErr(ret_ty, missing_local, missing_ty);
         var index = tags.len;
         while (index > 0) {
             index -= 1;
-            const tag_expr = try self.decodedTagUnionValue(tags[index], value_ty, ret_ty, encoding_local, encoding_ty, slot_local, state_ty);
+            const tag_expr = try self.decodedTagUnionValue(
+                tags[index],
+                value_ty,
+                ret_ty,
+                encoding_local,
+                encoding_ty,
+                slot_local,
+                state_ty,
+                if (maybe_spec_backing_ty != null) &precomputed_plan else null,
+            );
             const cond = try self.parseTagExactMatch(key_local, key_ty, tags[index]);
             body = try self.builder.ifExpr(cond, tag_expr, body, ret_ty);
         }
@@ -7425,6 +7771,25 @@ const BodyContext = struct {
         body = try self.wrapLet(encoding_local, encoding_ty, encoding_value, body, ret_ty);
         body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
         body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
+        if (maybe_spec_backing_ty) |spec_backing_ty| {
+            var capture_index = precomputed_plan.captures.items.len;
+            while (capture_index > 0) {
+                capture_index -= 1;
+                const capture = precomputed_plan.captures.items[capture_index];
+                body = try self.wrapLet(capture.local, try self.builder.primitiveType(.str), capture.value, body, ret_ty);
+            }
+            const backing_local = spec_backing_local orelse Common.invariant("generated tag-union spec backing local was missing");
+            const spec_pat = try self.builder.program.addPat(.{
+                .ty = spec_ty,
+                .data = .{ .nominal = try self.builder.bindPat(backing_local, spec_backing_ty) },
+            });
+            const branch = Ast.Branch{ .pat = spec_pat, .body = body };
+            const matched = try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+                .scrutinee = try self.builder.localExpr(spec_local orelse Common.invariant("generated tag-union spec local was missing"), spec_ty),
+                .branches = try self.builder.program.addBranchSpan(&[_]Ast.Branch{branch}),
+            } } });
+            return try self.wrapLet(spec_local orelse Common.invariant("generated tag-union spec local was missing"), spec_ty, spec_value, matched, ret_ty);
+        }
         return try self.wrapWildcardLet(arg_tys[0], spec_value, body, ret_ty);
     }
 
@@ -7437,6 +7802,7 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         slot_local: Ast.LocalId,
         slot_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!Ast.ExprId {
         const ret_info = self.tryInfo(ret_ty);
         const payload_tys = self.builder.program.types.span(tag.payloads);
@@ -7494,7 +7860,7 @@ const BodyContext = struct {
                 slot_expr,
                 slot_ty,
                 payload_parse_ret_tys[index],
-                null,
+                precomputed_plan,
             );
             body = try self.sequenceTry(payload_parse, payload_parse_ret_tys[index], payload_parse_locals[index], body, ret_ty);
         }
@@ -7870,17 +8236,17 @@ const BodyContext = struct {
         const generated_arg_overrides = try self.allocator.alloc(?Type.TypeId, function.args.len);
         defer self.allocator.free(generated_arg_overrides);
         @memset(generated_arg_overrides, null);
-        var saw_generated_fields_evidence = false;
+        var saw_generated_opaque_evidence = false;
         for (function.args, checked_args, 0..) |formal_ty, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             const formal_node = try self.instNode(formal_ty);
             try self.graph.unify(formal_node, try caller.instNode(arg_ty));
             if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
                 const evidence_node = try self.graph.importMono(evidence_ty);
-                if (self.isGeneratedFieldNamesEvidenceType(evidence_ty)) {
-                    saw_generated_fields_evidence = true;
+                if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
+                    saw_generated_opaque_evidence = true;
                     generated_arg_overrides[index] = evidence_ty;
-                    try self.graph.unify(evidence_node, formal_node);
+                    try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_ty)), formal_node);
                 } else {
                     try self.graph.unify(formal_node, evidence_node);
                 }
@@ -7891,7 +8257,7 @@ const BodyContext = struct {
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
         try self.graph.drainDirty();
-        if (saw_generated_fields_evidence) {
+        if (saw_generated_opaque_evidence) {
             const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
             defer self.allocator.free(arg_tys);
             for (function.args, generated_arg_overrides, 0..) |formal_ty, override, index| {
@@ -7942,8 +8308,8 @@ const BodyContext = struct {
                 try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                 if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
                     const evidence_node = try self.graph.importMono(evidence_ty);
-                    if (self.isGeneratedFieldNamesEvidenceType(evidence_ty)) {
-                        try self.graph.unify(evidence_node, formal_node);
+                    if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
+                        try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_ty)), formal_node);
                     } else {
                         try self.graph.unify(formal_node, evidence_node);
                     }
@@ -8031,7 +8397,7 @@ const BodyContext = struct {
             Common.invariant("checked synthetic dispatch target arity differs from its function type");
         }
         for (function.args, arg_tys) |formal_ty, arg_ty| {
-            try self.graph.unify(try self.graph.importMono(arg_ty), try self.instNode(formal_ty));
+            try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(arg_ty)), try self.instNode(formal_ty));
         }
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
         try self.graph.drainDirty();
@@ -8130,7 +8496,7 @@ const BodyContext = struct {
         }
         if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
-            try self.constrainTypeToMono(checked_ty, local_ty);
+            try self.constrainTypeToMono(checked_ty, try self.publicOpaqueUnificationType(local_ty));
             return local_ty;
         }
         return switch (record.ref) {
@@ -8374,9 +8740,9 @@ const BodyContext = struct {
             // The local's Monotype identifies the binder's node in the
             // context that bound it; importing it unifies this context's
             // instantiation with that node before the use type is unified.
-            try self.constrainTypeToMono(binder_ty, local_ty);
-            try self.constrainTypeToMono(binder_ty, ty);
-            try self.constrainTypeToMono(checked_ty, ty);
+            try self.constrainTypeToMono(binder_ty, try self.publicOpaqueUnificationType(local_ty));
+            try self.constrainTypeToMono(binder_ty, try self.publicOpaqueUnificationType(ty));
+            try self.constrainTypeToMono(checked_ty, try self.publicOpaqueUnificationType(ty));
             const live_ty = try self.lowerType(binder_ty);
             const use_ty = if (self.sameType(ty, local_ty))
                 local_ty

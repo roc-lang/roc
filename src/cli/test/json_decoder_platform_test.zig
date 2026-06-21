@@ -124,12 +124,12 @@ test "JSON parsing platform derives structural parser without runtime allocation
     if (camel_prebuilt_path == null) {
         try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
     }
-    try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "inner_value", "nested_record", "user_id" });
+    try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "first_value", "inner_value", "nested_record", "second_value", "user_id" });
     try runJsonDecoderAndCheckOutput(
         allocator,
         camel_output_path,
-        "{ \"cacheControl\" : \"no-cache\", \"nestedRecord\" : { \"innerValue\" : \"xyz\" }, \"userId\" : \"abc\" }\n",
-        "14\n",
+        "{ \"cacheControl\" : \"no-cache\", \"nestedRecord\" : { \"innerValue\" : \"xyz\" }, \"pair\" : { \"Pair\" : { \"firstValue\" : \"left\", \"secondValue\" : \"right\" } }, \"userId\" : \"abc\" }\n",
+        "23\n",
     );
 
     if (camel_direct_prebuilt_path == null) {
