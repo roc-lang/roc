@@ -9,7 +9,7 @@ history.
 - The public app surface uses retained `Elem`/`Signal`/`Html`/`Ui` values. Apps
   no longer import the removed `Reactive`/`Graph`/`UiRuntime` surface.
 - Host identity is dense and scope-relative. Only identity-bearing sites advance
-  ordinals: `Ui.state`, `Ui.when`, and `Ui.each`.
+  ordinals: `Ui.state`, `Ui.component`, `Ui.when`, and `Ui.each`.
 - The host owns source ids, retained descriptor streams, active scopes, keyed
   rows, state values, dirty queues, and simulated DOM patches.
 - Active source state, signal sink caches, sink reads, event payloads,
@@ -40,27 +40,25 @@ history.
   Preserved-order `Ui.each` churn splices only removed/changed/new row scopes
   before applying one DOM patch to the affected each site; reorder churn uses an
   explicit whole-site replacement because row order actually changed.
+- `Ui.component` introduces reusable local scopes for helper-owned state. The
+  component app proves multiple stateful instances keep separate construction
+  identities across keyed row movement and dispose state when the owning row
+  scope is removed.
 
 ## Remaining Design Gaps
 
 These map one-to-one to the Definition of Done in `DESIGN.md`. The platform is
 "done" when all are closed and the success-metric specs are green.
 
-1. **`Ui.component` is unimplemented (DoD 2).** Named scopes for local state
-   across helper functions returning `Elem` do not exist yet. Needed to prove
-   local state composes without identity leaks across multiple instantiations.
-2. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
+1. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
    `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` need a host-owned
    lifecycle tied to explicit scope ownership and cleanup.
 
 ## Next Green Slices
 
-Take one slice at a time and commit each green result. Slices are ordered so the
-highest-risk scaling property closes first and effects land last.
+Take one slice at a time and commit each green result.
 
-1. **`Ui.component` named scopes (closes gap 2).** Add the scope primitive and a
-   small composition app instantiating a stateful component more than once.
-2. **Effect lifecycle scaffold (closes gap 4).** Add the smallest host-owned
+1. **Effect lifecycle scaffold (closes gap 4).** Add the smallest host-owned
    subscription lifecycle for one cleanup-safe effect source.
 
 ### Capability apps (add alongside the slices, smallest proof only)
@@ -71,8 +69,6 @@ assertion-tight; no catalog fixtures.
 - **Async / effects app** — `Signal.from_task` with injected fake results,
   `[Loading, Done, Failed]` rendering, `Ui.on_change` firing a request, scope
   disposal cancelling in-flight work via `Ui.on_cleanup` (proves gap 4).
-- **Component-composition app** — a reusable stateful `Ui.component` instantiated
-  multiple times and moved/disposed (proves gap 2).
 
 Avoid broad fixture catalogs, extra DOM polish, new metric counters, or coverage
 around already-solved identity behavior unless it is the smallest proof for one
@@ -87,6 +83,7 @@ committing code changes.
   `zig test test/signals/platform/host.zig`
 - Platform Roc or ABI changes:
   `./zig-out/bin/roc check test/signals/apps/checkout_wizard.roc`
+  `./zig-out/bin/roc check test/signals/apps/component_composition.roc`
   `./zig-out/bin/roc check test/signals/apps/identity_stress.roc`
   `./zig-out/bin/roc check test/signals/apps/kanban_board.roc`
   `./zig-out/bin/roc check test/signals/apps/ops_dashboard.roc`

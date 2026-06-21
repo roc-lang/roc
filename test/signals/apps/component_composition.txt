@@ -1,0 +1,31 @@
+# Component composition smoke scenario
+
+expect_visible role:heading name:"Component composition"
+expect_visible role:region name:"Component controls"
+expect_visible role:region name:"Alpha"
+expect_visible role:region name:"Beta"
+expect_text text:"Alpha count: 0" "Alpha count: 0"
+expect_text text:"Beta count: 0" "Beta count: 0"
+
+click role:button name:"Increment Alpha"
+expect_text text:"Alpha count: 1" "Alpha count: 1"
+expect_text text:"Beta count: 0" "Beta count: 0"
+
+click role:button name:"Reorder components"
+expect_visible role:region name:"Beta"
+expect_visible role:region name:"Alpha"
+expect_text text:"Alpha count: 1" "Alpha count: 1"
+expect_text text:"Beta count: 0" "Beta count: 0"
+
+click role:button name:"Increment Beta"
+expect_text text:"Beta count: 1" "Beta count: 1"
+expect_text text:"Alpha count: 1" "Alpha count: 1"
+
+click role:button name:"Toggle Beta"
+expect_absent role:region name:"Beta"
+expect_text text:"Alpha count: 1" "Alpha count: 1"
+
+click role:button name:"Toggle Beta"
+expect_visible role:region name:"Beta"
+expect_text text:"Beta count: 0" "Beta count: 0"
+expect_text text:"Alpha count: 1" "Alpha count: 1"

@@ -12,7 +12,11 @@ import HostValue exposing [HostValue]
 ## - `Each`: a keyed list; each row is its own scope keyed by the typed key
 ##   payload, with a boxed key `is_eq` thunk. The row thunk receives the host-owned
 ##   key and item value. Advances the scope ordinal.
+## - `Component`: introduces a reusable local scope for helper-owned state.
+##   Advances the parent scope ordinal and collects the child under a component
+##   scope whose internal ordinals are local to the component instance.
 Elem := [
+	Component({ child : Box(Elem) }),
 	Element({ tag : Str, attrs : List(Node.Attr), children : List(Elem) }),
 	Text(Str),
 	TextSignal({ signal : Box(Node.SignalExpr), read : Box((HostValue -> Str)) }),

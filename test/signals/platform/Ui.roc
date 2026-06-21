@@ -10,6 +10,7 @@ import Signal exposing [Signal]
 ## referenced by their scoped token, so the same helper composes correctly
 ## wherever it is mounted.
 Ui := [].{
+
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -138,6 +139,12 @@ Ui := [].{
 		child = body(handle)
 		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), drop: Box.box(drop), child: Box.box(child) })
 	}
+
+	## Introduce a reusable local scope. State/when/each ordinals inside the body
+	## are local to this component instance instead of consuming the caller's
+	## identity sequence.
+	component : ({} -> Elem) -> Elem
+	component = |body| Elem.Component({ child: Box.box(body({})) })
 
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
 	when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem

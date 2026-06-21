@@ -204,6 +204,10 @@ const HostWhenBranchScopeStep = struct {
     branch: HostScopeBranch,
 };
 
+const HostComponentScopeStep = struct {
+    site_ordinal: u64,
+};
+
 const HostEachRowScopeStep = struct {
     site_ordinal: u64,
     key: HostValueCell,
@@ -212,6 +216,7 @@ const HostEachRowScopeStep = struct {
 
 const HostScopeStep = union(enum) {
     root,
+    component: HostComponentScopeStep,
     when_branch: HostWhenBranchScopeStep,
     each_row: HostEachRowScopeStep,
 
@@ -221,7 +226,7 @@ const HostScopeStep = union(enum) {
                 row.key.deinit(roc_host, metrics);
                 row.item.deinit(roc_host, metrics);
             },
-            .root, .when_branch => {},
+            .root, .component, .when_branch => {},
         }
     }
 };
@@ -248,6 +253,7 @@ const HostDomIdentity = struct {
 };
 
 const HostNodeScopeSiteKind = enum {
+    component,
     state,
     when,
     each,
@@ -2578,6 +2584,35 @@ const HostEnv = struct {
         return 0;
     }
 
+    fn internComponentScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64) u64 {
+        self.validateScopeId(parent_scope_id);
+
+        for (self.scopes.items) |scope| {
+            if (!scope.active) continue;
+            if (scope.parent_scope_id != parent_scope_id) continue;
+            switch (scope.step) {
+                .component => |step| {
+                    if (step.site_ordinal == site_ordinal) {
+                        return scope.scope_id;
+                    }
+                },
+                .root, .when_branch, .each_row => {},
+            }
+        }
+
+        const scope_id: u64 = @intCast(self.scopes.items.len);
+        self.scopes.append(self.gpa.allocator(), .{
+            .scope_id = scope_id,
+            .parent_scope_id = parent_scope_id,
+            .step = .{ .component = .{ .site_ordinal = site_ordinal } },
+            .active = true,
+        }) catch std.process.exit(1);
+        var metrics = self.pending_roc_metrics;
+        metrics.scopes_created += 1;
+        self.pending_roc_metrics = metrics;
+        return scope_id;
+    }
+
     fn internWhenBranchScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) u64 {
         self.validateScopeId(parent_scope_id);
 
@@ -2590,7 +2625,7 @@ const HostEnv = struct {
                         return scope.scope_id;
                     }
                 },
-                .root, .each_row => {},
+                .root, .component, .each_row => {},
             }
         }
 
@@ -2722,7 +2757,7 @@ const HostEnv = struct {
                         ids.append(allocator, scope.scope_id) catch std.process.exit(1);
                     }
                 },
-                .root, .when_branch => {},
+                .root, .component, .when_branch => {},
             }
         }
 
@@ -2734,7 +2769,7 @@ const HostEnv = struct {
         const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
             .each_row => |*row| row.key.valueEquals(roc_host, key),
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
 
@@ -2743,7 +2778,7 @@ const HostEnv = struct {
         const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
             .each_row => |*row| row.item.valueEquals(roc_host, item),
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
 
@@ -2752,7 +2787,7 @@ const HostEnv = struct {
         const scope = &self.scopes.items[@intCast(scope_id)];
         switch (scope.step) {
             .each_row => {},
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
         }
 
         scope.step.each_row.item.replaceValue(roc_host, item);
@@ -2763,7 +2798,7 @@ const HostEnv = struct {
         const scope = &self.scopes.items[@intCast(scope_id)];
         return switch (scope.step) {
             .each_row => |row| .{ .key = row.key.value, .item = row.item.value },
-            .root, .when_branch => failHost("scope id does not reference an each-row scope"),
+            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
         };
     }
 
@@ -2877,6 +2912,14 @@ const HostEnv = struct {
                 _ = self.internNodeIdentity(scope_id, ordinal.*);
                 ordinal.* += 1;
                 self.walkElemIdentitySites(elem.payload.state.child.*, scope_id, ordinal);
+            },
+            .Component => {
+                const site_ordinal = ordinal.*;
+                _ = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
+                var component_ordinal: u64 = 0;
+                self.walkElemIdentitySites(elem.payload.component.child.*, component_scope_id, &component_ordinal);
             },
             .When => {
                 _ = self.internNodeIdentity(scope_id, ordinal.*);
@@ -3115,6 +3158,16 @@ const HostEnv = struct {
                 self.collectElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack);
                 _ = binder_stack.pop() orelse unreachable;
             },
+            .Component => {
+                const site_ordinal = ordinal.*;
+                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .component, binder_stack.items);
+                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
+                var component_ordinal: u64 = 0;
+                var component_dom_ordinal: u64 = 0;
+                self.collectElemDescriptors(roc_host, stream, elem.payload.component.child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack);
+            },
             .When => {
                 const site_ordinal = ordinal.*;
                 const node_id = self.internNodeIdentity(scope_id, site_ordinal);
@@ -3184,7 +3237,7 @@ const HostEnv = struct {
                         return scope.scope_id;
                     }
                 },
-                .root, .each_row => {},
+                .root, .component, .each_row => {},
             }
         }
 
@@ -3348,7 +3401,7 @@ const HostEnv = struct {
                 .each_row => |row| {
                     if (scope.parent_scope_id == site.parent_scope_id and row.site_ordinal == site.site_ordinal) return id;
                 },
-                .root, .when_branch => {},
+                .root, .component, .when_branch => {},
             }
             current = scope.parent_scope_id;
         }
@@ -3505,7 +3558,7 @@ const HostEnv = struct {
                 .each_row => |row| {
                     if (scope.parent_scope_id == site.parent_scope_id and row.site_ordinal == site.site_ordinal) return true;
                 },
-                .root, .when_branch => {},
+                .root, .component, .when_branch => {},
             }
             current = scope.parent_scope_id;
         }
@@ -4318,6 +4371,16 @@ const HostEnv = struct {
                 binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
                 self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
                 _ = binder_stack.pop() orelse unreachable;
+            },
+            .Component => {
+                const site_ordinal = ordinal.*;
+                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
+                ordinal.* += 1;
+                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .component, binder_stack.items);
+                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
+                var component_ordinal: u64 = 0;
+                var component_dom_ordinal: u64 = 0;
+                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.component.child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, dirty_source_node_ids);
             },
             .When => {
                 const site_ordinal = ordinal.*;

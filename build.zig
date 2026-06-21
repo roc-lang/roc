@@ -2672,6 +2672,12 @@ pub fn build(b: *std.Build) void {
             .spec = "test/signals/apps/identity_stress.txt",
             .bench = false,
         },
+        .{
+            .exe_name = "signals-component-composition",
+            .source = "test/signals/apps/component_composition.roc",
+            .spec = "test/signals/apps/component_composition.txt",
+            .bench = false,
+        },
     };
 
     for (signals_apps) |signals_app| {
