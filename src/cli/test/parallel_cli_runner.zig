@@ -2667,10 +2667,13 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    var box: abi.RocBox = null;
         \\    var str: abi.RocStr = undefined;
         \\    var builder_args: abi.BuilderPrint_valueArgs = undefined;
+        \\    const tree: abi.HostTree = undefined;
         \\    _ = &host;
         \\    _ = &box;
         \\    _ = &str;
         \\    _ = &builder_args;
+        \\    abi.increfHostTree(tree, 1);
+        \\    abi.decrefHostTree(tree, &host);
         \\}}
     , .{"roc_platform_abi.zig"}) catch |err|
         return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
@@ -2728,6 +2731,10 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn increfBox",
         "pub fn decrefBox",
         "pub fn decrefBoxWith",
+        "pub fn allocateBox",
+        "pub fn decrefErasedCallable",
+        "pub fn decrefHostTree(value: HostTree, roc_host: *RocHost) void",
+        "fn decrefBoxPayloadType",
         "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;",
         "pub const BuilderPrint_valueArgs = extern struct",
         "pub extern fn roc_stdout_line(arg0: RocStr) callconv(.c) void;",
@@ -2797,13 +2804,22 @@ fn customGlueZigBoxHelperTest(
         \\const Env = struct {
         \\    callback_count: usize = 0,
         \\    callback_rc: isize = -1,
+        \\    alloc_count: usize = 0,
+        \\    alloc_length: usize = 0,
+        \\    alloc_alignment: usize = 0,
         \\    dealloc_count: usize = 0,
         \\    dealloc_ptr: usize = 0,
         \\    dealloc_alignment: usize = 0,
+        \\    backing: [256]u8 align(16) = undefined,
         \\};
         \\
-        \\fn rocAlloc(_: *abi.RocHost, _: usize, _: usize) callconv(.c) ?*anyopaque {
-        \\    unreachable;
+        \\fn rocAlloc(host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(host.env));
+        \\    env_ref.alloc_count += 1;
+        \\    env_ref.alloc_length = length;
+        \\    env_ref.alloc_alignment = alignment;
+        \\    if (length > env_ref.backing.len or alignment > 16) return null;
+        \\    return @ptrCast(&env_ref.backing);
         \\}
         \\
         \\fn rocDealloc(host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
@@ -2849,6 +2865,13 @@ fn customGlueZigBoxHelperTest(
         \\    env_ref.callback_rc = refcountPtr(data_ptr orelse unreachable).*;
         \\}
         \\
+        \\fn erasedCallableFn(_: *abi.RocHost, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8) callconv(.c) void {}
+        \\
+        \\fn erasedDrop(_: ?[*]u8, host: *abi.RocHost) callconv(.c) void {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(host.env));
+        \\    env_ref.callback_count += 1;
+        \\}
+        \\
         \\test "decrefBoxWith runs payload callback after final atomic decrement" {
         \\    var env_value = Env{};
         \\    var host = makeHost(&env_value);
@@ -2863,6 +2886,39 @@ fn customGlueZigBoxHelperTest(
         \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
         \\    try std.testing.expectEqual(@intFromPtr(&backing), env_value.dealloc_ptr);
         \\    try std.testing.expectEqual(@as(usize, @alignOf(usize)), env_value.dealloc_alignment);
+        \\}
+        \\
+        \\test "allocateBox uses Roc box header layout" {
+        \\    var env_value = Env{};
+        \\    var host = makeHost(&env_value);
+        \\
+        \\    const ptr = abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, &host);
+        \\    const payload: *u64 = @ptrCast(@alignCast(ptr));
+        \\    payload.* = 42;
+        \\
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.alloc_count);
+        \\    try std.testing.expectEqual(@as(usize, @sizeOf(usize) + @sizeOf(u64)), env_value.alloc_length);
+        \\    try std.testing.expectEqual(@as(usize, @alignOf(usize)), env_value.alloc_alignment);
+        \\    try std.testing.expectEqual(@as(isize, 1), refcountPtr(ptr).*);
+        \\    try std.testing.expectEqual(@as(u64, 42), payload.*);
+        \\
+        \\    abi.decrefBox(ptr, &host);
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
+        \\    try std.testing.expectEqual(@intFromPtr(&env_value.backing), env_value.dealloc_ptr);
+        \\}
+        \\
+        \\test "erased callable incref defers capture drop until final decref" {
+        \\    var env_value = Env{};
+        \\    var host = makeHost(&env_value);
+        \\
+        \\    const callable = abi.rocErasedCallableAllocate(&host, &erasedCallableFn, &erasedDrop, @sizeOf(u64));
+        \\    abi.increfErasedCallable(callable, 1);
+        \\    abi.decrefErasedCallable(callable, &host);
+        \\    try std.testing.expectEqual(@as(usize, 0), env_value.callback_count);
+        \\
+        \\    abi.decrefErasedCallable(callable, &host);
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.callback_count);
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
         \\}
         \\
         \\test "isUniqueBox returns false for static refcount" {
@@ -2937,6 +2993,19 @@ fn customGlueZigBangRecordFields(io: std.Io, allocator: Allocator, env: *const C
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{
+        "pub extern fn roc_init_for_host(arg0:",
+        "pub extern fn roc_render_for_host(arg0: RocBox",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing natural entrypoint declaration {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{ "arg0: **anyopaque", "ret_ptr:", "arg_ptr:" }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Zig file contained obsolete entrypoint ABI text {s}", .{needle});
         }
     }
     for ([_][]const u8{ "    init!:", "    render!:" }) |needle| {
