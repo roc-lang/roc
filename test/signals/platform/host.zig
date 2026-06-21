@@ -1356,10 +1356,14 @@ const HostStructuralPatchTargets = struct {
 const HostStructuralSplice = struct {
     removed_elem_ids: []u64,
     touched_parent_ids: []u64,
+    replacement_elem_ids: []u64,
+    replacement_on_change_indices: []usize,
 
     fn deinit(self: HostStructuralSplice, allocator: std.mem.Allocator) void {
         allocator.free(self.removed_elem_ids);
         allocator.free(self.touched_parent_ids);
+        allocator.free(self.replacement_elem_ids);
+        allocator.free(self.replacement_on_change_indices);
     }
 };
 
@@ -5221,8 +5225,21 @@ const HostEnv = struct {
         }
 
         const replacement_render_count = replacement.render_nodes.items.len;
+        const on_change_count = replacement.on_changes.items.len;
+        const replacement_elem_ids = allocator.alloc(u64, replacement_render_count) catch std.process.exit(1);
+        errdefer allocator.free(replacement_elem_ids);
+        for (replacement.render_nodes.items, 0..) |node, index| {
+            replacement_elem_ids[index] = node.elem_id;
+        }
+
         self.removeActiveNonRenderDescriptorsInTarget(roc_host, target);
         self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
+        const on_change_start = self.active_stream.on_changes.items.len;
+        const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch std.process.exit(1);
+        errdefer allocator.free(replacement_on_change_indices);
+        for (replacement_on_change_indices, 0..) |*index, offset| {
+            index.* = on_change_start + offset;
+        }
         self.appendReplacementNonRenderDescriptorsMoved(replacement, render_insert_index);
 
         self.active_stream.render_nodes.replaceRange(allocator, render_start, removed_render_count, replacement.render_nodes.items) catch std.process.exit(1);
@@ -5234,6 +5251,8 @@ const HostEnv = struct {
         return .{
             .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch std.process.exit(1),
             .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch std.process.exit(1),
+            .replacement_elem_ids = replacement_elem_ids,
+            .replacement_on_change_indices = replacement_on_change_indices,
         };
     }
 
@@ -5247,6 +5266,10 @@ const HostEnv = struct {
         defer removed_elem_ids.deinit(allocator);
         var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
         defer touched_parent_ids.deinit(allocator);
+        var replacement_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer replacement_elem_ids.deinit(allocator);
+        var replacement_on_change_indices: std.ArrayListUnmanaged(usize) = .empty;
+        defer replacement_on_change_indices.deinit(allocator);
         var spliced_any = false;
 
         for (diff.removed_scope_ids) |removed_scope_id| {
@@ -5259,6 +5282,8 @@ const HostEnv = struct {
             for (splice.touched_parent_ids) |parent_id| {
                 appendUniqueU64(allocator, &touched_parent_ids, parent_id);
             }
+            replacement_elem_ids.appendSlice(allocator, splice.replacement_elem_ids) catch std.process.exit(1);
+            replacement_on_change_indices.appendSlice(allocator, splice.replacement_on_change_indices) catch std.process.exit(1);
             spliced_any = true;
         }
 
@@ -5279,6 +5304,8 @@ const HostEnv = struct {
             for (splice.touched_parent_ids) |parent_id| {
                 appendUniqueU64(allocator, &touched_parent_ids, parent_id);
             }
+            replacement_elem_ids.appendSlice(allocator, splice.replacement_elem_ids) catch std.process.exit(1);
+            replacement_on_change_indices.appendSlice(allocator, splice.replacement_on_change_indices) catch std.process.exit(1);
             spliced_any = true;
         }
 
@@ -5287,6 +5314,8 @@ const HostEnv = struct {
         const merged_splice = HostStructuralSplice{
             .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch std.process.exit(1),
             .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch std.process.exit(1),
+            .replacement_elem_ids = replacement_elem_ids.toOwnedSlice(allocator) catch std.process.exit(1),
+            .replacement_on_change_indices = replacement_on_change_indices.toOwnedSlice(allocator) catch std.process.exit(1),
         };
         defer merged_splice.deinit(allocator);
         const target = HostStructuralReplacementTarget{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } };
@@ -6330,12 +6359,47 @@ fn renderNodeTag(stream: *const HostNodeDescriptorStream, node: HostRenderNode) 
     };
 }
 
+fn streamElemTag(stream: *const HostNodeDescriptorStream, elem_id: u64) []const u8 {
+    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse failHost("elem id had no descriptor index");
+    if (descriptor_index.element) |index| {
+        if (index >= stream.elements.items.len) failHost("element descriptor index exceeded descriptor table");
+        const desc = stream.elements.items[index];
+        if (desc.elem_id != elem_id) failHost("element descriptor index pointed at the wrong elem id");
+        return desc.tag;
+    }
+    if (descriptor_index.text_node != null or descriptor_index.signal_text_node != null) return "text";
+    failHost("elem id had no render descriptor");
+}
+
 fn renderNodeParentElemId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
     return switch (node.kind) {
         .element => (findElementDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
         .text => (findTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
         .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
     };
+}
+
+fn streamElemParentElemId(stream: *const HostNodeDescriptorStream, elem_id: u64) u64 {
+    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse failHost("elem id had no descriptor index");
+    if (descriptor_index.element) |index| {
+        if (index >= stream.elements.items.len) failHost("element descriptor index exceeded descriptor table");
+        const desc = stream.elements.items[index];
+        if (desc.elem_id != elem_id) failHost("element descriptor index pointed at the wrong elem id");
+        return desc.parent_elem_id;
+    }
+    if (descriptor_index.text_node) |index| {
+        if (index >= stream.text_nodes.items.len) failHost("text node descriptor index exceeded descriptor table");
+        const desc = stream.text_nodes.items[index];
+        if (desc.elem_id != elem_id) failHost("text node descriptor index pointed at the wrong elem id");
+        return desc.parent_elem_id;
+    }
+    if (descriptor_index.signal_text_node) |index| {
+        if (index >= stream.signal_text_nodes.items.len) failHost("signal text node descriptor index exceeded descriptor table");
+        const desc = stream.signal_text_nodes.items[index];
+        if (desc.elem_id != elem_id) failHost("signal text node descriptor index pointed at the wrong elem id");
+        return desc.parent_elem_id;
+    }
+    failHost("elem id had no render descriptor");
 }
 
 fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {
@@ -7037,6 +7101,7 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
         failHost(rendered);
     }
 
+    var child_list_patch_counted = false;
     for (next_child_ids, 0..) |child_id, new_index| {
         if (child_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing child");
         const child = &host.dom_elements.items[@intCast(child_id)];
@@ -7055,8 +7120,13 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
 
         if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null or old_child_index.? != new_index) {
             counts.addAppendChild();
+            child_list_patch_counted = true;
         }
         child.parent_id = parent_elem_id;
+    }
+
+    if (!child_list_patch_counted and parent.children.items.len != next_child_ids.len) {
+        counts.addAppendChild();
     }
 
     parent.children.deinit(allocator);
@@ -7091,6 +7161,111 @@ fn applyStructuralEventBindingsForSeen(host: *HostEnv, stream: *const HostNodeDe
             current_event_id.* = next_event_id;
             counts.addEventBinding();
         }
+    }
+}
+
+fn activeEventIdForElemKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind) ?u64 {
+    const descriptor_index = host.active_stream.elemDescriptorIndex(elem_id) orelse return null;
+    const event_index = descriptor_index.events.get(kind) orelse return null;
+    if (event_index >= host.active_stream.events.items.len) failHost("active event descriptor index exceeded descriptor table");
+    const desc = host.active_stream.events.items[event_index];
+    if (desc.elem_id != elem_id or desc.kind != kind) failHost("active event descriptor index pointed at the wrong event");
+    return @intCast(event_index + 1);
+}
+
+fn applyStructuralEventBindingsForElem(host: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
+    const elem = domElementById(host, elem_id);
+    const kinds = [_]RenderEventKind{ .click, .input, .check };
+    for (kinds) |kind| {
+        const next_event_id = activeEventIdForElemKind(host, elem_id, kind);
+        const current_event_id = domEventBindingSlot(elem, kind);
+        if (current_event_id.* == next_event_id) continue;
+
+        current_event_id.* = next_event_id;
+        counts.addEventBinding();
+    }
+}
+
+fn applyActiveStreamTextAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, descriptor_index: HostElemDescriptorIndex, counts: *CommandCounts) void {
+    if (descriptor_index.static_text_attrs.get(field)) |attr_index| {
+        if (attr_index >= host.active_stream.static_text_attrs.items.len) failHost("active static text attr index exceeded descriptor table");
+        const desc = host.active_stream.static_text_attrs.items[attr_index];
+        if (desc.elem_id != elem_id or desc.field != field) failHost("active static text attr index pointed at the wrong field");
+        if (applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addTextField(desc.field);
+        }
+    }
+
+    if (descriptor_index.signal_text_attrs.get(field)) |attr_index| {
+        if (attr_index >= host.active_stream.signal_text_attrs.items.len) failHost("active signal text attr index exceeded descriptor table");
+        const desc = &host.active_stream.signal_text_attrs.items[attr_index];
+        if (desc.elem_id != elem_id or desc.field != field) failHost("active signal text attr index pointed at the wrong field");
+        if (evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addTextField(desc.field);
+        }
+    }
+}
+
+fn applyActiveStreamBoolAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, descriptor_index: HostElemDescriptorIndex, counts: *CommandCounts) void {
+    if (descriptor_index.static_bool_attrs.get(field)) |attr_index| {
+        if (attr_index >= host.active_stream.static_bool_attrs.items.len) failHost("active static bool attr index exceeded descriptor table");
+        const desc = host.active_stream.static_bool_attrs.items[attr_index];
+        if (desc.elem_id != elem_id or desc.field != field) failHost("active static bool attr index pointed at the wrong field");
+        if (applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+
+    if (descriptor_index.signal_bool_attrs.get(field)) |attr_index| {
+        if (attr_index >= host.active_stream.signal_bool_attrs.items.len) failHost("active signal bool attr index exceeded descriptor table");
+        const desc = &host.active_stream.signal_bool_attrs.items[attr_index];
+        if (desc.elem_id != elem_id or desc.field != field) failHost("active signal bool attr index pointed at the wrong field");
+        if (evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addBoolField(desc.field);
+        }
+    }
+}
+
+fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, counts: *CommandCounts) void {
+    const descriptor_index = host.active_stream.elemDescriptorIndex(elem_id) orelse failHost("active render node had no descriptor index");
+    const elem = domElementById(host, elem_id);
+    const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
+    const bool_fields = [_]RenderBoolField{ .checked, .disabled };
+
+    for (text_fields) |field| {
+        if (!streamHasTextField(&host.active_stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
+            counts.addTextField(field);
+        }
+    }
+    for (bool_fields) |field| {
+        if (!streamHasBoolField(&host.active_stream, elem.id, field) and clearRenderBoolField(elem, field)) {
+            counts.addBoolField(field);
+        }
+    }
+
+    if (descriptor_index.text_node) |text_index| {
+        if (text_index >= host.active_stream.text_nodes.items.len) failHost("active text node index exceeded descriptor table");
+        const desc = host.active_stream.text_nodes.items[text_index];
+        if (desc.elem_id != elem_id) failHost("active text node index pointed at the wrong elem id");
+        if (applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+            counts.addTextField(.text);
+        }
+    }
+
+    if (descriptor_index.signal_text_node) |signal_text_index| {
+        if (signal_text_index >= host.active_stream.signal_text_nodes.items.len) failHost("active signal text node index exceeded descriptor table");
+        const desc = &host.active_stream.signal_text_nodes.items[signal_text_index];
+        if (desc.elem_id != elem_id) failHost("active signal text node index pointed at the wrong elem id");
+        if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
+            counts.addTextField(.text);
+        }
+    }
+
+    for (text_fields) |field| {
+        applyActiveStreamTextAttrForElem(host, roc_host, elem_id, field, descriptor_index, counts);
+    }
+    for (bool_fields) |field| {
+        applyActiveStreamBoolAttrForElem(host, roc_host, elem_id, field, descriptor_index, counts);
     }
 }
 
@@ -7281,11 +7456,15 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
 }
 
 fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, splice: HostStructuralSplice, targets: HostStructuralPatchTargets) CommandCounts {
+    _ = targets;
     if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
 
     const allocator = host.gpa.allocator();
-    var max_elem_id = maxRenderElemId(&host.active_stream);
+    var max_elem_id: u64 = @intCast(host.dom_elements.items.len - 1);
     for (splice.removed_elem_ids) |elem_id| {
+        max_elem_id = @max(max_elem_id, elem_id);
+    }
+    for (splice.replacement_elem_ids) |elem_id| {
         max_elem_id = @max(max_elem_id, elem_id);
     }
     const required_child_table_len: usize = @intCast(max_elem_id + 1);
@@ -7303,16 +7482,15 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
 
     var counts: CommandCounts = .{};
 
-    host.recordStreamNodesScanned(host.active_stream.render_nodes.items.len);
-    for (host.active_stream.render_nodes.items) |node| {
-        if (!host.renderNodeInReplacementTarget(&host.active_stream, node, targets.replacement)) continue;
-        if (node.elem_id >= child_table_len) failHost("render node exceeded structural DOM patch table");
+    host.recordStreamNodesScanned(splice.replacement_elem_ids.len);
+    for (splice.replacement_elem_ids) |elem_id| {
+        if (elem_id >= child_table_len) failHost("render node exceeded structural DOM patch table");
 
-        const parent_elem_id = renderNodeParentElemId(&host.active_stream, node);
+        const parent_elem_id = streamElemParentElemId(&host.active_stream, elem_id);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        ensureDomNode(host, node.elem_id, renderNodeTag(&host.active_stream, node), &counts);
-        seen[@intCast(node.elem_id)] = true;
+        ensureDomNode(host, elem_id, streamElemTag(&host.active_stream, elem_id), &counts);
+        seen[@intCast(elem_id)] = true;
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
 
@@ -7347,74 +7525,17 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
     }
 
-    const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
-    const bool_fields = [_]RenderBoolField{ .checked, .disabled };
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
-
-        for (text_fields) |field| {
-            if (!streamHasTextField(&host.active_stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
-                counts.addTextField(field);
-            }
-        }
-        for (bool_fields) |field| {
-            if (!streamHasBoolField(&host.active_stream, elem.id, field) and clearRenderBoolField(elem, field)) {
-                counts.addBoolField(field);
-            }
-        }
+    for (splice.replacement_elem_ids) |elem_id| {
+        applyActiveStreamFieldsForElem(host, roc_host, elem_id, &counts);
+        applyStructuralEventBindingsForElem(host, elem_id, &counts);
     }
 
-    host.recordStreamNodesScanned(host.active_stream.text_nodes.items.len);
-    for (host.active_stream.text_nodes.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
-            counts.addTextField(.text);
-        }
+    host.recordStreamNodesScanned(splice.replacement_on_change_indices.len);
+    for (splice.replacement_on_change_indices) |on_change_index| {
+        if (on_change_index >= host.active_stream.on_changes.items.len) failHost("structural splice on_change index exceeded active descriptor stream");
+        const desc = &host.active_stream.on_changes.items[on_change_index];
+        evalOnChangeInitial(host, roc_host, desc);
     }
-    host.recordStreamNodesScanned(host.active_stream.signal_text_nodes.items.len);
-    for (host.active_stream.signal_text_nodes.items) |*desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
-            counts.addTextField(.text);
-        }
-    }
-    host.recordStreamNodesScanned(host.active_stream.static_text_attrs.items.len);
-    for (host.active_stream.static_text_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
-            counts.addTextField(desc.field);
-        }
-    }
-    host.recordStreamNodesScanned(host.active_stream.signal_text_attrs.items.len);
-    for (host.active_stream.signal_text_attrs.items) |*desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
-            counts.addTextField(desc.field);
-        }
-    }
-    host.recordStreamNodesScanned(host.active_stream.static_bool_attrs.items.len);
-    for (host.active_stream.static_bool_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
-            counts.addBoolField(desc.field);
-        }
-    }
-    host.recordStreamNodesScanned(host.active_stream.signal_bool_attrs.items.len);
-    for (host.active_stream.signal_bool_attrs.items) |*desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
-            counts.addBoolField(desc.field);
-        }
-    }
-    host.recordStreamNodesScanned(host.active_stream.on_changes.items.len);
-    for (host.active_stream.on_changes.items) |*desc| {
-        if (host.scopeIsInReplacementTarget(desc.scope_id, targets.replacement)) {
-            evalOnChangeInitial(host, roc_host, desc);
-        }
-    }
-
-    var event_seen = allocator.alloc(bool, child_table_len) catch std.process.exit(1);
-    defer allocator.free(event_seen);
-    @memset(event_seen, false);
-    host.recordStreamNodesScanned(host.active_stream.render_nodes.items.len);
-    for (host.active_stream.render_nodes.items) |node| {
-        if (node.elem_id < event_seen.len) event_seen[@intCast(node.elem_id)] = true;
-    }
-    applyStructuralEventBindingsForSeen(host, &host.active_stream, event_seen, &counts);
 
     host.render_metrics.patches_emitted += counts.total;
     return counts;
