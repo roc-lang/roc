@@ -36,6 +36,7 @@ const DevProgram = struct {
     view: RunImage.ProgramView,
     executable: ExecutableMemory,
     generation: u64,
+    refs: std.atomic.Value(usize),
 
     fn deinit(self: *DevProgram) void {
         self.executable.deinit();
@@ -44,7 +45,8 @@ const DevProgram = struct {
 
 const RuntimeState = struct {
     shm: SharedMemoryAllocator,
-    program: DevProgram,
+    program: *DevProgram,
+    retired_programs: std.ArrayList(*DevProgram),
     control: ?*hot_reload.Control,
 };
 
@@ -115,12 +117,13 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const image_bound = if (has_hot_reload) hot_reload.imageSize(control) else shm.total_size;
 
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
-    var program = try loadDevProgram(gpa, &view);
-    program.generation = generation;
+    const program = try createDevProgram(gpa, &view, generation);
+    errdefer destroyDevProgram(gpa, program);
 
     return .{
         .shm = shm,
         .program = program,
+        .retired_programs = .empty,
         .control = if (has_hot_reload) control else null,
     };
 }
@@ -184,40 +187,56 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProg
 
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
+        const shim_function_addr = resolveShimFunction(name);
         switch (try record.relocationKind()) {
             .linked_function => {
-                if (findFunctionStub(function_stubs.items, name) == null) {
-                    const target_addr = resolveShimFunction(name) orelse return error.UnresolvedSymbol;
-                    try function_stubs.append(gpa, .{
-                        .name = name,
-                        .target_addr = target_addr,
-                    });
-                }
+                const target_addr = shim_function_addr orelse return error.UnresolvedSymbol;
+                try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
                 relocation.* = .{ .linked_function = .{
                     .offset = record.code_offset,
                     .name = name,
                 } };
             },
-            .linked_data_abs64 => relocation.* = .{ .linked_data = .{
-                .offset = record.code_offset,
-                .name = name,
-                .kind = .abs64,
-            } },
-            .linked_data_rel32 => relocation.* = .{ .linked_data = .{
-                .offset = record.code_offset,
-                .name = name,
-                .kind = .rel32,
-            } },
-            .linked_data_page21 => relocation.* = .{ .linked_data = .{
-                .offset = record.code_offset,
-                .name = name,
-                .kind = .page21,
-            } },
-            .linked_data_pageoff12 => relocation.* = .{ .linked_data = .{
-                .offset = record.code_offset,
-                .name = name,
-                .kind = .pageoff12,
-            } },
+            .linked_data_abs64 => {
+                if (shim_function_addr) |target_addr| {
+                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+                }
+                relocation.* = .{ .linked_data = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = .abs64,
+                } };
+            },
+            .linked_data_rel32 => {
+                if (shim_function_addr) |target_addr| {
+                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+                }
+                relocation.* = .{ .linked_data = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = .rel32,
+                } };
+            },
+            .linked_data_page21 => {
+                if (shim_function_addr) |target_addr| {
+                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+                }
+                relocation.* = .{ .linked_data = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = .page21,
+                } };
+            },
+            .linked_data_pageoff12 => {
+                if (shim_function_addr) |target_addr| {
+                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+                }
+                relocation.* = .{ .linked_data = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = .pageoff12,
+                } };
+            },
         }
     }
 
@@ -264,7 +283,22 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProg
         .view = view.*,
         .executable = executable,
         .generation = 0,
+        .refs = std.atomic.Value(usize).init(1),
     };
+}
+
+fn createDevProgram(gpa: Allocator, view: *const RunImage.ProgramView, generation: u64) LoadDevProgramError!*DevProgram {
+    const program = try gpa.create(DevProgram);
+    errdefer gpa.destroy(program);
+
+    program.* = try loadDevProgram(gpa, view);
+    program.generation = generation;
+    return program;
+}
+
+fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
+    program.deinit();
+    gpa.destroy(program);
 }
 
 fn findFunctionStub(stubs: []const FunctionStub, name: []const u8) ?usize {
@@ -272,6 +306,14 @@ fn findFunctionStub(stubs: []const FunctionStub, name: []const u8) ?usize {
         if (std.mem.eql(u8, stub.name, name)) return i;
     }
     return null;
+}
+
+fn ensureFunctionStub(gpa: Allocator, stubs: *std.ArrayList(FunctionStub), name: []const u8, target_addr: usize) Allocator.Error!void {
+    if (findFunctionStub(stubs.items, name) != null) return;
+    try stubs.append(gpa, .{
+        .name = name,
+        .target_addr = target_addr,
+    });
 }
 
 fn resolveShimFunction(name: []const u8) ?usize {
@@ -379,6 +421,66 @@ fn executeDevEntrypoint(
     program.executable.callRocABIAt(entry_offset, @ptrCast(ops), ret, arg_ptr);
 }
 
+fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
+    const base = @intFromPtr(program.executable.memory.ptr);
+    return address >= base and address - base < program.executable.code_size;
+}
+
+fn findDevProgramByCodeAddressLocked(state: *RuntimeState, address: usize) ?*DevProgram {
+    if (devProgramContainsCodeAddress(state.program, address)) return state.program;
+
+    for (state.retired_programs.items) |program| {
+        if (devProgramContainsCodeAddress(program, address)) return program;
+    }
+
+    return null;
+}
+
+fn acquireDevProgramRef(program: *DevProgram) void {
+    const previous = program.refs.fetchAdd(1, .acquire);
+    if (builtin.mode == .Debug and previous == 0) {
+        std.debug.panic("machine-code shim invariant violated: acquired unreferenced dev program", .{});
+    }
+}
+
+fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
+    const previous = program.refs.fetchSub(1, .acq_rel);
+    if (builtin.mode == .Debug and previous == 0) {
+        std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+    }
+    if (previous == 1) {
+        reclaimRetiredProgramsLocked(state);
+    }
+}
+
+fn releaseDevProgramRef(program: *DevProgram) void {
+    const previous = program.refs.fetchSub(1, .acq_rel);
+    if (builtin.mode == .Debug and previous == 0) {
+        std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+    }
+    if (previous != 1) return;
+
+    runtime_state_mutex.lockUncancelable(shimIo());
+    defer runtime_state_mutex.unlock(shimIo());
+
+    if (runtime_state_initialized) {
+        reclaimRetiredProgramsLocked(&runtime_state);
+    }
+}
+
+fn reclaimRetiredProgramsLocked(state: *RuntimeState) void {
+    var i: usize = 0;
+    while (i < state.retired_programs.items.len) {
+        const program = state.retired_programs.items[i];
+        if (program.refs.load(.acquire) == 0) {
+            _ = state.retired_programs.swapRemove(i);
+            destroyDevProgram(allocator(), program);
+        } else {
+            i += 1;
+        }
+    }
+}
+
 fn refreshRuntimeProgramIfNeeded(
     state: *RuntimeState,
 ) void {
@@ -395,15 +497,22 @@ fn refreshRuntimeProgramIfNeeded(
         return;
     };
 
-    var next_program = loadDevProgram(allocator(), &view) catch {
+    const gpa = allocator();
+    const next_program = createDevProgram(gpa, &view, published_generation) catch {
         hot_reload.acknowledge(control, published_generation, .rejected);
         return;
     };
-    next_program.generation = published_generation;
 
-    var old_program = state.program;
+    state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
+        destroyDevProgram(gpa, next_program);
+        hot_reload.acknowledge(control, published_generation, .rejected);
+        return;
+    };
+
+    const old_program = state.program;
     state.program = next_program;
-    old_program.deinit();
+    state.retired_programs.appendAssumeCapacity(old_program);
+    releaseDevProgramRefLocked(state, old_program);
     hot_reload.acknowledge(control, published_generation, .accepted);
 }
 
@@ -416,13 +525,39 @@ fn evaluateEntrypoint(
     const state = try ensureRuntimeState(ops);
     if (state.control != null) {
         runtime_state_mutex.lockUncancelable(shimIo());
-        defer runtime_state_mutex.unlock(shimIo());
-
         refreshRuntimeProgramIfNeeded(state);
-        try executeDevEntrypoint(&state.program, entry_idx, ops, ret_ptr, arg_ptr);
+        const program = state.program;
+        acquireDevProgramRef(program);
+        runtime_state_mutex.unlock(shimIo());
+
+        defer releaseDevProgramRef(program);
+        try executeDevEntrypoint(program, entry_idx, ops, ret_ptr, arg_ptr);
     } else {
-        try executeDevEntrypoint(&state.program, entry_idx, ops, ret_ptr, arg_ptr);
+        try executeDevEntrypoint(state.program, entry_idx, ops, ret_ptr, arg_ptr);
     }
+}
+
+/// Retain the loaded dev image containing a generated-code return address.
+pub fn roc_hot_reload_enter(return_address: usize) ?*anyopaque {
+    runtime_state_mutex.lockUncancelable(shimIo());
+    defer runtime_state_mutex.unlock(shimIo());
+
+    if (!runtime_state_initialized) return null;
+    const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
+    acquireDevProgramRef(program);
+    return program;
+}
+
+/// Release a loaded dev image token returned by `roc_hot_reload_enter`.
+pub fn roc_hot_reload_leave(code_ref: ?*anyopaque) void {
+    const code_ref_ptr = code_ref orelse return;
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref_ptr));
+    releaseDevProgramRef(program);
+}
+
+/// Retain the image that created a boxed erased-callable payload.
+pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
+    return roc_hot_reload_enter(return_address);
 }
 
 export fn roc_shim_get_ops() callconv(.c) *anyopaque {

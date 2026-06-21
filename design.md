@@ -3343,10 +3343,32 @@ Successful rebuild workers append a new dev `RunImage` to the same shared-memory
 mapping and write its generation, header offset, and image bound through the
 hot-load control block with release/acquire atomics. The host shim checks that
 control block at Roc entrypoint boundaries. If a newer generation is available,
-the shim validates and loads the replacement `RunImage` into host-callable memory, swaps to it
-under the runtime-state mutex, deallocates the previous machine-code allocation,
-and acknowledges the generation as accepted. If validation or loading fails, it
-acknowledges rejection and keeps using the previous `RunImage`.
+the shim validates and loads the replacement `RunImage` into host-callable
+memory, swaps the active entrypoint reference to the new image under the
+runtime-state mutex, and acknowledges the generation as accepted. If validation
+or loading fails, it acknowledges rejection and keeps using the previous
+`RunImage`.
+
+Loaded machine-code images are reference-counted by the host shim. Each active
+image starts with one reference owned by the active entrypoint table. Entering a
+host-callable Roc function increments that image's atomic live count, and
+returning from that function decrements it. Swapping to a new image drops the
+old image's active-entrypoint reference and moves the old image to a retired
+list. A retired image is unmapped only after its live count reaches zero, so
+calls that entered old code before the swap keep executing old code safely while
+new entrypoint calls use the new image.
+
+This lifetime rule also covers boxed Roc closures that cross the host boundary.
+The dev backend generates real erased-callable procedures; it does not insert
+trampolines. In shim execution mode, packed erased-callable payloads reserve a
+small shim-only prefix before the ordinary capture bytes. The prefix stores a
+reference to the owning loaded image and the original capture-drop callback.
+Generated erased-callable procedures skip this prefix before reading their
+capture, increment the owning image on entry, and decrement it before returning.
+The payload's final-drop callback first runs the original capture-drop callback
+with the adjusted capture pointer, then releases the payload's retained image
+reference. That retained reference keeps an old image alive while a host stores
+a boxed Roc closure and later calls it after one or more hot reloads.
 
 Headerless default apps compile through synthetic temporary source files. Watch
 input collection rewrites those synthetic app paths back to the user's original

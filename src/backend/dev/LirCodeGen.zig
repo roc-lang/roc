@@ -238,6 +238,10 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_free,
+    hot_reload_enter,
+    hot_reload_leave,
+    hot_reload_retain_current,
+    hot_reload_erased_callable_drop,
 
     // Numeric operations
     dec_to_str,
@@ -353,6 +357,10 @@ pub const BuiltinFn = enum {
             .erased_callable_decref => "roc_builtins_erased_callable_decref",
             .erased_callable_decref_single_thread => "roc_builtins_erased_callable_decref_single_thread",
             .erased_callable_free => "roc_builtins_erased_callable_free",
+            .hot_reload_enter => "roc_builtins_hot_reload_enter",
+            .hot_reload_leave => "roc_builtins_hot_reload_leave",
+            .hot_reload_retain_current => "roc_builtins_hot_reload_retain_current",
+            .hot_reload_erased_callable_drop => "roc_builtins_hot_reload_erased_callable_drop",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -10232,7 +10240,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            const capture_prefix_size: u32 = if (self.generation_mode == .shim_execution)
+                builtins.erased_callable.hot_reload_capture_prefix_size
+            else
+                0;
+            const payload_size = builtins.erased_callable.payloadSize(capture_prefix_size + capture_size);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
@@ -10246,6 +10258,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
+            const hot_reload_code_ref_slot: ?i32 = if (self.generation_mode == .shim_execution) blk: {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_retain_current), .hot_reload_retain_current);
+
+                const slot = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                break :blk slot;
+            } else null;
+
             const heap_ptr = try self.allocTempGeneral();
             try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
@@ -10258,9 +10280,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
-            try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
-            self.codegen.freeGeneral(on_drop_reg);
+            if (self.generation_mode == .shim_execution) {
+                const hot_drop_reg = try self.allocTempGeneral();
+                try self.emitBuiltinAddress(
+                    hot_drop_reg,
+                    @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_erased_callable_drop),
+                    .hot_reload_erased_callable_drop,
+                );
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
+                self.codegen.freeGeneral(hot_drop_reg);
+
+                if (hot_reload_code_ref_slot) |slot| {
+                    const code_ref_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot);
+                    try self.emitStore(
+                        .w64,
+                        heap_ptr,
+                        @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "code_ref")),
+                        code_ref_reg,
+                    );
+                    self.codegen.freeGeneral(code_ref_reg);
+                }
+
+                const original_on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(
+                    .w64,
+                    heap_ptr,
+                    @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_drop")),
+                    original_on_drop_reg,
+                );
+                self.codegen.freeGeneral(original_on_drop_reg);
+            } else {
+                const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
+                self.codegen.freeGeneral(on_drop_reg);
+            }
 
             if (capture) |capture_local| {
                 const layout_idx = capture_layout orelse unreachable;
@@ -10278,7 +10332,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         frame_ptr,
                         capture_stack,
                         heap_ptr,
-                        @intCast(builtins.erased_callable.capture_offset),
+                        @intCast(builtins.erased_callable.capture_offset + capture_prefix_size),
                         capture_size,
                     );
                     self.codegen.freeGeneral(temp);
@@ -10954,6 +11008,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
                 },
             }
+        }
+
+        fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
+            switch (self.generation_mode) {
+                .native_execution => {
+                    try self.codegen.emitLoadImm(dst_reg, @bitCast(@as(u64, fn_addr)));
+                },
+                .shim_execution, .object_file => {
+                    try self.codegen.emitLoadDataAddress(dst_reg, builtin_fn.symbolName());
+                },
+            }
+        }
+
+        fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
+            if (self.generation_mode != .shim_execution) return null;
+
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const code_ref_slot = self.codegen.allocStackSlot(8);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_enter), .hot_reload_enter);
+            }
+            try self.emitStore(.w64, frame_ptr, code_ref_slot, ret_reg_0);
+            return code_ref_slot;
+        }
+
+        fn emitHotReloadLeaveForHostCallable(self: *Self, code_ref_slot: i32) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, code_ref_slot);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_leave), .hot_reload_leave);
         }
 
         /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.
@@ -12602,11 +12687,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
+            var hot_reload_code_ref_slot: ?i32 = null;
             if (proc.abi == .erased_callable) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc.args);
+                hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -12635,6 +12722,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
             const body_epilogue_offset = self.codegen.currentOffset();
+            if (hot_reload_code_ref_slot) |slot| {
+                try self.emitHotReloadLeaveForHostCallable(slot);
+            }
             {
                 const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
                     @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
@@ -13462,6 +13552,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
+            if (self.generation_mode == .shim_execution) {
+                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
+            }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));

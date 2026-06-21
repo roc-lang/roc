@@ -353,7 +353,7 @@ test "repair result is always padding-free for a larger shuffled record" {
     }
 }
 
-fn expectStructuralOrder(fields: []const StructuralField, expected: []const u16) anyerror!void {
+fn expectStructuralOrder(fields: []const StructuralField, expected: []const u16) error{TestExpectedEqual}!void {
     var order: [64]u16 = undefined;
     computeStructuralFieldOrder(fields, order[0..fields.len]);
     try testing.expectEqualSlices(u16, expected, order[0..fields.len]);

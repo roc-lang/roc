@@ -1087,6 +1087,41 @@ pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8, roc_ops: *RocOps) 
     erased_callable.free(payload_ptr, roc_ops);
 }
 
+/// Enter the loaded dev-shim code image that contains the generated callsite.
+pub fn roc_builtins_hot_reload_enter(_: *RocOps) callconv(.c) ?*anyopaque {
+    if (comptime @hasDecl(@import("root"), "roc_hot_reload_enter")) {
+        return @import("root").roc_hot_reload_enter(@returnAddress());
+    }
+    return null;
+}
+
+/// Leave a loaded dev-shim code image previously returned by hot_reload_enter.
+pub fn roc_builtins_hot_reload_leave(code_ref: ?*anyopaque) callconv(.c) void {
+    if (comptime @hasDecl(@import("root"), "roc_hot_reload_leave")) {
+        @import("root").roc_hot_reload_leave(code_ref);
+    }
+}
+
+/// Retain the loaded dev-shim code image that created an erased-callable
+/// payload. The retained reference is released by
+/// roc_builtins_hot_reload_erased_callable_drop.
+pub fn roc_builtins_hot_reload_retain_current(_: *RocOps) callconv(.c) ?*anyopaque {
+    if (comptime @hasDecl(@import("root"), "roc_hot_reload_retain_current")) {
+        return @import("root").roc_hot_reload_retain_current(@returnAddress());
+    }
+    return null;
+}
+
+/// Final-drop callback for shim-execution erased callables that carry a
+/// hot-reload capture prefix.
+pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
+    if (header.original_on_drop) |original_on_drop| {
+        original_on_drop(erased_callable.hotReloadAdjustedCapturePtr(capture_ptr), roc_ops);
+    }
+    roc_builtins_hot_reload_leave(header.code_ref);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Memory/Refcounting Wrappers (re-export with dev_ prefix for consistency)
 // ═══════════════════════════════════════════════════════════════════════════

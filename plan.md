@@ -266,6 +266,47 @@ run subcommand.
 - [x] Have the compiler parent report host-shim acknowledgement status instead
   of only defining the shared-memory acknowledgement path.
 
+### Code Blob Lifetime Follow-Up
+
+- [x] Replace immediate old-image deallocation with host-shim code-blob
+  refcounting.
+  - Active entrypoint table owns one reference to the current image.
+  - Each host-callable Roc entrypoint call increments before executing and
+    decrements after returning.
+  - Swapping to a new image drops the active-table reference from the old image.
+  - Retired images are reclaimed only after their atomic reference count reaches
+    zero.
+- [x] Change dev codegen for shim-execution erased-callable procedures.
+  - Procedures that can be called by the host enter their owning image before
+    executing and leave it before returning.
+  - Packed erased-callable payloads retain their owning image while the payload
+    exists.
+  - The shim-only payload prefix stores the retained image token and the
+    original capture-drop callback.
+  - The final-drop helper runs the original capture drop and then releases the
+    retained image token.
+- [x] Preserve direct generated function pointers for boxed closures.
+  - Do not introduce trampoline functions.
+  - Use codegen prologue/epilogue and payload-prefix metadata for lifetime
+    management.
+- [x] Add focused tests for hot-reload lifetime behavior.
+  - Repeated hot reloads exercise retirement and final-drop release paths.
+  - An in-flight old entrypoint call can finish after a newer image is accepted.
+  - A host-stored boxed Roc closure created before a reload can still be called
+    after the reload.
+  - Releasing that boxed closure exercises the retained image release path.
+  - Boxed closure capture storage is exercised across same-size, larger, and
+    zero-capture reload generations.
+- [x] Add effectful-platform hot-reload tests.
+  - Reload code that calls hosted effects.
+  - Reload code that passes boxed Roc closures to hosted effects.
+  - Reload code while the host stores and later calls a boxed Roc closure.
+- [x] Add app-polymorphic boundary hot-reload tests.
+  - A platform-required `[Model : model]` value crosses the host boundary as
+    `Box(Model)`.
+  - Reloading the app updates functions that construct, update, and read the
+    app-provided `Model`.
+
 ### Tests To Add
 
 - [x] Unit tests for hot-load control block store/acknowledge state.
@@ -284,6 +325,10 @@ run subcommand.
 - [x] Lifecycle test that the compiler parent exits when the host shim child
   exits.
 - [x] Regression test that metadata-only touches do not rebuild or reload.
+- [x] Regression test that a host-stored boxed closure remains callable after
+  reloads where later closures have larger and then smaller captures.
+- [x] Regression test that an app-provided polymorphic `Model` type crosses the
+  host boundary through `Box(Model)` before and after a hot reload.
 
 ### Verification Completed
 
@@ -297,6 +342,19 @@ run subcommand.
 - [x] `zig build -Dtarget=x86_64-windows-gnu roc --summary all --color off`
   compiles the Windows hot-load handle path.
 - [x] `zig build minici --summary all --color off` passes.
+- [x] Re-run focused hot-reload and codegen tests after code-blob lifetime
+  changes.
+  - `zig build run-test-cli -- --suite subcommands --filter "roc --watch hot reloads dev shim code"`
+  - `zig build run-test-cli -- --suite subcommands --filter "roc --watch hot reloads app-provided Model through Box"`
+  - `zig build run-test-zig-module-builtins`
+  - `zig build run-test-zig-module-backend`
+  - `zig build run-test-zig-fx-platform`
+- [x] Re-run full CLI integration tests after code-blob lifetime changes.
+  - `zig build run-test-cli`
+- [x] Re-run Windows cross-compile after code-blob lifetime changes.
+  - `zig build -Dtarget=x86_64-windows-gnu roc --summary all --color off`
+- [x] Re-run `zig build minici --summary all --color off` after code-blob
+  lifetime changes.
 
 ### Success Criteria
 
@@ -312,3 +370,9 @@ run subcommand.
 - [x] Host shim child exit cleanly terminates the compiler parent and all watches.
 - [x] The current check/test watch behavior and non-hot-load execution behavior
   continue to pass their existing tests.
+- [x] Hot reload never unmaps a code image while an old entrypoint call is still
+  executing.
+- [x] Hot reload never unmaps a code image while a host-retained boxed Roc
+  closure can still call into it.
+- [x] Retired code images are reclaimed after all active calls and boxed-closure
+  references to them are gone.
