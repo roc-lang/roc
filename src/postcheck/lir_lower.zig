@@ -3115,6 +3115,20 @@ const Lowerer = struct {
                     const node = try self.graph.reserveNode(self.lowerer.allocator);
                     self.local_nodes[index] = node;
                     self.local_nodes[backing_index] = node;
+
+                    // A nominal or opaque record lays out its fields in declared
+                    // order. The declared-order channel carries that order (the
+                    // backing row stays lexicographic for name resolution); build
+                    // the struct node from it and mark it nominal so the shared
+                    // commit keeps declared order, repaired only for padding.
+                    if (named.kind != .alias and named.declared_order.len != 0) {
+                        if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
+                            self.graph.setNode(node, .{ .struct_ = field_span });
+                            try self.graph.markNominalStruct(self.lowerer.allocator, node);
+                            return layout.localGraphInput(node);
+                        }
+                    }
+
                     self.graph.setNode(node, try self.nodeForType(backing.ty));
                     return layout.localGraphInput(node);
                 },
@@ -3181,6 +3195,61 @@ const Lowerer = struct {
             defer self.lowerer.allocator.free(fields);
             for (items, 0..) |item, i| {
                 fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.ty) };
+            }
+            return try self.graph.appendFields(self.lowerer.allocator, fields);
+        }
+
+        /// Builds graph fields for a nominal record in declared order from its
+        /// declared-order channel. Each named entry maps to the matching backing
+        /// field, keeping `.index` = the field's lexicographic position so
+        /// name-resolution (which indexes the lexicographic backing row) and the
+        /// layout offset map stay consistent. Returns null when the backing is
+        /// not a record or the declared order does not cover the backing fields,
+        /// so the caller falls back to the structural path.
+        fn declaredOrderStructFields(
+            self: *LayoutGraphBuilder,
+            declared_order: Type.Span,
+            backing_ty: Type.TypeId,
+        ) Common.LowerError!?layout.GraphFieldSpan {
+            const backing_fields = switch (self.lowerer.program.types.get(backing_ty)) {
+                .record => |span| self.lowerer.program.types.fieldSpan(span),
+                else => return null,
+            };
+            const entries = self.lowerer.program.types.declaredFieldSpan(declared_order);
+
+            var named_count: usize = 0;
+            for (entries) |entry| {
+                if (entry == .named) named_count += 1;
+            }
+            if (named_count != backing_fields.len) return null;
+
+            const fields = try self.lowerer.allocator.alloc(layout.GraphField, entries.len);
+            defer self.lowerer.allocator.free(fields);
+            // Padding spacers carry an index past every named field so they never
+            // collide with a named field's original (lexicographic) index, which
+            // is what `getStructFieldOffsetByOriginalIndex` looks up.
+            var padding_ordinal: u16 = 0;
+            for (entries, 0..) |entry, i| {
+                switch (entry) {
+                    .named => |name| {
+                        var lexicographic_index: ?u16 = null;
+                        var field_ty: Type.TypeId = undefined;
+                        for (backing_fields, 0..) |field, idx| {
+                            if (field.name == name) {
+                                lexicographic_index = @intCast(idx);
+                                field_ty = field.ty;
+                                break;
+                            }
+                        }
+                        const idx = lexicographic_index orelse return null;
+                        fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
+                    },
+                    .padding => |ty| {
+                        const pad_index: u16 = @intCast(backing_fields.len + padding_ordinal);
+                        padding_ordinal += 1;
+                        fields[i] = .{ .index = pad_index, .child = try self.inputForType(ty), .is_padding = true };
+                    },
+                }
             }
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }

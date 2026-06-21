@@ -120,6 +120,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("graph.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
+    std.testing.refAllDecls(@import("nominal_order.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));

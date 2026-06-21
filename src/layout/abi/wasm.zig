@@ -46,8 +46,10 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
         .struct_ => {
             const struct_idx = lay.getStruct().idx;
             const field_count = store.getStructData(struct_idx).fields.count;
-            // A single-field struct is passed as its field; any other aggregate is indirect.
-            if (field_count != 1) return .indirect;
+            // A single-field struct is passed as its field; any other aggregate is
+            // indirect. A lone unnamed-padding field is not a real newtype member,
+            // so it is never unwrapped.
+            if (field_count != 1 or store.getStructFieldIsPadding(struct_idx, 0)) return .indirect;
             return classifyType(store, store.getStructFieldLayout(struct_idx, 0));
         },
         .tag_union => {
@@ -110,6 +112,13 @@ test "wasm classify: aggregates are indirect, single-field structs unwrap" {
     // A single-field struct is passed as its field.
     const wrapped = try testStruct(&store, &.{.i64});
     try testing.expectEqual(Class{ .direct = .i64 }, classifyType(&store, wrapped));
+
+    // A struct whose only field is unnamed padding is not a real newtype, so it is
+    // passed indirectly rather than unwrapped to the padding's borrowed type.
+    const padding_only = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .u64, .is_padding = true },
+    });
+    try testing.expectEqual(Class.indirect, classifyType(&store, padding_only));
 }
 
 test "wasm classify: enums are direct, Bool included" {

@@ -793,6 +793,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .unnamed_field_not_allowed_in_structural_record = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .type_module_missing_matching_type = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),

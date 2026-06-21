@@ -156,7 +156,7 @@ pub const BuildArgs = struct {
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
-    suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
+    suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
     source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
@@ -276,7 +276,7 @@ const main_help =
     \\Arguments:
     \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
-    \\                     e.g. `roc run -- arg1 arg2`
+    \\                     e.g. `roc app.roc -- arg1 arg2`
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
@@ -1143,7 +1143,7 @@ fn getFlagValue(arg: []const u8) ?[]const u8 {
     return iter.next();
 }
 
-test "roc run" {
+test "default roc command" {
     const gpa = testing.allocator;
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{});

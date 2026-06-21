@@ -264,7 +264,7 @@ pub const RocTarget = enum {
 
     /// Check if this target produces a process executable that can run on this host.
     /// This is intentionally stricter than build compatibility: wasm32 can be
-    /// built on any host, but `roc run` does not execute wasm artifacts directly.
+    /// built on any host, but the default `roc` command does not execute wasm artifacts directly.
     pub fn isExecutableOnHost(self: RocTarget) bool {
         if (self == .wasm32) return false;
 

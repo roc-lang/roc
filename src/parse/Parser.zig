@@ -4340,7 +4340,10 @@ fn runExprStatementKernel(
             const two_away_tok = self.peekN(2);
             const three_away_tok = self.peekN(3);
             const curr_is_arrow = curr == .OpArrow or curr == .OpFatArrow;
-            const next_is_not_lower_ident = next_tok != .LowerIdent;
+            // `_` and `_name` are valid record-field names (unnamed padding fields),
+            // so `, _ :` / `, _name :` begins the next record field just like
+            // `, name :` does, and must not be mistaken for a function-arg list.
+            const next_is_not_field_name = next_tok != .LowerIdent and next_tok != .Underscore and next_tok != .NamedUnderscore;
             const not_followed_by_colon = two_away_tok != .OpColon;
             const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
             const next_starts_where_clause = next_tok == .LowerIdent and
@@ -4350,7 +4353,7 @@ fn runExprStatementKernel(
             const can_parse_arrow = type_after_primary_state.looking_for_args != .looking_for_args and curr_is_arrow;
             const can_parse_comma_args = type_after_primary_state.looking_for_args == .not_looking_for_args and
                 curr == .Comma and
-                (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
+                (next_is_not_field_name or not_followed_by_colon or two_away_is_arrow) and
                 !next_starts_where_clause and
                 next_tok != .CloseCurly and
                 next_tok != .DoubleDot and
@@ -4742,7 +4745,10 @@ fn runExprStatementKernel(
                 type_record_state.ext = .{ .open = double_dot_start };
                 continue :expr_kernel .type_record_finish;
             },
-            .LowerIdent => {
+            // `_` and `_name` are unnamed (padding) fields, valid only in nominal
+            // record declarations; canonicalization rejects them in structural
+            // record types. They parse like any other field name.
+            .LowerIdent, .Underscore, .NamedUnderscore => {
                 const field_start = self.pos;
                 const name = self.pos;
                 self.advance();

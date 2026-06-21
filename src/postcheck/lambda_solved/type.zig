@@ -61,6 +61,13 @@ pub const FnMember = struct {
     captures: Span,
 };
 
+/// One entry of a nominal record's declared layout order; consumed only by
+/// layout selection (the backing row stays lexicographic).
+pub const DeclaredField = union(enum) {
+    named: names.RecordFieldNameId,
+    padding: TypeVarId,
+};
+
 /// Lambda Solved type-variable content.
 pub const Content = union(enum) {
     link: TypeVarId,
@@ -77,6 +84,9 @@ pub const Content = union(enum) {
             ty: TypeVarId,
             use: MonoType.BackingUse,
         } = null,
+        /// Declared field order for a nominal/opaque record backing; empty
+        /// otherwise.
+        declared_order: Span = Span.empty(),
     },
     record: Span,
     tuple: Span,
@@ -105,6 +115,7 @@ pub const Store = struct {
     tags: std.ArrayList(Tag),
     captures: std.ArrayList(Capture),
     fn_members: std.ArrayList(FnMember),
+    declared_fields: std.ArrayList(DeclaredField),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -115,10 +126,12 @@ pub const Store = struct {
             .tags = .empty,
             .captures = .empty,
             .fn_members = .empty,
+            .declared_fields = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.declared_fields.deinit(self.allocator);
         self.fn_members.deinit(self.allocator);
         self.captures.deinit(self.allocator);
         self.tags.deinit(self.allocator);
@@ -201,6 +214,17 @@ pub const Store = struct {
 
     pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
         return self.fields.items[span_.start..][0..span_.len];
+    }
+
+    pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
+        const start: u32 = @intCast(self.declared_fields.items.len);
+        try self.declared_fields.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
+        return self.declared_fields.items[span_.start..][0..span_.len];
     }
 
     pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {

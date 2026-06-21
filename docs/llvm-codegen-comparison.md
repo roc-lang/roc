@@ -65,7 +65,7 @@ var builder = LlvmBuilder.init(.{
 **Legacy Rust:**
 - Full AOT (Ahead-of-Time) compiler backend
 - Produces object files for linking
-- Used by `roc build`, `roc run`
+- Used by `roc build` and the default `roc` command
 - Targets all supported platforms
 
 **New Zig:**

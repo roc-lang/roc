@@ -1220,6 +1220,9 @@ pub const Interpreter = struct {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
+                    // Padding spacers hold uninitialized bytes; there is no value
+                    // to validate against their (size-only) layout.
+                    if (field.is_padding) continue;
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
                     if (next_len < path_buf.len) {
@@ -3085,6 +3088,9 @@ pub const Interpreter = struct {
         var expected_field_count: usize = 0;
         for (0..expected_info.fields.len) |i| {
             const field = expected_info.fields.get(@intCast(i));
+            // Padding spacers carry indices past every named field and are never
+            // constructed, so they must not raise the expected named-field count.
+            if (field.is_padding) continue;
             expected_field_count = @max(expected_field_count, @as(usize, @intCast(field.index)) + 1);
         }
         if (builtin.mode == .Debug and field_locals.len < expected_field_count) {
@@ -3689,7 +3695,8 @@ pub const Interpreter = struct {
         if (self.struct_field_plans.get(id)) |plan| return plan;
 
         const field_layout_idx = self.layout_store.getStructFieldLayout(struct_plan.struct_idx, field_index);
-        const plan: ?layout_mod.RcFieldPlan = if (!self.layoutContainsRc(field_layout_idx) or
+        const plan: ?layout_mod.RcFieldPlan = if (self.layout_store.getStructFieldIsPadding(struct_plan.struct_idx, field_index) or
+            !self.layoutContainsRc(field_layout_idx) or
             self.layout_store.getStructFieldSize(struct_plan.struct_idx, field_index) == 0)
             null
         else
@@ -3815,6 +3822,8 @@ pub const Interpreter = struct {
             .struct_ => blk: {
                 const sd = self.layout_store.getStructData(layout_val.getStruct().idx);
                 for (0..sd.fields.count) |i| {
+                    // Padding spacers hold uninitialized bytes, never a refcounted value.
+                    if (self.layout_store.getStructFieldIsPadding(layout_val.getStruct().idx, @intCast(i))) continue;
                     const field_layout = self.layout_store.getStructFieldLayout(layout_val.getStruct().idx, @intCast(i));
                     if (self.layoutContainsRc(field_layout)) break :blk true;
                 }
@@ -5929,6 +5938,9 @@ pub const Interpreter = struct {
                 var field_index: usize = 0;
                 while (field_index < fields.len) : (field_index += 1) {
                     const field = fields.get(@intCast(field_index));
+                    // Padding spacers hold uninitialized bytes; they are not part
+                    // of a value's identity and must never be compared.
+                    if (field.is_padding) continue;
                     const field_layout = field.layout;
                     const field_size = self.helper.sizeOf(field_layout);
                     if (field_size == 0) continue;

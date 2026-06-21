@@ -632,7 +632,7 @@ test "fx platform checked directly finds sibling modules" {
     }
 }
 
-test "custom platform and package qualifiers work in roc run" {
+test "custom platform and package qualifiers work in default roc command" {
     // Regression test for package qualifier extraction and execution.
     // Apps can use any identifier for their platform/package qualifiers (e.g., "fx" instead of "pf").
     // The qualifier must be correctly extracted from the app header for module resolution.
@@ -666,7 +666,7 @@ test "custom platform and package qualifiers work in roc run" {
         return error.PackageQualifierNotRecognized;
     }
 
-    // Check that roc run succeeded
+    // Check that the default roc command succeeded
     switch (run_result.term) {
         .exited => |code| {
             if (code != 0) {
@@ -996,7 +996,7 @@ test "fx platform issue8433" {
 }
 
 test "run aborts on type errors by default" {
-    // Tests that roc run aborts when there are type errors (without --allow-errors)
+    // Tests that the default roc command aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/run_allow_errors.roc");
@@ -1011,7 +1011,7 @@ test "run aborts on type errors by default" {
 }
 
 test "run aborts on parse errors by default" {
-    // Tests that roc run aborts when there are parse errors (without --allow-errors)
+    // Tests that the default roc command aborts when there are parse errors (without --allow-errors)
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/parse_error.roc");
@@ -1026,7 +1026,7 @@ test "run aborts on parse errors by default" {
 }
 
 test "run with --allow-errors attempts execution despite type errors" {
-    // Tests that roc run --allow-errors attempts to execute even with type errors.
+    // Tests that `roc --allow-errors` attempts to execute even with type errors.
     // TODO: remove Windows workaround once the shared LIR image path
     // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";

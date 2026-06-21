@@ -1459,6 +1459,7 @@ const Builder = struct {
                             .use = backing_use,
                         },
                     },
+                    .declared_order = try self.declaredOrderForNominal(view, nominal),
                 } };
             },
         };
@@ -1573,7 +1574,32 @@ const Builder = struct {
                 try ctx.constrainTypeToMono(ctx.checkedTypeInCurrentView(source.view, formal), mono_arg);
             }
         }
-        return try ctx.lowerType(ctx.nominalBackingRoot(nominal));
+        const backing = try ctx.lowerType(ctx.nominalBackingRoot(nominal));
+        return try self.structuralBackingForNominal(view, nominal, backing);
+    }
+
+    fn structuralBackingForNominal(
+        self: *Builder,
+        view: ModuleView,
+        nominal: checked.CheckedNominalType,
+        backing: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
+        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var current = backing;
+        while (true) {
+            if (seen.contains(current)) return current;
+            try seen.put(current, {});
+            switch (self.program.types.get(current)) {
+                .named => |named| {
+                    if (named.kind != .alias and !sameTypeDef(named.def, owner_def)) return current;
+                    const next = named.backing orelse return current;
+                    current = next.ty;
+                },
+                else => return current,
+            }
+        }
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
@@ -1749,6 +1775,103 @@ const Builder = struct {
         Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
+    const NominalDeclLookup = struct {
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+        /// Unnamed padding field types (declared order), in `view`'s store. For a
+        /// box-payload capability this is the *instance's* substituted padding, so
+        /// type-parameterized padding reserves its instantiated size; for a direct
+        /// declaration it is the declaration's own padding types.
+        padding_field_tys: []const checked.CheckedTypeId,
+    };
+
+    /// Resolves a nominal's source declaration across every representation that
+    /// has one, for reading declared field order. The box-payload representation
+    /// is the common case for record nominals (assigned while the checked module
+    /// data is built), so it must be handled, not just `*_declaration`.
+    fn nominalDeclarationFor(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclLookup {
+        return switch (nominal.representation) {
+            .local_declaration => |id| blk: {
+                const decl = view.types.nominalDeclarationById(id);
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(view.types) };
+            },
+            .imported_declaration => |imported| blk: {
+                const sv = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                const decl = sv.types.nominalDeclarationById(imported.declaration);
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(sv.types) };
+            },
+            .local_box_payload_capability => |cap| blk: {
+                const capability = view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(view.interface_capabilities) };
+            },
+            .imported_box_payload_capability => |cap| blk: {
+                const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
+                const capability = sv.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
+            },
+            .builtin, .opaque_without_backing => null,
+        };
+    }
+
+    /// Builds the declared-field-order span for a nominal/opaque record backing
+    /// from its source declaration (the declaration backing preserves source
+    /// order, unlike the lexicographically-sorted lowered row). Returns the empty
+    /// span for non-record backings or when no declaration is available. The
+    /// span feeds layout selection only; the lowered row stays lexicographic.
+    fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return Type.Span.empty();
+        const source_decl = lookup.declaration.nominal.source_decl orelse return Type.Span.empty();
+        // Read declared field order from the declaration's record annotation,
+        // which preserves source order (the checked row and every lowered row
+        // sort lexicographically). `lookup.view` is the declaring module, so this
+        // is correct across module boundaries.
+        const module_env = lookup.view.module_env;
+        const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
+            .s_nominal_decl => |decl| decl.anno,
+            else => return Type.Span.empty(),
+        };
+        // The backing record may be wrapped in parentheses; unwrap before reading
+        // its fields (the backing type itself already handles parens).
+        var record_anno = anno_idx;
+        const record = while (true) {
+            switch (module_env.store.getTypeAnno(record_anno)) {
+                .parens => |parens| record_anno = parens.anno,
+                .record => |record| break record,
+                else => return Type.Span.empty(),
+            }
+        };
+        const fields = module_env.store.sliceAnnoRecordFields(record.fields);
+        if (fields.len == 0) return Type.Span.empty();
+        // Unnamed fields are layout padding; their resolved checked types ride on
+        // the declaration in declared order and are pulled sequentially as each
+        // unnamed field is encountered while walking the declared annotation.
+        // Padding types come from the lookup, which for an instantiated nominal
+        // (box-payload capability) carries the *instance's* substituted padding
+        // types — so a type-parameterized padding field (`_ : a`) reserves the
+        // instantiated size, exactly like a named field of the same type.
+        const padding_types = lookup.padding_field_tys;
+        const padding_view = lookup.view;
+        var padding_cursor: usize = 0;
+        const entries = try self.allocator.alloc(Type.DeclaredField, fields.len);
+        defer self.allocator.free(entries);
+        for (fields, 0..) |field_idx, i| {
+            const field = module_env.store.getAnnoRecordField(field_idx);
+            if (field.is_unnamed) {
+                if (padding_cursor >= padding_types.len) {
+                    Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
+                }
+                const checked_ty = padding_types[padding_cursor];
+                padding_cursor += 1;
+                entries[i] = .{ .padding = try self.lowerType(padding_view, checked_ty) };
+            } else {
+                entries[i] = .{ .named = try self.program.names.internRecordFieldLabel(module_env.getIdentText(field.name)) };
+            }
+        }
+        return try self.program.types.addDeclaredFields(entries);
+    }
+
     fn providedConstNode(self: *Builder, data: checked.ProvidedDataExport) ConstNode {
         const view = self.moduleForId(checked.constModuleId(data.const_ref));
         const template = view.const_templates.get(data.const_ref);
@@ -1846,8 +1969,7 @@ const Builder = struct {
             .platform_required => |required| blk: {
                 const app_view = self.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
-                break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
+                break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
             },
         };
         return try self.lowerFnTemplateDef(source_ty_view, fn_template);
@@ -3489,6 +3611,7 @@ const BodyContext = struct {
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
             .backing = backing,
+            .declared_order = try self.builder.declaredOrderForNominal(self.view, nominal),
         } });
     }
 
@@ -8143,8 +8266,7 @@ const BodyContext = struct {
             .platform_required => |required| blk: {
                 const app_view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
-                break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
+                break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
             },
         };
         return try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
@@ -14688,6 +14810,12 @@ fn branchCount(branches: anytype) usize {
 
 fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
+}
+
+fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
+    return left.module_name == right.module_name and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl;
 }
 
 const CheckedTypeAddress = struct {
