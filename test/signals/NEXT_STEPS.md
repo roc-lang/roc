@@ -36,47 +36,31 @@ history.
 - Changed `Ui.when` and `Ui.each` outputs retain the host-owned data needed to
   collect only affected branch/row scopes. Dirty structural work splices those
   replacement descriptors into retained active descriptors without re-entering
-  the root `Elem`. Unchanged keyed row items can reuse their retained row
-  descriptor subtree unless a descendant structural descriptor depends on the
-  dirty source.
+  the root `Elem` or materializing a full next active descriptor stream.
+  Preserved-order `Ui.each` churn splices only removed/changed/new row scopes
+  before applying one DOM patch to the affected each site; reorder churn uses an
+  explicit whole-site replacement because row order actually changed.
 
 ## Remaining Design Gaps
 
 These map one-to-one to the Definition of Done in `DESIGN.md`. The platform is
 "done" when all are closed and the success-metric specs are green.
 
-1. **`Ui.each` scaling is not yet proven linear (DoD 1, highest risk).** Dirty
-   `Ui.when` and `Ui.each` work no longer rebuilds from the root `Elem`, but the
-   host still materializes an updated active descriptor stream and applies the
-   structural patch against that stream. This is purely a **host-side patch
-   locality** problem: invoking Roc to *build* a new row is already solved (the
-   host calls the retained `row` builder closure directly — no entrypoint, see
-   `DESIGN.md` "Retained closures"). What remains is splicing the returned row
-   sub-tree into only the affected scope rather than rebuilding the active
-   descriptor stream. Until that lands, list churn is not provably O(changed
-   rows). This is the headline scaling property and the most important gap.
-2. **`Ui.component` is unimplemented (DoD 2).** Named scopes for local state
+1. **`Ui.component` is unimplemented (DoD 2).** Named scopes for local state
    across helper functions returning `Elem` do not exist yet. Needed to prove
    local state composes without identity leaks across multiple instantiations.
-3. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
-   `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` wait until structural
-   site ownership (gap 1) is stable enough to avoid cleanup tied to whole-stream
-   rebuilds.
+2. **Effects and subscriptions are unimplemented (DoD 4).** `Signal.from_task`,
+   `Signal.interval`, `Ui.on_change`, and `Ui.on_cleanup` need a host-owned
+   lifecycle tied to explicit scope ownership and cleanup.
 
 ## Next Green Slices
 
 Take one slice at a time and commit each green result. Slices are ordered so the
 highest-risk scaling property closes first and effects land last.
 
-1. **Scope-local structural patch (closes gap 1).** Apply a dirty
-   `Ui.when`/`Ui.each` replacement stream directly to the affected parent/row
-   scopes instead of applying structural patches against a full updated active
-   stream. Prove with a list-churn spec asserting `nodes_recomputed`,
-   `patches_emitted`, and `rows_*` track changed rows, not list size.
-2. **`Ui.component` named scopes (closes gap 2).** Add the scope primitive and a
+1. **`Ui.component` named scopes (closes gap 2).** Add the scope primitive and a
    small composition app instantiating a stateful component more than once.
-3. **Effect lifecycle scaffold (closes gap 4).** Once structural updates no
-   longer rebuild the whole active descriptor stream, add the smallest host-owned
+2. **Effect lifecycle scaffold (closes gap 4).** Add the smallest host-owned
    subscription lifecycle for one cleanup-safe effect source.
 
 ### Capability apps (add alongside the slices, smallest proof only)
@@ -84,9 +68,6 @@ highest-risk scaling property closes first and effects land last.
 Each app maps to exactly one Definition-of-Done capability. Keep them minimal and
 assertion-tight; no catalog fixtures.
 
-- **Derived-graph / diamond app** — wide fan-in re-join; assert glitch-free
-  single recompute and `is_eq` pruning suppressing unchanged branches under high
-  update volume (proves scaling on derivation depth, supports gap 1's metrics).
 - **Async / effects app** — `Signal.from_task` with injected fake results,
   `[Loading, Done, Failed]` rendering, `Ui.on_change` firing a request, scope
   disposal cancelling in-flight work via `Ui.on_cleanup` (proves gap 4).

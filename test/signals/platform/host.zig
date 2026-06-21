@@ -1019,11 +1019,18 @@ const RecomputeApplyOutcome = struct {
 const HostKeyedRowDiffResult = struct {
     scope_ids: []u64,
     row_items_changed: []bool,
+    removed_scope_ids: []u64,
     rows_reused: u64,
     rows_created: u64,
     rows_removed: u64,
     row_items_unchanged: u64,
     row_items_updated: u64,
+
+    fn deinit(self: HostKeyedRowDiffResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.scope_ids);
+        allocator.free(self.row_items_changed);
+        allocator.free(self.removed_scope_ids);
+    }
 };
 
 const HostRenderMetrics = struct {
@@ -2786,6 +2793,8 @@ const HostEnv = struct {
         errdefer allocator.free(next_scope_ids);
         var row_items_changed = allocator.alloc(bool, keys.len) catch std.process.exit(1);
         errdefer allocator.free(row_items_changed);
+        var removed_scope_ids: std.ArrayListUnmanaged(u64) = .empty;
+        errdefer removed_scope_ids.deinit(allocator);
 
         var rows_reused: u64 = 0;
         var rows_created: u64 = 0;
@@ -2832,6 +2841,7 @@ const HostEnv = struct {
         var rows_removed: u64 = 0;
         for (existing_scope_ids, 0..) |scope_id, existing_index| {
             if (matched_existing[existing_index]) continue;
+            removed_scope_ids.append(allocator, scope_id) catch std.process.exit(1);
             self.disposeScopeSubtree(roc_host, scope_id);
             rows_removed += 1;
         }
@@ -2845,6 +2855,7 @@ const HostEnv = struct {
         return .{
             .scope_ids = next_scope_ids,
             .row_items_changed = row_items_changed,
+            .removed_scope_ids = removed_scope_ids.toOwnedSlice(allocator) catch std.process.exit(1),
             .rows_reused = rows_reused,
             .rows_created = rows_created,
             .rows_removed = rows_removed,
@@ -3258,12 +3269,12 @@ const HostEnv = struct {
         return diff;
     }
 
-    fn collectActiveEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
+    fn syncActiveEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
         if (site.kind != .each) {
-            failHost("active row collection requires an each scope site");
+            failHost("active row sync requires an each scope site");
         }
         if (site.node_id != each.node_id) {
-            failHost("active row collection received mismatched each descriptors");
+            failHost("active row sync received mismatched each descriptors");
         }
 
         const allocator = self.gpa.allocator();
@@ -3281,12 +3292,18 @@ const HostEnv = struct {
             keys[index] = callErasedHostValueToHostValue(roc_host, each.key_of, item);
         }
 
-        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
-        defer {
-            allocator.free(diff.scope_ids);
-            allocator.free(diff.row_items_changed);
-        }
+        return self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
+    }
 
+    fn collectActiveEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
+        const allocator = self.gpa.allocator();
+        const diff = self.syncActiveEachRowScopes(roc_host, site, each);
+        defer diff.deinit(allocator);
+        self.collectActiveEachRowDescriptorsFromDiff(roc_host, stream, site, each, diff, dirty_source_node_ids);
+    }
+
+    fn collectActiveEachRowDescriptorsFromDiff(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
+        const allocator = self.gpa.allocator();
         var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
         defer binder_stack.deinit(allocator);
         binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
@@ -3305,6 +3322,99 @@ const HostEnv = struct {
             var dom_ordinal: u64 = 0;
             self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
         }
+    }
+
+    fn collectActiveEachSingleRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
+        const allocator = self.gpa.allocator();
+        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
+        defer binder_stack.deinit(allocator);
+        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
+
+        const row_values = self.eachRowScopeValues(row_scope_id);
+        const row_elem = callErasedHostValueHostValueToElem(roc_host, each.row, row_values.key, row_values.item);
+        defer abi.decrefElem(row_elem, roc_host);
+
+        var ordinal: u64 = 0;
+        var dom_ordinal: u64 = 0;
+        self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+    }
+
+    fn eachSiteRowAncestorScopeId(self: *HostEnv, scope_id: u64, site: HostEachSite) ?u64 {
+        var current: ?u64 = scope_id;
+        while (current) |id| {
+            if (id >= self.scopes.items.len) failHost("scope descriptor referenced an unknown parent scope");
+            const scope = self.scopes.items[@intCast(id)];
+            switch (scope.step) {
+                .each_row => |row| {
+                    if (scope.parent_scope_id == site.parent_scope_id and row.site_ordinal == site.site_ordinal) return id;
+                },
+                .root, .when_branch => {},
+            }
+            current = scope.parent_scope_id;
+        }
+        return null;
+    }
+
+    fn activeEachRowScopesInRenderOrder(self: *HostEnv, allocator: std.mem.Allocator, site: HostEachSite) []u64 {
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        errdefer ids.deinit(allocator);
+
+        for (self.active_stream.render_nodes.items) |node| {
+            const scope_id = HostEnv.renderNodeScopeId(&self.active_stream, node);
+            const row_scope_id = self.eachSiteRowAncestorScopeId(scope_id, site) orelse continue;
+            appendUniqueU64(allocator, &ids, row_scope_id);
+        }
+
+        return ids.toOwnedSlice(allocator) catch std.process.exit(1);
+    }
+
+    fn eachDiffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
+        var old_index: usize = 0;
+        for (next_scope_ids) |next_scope_id| {
+            if (!u64SliceContains(old_render_rows, next_scope_id)) continue;
+            while (old_index < old_render_rows.len and !u64SliceContains(next_scope_ids, old_render_rows[old_index])) {
+                old_index += 1;
+            }
+            if (old_index >= old_render_rows.len) return false;
+            if (old_render_rows[old_index] != next_scope_id) return false;
+            old_index += 1;
+        }
+        return true;
+    }
+
+    fn lastRenderEndIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
+        var end_index: ?usize = null;
+        for (stream.render_nodes.items, 0..) |node, index| {
+            if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) {
+                end_index = index + 1;
+            }
+        }
+        return end_index;
+    }
+
+    fn renderInsertIndexForEachRow(self: *HostEnv, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64, row_index: usize) usize {
+        if (row_index >= next_scope_ids.len) failHost("each row insertion index was requested outside the next row order");
+
+        if (self.firstRenderIndexInScopeSubtree(&self.active_stream, next_scope_ids[row_index])) |existing_index| {
+            return existing_index;
+        }
+
+        var next_index = row_index + 1;
+        while (next_index < next_scope_ids.len) : (next_index += 1) {
+            if (self.firstRenderIndexInScopeSubtree(&self.active_stream, next_scope_ids[next_index])) |insert_before| {
+                return insert_before;
+            }
+        }
+
+        var previous_index = row_index;
+        while (previous_index > 0) {
+            previous_index -= 1;
+            if (self.lastRenderEndIndexInScopeSubtree(&self.active_stream, next_scope_ids[previous_index])) |insert_after| {
+                return insert_after;
+            }
+        }
+
+        return site.render_insert_index;
     }
 
     fn scopeIsDescendantOrSelf(self: *HostEnv, scope_id: u64, root_scope_id: u64) bool {
@@ -4029,6 +4139,61 @@ const HostEnv = struct {
         return self.spliceActiveStreamReplacingTarget(roc_host, .{ .scope = replaced_scope_id }, render_insert_index, replacement);
     }
 
+    fn applyDirtyEachRowScopeSplices(self: *HostEnv, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) CommandCounts {
+        const allocator = self.gpa.allocator();
+        var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer removed_elem_ids.deinit(allocator);
+        var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer touched_parent_ids.deinit(allocator);
+        var spliced_any = false;
+
+        for (diff.removed_scope_ids) |removed_scope_id| {
+            var empty_stream: HostNodeDescriptorStream = .{};
+            const render_insert_index = self.firstRenderIndexInScopeSubtree(&self.active_stream, removed_scope_id) orelse site.render_insert_index;
+            const splice = self.spliceActiveStreamReplacingScope(roc_host, removed_scope_id, render_insert_index, &empty_stream);
+            defer splice.deinit(self.gpa.allocator());
+
+            removed_elem_ids.appendSlice(allocator, splice.removed_elem_ids) catch std.process.exit(1);
+            for (splice.touched_parent_ids) |parent_id| {
+                appendUniqueU64(allocator, &touched_parent_ids, parent_id);
+            }
+            spliced_any = true;
+        }
+
+        for (diff.scope_ids, diff.row_items_changed, 0..) |row_scope_id, row_item_changed, row_index| {
+            if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
+                continue;
+            }
+
+            var row_stream: HostNodeDescriptorStream = .{};
+            defer row_stream.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
+            self.collectActiveEachSingleRowDescriptors(roc_host, &row_stream, site, each, row_scope_id, dirty_source_node_ids);
+
+            const render_insert_index = self.renderInsertIndexForEachRow(site, diff.scope_ids, row_index);
+            const splice = self.spliceActiveStreamReplacingScope(roc_host, row_scope_id, render_insert_index, &row_stream);
+            defer splice.deinit(self.gpa.allocator());
+
+            removed_elem_ids.appendSlice(allocator, splice.removed_elem_ids) catch std.process.exit(1);
+            for (splice.touched_parent_ids) |parent_id| {
+                appendUniqueU64(allocator, &touched_parent_ids, parent_id);
+            }
+            spliced_any = true;
+        }
+
+        if (!spliced_any) return .{};
+
+        const merged_splice = HostStructuralSplice{
+            .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch std.process.exit(1),
+            .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch std.process.exit(1),
+        };
+        defer merged_splice.deinit(allocator);
+        const target = HostStructuralReplacementTarget{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } };
+        return applySplicedStructuralNodeDescriptorTarget(self, roc_host, merged_splice, .{
+            .removed = target,
+            .replacement = target,
+        });
+    }
+
     fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
         const allocator = self.gpa.allocator();
         const previous = &self.active_stream;
@@ -4216,10 +4381,7 @@ const HostEnv = struct {
                 }
 
                 const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, item_values, each_desc.key_eq, each_desc.key_drop, each_desc.item_eq, each_desc.item_drop);
-                defer {
-                    allocator.free(diff.scope_ids);
-                    allocator.free(diff.row_items_changed);
-                }
+                defer diff.deinit(allocator);
 
                 for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
                     if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
@@ -5477,10 +5639,22 @@ fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNodeDes
 
 fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
     const allocator = host.gpa.allocator();
-    const parent = domElementById(host, parent_elem_id);
+    if (parent_elem_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing parent");
+    const parent = &host.dom_elements.items[@intCast(parent_elem_id)];
+    if (!parent.active) {
+        var message: [128]u8 = undefined;
+        const rendered = std.fmt.bufPrint(&message, "structural child replacement referenced inactive parent {d}", .{parent_elem_id}) catch "structural child replacement referenced inactive parent";
+        failHost(rendered);
+    }
 
     for (next_child_ids, 0..) |child_id, new_index| {
-        const child = domElementById(host, child_id);
+        if (child_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing child");
+        const child = &host.dom_elements.items[@intCast(child_id)];
+        if (!child.active) {
+            var message: [128]u8 = undefined;
+            const rendered = std.fmt.bufPrint(&message, "structural child replacement referenced inactive child {d} under parent {d}", .{ child_id, parent_elem_id }) catch "structural child replacement referenced inactive child";
+            failHost(rendered);
+        }
         const old_parent_id = child.parent_id;
         const old_child_index = if (old_parent_id) |id| blk: {
             if (id >= host.dom_elements.items.len) failHost("active DOM node referenced missing parent");
@@ -5748,6 +5922,17 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
     for (touched_parents.items) |parent_elem_id| {
         const children = streamDirectChildren(allocator, &host.active_stream, parent_elem_id);
         defer allocator.free(children);
+        for (children) |child_id| {
+            if (child_id >= host.dom_elements.items.len or host.dom_elements.items[@intCast(child_id)].active) continue;
+            const was_seen = child_id < seen.len and seen[@intCast(child_id)];
+            var message: [160]u8 = undefined;
+            const rendered = std.fmt.bufPrint(
+                &message,
+                "spliced structural parent {d} has inactive child {d}; replacement target seen={}",
+                .{ parent_elem_id, child_id, was_seen },
+            ) catch "spliced structural parent has inactive child";
+            failHost(rendered);
+        }
         replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
     }
 
@@ -6193,9 +6378,24 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
                     failHost("dirty each descriptor is not active");
                 };
                 const each_desc = host.active_stream.eaches.items[each_index];
-                const target = HostStructuralReplacementTarget{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } };
+                const each_site = HostEachSite{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal };
+                const target = HostStructuralReplacementTarget{ .each_site = each_site };
+                const allocator = host.gpa.allocator();
+                const old_active_rows = host.activeEachRowScopes(allocator, site.scope_id, site.ordinal);
+                defer allocator.free(old_active_rows);
+                const old_render_rows = host.activeEachRowScopesInRenderOrder(allocator, each_site);
+                defer allocator.free(old_render_rows);
+                const diff = host.syncActiveEachRowScopes(roc_host, site, each_desc);
+                defer diff.deinit(allocator);
 
-                host.collectActiveEachRowDescriptors(roc_host, &replacement_stream, site, each_desc, dirty_source_node_ids);
+                if (old_active_rows.len == old_render_rows.len and HostEnv.eachDiffPreservesSurvivorRenderOrder(old_render_rows, diff.scope_ids)) {
+                    const counts = host.applyDirtyEachRowScopeSplices(roc_host, site, each_desc, diff, dirty_source_node_ids);
+                    total_counts.addAll(counts);
+                    applied_any = true;
+                    continue;
+                }
+
+                host.collectActiveEachRowDescriptorsFromDiff(roc_host, &replacement_stream, site, each_desc, diff, dirty_source_node_ids);
                 const splice = host.spliceActiveStreamReplacingTarget(
                     roc_host,
                     target,
@@ -8322,8 +8522,7 @@ test "signals host structural patch shifts moved row event ids only" {
 }
 
 fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
-    host.gpa.allocator().free(diff.scope_ids);
-    host.gpa.allocator().free(diff.row_items_changed);
+    diff.deinit(host.gpa.allocator());
 }
 
 fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {

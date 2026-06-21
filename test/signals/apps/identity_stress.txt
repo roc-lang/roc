@@ -44,6 +44,8 @@ expect_visible role:region name:"Delta"
 expect_text text:"Delta waiting" "Delta waiting"
 expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
+expect_metric_delta nodes_recomputed 1
+expect_metric_delta patches_emitted 12
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 1
 expect_metric_delta rows_removed 0
@@ -64,6 +66,8 @@ expect_absent role:region name:"Beta"
 expect_text text:"Delta detail count: 1" "Delta detail count: 1"
 expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
+expect_metric_delta nodes_recomputed 1
+expect_metric_delta patches_emitted 1
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 1
