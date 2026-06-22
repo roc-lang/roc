@@ -12,7 +12,6 @@ const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
-const keyed_rows = @import("keyed_rows.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const erased_calls = @import("erased_calls.zig");
 const hv = @import("host_values.zig");
@@ -2038,32 +2037,19 @@ const HostEnv = struct {
     }
 
     fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
-        self.validateScopeId(scope_id);
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        self.engine.recordEachKeyCompare();
-        return switch (scope.step) {
-            .each_row => |*row| row.key.valueEquals(roc_host, key),
-            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
+        return self.engine.eachRowScopeKeyEquals(roc_host, scope_id, key);
     }
 
     fn eachRowScopeKeyValue(self: *HostEnv, scope_id: u64) HostValue {
-        self.validateScopeId(scope_id);
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        return switch (scope.step) {
-            .each_row => |row| row.key.value,
-            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
+        return self.engine.eachRowScopeKeyValue(scope_id);
     }
 
     fn hashEachKeyValue(self: *HostEnv, roc_host: *abi.RocHost, key_hash: abi.RocErasedCallable, key: HostValue) u64 {
-        self.engine.recordEachKeyCompare();
-        return callErasedHostValueToU64(roc_host, key_hash, key);
+        return self.engine.hashEachKeyValue(roc_host, key_hash, key);
     }
 
     fn eachKeysEqual(self: *HostEnv, roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, left: HostValue, right: HostValue) bool {
-        self.engine.recordEachKeyCompare();
-        return callErasedHostValueHostValueToBool(roc_host, key_eq, left, right);
+        return self.engine.eachKeysEqual(roc_host, key_eq, left, right);
     }
 
     fn eachRowScopeItemEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
@@ -2103,44 +2089,7 @@ const HostEnv = struct {
         const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal);
         defer allocator.free(existing_scope_ids);
 
-        const key_hashes = allocator.alloc(u64, keys.len) catch std.process.exit(1);
-        defer allocator.free(key_hashes);
-        for (keys, 0..) |key, key_index| {
-            key_hashes[key_index] = self.hashEachKeyValue(roc_host, key_hash, key);
-        }
-
-        const existing_key_hashes = allocator.alloc(u64, existing_scope_ids.len) catch std.process.exit(1);
-        defer allocator.free(existing_key_hashes);
-        for (existing_scope_ids, 0..) |scope_id, existing_index| {
-            const existing_key = self.eachRowScopeKeyValue(scope_id);
-            existing_key_hashes[existing_index] = self.hashEachKeyValue(roc_host, key_hash, existing_key);
-        }
-
-        const MatchContext = struct {
-            host: *HostEnv,
-            roc_host: *abi.RocHost,
-            existing_scope_ids: []const u64,
-            keys: []const HostValue,
-            key_eq: abi.RocErasedCallable,
-
-            pub fn nextKeysEqual(context: *@This(), left_index: usize, right_index: usize) bool {
-                return context.host.eachKeysEqual(context.roc_host, context.key_eq, context.keys[left_index], context.keys[right_index]);
-            }
-
-            pub fn existingKeyEquals(context: *@This(), existing_index: usize, key_index: usize) bool {
-                const scope_id = context.existing_scope_ids[existing_index];
-                return context.host.eachRowScopeKeyEquals(context.roc_host, scope_id, context.keys[key_index]);
-            }
-        };
-
-        var match_context = MatchContext{
-            .host = self,
-            .roc_host = roc_host,
-            .existing_scope_ids = existing_scope_ids,
-            .keys = keys,
-            .key_eq = key_eq,
-        };
-        const match_plan = keyed_rows.buildPlan(allocator, existing_scope_ids, existing_key_hashes, key_hashes, &match_context) catch |err| {
+        const match_plan = self.engine.buildEachRowMatchPlan(allocator, roc_host, existing_scope_ids, keys, key_hash, key_eq) catch |err| {
             failKeyedRowsError(err);
         };
         defer allocator.free(match_plan.rows);
