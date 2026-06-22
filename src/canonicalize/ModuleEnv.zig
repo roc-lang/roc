@@ -999,9 +999,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             // Extract the literal text from the source
             const literal_text = self.getSource(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "This number literal is not valid: {s}", .{literal_text});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "INVALID NUMBER", headline, .runtime_error);
+            var report = try Report.init(allocator, "INVALID NUMBER", "", .runtime_error);
+            const owned_literal = try report.addOwnedString(literal_text);
+            try report.headline.addReflowingText("This number literal is not valid: ");
+            try report.headline.addInlineCode(owned_literal);
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -1029,9 +1030,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "Nothing is named {s} in this scope.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "UNDEFINED VARIABLE", headline, .runtime_error);
+            var report = try Report.init(allocator, "UNDEFINED VARIABLE", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("Nothing is named ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" in this scope.");
             try report.document.addReflowingText("Is there an ");
             try report.document.addKeyword("import");
             try report.document.addReflowingText(" or ");
@@ -1054,9 +1057,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "This reads {s} before every path has assigned it a value.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "READING UNINITIALIZED VAR", headline, .runtime_error);
+            var report = try Report.init(allocator, "READING UNINITIALIZED VAR", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("This reads ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" before every path has assigned it a value.");
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1072,9 +1077,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "The value {s} is assigned to itself, which would cause an infinite loop at runtime.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", headline, .runtime_error);
+            var report = try Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The value ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1093,9 +1100,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "The value {s} is part of a recursive non-function definition cycle.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "CIRCULAR VALUE DEFINITION", headline, .runtime_error);
+            var report = try Report.init(allocator, "CIRCULAR VALUE DEFINITION", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The value ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is part of a recursive non-function definition cycle.");
             try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1114,10 +1123,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "The name {s} is used before it is defined.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "USED BEFORE DEFINITION", headline, .runtime_error);
+            var report = try Report.init(allocator, "USED BEFORE DEFINITION", "", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is used before it is defined.");
             try report.document.addReflowingText("Local definitions are evaluated in order: a definition can refer to itself or to definitions written before it, but not to definitions written later in the same block. Move ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" above this use, or move both to the top level.");
@@ -1139,9 +1149,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const ident1_name = self.getIdent(data.ident1);
             const ident2_name = self.getIdent(data.ident2);
 
-            const headline = try std.fmt.allocPrint(allocator, "The local definitions {s} and {s} are mutually recursive, which isn't supported for local definitions.", .{ ident1_name, ident2_name });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MUTUALLY RECURSIVE LOCAL DEFINITIONS", headline, .runtime_error);
+            var report = try Report.init(allocator, "MUTUALLY RECURSIVE LOCAL DEFINITIONS", "", .runtime_error);
+            const owned_ident1 = try report.addOwnedString(ident1_name);
+            const owned_ident2 = try report.addOwnedString(ident2_name);
+            try report.headline.addReflowingText("The local definitions ");
+            try report.headline.addUnqualifiedSymbol(owned_ident1);
+            try report.headline.addReflowingText(" and ");
+            try report.headline.addUnqualifiedSymbol(owned_ident2);
+            try report.headline.addReflowingText(" are mutually recursive, which isn't supported for local definitions.");
             try report.document.addReflowingText("Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1160,9 +1175,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "This use of {s} was rewritten to crash because the referenced top-level value failed type checking earlier.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "ERRONEOUS VALUE USE", headline, .runtime_error);
+            var report = try Report.init(allocator, "ERRONEOUS VALUE USE", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("This use of ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1199,9 +1216,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "{s} does not exist.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "DOES NOT EXIST", headline, .runtime_error);
+            var report = try Report.init(allocator, "DOES NOT EXIST", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" does not exist.");
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1218,11 +1236,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "The module header says that {s} is exposed, but it is not defined anywhere in this module.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "EXPOSED BUT NOT DEFINED", headline, .runtime_error);
+            var report = try Report.init(allocator, "EXPOSED BUT NOT DEFINED", "", .runtime_error);
 
             const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The module header says that ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is exposed, but it is not defined anywhere in this module.");
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
@@ -1238,10 +1257,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "Variable {s} is defined here and then never used:", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "UNUSED VARIABLE", headline, .warning);
+            var report = try Report.init(allocator, "UNUSED VARIABLE", "", .warning);
             const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("Variable ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is defined here and then never used:");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -1286,9 +1306,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type {s} is not declared in this scope.", .{type_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "UNDECLARED TYPE", headline, .runtime_error);
+            var report = try Report.init(allocator, "UNDECLARED TYPE", "", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.headline.addReflowingText("The type ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" is not declared in this scope.");
             try report.document.addReflowingText("This type is referenced here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1306,9 +1328,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "You are using the type {s} like a nominal type, but it is an alias.", .{type_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "EXPECTED NOMINAL TYPE", headline, .runtime_error);
+            var report = try Report.init(allocator, "EXPECTED NOMINAL TYPE", "", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.headline.addReflowingText("You are using the type ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" like a nominal type, but it is an alias.");
             try report.document.addReflowingText("This type is referenced here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1334,10 +1358,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type {s} is being redeclared.", .{type_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "TYPE REDECLARED", headline, .runtime_error);
+            var report = try Report.init(allocator, "TYPE REDECLARED", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
+            try report.headline.addReflowingText("The type ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" is being redeclared.");
 
             // Show where the redeclaration is
             try report.document.addReflowingText("The redeclaration is here:");
@@ -1371,10 +1396,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type alias {s} is being redeclared.", .{type_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "TYPE ALIAS REDECLARED", headline, .runtime_error);
+            var report = try Report.init(allocator, "TYPE ALIAS REDECLARED", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
+            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" is being redeclared.");
 
             try report.document.addReflowingText("The redeclaration is here:");
             try report.document.addLineBreak();
@@ -1407,10 +1433,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The nominal type {s} is being redeclared.", .{type_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "NOMINAL TYPE REDECLARED", headline, .runtime_error);
+            var report = try Report.init(allocator, "NOMINAL TYPE REDECLARED", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
+            try report.headline.addReflowingText("The nominal type ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" is being redeclared.");
 
             try report.document.addReflowingText("The redeclaration is here:");
             try report.document.addLineBreak();
@@ -1442,9 +1469,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const stmt_name = self.getString(data.stmt);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The statement {s} is not allowed at the top level.", .{stmt_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "INVALID STATEMENT", headline, .runtime_error);
+            var report = try Report.init(allocator, "INVALID STATEMENT", "", .runtime_error);
+            const owned_stmt = try report.addOwnedString(stmt_name);
+            try report.headline.addReflowingText("The statement ");
+            try report.headline.addInlineCode(owned_stmt);
+            try report.headline.addReflowingText(" is not allowed at the top level.");
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1463,9 +1492,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "Variable {s} is prefixed with an underscore but is actually used.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "UNDERSCORE VARIABLE USED", headline, .warning);
+            var report = try Report.init(allocator, "UNDERSCORE VARIABLE USED", "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("Variable ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is prefixed with an underscore but is actually used.");
 
             try report.document.addReflowingText("Variables prefixed with ");
             try report.document.addUnqualifiedSymbol("_");
@@ -1511,7 +1542,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "CRASH EXPECTS STRING", "The crash keyword expects a string literal as its argument.", .runtime_error);
+            var report = try Report.init(allocator, "CRASH EXPECTS STRING", "", .runtime_error);
+            try report.headline.addReflowingText("The ");
+            try report.headline.addAnnotated("crash", .inline_code);
+            try report.headline.addReflowingText(" keyword expects a string literal as its argument.");
             try report.document.addReflowingText("For example: ");
             try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
             try report.document.addLineBreak();
@@ -1531,10 +1565,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The record field {s} appears more than once in this record.", .{field_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "DUPLICATE RECORD FIELD", headline, .runtime_error);
+            var report = try Report.init(allocator, "DUPLICATE RECORD FIELD", "", .runtime_error);
             const owned_field_name = try report.addOwnedString(field_name);
+            try report.headline.addReflowingText("The record field ");
+            try report.headline.addRecordField(owned_field_name);
+            try report.headline.addReflowingText(" appears more than once in this record.");
 
             // Show where the duplicate field is
             try report.document.addReflowingText("This field is duplicated here:");
@@ -1570,9 +1605,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The identifier {s} is exposed multiple times in the module header.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "REDUNDANT EXPOSED", headline, .warning);
+            var report = try Report.init(allocator, "REDUNDANT EXPOSED", "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The identifier ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is exposed multiple times in the module header.");
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1590,9 +1627,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_var_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type variable {s} is not declared in this scope.", .{type_var_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "UNDECLARED TYPE VARIABLE", headline, .runtime_error);
+            var report = try Report.init(allocator, "UNDECLARED TYPE VARIABLE", "", .runtime_error);
+            const owned_type_var_name = try report.addOwnedString(type_var_name);
+            try report.headline.addReflowingText("The type variable ");
+            try report.headline.addType(owned_type_var_name);
+            try report.headline.addReflowingText(" is not declared in this scope.");
             try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1612,9 +1651,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         },
         .not_implemented => |data| blk: {
             const feature = self.getString(data.feature);
-            const headline = try std.fmt.allocPrint(allocator, "This feature is not yet implemented: {s}", .{feature});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "NOT IMPLEMENTED", headline, .fatal);
+            var report = try Report.init(allocator, "NOT IMPLEMENTED", "", .fatal);
+            const owned_feature = try report.addOwnedString(feature);
+            try report.headline.addReflowingText("This feature is not yet implemented: ");
+            try report.headline.addAnnotatedText(owned_feature, .emphasized);
             const owned_filename = try report.addOwnedString(filename);
             const region_info = self.calcRegionInfo(data.region);
             try report.document.addSourceRegion(
@@ -1645,7 +1685,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .if_condition_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "INVALID IF CONDITION", "The condition in this if expression could not be processed.", .runtime_error);
+            var report = try Report.init(allocator, "INVALID IF CONDITION", "", .runtime_error);
+            try report.headline.addReflowingText("The condition in this ");
+            try report.headline.addKeyword("if");
+            try report.headline.addReflowingText(" expression could not be processed.");
             try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
             try report.document.addKeyword("Bool");
             try report.document.addReflowingText(" value (");
@@ -1656,12 +1699,20 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .if_then_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "INVALID IF BRANCH", "The branch in this if expression could not be processed.", .runtime_error);
+            var report = try Report.init(allocator, "INVALID IF BRANCH", "", .runtime_error);
+            try report.headline.addReflowingText("The branch in this ");
+            try report.headline.addKeyword("if");
+            try report.headline.addReflowingText(" expression could not be processed.");
             try report.document.addReflowingText("The branch must contain a valid expression. Check for syntax errors or missing values.");
             break :blk report;
         },
         .if_else_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "INVALID IF BRANCH", "The else branch of this if expression could not be processed.", .runtime_error);
+            var report = try Report.init(allocator, "INVALID IF BRANCH", "", .runtime_error);
+            try report.headline.addReflowingText("The ");
+            try report.headline.addKeyword("else");
+            try report.headline.addReflowingText(" branch of this ");
+            try report.headline.addKeyword("if");
+            try report.headline.addReflowingText(" expression could not be processed.");
             try report.document.addReflowingText("The ");
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
@@ -1669,7 +1720,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .if_expr_without_else => blk: {
-            var report = try Report.init(allocator, "IF EXPRESSION WITHOUT ELSE", "This if has no else branch, but it's being used as an expression (assigned to a variable, passed to a function, etc.).", .runtime_error);
+            var report = try Report.init(allocator, "IF EXPRESSION WITHOUT ELSE", "", .runtime_error);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addKeyword("if");
+            try report.headline.addReflowingText(" has no ");
+            try report.headline.addKeyword("else");
+            try report.headline.addReflowingText(" branch, but it's being used as an expression (assigned to a variable, passed to a function, etc.).");
             try report.document.addReflowingText("You can only use ");
             try report.document.addKeyword("if");
             try report.document.addReflowingText(" without ");
@@ -1720,10 +1776,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const new_region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The name {s} is being redeclared in this scope.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "DUPLICATE DEFINITION", headline, .warning);
+            var report = try Report.init(allocator, "DUPLICATE DEFINITION", "", .warning);
             const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is being redeclared in this scope.");
 
             // Show where the new declaration is
             try report.document.addReflowingText("The redeclaration is here:");
@@ -1794,7 +1851,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .var_across_function_boundary => blk: {
-            var report = try Report.init(allocator, "VAR REASSIGNMENT ERROR", "Cannot reassign a var from outside the function where it was declared.", .runtime_error);
+            var report = try Report.init(allocator, "VAR REASSIGNMENT ERROR", "", .runtime_error);
+            try report.headline.addReflowingText("Cannot reassign a ");
+            try report.headline.addKeyword("var");
+            try report.headline.addReflowingText(" from outside the function where it was declared.");
             try report.document.addReflowingText("Variables declared with ");
             try report.document.addKeyword("var");
             try report.document.addReflowingText(" can only be reassigned within the same function scope.");
@@ -1810,9 +1870,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             // Extract the literal text from the source
             const literal_text = self.getSource(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "This floating-point literal cannot be used in a pattern match: {s}", .{literal_text});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", headline, .runtime_error);
+            var report = try Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", "", .runtime_error);
+            const owned_literal = try report.addOwnedString(literal_text);
+            try report.headline.addText("This floating-point literal cannot be used in a pattern match: ");
+            try report.headline.addInlineCode(owned_literal);
 
             try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
             try report.document.addInlineCode("Dec");
@@ -1847,9 +1908,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type {s} is not exposed by the module {s}.", .{ type_name_bytes, module_name_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "TYPE NOT EXPOSED", headline, .runtime_error);
+            var report = try Report.init(allocator, "TYPE NOT EXPOSED", "", .runtime_error);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addText("The type ");
+            try report.headline.addInlineCode(type_name);
+            try report.headline.addReflowingText(" is not exposed by the module ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("You're attempting to use this type here:");
             try report.document.addLineBreak();
@@ -1870,10 +1936,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const exposed_type_bytes = self.getIdent(data.exposed_type);
             const private_type_bytes = self.getIdent(data.private_type);
 
-            const headline = try std.fmt.allocPrint(allocator, "The exposed type {s} refers to {s}, but {s} is private to this module.", .{ exposed_type_bytes, private_type_bytes, private_type_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "PRIVATE TYPE IN EXPOSED TYPE", headline, .warning);
+            var report = try Report.init(allocator, "PRIVATE TYPE IN EXPOSED TYPE", "", .warning);
             const exposed_type = try report.addOwnedString(exposed_type_bytes);
+            const private_type = try report.addOwnedString(private_type_bytes);
+            try report.headline.addReflowingText("The exposed type ");
+            try report.headline.addType(exposed_type);
+            try report.headline.addReflowingText(" refers to ");
+            try report.headline.addType(private_type);
+            try report.headline.addReflowingText(", but ");
+            try report.headline.addType(private_type);
+            try report.headline.addReflowingText(" is private to this module.");
 
             try report.document.addReflowingText("Other modules can see ");
             try report.document.addType(exposed_type);
@@ -1912,10 +1984,19 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const field_name_bytes = self.getIdent(data.field_name);
             const private_type_bytes = self.getIdent(data.private_type);
 
-            const headline = try std.fmt.allocPrint(allocator, "The {s} field of {s} refers to {s}, but {s} is private to this module.", .{ field_name_bytes, exposed_type_bytes, private_type_bytes, private_type_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "PRIVATE TYPE IN EXPOSED FIELD", headline, .warning);
+            var report = try Report.init(allocator, "PRIVATE TYPE IN EXPOSED FIELD", "", .warning);
             const exposed_type = try report.addOwnedString(exposed_type_bytes);
+            const field_name = try report.addOwnedString(field_name_bytes);
+            const private_type = try report.addOwnedString(private_type_bytes);
+            try report.headline.addReflowingText("The ");
+            try report.headline.addUnqualifiedSymbol(field_name);
+            try report.headline.addReflowingText(" field of ");
+            try report.headline.addType(exposed_type);
+            try report.headline.addReflowingText(" refers to ");
+            try report.headline.addType(private_type);
+            try report.headline.addReflowingText(", but ");
+            try report.headline.addType(private_type);
+            try report.headline.addReflowingText(" is private to this module.");
 
             try report.document.addReflowingText("Other modules can see this field because ");
             try report.document.addType(exposed_type);
@@ -1953,9 +2034,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type {s} is qualified by the module {s}, but that module was not found in this Roc project.", .{ type_name_bytes, module_name_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MODULE NOT FOUND", headline, .runtime_error);
+            var report = try Report.init(allocator, "MODULE NOT FOUND", "", .runtime_error);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addText("The type ");
+            try report.headline.addInlineCode(type_name);
+            try report.headline.addReflowingText(" is qualified by the module ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(", but that module was not found in this Roc project.");
 
             try report.document.addReflowingText("You're attempting to use this type here:");
             try report.document.addLineBreak();
@@ -1973,9 +2059,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .value_not_exposed => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The value {s} is not exposed by the module {s}.", .{ self.getIdent(data.value_name), self.getIdent(data.module_name) });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "VALUE NOT EXPOSED", headline, .runtime_error);
+            var report = try Report.init(allocator, "VALUE NOT EXPOSED", "", .runtime_error);
+            try report.headline.addText("The value ");
+            try report.headline.addInlineCode(self.getIdent(data.value_name));
+            try report.headline.addReflowingText(" is not exposed by the module ");
+            try report.headline.addInlineCode(self.getIdent(data.module_name));
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("You're attempting to use this value here:");
             try report.document.addLineBreak();
@@ -2031,9 +2120,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "The module {s} was not found in this Roc project.", .{module_name_bytes});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MODULE NOT FOUND", headline, .runtime_error);
+            var report = try Report.init(allocator, "MODULE NOT FOUND", "", .runtime_error);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addText("The module ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(" was not found in this Roc project.");
 
             try report.document.addReflowingText("You're attempting to use this module here:");
             try report.document.addLineBreak();
@@ -2053,9 +2144,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "There is no module with the name {s} imported into this Roc file.", .{module_name_bytes});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MODULE NOT IMPORTED", headline, .runtime_error);
+            var report = try Report.init(allocator, "MODULE NOT IMPORTED", "", .runtime_error);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addText("There is no module with the name ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(" imported into this Roc file.");
 
             try report.document.addReflowingText("You're attempting to use this module here:");
             try report.document.addLineBreak();
@@ -2076,14 +2169,24 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const parent_bytes = self.getIdent(data.parent_name);
             const nested_bytes = self.getIdent(data.nested_name);
 
-            // Say "also named" if the parent and nested types are equal, e.g. `Foo.Foo` - when
-            // this happens it can be kind of a confusing message if the message just says
-            // "Foo is in scope, but it doesn't have a nested type named Foo" compared to
-            // "Foo is in scope, but it doesn't have a nested type that's also named Foo"
-            const also_named = if (std.mem.eql(u8, parent_bytes, nested_bytes)) "that's also " else "";
-            const headline = try std.fmt.allocPrint(allocator, "{s} is in scope, but it doesn't have a nested type {s}named {s}.", .{ parent_bytes, also_named, nested_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MISSING NESTED TYPE", headline, .runtime_error);
+            var report = try Report.init(allocator, "MISSING NESTED TYPE", "", .runtime_error);
+            const parent_name = try report.addOwnedString(parent_bytes);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.headline.addInlineCode(parent_name);
+            try report.headline.addReflowingText(" is in scope, but it doesn't have a nested type ");
+
+            if (std.mem.eql(u8, parent_bytes, nested_bytes)) {
+                // Say "also named" if the parent and nested types are equal, e.g. `Foo.Foo` - when
+                // this happens it can be kind of a confusing message if the message just says
+                // "Foo is in scope, but it doesn't have a nested type named Foo" compared to
+                // "Foo is in scope, but it doesn't have a nested type that's also named Foo"
+                try report.headline.addReflowingText("that's also ");
+            }
+
+            try report.headline.addReflowingText("named ");
+            try report.headline.addInlineCode(nested_name);
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("It's referenced here:");
             try report.document.addLineBreak();
@@ -2104,13 +2207,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const parent_bytes = self.getIdent(data.parent_name);
             const nested_bytes = self.getIdent(data.nested_name);
 
-            // First line: "Foo.bar does not exist."
-            const headline = try std.fmt.allocPrint(allocator, "{s}.{s} does not exist.", .{ parent_bytes, nested_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "DOES NOT EXIST", headline, .runtime_error);
+            var report = try Report.init(allocator, "DOES NOT EXIST", "", .runtime_error);
 
             const parent_name = try report.addOwnedString(parent_bytes);
             const nested_name = try report.addOwnedString(nested_bytes);
+
+            // First line: "Foo.bar does not exist."
+            const full_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ parent_bytes, nested_bytes });
+            defer allocator.free(full_name);
+            const owned_full_name = try report.addOwnedString(full_name);
+            try report.headline.addInlineCode(owned_full_name);
+            try report.headline.addReflowingText(" does not exist.");
 
             // Second line: "Foo is in scope, but it has no associated bar."
             try report.document.addInlineCode(parent_name);
@@ -2138,11 +2245,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const type_bytes = self.getIdent(data.type_name);
 
-            // "The type `Foo` is used in a record builder expression, but does not implement `map2`:"
-            const headline = try std.fmt.allocPrint(allocator, "The type {s} is used in a record builder expression, but does not implement map2:", .{type_bytes});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "RECORD BUILDER NOT SUPPORTED", headline, .runtime_error);
+            var report = try Report.init(allocator, "RECORD BUILDER NOT SUPPORTED", "", .runtime_error);
             const type_name = try report.addOwnedString(type_bytes);
+
+            // "The type `Foo` is used in a record builder expression, but does not implement `map2`:"
+            try report.headline.addReflowingText("The type ");
+            try report.headline.addInlineCode(type_name);
+            try report.headline.addReflowingText(" is used in a record builder expression, but does not implement ");
+            try report.headline.addInlineCode("map2");
+            try report.headline.addReflowingText(":");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2166,9 +2277,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .too_many_exports => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "This module exposes {d} values, which exceeds the compiler limit.", .{data.count});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "TOO MANY EXPORTS", headline, .runtime_error);
+            const count_text = try std.fmt.allocPrint(allocator, "{d}", .{data.count});
+            defer allocator.free(count_text);
+
+            var report = try Report.init(allocator, "TOO MANY EXPORTS", "", .runtime_error);
+            const owned_count = try report.addOwnedString(count_text);
+
+            try report.headline.addReflowingText("This module exposes ");
+            try report.headline.addInlineCode(owned_count);
+            try report.headline.addReflowingText(" values, which exceeds the compiler limit.");
 
             try report.document.addReflowingText("The export list starts here:");
             try report.document.addLineBreak();
@@ -2186,7 +2303,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", "You cannot define a where clause inside a type declaration.", .warning);
+            var report = try Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", "", .warning);
+            try report.headline.addText("You cannot define a ");
+            try report.headline.addInlineCode("where");
+            try report.headline.addReflowingText(" clause inside a type declaration.");
 
             try report.document.addReflowingText("You're attempting do this here:");
             try report.document.addLineBreak();
@@ -2204,7 +2324,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .open_ext_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", "You cannot use a .. inside a type declaration:", .warning);
+            var report = try Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", "", .warning);
+            try report.headline.addText("You cannot use a ");
+            try report.headline.addInlineCode("..");
+            try report.headline.addReflowingText(" inside a type declaration:");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2227,7 +2350,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .unnamed_field_not_allowed_in_structural_record => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD", "Unnamed fields (written _ or _name) are only allowed in nominal record type declarations, not in structural record types:", .runtime_error);
+            var report = try Report.init(allocator, "UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD", "", .runtime_error);
+            try report.headline.addReflowingText("Unnamed fields (written ");
+            try report.headline.addInlineCode("_");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("_name");
+            try report.headline.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types:");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2295,9 +2423,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "This file is named {s}.roc, and contains a type alias {s}.", .{ module_name_bytes, module_name_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "TYPE MODULE REQUIRES NOMINAL TYPE", headline, .runtime_error);
+            var report = try Report.init(allocator, "TYPE MODULE REQUIRES NOMINAL TYPE", "", .runtime_error);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addText("This file is named ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addText(".roc, and contains a type alias ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("Type modules must use nominal types (");
             try report.document.addInlineCode(":=");
@@ -2350,7 +2482,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .default_app_missing_main => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "MISSING MAIN! FUNCTION", "Default app modules must have a main! function.", .runtime_error);
+            var report = try Report.init(allocator, "MISSING MAIN! FUNCTION", "", .runtime_error);
+            try report.headline.addReflowingText("Default app modules must have a ");
+            try report.headline.addInlineCode("main!");
+            try report.headline.addReflowingText(" function.");
 
             try report.document.addText("No ");
             try report.document.addInlineCode("main!");
@@ -2377,7 +2512,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .default_app_wrong_arity => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "MAIN! SHOULD TAKE 1 ARGUMENT", "main! is defined but has the wrong number of arguments. main! should take 1 argument.", .runtime_error);
+            var report = try Report.init(allocator, "MAIN! SHOULD TAKE 1 ARGUMENT", "", .runtime_error);
+            try report.headline.addInlineCode("main!");
+            try report.headline.addReflowingText(" is defined but has the wrong number of arguments. ");
+            try report.headline.addInlineCode("main!");
+            try report.headline.addReflowingText(" should take 1 argument.");
 
             const arity_msg = try std.fmt.allocPrint(allocator, "{d}", .{data.arity});
             defer allocator.free(arity_msg);
@@ -2491,7 +2630,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .module_header_deprecated => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "MODULE HEADER DEPRECATED", "The module header is deprecated.", .warning);
+            var report = try Report.init(allocator, "MODULE HEADER DEPRECATED", "", .warning);
+            try report.headline.addReflowingText("The ");
+            try report.headline.addInlineCode("module");
+            try report.headline.addReflowingText(" header is deprecated.");
 
             try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
             try report.document.addLineBreak();
@@ -2519,10 +2661,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const module_name_bytes = self.getIdent(data.module_name);
 
-            const headline = try std.fmt.allocPrint(allocator, "Redundantly exposing {s} when importing {s}.", .{ type_name_bytes, module_name_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "REDUNDANT EXPOSE", headline, .warning);
+            var report = try Report.init(allocator, "REDUNDANT EXPOSE", "", .warning);
             const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            try report.headline.addReflowingText("Redundantly exposing ");
+            try report.headline.addInlineCode(type_name);
+            try report.headline.addReflowingText(" when importing ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("The type ");
             try report.document.addInlineCode(type_name);
@@ -2552,9 +2698,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const alias_bytes = self.getIdent(data.alias);
 
-            const headline = try std.fmt.allocPrint(allocator, "Cannot rename {s} to {s} in the exposing clause.", .{ type_name_bytes, alias_bytes });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "INVALID TYPE RENAME", headline, .runtime_error);
+            var report = try Report.init(allocator, "INVALID TYPE RENAME", "", .runtime_error);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const alias = try report.addOwnedString(alias_bytes);
+            try report.headline.addReflowingText("Cannot rename ");
+            try report.headline.addInlineCode(type_name);
+            try report.headline.addReflowingText(" to ");
+            try report.headline.addInlineCode(alias);
+            try report.headline.addReflowingText(" in the exposing clause.");
 
             try report.document.addReflowingText("To rename both the module and its main type, use ");
             try report.document.addInlineCode("as");
@@ -2582,9 +2733,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            const headline = try std.fmt.allocPrint(allocator, "The name {s} is already defined in this scope.", .{ident_name});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "SHADOWING", headline, .runtime_error);
+            var report = try Report.init(allocator, "SHADOWING", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is already defined in this scope.");
             try report.document.addReflowingText("Choose a different name for this identifier.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -2602,7 +2755,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .break_outside_loop => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "BREAK OUTSIDE LOOP", "The break statement can only be used inside loops like while or for to exit the loop early.", .runtime_error);
+            var report = try Report.init(allocator, "BREAK OUTSIDE LOOP", "", .runtime_error);
+            try report.headline.addReflowingText("The ");
+            try report.headline.addAnnotated("break", .inline_code);
+            try report.headline.addReflowingText(" statement can only be used inside loops like ");
+            try report.headline.addAnnotated("while", .inline_code);
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addAnnotated("for", .inline_code);
+            try report.headline.addReflowingText(" to exit the loop early.");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -2617,7 +2777,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .infinite_loop_never_exits => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "INFINITE LOOP NEVER EXITS", "This infinite loop has no return, ?, crash, or break that exits this loop, so it will run forever and hang the program.", .warning);
+            var report = try Report.init(allocator, "INFINITE LOOP NEVER EXITS", "", .warning);
+            try report.headline.addReflowingText("This infinite loop has no ");
+            try report.headline.addAnnotated("return", .inline_code);
+            try report.headline.addReflowingText(", ");
+            try report.headline.addAnnotated("?", .inline_code);
+            try report.headline.addReflowingText(", ");
+            try report.headline.addAnnotated("crash", .inline_code);
+            try report.headline.addReflowingText(", or ");
+            try report.headline.addAnnotated("break", .inline_code);
+            try report.headline.addReflowingText(" that exits this loop, so it will run forever and hang the program.");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -2634,11 +2803,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = switch (data.context) {
                 .try_suffix => r: {
-                    const r = try Report.init(allocator, "TRY OPERATOR OUTSIDE FUNCTION", "The ? operator can only be used inside function bodies because it can cause an early return.", .runtime_error);
+                    var r = try Report.init(allocator, "TRY OPERATOR OUTSIDE FUNCTION", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("?", .inline_code);
+                    try r.headline.addReflowingText(" operator can only be used inside function bodies because it can cause an early return.");
                     break :r r;
                 },
                 .return_statement, .return_expr => r: {
-                    const r = try Report.init(allocator, "RETURN OUTSIDE FUNCTION", "The return keyword can only be used inside function bodies.", .runtime_error);
+                    var r = try Report.init(allocator, "RETURN OUTSIDE FUNCTION", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("return", .inline_code);
+                    try r.headline.addReflowingText(" keyword can only be used inside function bodies.");
                     break :r r;
                 },
             };
@@ -2659,10 +2834,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const other_region_info = self.calcRegionInfo(data.other_region);
 
-            const headline = try std.fmt.allocPrint(allocator, "The type alias {s} and {s} form a recursive cycle.", .{ type_name, other_type_name });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "MUTUALLY RECURSIVE TYPE ALIASES", headline, .runtime_error);
+            var report = try Report.init(allocator, "MUTUALLY RECURSIVE TYPE ALIASES", "", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
+            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addType(owned_type_name);
+            try report.headline.addReflowingText(" and ");
+            try report.headline.addType(owned_other_name);
+            try report.headline.addReflowingText(" form a recursive cycle.");
 
             try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
             try report.document.addReflowingText("If you need recursive types, use nominal types (");
@@ -2727,7 +2906,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .range_op_chained => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "CHAINED RANGE", "Range operators can't be chained. Write a single range instead, like a..<b or a..=b.", .runtime_error);
+            var report = try Report.init(allocator, "CHAINED RANGE", "", .runtime_error);
+            try report.headline.addReflowingText("Range operators can't be chained. Write a single range instead, like ");
+            try report.headline.addInlineCode("a..<b");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("a..=b");
+            try report.headline.addReflowingText(".");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(

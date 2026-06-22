@@ -32,7 +32,7 @@ But the function needs the first argument to be:
     Dec
 ---
 **UNDEFINED VARIABLE**
-Nothing is named b in this scope.
+Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **repl:3:22:3:23:**

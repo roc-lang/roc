@@ -9,7 +9,7 @@ type=repl
 ~~~
 # OUTPUT
 **UNDEFINED VARIABLE**
-Nothing is named lst in this scope.
+Nothing is named `lst` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **repl:1:1:1:4:**

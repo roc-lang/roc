@@ -23,9 +23,13 @@ const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
-    /// One-sentence summary shown in the report's headline slot (the box's top
-    /// edge). Owned by the report.
-    headline: []const u8 = "",
+    /// One-sentence summary shown in the report's headline slot: the box's top
+    /// edge in the terminal/snapshot layout, or a line under the title in the
+    /// markdown/HTML/LSP renderers. Rich content, so inline code, type names,
+    /// and operators keep their styling. Builders with a plain headline pass it
+    /// as the `headline` string to `init`; builders that need inline styling
+    /// pass `""` and add to this document directly.
+    headline: Document,
     severity: Severity,
     document: Document,
     allocator: Allocator,
@@ -34,13 +38,15 @@ pub const Report = struct {
     pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
         var report = Report{
             .title = title,
-            .headline = "",
+            .headline = Document.init(allocator),
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
             .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
-        report.headline = try report.addOwnedString(headline);
+        if (headline.len > 0) {
+            try report.headline.addReflowingText(headline);
+        }
         return report;
     }
 
@@ -49,6 +55,7 @@ pub const Report = struct {
             self.allocator.free(@constCast(owned_string));
         }
         self.owned_strings.deinit();
+        self.headline.deinit();
         self.document.deinit();
     }
 

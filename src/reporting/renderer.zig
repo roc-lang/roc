@@ -81,8 +81,8 @@ pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, con
     try writer.writeAll("**");
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
-    if (report.headline.len > 0) {
-        try writer.writeAll(report.headline);
+    if (report.headline.elementCount() > 0) {
+        try renderDocumentToMarkdown(&report.headline, writer, config);
         try writer.writeByte('\n');
     }
     try renderDocumentToMarkdown(&report.document, writer, config);
@@ -252,8 +252,13 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     var summary_buf = std.array_list.Managed(u8).init(gpa);
     defer summary_buf.deinit();
     var below_start: usize = 0;
-    var summary: []const u8 = report.headline;
-    if (report.headline.len == 0) {
+    if (report.headline.elementCount() > 0) {
+        // The headline is rich content; flatten it to plain text for the gray
+        // top edge (which doesn't carry inline styling).
+        try collectPlainText(report.headline.elements.items, &summary_buf);
+    } else {
+        // Fallback: derive the summary from the lead text up to the first line
+        // break before the region (reports with an empty headline).
         var summary_end = region.index;
         var i: usize = 0;
         while (i < region.index) : (i += 1) {
@@ -263,9 +268,9 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             }
         }
         try collectPlainText(elements[0..summary_end], &summary_buf);
-        summary = std.mem.trim(u8, summary_buf.items, " ");
         below_start = if (summary_end < region.index) summary_end + 1 else region.index;
     }
+    const summary = std.mem.trim(u8, summary_buf.items, " ");
 
     const title = report.title;
     const total: usize = config.getMaxLineWidth();
@@ -555,10 +560,13 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
     try writer.writeAll(report.title);
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
-    if (report.headline.len > 0) {
+    if (report.headline.elementCount() > 0) {
         try writer.writeByte('\n');
+        var hbuf = std.Io.Writer.Allocating.init(report.document.allocator);
+        defer hbuf.deinit();
+        try renderDocumentToTerminal(&report.headline, &hbuf.writer, palette, config);
         const width: usize = config.getMaxLineWidth();
-        var it = std.mem.splitScalar(u8, report.headline, '\n');
+        var it = std.mem.splitScalar(u8, hbuf.written(), '\n');
         while (it.next()) |ln| {
             try wrapAndEmitBelowLine(writer, ln, 0, width);
         }
@@ -581,8 +589,8 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
     try writeEscapedHtml(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
-    if (report.headline.len > 0) {
-        try writeEscapedHtml(writer, report.headline);
+    if (report.headline.elementCount() > 0) {
+        try renderDocumentToHtml(&report.headline, writer, config);
         try writer.writeAll("<br>\n");
     }
     try renderDocumentToHtml(&report.document, writer, config);
@@ -594,8 +602,8 @@ pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: 
     // LSP typically wants plain text without formatting
     try writer.writeAll(report.title);
     try writer.writeAll("\n\n");
-    if (report.headline.len > 0) {
-        try writer.writeAll(report.headline);
+    if (report.headline.elementCount() > 0) {
+        try renderDocumentToLsp(&report.headline, writer, config);
         try writer.writeByte('\n');
     }
     try renderDocumentToLsp(&report.document, writer, config);

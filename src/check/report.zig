@@ -24,6 +24,7 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
+const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
@@ -381,25 +382,25 @@ pub const ReportBuilder = struct {
             return result;
         }
 
-        /// Render a single Doc fragment to the report.
-        fn render(doc: Doc, builder: *ReportBuilder, report: *Report) Allocator.Error!void {
+        /// Render a single Doc fragment into `out` (a document owned by `report`).
+        fn render(doc: Doc, builder: *ReportBuilder, report: *Report, out: *Document) Allocator.Error!void {
             switch (doc.type_) {
                 .bytes => |b| {
                     if (doc.annotation) |annotation| {
-                        try report.document.addAnnotated(b, annotation);
+                        try out.addAnnotated(b, annotation);
                     } else {
-                        try report.document.addReflowingText(b);
+                        try out.addReflowingText(b);
                     }
                 },
                 .link => |b| {
-                    try report.document.addLink(b);
+                    try out.addLink(b);
                 },
                 .ident => |i| {
                     const ident_bytes = try report.addOwnedString(builder.can_ir.getIdent(i));
                     if (doc.annotation) |annotation| {
-                        try report.document.addAnnotated(ident_bytes, annotation);
+                        try out.addAnnotated(ident_bytes, annotation);
                     } else {
-                        try report.document.addReflowingText(ident_bytes);
+                        try out.addReflowingText(ident_bytes);
                     }
                 },
                 .type_ident => |i| {
@@ -407,25 +408,25 @@ pub const ReportBuilder = struct {
                     const display = types_mod.TypeWriter.stripBuiltinQualification(builder.can_ir.getIdent(mapped));
                     const ident_bytes = try report.addOwnedString(display);
                     if (doc.annotation) |annotation| {
-                        try report.document.addAnnotated(ident_bytes, annotation);
+                        try out.addAnnotated(ident_bytes, annotation);
                     } else {
-                        try report.document.addReflowingText(ident_bytes);
+                        try out.addReflowingText(ident_bytes);
                     }
                 },
                 .num_ord => |ord| {
                     const ord_bytes = try builder.getOrdinalOwned(report, ord);
                     if (doc.annotation) |annotation| {
-                        try report.document.addAnnotated(ord_bytes, annotation);
+                        try out.addAnnotated(ord_bytes, annotation);
                     } else {
-                        try report.document.addReflowingText(ord_bytes);
+                        try out.addReflowingText(ord_bytes);
                     }
                 },
                 .num => |n| {
                     const num_bytes = try builder.getNumOwned(report, n);
                     if (doc.annotation) |annotation| {
-                        try report.document.addAnnotated(num_bytes, annotation);
+                        try out.addAnnotated(num_bytes, annotation);
                     } else {
-                        try report.document.addReflowingText(num_bytes);
+                        try out.addReflowingText(num_bytes);
                     }
                 },
             }
@@ -445,38 +446,18 @@ pub const ReportBuilder = struct {
         fn renderSlice(docs: []const Doc, builder: *ReportBuilder, report: *Report) Allocator.Error!void {
             for (docs, 0..) |doc, i| {
                 if (i != 0 and doc.preceding_space) try report.document.addReflowingText(" ");
-                try doc.render(builder, report);
+                try doc.render(builder, report, &report.document);
             }
         }
 
-        /// Flatten a slice of Doc fragments to a plain-text string, mirroring the
-        /// spacing and text content `renderSlice` would produce (without any
-        /// annotations). The caller owns the returned buffer.
-        fn renderSliceOwned(docs: []const Doc, builder: *ReportBuilder) Allocator.Error![]u8 {
-            var buf = std.array_list.Managed(u8).init(builder.gpa);
-            defer buf.deinit();
+        /// Render a slice of Doc fragments into `out` (a document owned by
+        /// `report`), joining with spaces — like `renderSlice`, but targeting an
+        /// arbitrary document such as `report.headline` so inline styling is kept.
+        fn renderSliceInto(docs: []const Doc, builder: *ReportBuilder, report: *Report, out: *Document) Allocator.Error!void {
             for (docs, 0..) |doc, i| {
-                if (i != 0 and doc.preceding_space) try buf.append(' ');
-                switch (doc.type_) {
-                    .bytes => |b| try buf.appendSlice(b),
-                    // Links render to a `.link` element which contributes no
-                    // plain text to a headline.
-                    .link => {},
-                    .ident => |id| try buf.appendSlice(builder.can_ir.getIdent(id)),
-                    .type_ident => |id| {
-                        const mapped = builder.import_mapping.get(id) orelse id;
-                        const display = types_mod.TypeWriter.stripBuiltinQualification(builder.can_ir.getIdent(mapped));
-                        try buf.appendSlice(display);
-                    },
-                    .num_ord => |ord| try ReportBuilder.appendOrdinal(&buf, ord),
-                    .num => |n| {
-                        var tmp: [20]u8 = undefined;
-                        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
-                        try buf.appendSlice(formatted);
-                    },
-                }
+                if (i != 0 and doc.preceding_space) try out.addReflowingText(" ");
+                try doc.render(builder, report, out);
             }
-            return buf.toOwnedSlice();
         }
 
         pub const ArrayList = std.array_list.Managed(Doc);
@@ -495,10 +476,9 @@ pub const ReportBuilder = struct {
         expected_snapshot: SnapshotContentIdx,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(title, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
+        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
         errdefer report.deinit();
+        try D.renderSliceInto(title, self, &report, &report.headline);
 
         // Add the region to highlight
         switch (region) {
@@ -568,10 +548,9 @@ pub const ReportBuilder = struct {
         actual_snapshot: SnapshotContentIdx,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(title, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
+        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
         errdefer report.deinit();
+        try D.renderSliceInto(title, self, &report, &report.headline);
 
         // Add the region to highlight
         switch (region) {
@@ -605,10 +584,9 @@ pub const ReportBuilder = struct {
         title: []const Doc,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(title, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
+        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
         errdefer report.deinit();
+        try D.renderSliceInto(title, self, &report, &report.headline);
 
         // Add the region to highlight
         switch (region) {
@@ -1484,17 +1462,19 @@ pub const ReportBuilder = struct {
             }
         };
 
-        const headline_prefix = if (ctx.fn_name) |fn_name|
-            try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, title, "", .runtime_error);
+        errdefer report.deinit();
+        if (ctx.fn_name) |fn_name| {
+            try D.renderSliceInto(&.{
                 D.bytes("The"),
                 D.ident(fn_name).withAnnotation(.inline_code),
-            }, self)
-        else
-            try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
                 D.bytes("This"),
-            }, self);
-        defer self.gpa.free(headline_prefix);
-        const headline_suffix = try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        }
+        try D.renderSliceInto(&.{
             D.bytes(" function expects"),
             D.num(ctx.expected_args),
             D.bytes(pluralize(ctx.expected_args, "argument", "arguments")),
@@ -1502,13 +1482,7 @@ pub const ReportBuilder = struct {
             D.bytes("but it got"),
             D.num(ctx.actual_args),
             D.bytes("instead:"),
-        }, self);
-        defer self.gpa.free(headline_suffix);
-        const headline = try std.fmt.allocPrint(self.gpa, "{s}{s}", .{ headline_prefix, headline_suffix });
-        defer self.gpa.free(headline);
-
-        var report = try Report.init(self.gpa, title, headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Add region
         try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
@@ -1885,7 +1859,9 @@ pub const ReportBuilder = struct {
         else
             data.type_name;
 
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, title, "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The type"),
             D.ident(type_name_ident).withAnnotation(.type_variable),
             D.bytes("expects"),
@@ -1894,10 +1870,7 @@ pub const ReportBuilder = struct {
             D.bytes("but got"),
             D.num(data.num_actual_args),
             D.bytes("instead."),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, title, headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -1923,14 +1896,13 @@ pub const ReportBuilder = struct {
         else
             data.type_name;
 
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "RECURSIVE ALIAS", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The type alias"),
             D.ident(type_name_ident).withAnnotation(.type_variable),
             D.bytes("references itself, which is not allowed:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "RECURSIVE ALIAS", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -1960,14 +1932,13 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: UnsupportedAliasWhereClause,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "UNSUPPORTED WHERE CLAUSE", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The where clause syntax"),
             D.ident(data.alias_name).withAnnotation(.type_variable),
             D.bytes("is not supported:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "UNSUPPORTED WHERE CLAUSE", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -1997,14 +1968,13 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherNotNominal,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("This"),
             D.ident(data.method_name).withAnnotation(.emphasized),
             D.bytes("method is being called on a value whose type doesn't have that method:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING METHOD", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
@@ -2065,23 +2035,23 @@ pub const ReportBuilder = struct {
         const is_from_binop = data.origin == .desugared_binop;
         const mb_operator = self.getOperatorForMethod(data.method_name);
 
-        const headline = if (is_from_binop and mb_operator != null)
-            try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        errdefer report.deinit();
+        if (is_from_binop and mb_operator != null) {
+            try D.renderSliceInto(&.{
                 D.bytes("The value before this"),
                 D.bytes(mb_operator.?).withAnnotation(.emphasized),
                 D.bytes("operator has a type that doesn't have a"),
                 D.ident(data.method_name).withAnnotation(.emphasized),
                 D.bytes("method:"),
-            }, self)
-        else
-            try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
                 D.bytes("This"),
                 D.ident(data.method_name).withAnnotation(.emphasized),
                 D.bytes("method is being called on a value whose type doesn't have that method:"),
-            }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING METHOD", headline, .runtime_error);
-        errdefer report.deinit();
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
@@ -2199,28 +2169,28 @@ pub const ReportBuilder = struct {
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
 
-        const headline = if (is_equality) blk: {
+        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        errdefer report.deinit();
+        if (is_equality) {
             const op = if (data.binop_negated) "!=" else operator orelse "==";
-            break :blk try D.renderSliceOwned(&.{
+            try D.renderSliceInto(&.{
                 D.bytes("This is trying to compare values with"),
                 D.bytes(op).withAnnotation(.inline_code),
                 D.bytes(", but their type is an unresolved type variable, which has no methods.").withNoPrecedingSpace(),
-            }, self);
-        } else if (data.is_binop and operator != null)
-            try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        } else if (data.is_binop and operator != null) {
+            try D.renderSliceInto(&.{
                 D.bytes("This is trying to use the"),
                 D.bytes(operator.?).withAnnotation(.inline_code),
                 D.bytes("operator on a value whose type is an unresolved type variable, which has no methods."),
-            }, self)
-        else
-            try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
                 D.bytes("This is trying to dispatch a method named"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("on an unresolved type variable, but unresolved type variables have no methods."),
-            }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING METHOD", headline, .runtime_error);
-        errdefer report.deinit();
+            }, self, &report, &report.headline);
+        }
 
         // Add source region highlighting on the offending dispatch call (the
         // primary region).
@@ -2273,14 +2243,13 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: RecursiveDispatch,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "RECURSIVE DISPATCH", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("This"),
             D.ident(data.method_name).withAnnotation(.emphasized),
             D.bytes("dispatch would have to call itself to satisfy its own type:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "RECURSIVE DISPATCH", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
@@ -2449,14 +2418,13 @@ pub const ReportBuilder = struct {
             .quote, .interpolation => "Nothing in this definition's type determines the type of this string literal, so it was given the default type",
         };
 
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "LITERAL DEFAULTED", "", .warning);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes(intro),
             D.bytes(self.getFormattedString(data.default_snapshot)).withAnnotation(.emphasized),
             D.bytes("instead:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "LITERAL DEFAULTED", headline, .warning);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
@@ -2621,14 +2589,13 @@ pub const ReportBuilder = struct {
         const best_suggestion = self.typo_suggestions.items[0];
 
         // Create report directly and render dynamic suggestions inline
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("This record does not have a"),
             D.ident(field_name).withAnnotation(.inline_code),
             D.bytes("field:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Add source highlight
         switch (source_region) {
@@ -2883,17 +2850,16 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: CannotAccessOpaqueNominal,
     ) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("You're attempting to create an instance of"),
             D.ident(data.nominal_type_name).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but it's an"),
             D.bytes("opaque").withAnnotation(.emphasized),
             D.bytes("type:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -3326,19 +3292,19 @@ pub const ReportBuilder = struct {
 
     /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
     fn buildAnonymousRecursionReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
-        const headline = if (data.def_name) |def_name|
-            try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "ANONYMOUS RECURSION", "", .runtime_error);
+        errdefer report.deinit();
+        if (data.def_name) |def_name| {
+            try D.renderSliceInto(&.{
                 D.bytes("I am inferring a recursive type that has no name somewhere in"),
                 D.ident(def_name).withAnnotation(.inline_code),
                 D.bytes(":").withNoPrecedingSpace(),
-            }, self)
-        else
-            try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
                 D.bytes("I am inferring a recursive type that has no name:"),
-            }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "ANONYMOUS RECURSION", headline, .runtime_error);
-        errdefer report.deinit();
+            }, self, &report, &report.headline);
+        }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -3404,17 +3370,16 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
             D.bytes("module to define a type alias named"),
             D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         switch (data.ctx) {
             .not_found => {
@@ -3444,70 +3409,68 @@ pub const ReportBuilder = struct {
 
     fn buildPlatformHostedSection(self: *Self, data: PlatformHostedSection) Allocator.Error!Report {
         const name = self.problems.getExtraString(data.name);
-        const headline = switch (data.reason) {
-            .function_not_in_section => try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "INVALID HOSTED SECTION", "", .runtime_error);
+        errdefer report.deinit();
+        switch (data.reason) {
+            .function_not_in_section => try D.renderSliceInto(&.{
                 D.bytes("This platform's exposed modules declare a hosted function named"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but the platform header's"),
                 D.bytes("hosted").withAnnotation(.inline_code),
                 D.bytes("section has no entry for it. Every hosted function needs an entry mapping a linker symbol to it."),
-            }, self),
-            .unknown_function => try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline),
+            .unknown_function => try D.renderSliceInto(&.{
                 D.bytes("The platform header's"),
                 D.bytes("hosted").withAnnotation(.inline_code),
                 D.bytes("section has an entry for"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but no exposed module declares a hosted function with that name."),
-            }, self),
-            .duplicate_function => try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline),
+            .duplicate_function => try D.renderSliceInto(&.{
                 D.bytes("The platform header's"),
                 D.bytes("hosted").withAnnotation(.inline_code),
                 D.bytes("section maps the hosted function"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes("to more than one linker symbol. Each hosted function takes exactly one entry."),
-            }, self),
-            .duplicate_symbol => try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline),
+            .duplicate_symbol => try D.renderSliceInto(&.{
                 D.bytes("The platform header maps more than one function to the linker symbol"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(".").withNoPrecedingSpace(),
                 D.bytes("Each provides and hosted entry needs a distinct symbol."),
-            }, self),
-            .reserved_symbol => try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline),
+            .reserved_symbol => try D.renderSliceInto(&.{
                 D.bytes("The platform header uses the linker symbol"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but that name is reserved for the Roc runtime. Pick a different symbol."),
-            }, self),
-            .reserved_prefix => try D.renderSliceOwned(&.{
+            }, self, &report, &report.headline),
+            .reserved_prefix => try D.renderSliceInto(&.{
                 D.bytes("The platform header uses the linker symbol"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but the"),
                 D.bytes("roc__").withAnnotation(.inline_code),
                 D.bytes("prefix is reserved for symbols the Roc compiler generates internally. Pick a different symbol."),
-            }, self),
-        };
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "INVALID HOSTED SECTION", headline, .runtime_error);
-        errdefer report.deinit();
+            }, self, &report, &report.headline),
+        }
 
         return report;
     }
 
     fn buildPlatformDefNotFound(self: *Self, data: PlatformDefNotFound) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED DEFINITION", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
             D.bytes("module to export a definition named"),
             D.ident(data.expected_def_ident).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED DEFINITION", headline, .runtime_error);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         switch (data.ctx) {
             .not_found => {
@@ -3863,16 +3826,15 @@ pub const ReportBuilder = struct {
     }
 
     fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "REDUNDANT PATTERN", "", .warning);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The"),
             D.num_ord(data.problem_branch_index + 1),
             D.bytes("branch of this"),
             D.bytes("match").withAnnotation(.keyword),
             D.bytes("is redundant:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "REDUNDANT PATTERN", headline, .warning);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Cast Expr.Idx to Var (they're parallel arrays)
         try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
@@ -3886,16 +3848,15 @@ pub const ReportBuilder = struct {
     }
 
     fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) Allocator.Error!Report {
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "UNMATCHABLE PATTERN", "", .warning);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("The"),
             D.num_ord(data.problem_branch_index + 1),
             D.bytes("branch of this"),
             D.bytes("match").withAnnotation(.keyword),
             D.bytes("can never match:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "UNMATCHABLE PATTERN", headline, .warning);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         // Cast Expr.Idx to Var (they're parallel arrays)
         try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
@@ -3929,14 +3890,13 @@ pub const ReportBuilder = struct {
             .match => "match alternative",
             .if_ => "if branch",
         };
-        const headline = try D.renderSliceOwned(&.{
+        var report = try Report.init(self.gpa, "UNUSED BRANCH", "", .warning);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
             D.bytes("This"),
             D.bytes(noun),
             D.bytes("was not taken during compile-time evaluation:"),
-        }, self);
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "UNUSED BRANCH", headline, .warning);
-        errdefer report.deinit();
+        }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.branch_region);
         try report.document.addSourceRegion(
