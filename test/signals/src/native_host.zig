@@ -68,7 +68,38 @@ const RuntimeMetrics = struct {
     set_text: u64,
     set_value: u64,
     stream_nodes_scanned: u64,
+
+    /// FieldEnum derived from the struct's own fields, so it never drifts.
+    pub const Field = std.meta.FieldEnum(@This());
+
+    /// Increment one counter. The engine writes counters only through this
+    /// method and never reads a counter to drive logic, so a metrics-less host
+    /// can supply `NoMetrics` (whose `bump` compiles to nothing) once the engine
+    /// is generic over its metrics type — see the engine-extraction plan.
+    pub inline fn bump(self: *RuntimeMetrics, comptime field: Field, n: u64) void {
+        @field(self, @tagName(field)) += n;
+    }
 };
+
+/// Zero-size stand-in for `RuntimeMetrics`: every `bump` is a comptime no-op.
+/// The native host keeps the real `RuntimeMetrics`; the browser host will supply
+/// this once the shared engine is generic over its metrics type. Not yet wired.
+const NoMetrics = struct {
+    pub const Field = RuntimeMetrics.Field;
+
+    pub inline fn bump(_: *NoMetrics, comptime _: Field, _: u64) void {}
+};
+
+comptime {
+    std.debug.assert(@sizeOf(NoMetrics) == 0);
+}
+
+test "NoMetrics is a zero-size no-op metrics sink" {
+    try std.testing.expectEqual(@as(usize, 0), @sizeOf(NoMetrics));
+    var metrics: NoMetrics = .{};
+    metrics.bump(.closure_retains, 2);
+    metrics.bump(.nodes_recomputed, 1);
+}
 
 const EventPayloadKind = enum(u64) {
     unit = 1,
@@ -117,7 +148,7 @@ const HostValueCell = struct {
     fn initRetained(value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable, metrics: *RuntimeMetrics) HostValueCell {
         abi.increfErasedCallable(eq, 1);
         abi.increfErasedCallable(drop, 1);
-        metrics.closure_retains += 2;
+        metrics.bump(.closure_retains, 2);
         return .{ .value = value, .eq = eq, .drop = drop };
     }
 
@@ -125,7 +156,7 @@ const HostValueCell = struct {
         const value = host.cloneHostValue(self.value);
         abi.increfErasedCallable(self.eq, 1);
         abi.increfErasedCallable(self.drop, 1);
-        metrics.closure_retains += 2;
+        metrics.bump(.closure_retains, 2);
         return .{ .value = value, .eq = self.eq, .drop = self.drop };
     }
 
@@ -133,7 +164,7 @@ const HostValueCell = struct {
         callErasedHostValueToUnit(roc_host, self.drop, self.value);
         abi.decrefErasedCallable(self.eq, roc_host);
         abi.decrefErasedCallable(self.drop, roc_host);
-        metrics.closure_releases += 2;
+        metrics.bump(.closure_releases, 2);
         self.* = undefined;
     }
 
@@ -256,7 +287,7 @@ const HostBinderBinding = struct {
 
 fn retainHostCallable(callable: abi.RocErasedCallable, metrics: *RuntimeMetrics) abi.RocErasedCallable {
     abi.increfErasedCallable(callable, 1);
-    metrics.closure_retains += 1;
+    metrics.bump(.closure_retains, 1);
     return callable;
 }
 
@@ -383,7 +414,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.init, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 3;
+                metrics.bump(.closure_releases, 3);
             },
             .map => |payload| {
                 payload.input.release(allocator, roc_host, metrics);
@@ -393,7 +424,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 3;
+                metrics.bump(.closure_releases, 3);
             },
             .map2 => |payload| {
                 payload.left.release(allocator, roc_host, metrics);
@@ -404,7 +435,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 3;
+                metrics.bump(.closure_releases, 3);
             },
             .combine => |payload| {
                 for (payload.children) |child| {
@@ -417,7 +448,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.transform, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 3;
+                metrics.bump(.closure_releases, 3);
             },
             .task_source => |payload| {
                 var cached_value = payload.cached_value;
@@ -431,7 +462,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.failed, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 6;
+                metrics.bump(.closure_releases, 6);
             },
             .interval_source => |payload| {
                 var cached_value = payload.cached_value;
@@ -441,7 +472,7 @@ const HostSignalRecord = struct {
                 abi.decrefErasedCallable(payload.tick, roc_host);
                 abi.decrefErasedCallable(payload.eq, roc_host);
                 abi.decrefErasedCallable(payload.drop, roc_host);
-                metrics.closure_releases += 4;
+                metrics.bump(.closure_releases, 4);
             },
         }
 
@@ -832,7 +863,7 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_text_nodes.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_text_nodes.deinit(allocator);
@@ -845,7 +876,7 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_text_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_text_attrs.deinit(allocator);
@@ -855,7 +886,7 @@ const HostNodeDescriptorStream = struct {
         for (self.signal_bool_attrs.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
         self.signal_bool_attrs.deinit(allocator);
@@ -863,7 +894,7 @@ const HostNodeDescriptorStream = struct {
         for (self.on_changes.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.to_cmd, roc_host);
         }
         self.on_changes.deinit(allocator);
@@ -878,11 +909,11 @@ const HostNodeDescriptorStream = struct {
                 abi.decrefBox(@ptrCast(desc.payload_tag), roc_host);
             }
             if (desc.owns_payload_drop) {
-                metrics.closure_releases += 1;
+                metrics.bump(.closure_releases, 1);
                 abi.decrefErasedCallable(desc.payload_drop, roc_host);
             }
             if (desc.owns_transform) {
-                metrics.closure_releases += 1;
+                metrics.bump(.closure_releases, 1);
                 abi.decrefErasedCallable(desc.transform, roc_host);
             }
         }
@@ -894,7 +925,7 @@ const HostNodeDescriptorStream = struct {
         self.scope_sites.deinit(allocator);
 
         for (self.states.items) |desc| {
-            metrics.closure_releases += 3;
+            metrics.bump(.closure_releases, 3);
             abi.decrefErasedCallable(desc.initial, roc_host);
             abi.decrefErasedCallable(desc.eq, roc_host);
             abi.decrefErasedCallable(desc.drop, roc_host);
@@ -904,7 +935,7 @@ const HostNodeDescriptorStream = struct {
         for (self.whens.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.condition.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
             abi.decrefElem(desc.when_false, roc_host);
             abi.decrefElem(desc.when_true, roc_host);
@@ -914,7 +945,7 @@ const HostNodeDescriptorStream = struct {
         for (self.eaches.items) |*desc| {
             desc.cached_value.deinit(roc_host, metrics);
             desc.items.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 8;
+            metrics.bump(.closure_releases, 8);
             abi.decrefErasedCallable(desc.items_to_values, roc_host);
             abi.decrefErasedCallable(desc.key_hash, roc_host);
             abi.decrefErasedCallable(desc.key_of, roc_host);
@@ -1016,13 +1047,13 @@ const HostNodeDescriptorStream = struct {
         self.next_elem_id += 1;
         self.rememberSignalRecordTree(allocator, signal.record);
         abi.increfErasedCallable(read, 1);
-        metrics.closure_retains += 1;
+        metrics.bump(.closure_retains, 1);
         const signal_text_node_index = self.signal_text_nodes.items.len;
 
         self.render_nodes.append(allocator, .{ .elem_id = elem_id, .kind = .signal_text }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
@@ -1035,7 +1066,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
@@ -1059,7 +1090,7 @@ const HostNodeDescriptorStream = struct {
     fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderTextField, signal: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, signal.record);
         abi.increfErasedCallable(read, 1);
-        metrics.closure_retains += 1;
+        metrics.bump(.closure_retains, 1);
         const attr_index = self.signal_text_attrs.items.len;
         self.signal_text_attrs.append(allocator, .{
             .elem_id = elem_id,
@@ -1069,7 +1100,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
@@ -1089,7 +1120,7 @@ const HostNodeDescriptorStream = struct {
     fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, field: RenderBoolField, signal: HostSignalBinding, read: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, signal.record);
         abi.increfErasedCallable(read, 1);
-        metrics.closure_retains += 1;
+        metrics.bump(.closure_retains, 1);
         const attr_index = self.signal_bool_attrs.items.len;
         self.signal_bool_attrs.append(allocator, .{
             .elem_id = elem_id,
@@ -1099,7 +1130,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(read, roc_host);
             std.process.exit(1);
         };
@@ -1109,7 +1140,7 @@ const HostNodeDescriptorStream = struct {
     fn appendOnChange(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, scope_id: u64, signal: HostSignalBinding, to_cmd: abi.RocErasedCallable) void {
         self.rememberSignalRecordTree(allocator, signal.record);
         abi.increfErasedCallable(to_cmd, 1);
-        metrics.closure_retains += 1;
+        metrics.bump(.closure_retains, 1);
         self.on_changes.append(allocator, .{
             .scope_id = scope_id,
             .signal = signal,
@@ -1117,7 +1148,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(to_cmd, roc_host);
             std.process.exit(1);
         };
@@ -1137,7 +1168,7 @@ const HostNodeDescriptorStream = struct {
     fn appendEventWithOwnedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: *RuntimeMetrics, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
         abi.increfErasedCallable(payload_drop, 1);
         abi.increfErasedCallable(transform, 1);
-        metrics.closure_retains += 2;
+        metrics.bump(.closure_retains, 2);
         const event_index = self.events.items.len;
         self.events.append(allocator, .{
             .elem_id = elem_id,
@@ -1150,7 +1181,7 @@ const HostNodeDescriptorStream = struct {
             .transform = transform,
         }) catch {
             abi.decrefBox(@ptrCast(payload_tag), roc_host);
-            metrics.closure_releases += 2;
+            metrics.bump(.closure_releases, 2);
             abi.decrefErasedCallable(payload_drop, roc_host);
             abi.decrefErasedCallable(transform, roc_host);
             std.process.exit(1);
@@ -1182,14 +1213,14 @@ const HostNodeDescriptorStream = struct {
         abi.increfErasedCallable(initial, 1);
         abi.increfErasedCallable(eq, 1);
         abi.increfErasedCallable(drop, 1);
-        metrics.closure_retains += 3;
+        metrics.bump(.closure_retains, 3);
         self.states.append(allocator, .{
             .node_id = node_id,
             .initial = initial,
             .eq = eq,
             .drop = drop,
         }) catch {
-            metrics.closure_releases += 3;
+            metrics.bump(.closure_releases, 3);
             abi.decrefErasedCallable(initial, roc_host);
             abi.decrefErasedCallable(eq, roc_host);
             abi.decrefErasedCallable(drop, roc_host);
@@ -1211,7 +1242,7 @@ const HostNodeDescriptorStream = struct {
         abi.increfErasedCallable(read, 1);
         abi.increfElem(when_false, 1);
         abi.increfElem(when_true, 1);
-        metrics.closure_retains += 1;
+        metrics.bump(.closure_retains, 1);
         self.whens.append(allocator, .{
             .node_id = node_id,
             .condition = condition,
@@ -1221,7 +1252,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_condition = condition;
             owned_condition.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 1;
+            metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(read, roc_host);
             abi.decrefElem(when_false, roc_host);
             abi.decrefElem(when_true, roc_host);
@@ -1239,7 +1270,7 @@ const HostNodeDescriptorStream = struct {
         abi.increfErasedCallable(item_eq, 1);
         abi.increfErasedCallable(item_drop, 1);
         abi.increfErasedCallable(row, 1);
-        metrics.closure_retains += 8;
+        metrics.bump(.closure_retains, 8);
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
@@ -1254,7 +1285,7 @@ const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_items = items;
             owned_items.deinit(allocator, roc_host, metrics);
-            metrics.closure_releases += 8;
+            metrics.bump(.closure_releases, 8);
             abi.decrefErasedCallable(items_to_values, roc_host);
             abi.decrefErasedCallable(key_hash, roc_host);
             abi.decrefErasedCallable(key_of, roc_host);
@@ -2166,7 +2197,7 @@ const HostEnv = struct {
             abi.decrefBox(@ptrCast(desc.payload_tag), self.roc_host.?);
             abi.decrefErasedCallable(desc.payload_drop, self.roc_host.?);
             abi.decrefErasedCallable(desc.transform, self.roc_host.?);
-            self.pending_roc_metrics.closure_releases += 2;
+            self.pending_roc_metrics.bump(.closure_releases, 2);
         }
         self.active_events.items.len = 0;
     }
@@ -2481,7 +2512,7 @@ const HostEnv = struct {
             .rank = rank,
         }) catch std.process.exit(1);
         record.active_graph_id = record_id;
-        self.pending_roc_metrics.active_graph_records_rebuilt += 1;
+        self.pending_roc_metrics.bump(.active_graph_records_rebuilt, 1);
         return record_id;
     }
 
@@ -3070,7 +3101,7 @@ const HostEnv = struct {
     }
 
     fn recordStreamNodesScanned(self: *HostEnv, count: usize) void {
-        self.pending_roc_metrics.stream_nodes_scanned += @intCast(count);
+        self.pending_roc_metrics.bump(.stream_nodes_scanned, @intCast(count));
     }
 
     fn deinitPendingTask(self: *HostEnv, task: *HostPendingTask) void {
@@ -3335,7 +3366,7 @@ const HostEnv = struct {
 
     fn recordScopeCreated(self: *HostEnv) void {
         var metrics = self.pending_roc_metrics;
-        metrics.scopes_created += 1;
+        metrics.bump(.scopes_created, 1);
         self.pending_roc_metrics = metrics;
     }
 
@@ -3416,7 +3447,7 @@ const HostEnv = struct {
         deinitHostScopeStep(&scope.step, roc_host, &self.pending_roc_metrics);
         scope.active = false;
         var metrics = self.pending_roc_metrics;
-        metrics.scopes_disposed += 1;
+        metrics.bump(.scopes_disposed, 1);
         self.pending_roc_metrics = metrics;
     }
 
@@ -3447,7 +3478,7 @@ const HostEnv = struct {
 
     fn recordEachKeyCompare(self: *HostEnv) void {
         var metrics = self.pending_roc_metrics;
-        metrics.each_key_compares += 1;
+        metrics.bump(.each_key_compares, 1);
         self.pending_roc_metrics = metrics;
     }
 
@@ -3577,9 +3608,9 @@ const HostEnv = struct {
         }
 
         var metrics = self.pending_roc_metrics;
-        metrics.rows_reused += match_plan.rows_reused;
-        metrics.rows_created += match_plan.rows_created;
-        metrics.rows_removed += match_plan.rows_removed;
+        metrics.bump(.rows_reused, match_plan.rows_reused);
+        metrics.bump(.rows_created, match_plan.rows_created);
+        metrics.bump(.rows_removed, match_plan.rows_removed);
         self.pending_roc_metrics = metrics;
 
         return .{
@@ -4649,28 +4680,28 @@ const HostEnv = struct {
     fn deinitActiveSignalTextNodeDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
         desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
         desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-        self.pending_roc_metrics.closure_releases += 1;
+        self.pending_roc_metrics.bump(.closure_releases, 1);
         abi.decrefErasedCallable(desc.read, roc_host);
     }
 
     fn deinitActiveSignalTextAttrDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
         desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
         desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-        self.pending_roc_metrics.closure_releases += 1;
+        self.pending_roc_metrics.bump(.closure_releases, 1);
         abi.decrefErasedCallable(desc.read, roc_host);
     }
 
     fn deinitActiveSignalBoolAttrDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeSignalBoolAttrDesc) void {
         desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
         desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-        self.pending_roc_metrics.closure_releases += 1;
+        self.pending_roc_metrics.bump(.closure_releases, 1);
         abi.decrefErasedCallable(desc.read, roc_host);
     }
 
     fn deinitActiveOnChangeDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
         desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
         desc.signal.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-        self.pending_roc_metrics.closure_releases += 1;
+        self.pending_roc_metrics.bump(.closure_releases, 1);
         abi.decrefErasedCallable(desc.to_cmd, roc_host);
     }
 
@@ -4678,7 +4709,7 @@ const HostEnv = struct {
         abi.decrefBox(@ptrCast(desc.payload_tag), roc_host);
         abi.decrefErasedCallable(desc.payload_drop, roc_host);
         abi.decrefErasedCallable(desc.transform, roc_host);
-        self.pending_roc_metrics.closure_releases += 2;
+        self.pending_roc_metrics.bump(.closure_releases, 2);
     }
 
     fn removeActiveElementDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
@@ -4882,7 +4913,7 @@ const HostEnv = struct {
         self.recordStreamNodesScanned(self.active_stream.states.items.len);
         for (self.active_stream.states.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
-                self.pending_roc_metrics.closure_releases += 3;
+                self.pending_roc_metrics.bump(.closure_releases, 3);
                 abi.decrefErasedCallable(desc.initial, roc_host);
                 abi.decrefErasedCallable(desc.eq, roc_host);
                 abi.decrefErasedCallable(desc.drop, roc_host);
@@ -4903,7 +4934,7 @@ const HostEnv = struct {
                 self.releaseActiveSignalRecord(removed.condition.record);
                 removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
                 removed.condition.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-                self.pending_roc_metrics.closure_releases += 1;
+                self.pending_roc_metrics.bump(.closure_releases, 1);
                 abi.decrefErasedCallable(removed.read, roc_host);
                 abi.decrefElem(removed.when_false, roc_host);
                 abi.decrefElem(removed.when_true, roc_host);
@@ -4924,7 +4955,7 @@ const HostEnv = struct {
                 self.releaseActiveSignalRecord(removed.items.record);
                 removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
                 removed.items.deinit(self.gpa.allocator(), roc_host, &self.pending_roc_metrics);
-                self.pending_roc_metrics.closure_releases += 8;
+                self.pending_roc_metrics.bump(.closure_releases, 8);
                 abi.decrefErasedCallable(removed.items_to_values, roc_host);
                 abi.decrefErasedCallable(removed.key_hash, roc_host);
                 abi.decrefErasedCallable(removed.key_of, roc_host);
@@ -5789,7 +5820,7 @@ fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(
         .alignment = align_enum,
     }) catch std.process.exit(1);
     host.alloc_count += 1;
-    host.pending_roc_metrics.allocs_this_event += 1;
+    host.pending_roc_metrics.bump(.allocs_this_event, 1);
 
     return user_ptr;
 }
@@ -5807,7 +5838,7 @@ fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callc
 
     removeRocAllocationAt(host, ledger_index, base_ptr);
     host.dealloc_count += 1;
-    host.pending_roc_metrics.deallocs_this_event += 1;
+    host.pending_roc_metrics.bump(.deallocs_this_event, 1);
 
     allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
@@ -5845,8 +5876,8 @@ fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alig
     removeRocAllocationAt(host, old_ledger_index, old_base_ptr);
     host.alloc_count += 1;
     host.dealloc_count += 1;
-    host.pending_roc_metrics.allocs_this_event += 1;
-    host.pending_roc_metrics.deallocs_this_event += 1;
+    host.pending_roc_metrics.bump(.allocs_this_event, 1);
+    host.pending_roc_metrics.bump(.deallocs_this_event, 1);
 
     allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
 
@@ -6348,7 +6379,7 @@ const HostSignalEvalResult = struct {
 
 fn recordDerivedCall(host: *HostEnv) void {
     var metrics = host.pending_roc_metrics;
-    metrics.derived_calls_into_roc += 1;
+    metrics.bump(.derived_calls_into_roc, 1);
     host.pending_roc_metrics = metrics;
 }
 
@@ -6634,7 +6665,7 @@ fn hostSignalBindingDropCallable(host: *HostEnv, signal: *const HostSignalBindin
 
 fn recordSignalPrune(host: *HostEnv) void {
     var metrics = host.pending_roc_metrics;
-    metrics.propagation_prunes += 1;
+    metrics.bump(.propagation_prunes, 1);
     host.pending_roc_metrics = metrics;
 }
 
@@ -6736,7 +6767,7 @@ fn dispatchEffectSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
 
     host.recordDispatch();
     var metrics = host.pending_roc_metrics;
-    metrics.nodes_recomputed += 1;
+    metrics.bump(.nodes_recomputed, 1);
     host.pending_roc_metrics = metrics;
     const dirty_generation = host.nextDirtySignalGeneration();
     record.last_dirty_generation = dirty_generation;
@@ -7903,8 +7934,8 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     host.recordDispatch();
 
     var metrics = host.pending_roc_metrics;
-    metrics.nodes_recomputed += 1;
-    metrics.derived_calls_into_roc += 1;
+    metrics.bump(.nodes_recomputed, 1);
+    metrics.bump(.derived_calls_into_roc, 1);
     host.pending_roc_metrics = metrics;
 
     const start_ns = benchmarkNowNs();
@@ -7916,7 +7947,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     const changed = host.updateStateValue(roc_host, desc.target_node_id, next);
     if (!changed) {
         var prune_metrics = host.pending_roc_metrics;
-        prune_metrics.propagation_prunes += 1;
+        prune_metrics.bump(.propagation_prunes, 1);
         host.pending_roc_metrics = prune_metrics;
         finishHostMetrics(host);
         if (stats) |s| s.actions += 1;
