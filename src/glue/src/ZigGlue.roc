@@ -88,6 +88,15 @@ zig_record_field_decl = |type_table, field| {
 	"    ${field_name}: ${zig_type},\n"
 }
 
+zig_record_fields_decl : List(TypeRepr), List(RecordField) -> Str
+zig_record_fields_decl = |type_table, fields| {
+	var $field_strs = ""
+	for field in fields {
+		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, field))
+	}
+	$field_strs
+}
+
 ## Convert a TypeRepr to its Zig type string
 type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
@@ -431,9 +440,318 @@ generate_roc_env =
 	\\};
 	\\
 
+align_forward_u64 : U64, U64 -> U64
+align_forward_u64 = |offset, alignment| {
+	if alignment == 0 {
+		offset
+	} else {
+		remainder = U64.rem_by(offset, alignment)
+		if remainder == 0 {
+			offset
+		} else {
+			offset + alignment - remainder
+		}
+	}
+}
+
+type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_64 = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => repr_layout_64(type_table, type_repr)
+		Err(_) => { size: 8, alignment: 8 }
+	}
+}
+
+repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_64 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 8, alignment: 8 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 8, alignment: 8 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 24, alignment: 8 }
+		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
+		RocStr => { size: 24, alignment: 8 }
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => type_layout_64(type_table, payload_id)
+							_ => { size: 0, alignment: 1 }
+						}
+					_ => { size: 0, alignment: 1 }
+				}
+			} else {
+				{ size: tu.size, alignment: tu.alignment }
+			}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 8, alignment: 8 }
+	}
+}
+
+type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_32 = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => repr_layout_32(type_table, type_repr)
+		Err(_) => { size: 4, alignment: 4 }
+	}
+}
+
+repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_32 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 4, alignment: 4 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 4, alignment: 4 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 12, alignment: 4 }
+		RocRecord(rec) =>
+			record_layout_from_fields_32(
+				type_table,
+				if rec.anonymous {
+					record_fields_for_wasm32(type_table, rec.fields)
+				} else {
+					rec.fields
+				},
+			)
+		RocStr => { size: 12, alignment: 4 }
+		RocTagUnion(tu) => {
+			layout = tag_union_layout_32(type_table, tu)
+			{ size: layout.size, alignment: layout.alignment }
+		}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 4, alignment: 4 }
+	}
+}
+
+record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = type_layout_64(type_table, field.type_id)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields_32 = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = type_layout_32(type_table, field.type_id)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
+tag_union_layout_32 = |type_table, tu| {
+	if List.len(tu.tags) == 1 {
+		payload_layout = match List.first(tu.tags) {
+			Ok(tag) =>
+				match List.first(tag.payload) {
+					Ok(payload_id) => type_layout_32(type_table, payload_id)
+					_ => { size: 0, alignment: 1 }
+				}
+			_ => { size: 0, alignment: 1 }
+		}
+		{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+	} else {
+		var $max_payload_size = 0
+		var $max_payload_alignment = 1
+
+		for tag in tu.tags {
+			payload_layout = tag_payload_layout_32(type_table, tag.payload)
+			if payload_layout.size > $max_payload_size {
+				$max_payload_size = payload_layout.size
+			}
+			if payload_layout.alignment > $max_payload_alignment {
+				$max_payload_alignment = payload_layout.alignment
+			}
+		}
+
+		disc = disc_layout_for_count(List.len(tu.tags))
+		disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+		total_alignment = if $max_payload_alignment > disc.alignment {
+			$max_payload_alignment
+		} else {
+			disc.alignment
+		}
+		total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+		{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
+	}
+}
+
+tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
+tag_union_layout_64 = |type_table, tu| {
+	if List.len(tu.tags) == 1 {
+		payload_layout = match List.first(tu.tags) {
+			Ok(tag) =>
+				match List.first(tag.payload) {
+					Ok(payload_id) => type_layout_64(type_table, payload_id)
+					_ => { size: 0, alignment: 1 }
+				}
+			_ => { size: 0, alignment: 1 }
+		}
+		{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+	} else {
+		var $max_payload_size = 0
+		var $max_payload_alignment = 1
+
+		for tag in tu.tags {
+			payload_layout = tag_payload_layout_64(type_table, tag.payload)
+			if payload_layout.size > $max_payload_size {
+				$max_payload_size = payload_layout.size
+			}
+			if payload_layout.alignment > $max_payload_alignment {
+				$max_payload_alignment = payload_layout.alignment
+			}
+		}
+
+		disc = disc_layout_for_count(List.len(tu.tags))
+		disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+		total_alignment = if $max_payload_alignment > disc.alignment {
+			$max_payload_alignment
+		} else {
+			disc.alignment
+		}
+		total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+		{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
+	}
+}
+
+tag_payload_layout_64 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
+tag_payload_layout_64 = |type_table, payload| {
+	var $offset = 0
+	var $alignment = 1
+
+	for payload_id in payload {
+		payload_layout = type_layout_64(type_table, payload_id)
+		if payload_layout.alignment > $alignment {
+			$alignment = payload_layout.alignment
+		}
+		$offset = align_forward_u64($offset, payload_layout.alignment)
+		$offset = $offset + payload_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+tag_payload_layout_32 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
+tag_payload_layout_32 = |type_table, payload| {
+	var $offset = 0
+	var $alignment = 1
+
+	for payload_id in payload {
+		payload_layout = type_layout_32(type_table, payload_id)
+		if payload_layout.alignment > $alignment {
+			$alignment = payload_layout.alignment
+		}
+		$offset = align_forward_u64($offset, payload_layout.alignment)
+		$offset = $offset + payload_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+disc_layout_for_count = |count| {
+	if count <= 1 {
+		{ size: 0, alignment: 1 }
+	} else if count <= 256 {
+		{ size: 1, alignment: 1 }
+	} else if count <= 65536 {
+		{ size: 2, alignment: 2 }
+	} else {
+		{ size: 4, alignment: 4 }
+	}
+}
+
+compare_utf8_lists : List(U8), List(U8) -> [LT, EQ, GT]
+compare_utf8_lists = |left, right| {
+	match List.first(left) {
+		Ok(left_byte) =>
+			match List.first(right) {
+				Ok(right_byte) =>
+					if left_byte < right_byte {
+						LT
+					} else if left_byte > right_byte {
+						GT
+					} else {
+						compare_utf8_lists(List.drop_first(left, 1), List.drop_first(right, 1))
+					}
+				Err(_) => GT
+			}
+		Err(_) =>
+			if List.is_empty(right) {
+				EQ
+			} else {
+				LT
+			}
+	}
+}
+
+compare_str_bytes : Str, Str -> [LT, EQ, GT]
+compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
+
+record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
+record_fields_for_wasm32 = |type_table, fields| {
+	List.sort_with(
+		fields,
+		|left, right| {
+			left_layout = type_layout_32(type_table, left.type_id)
+			right_layout = type_layout_32(type_table, right.type_id)
+			if left_layout.alignment > right_layout.alignment {
+				LT
+			} else if left_layout.alignment < right_layout.alignment {
+				GT
+			} else {
+				compare_str_bytes(left.name, right.name)
+			}
+		},
+	)
+}
+
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
-## Fields arrive pre-sorted by alignment descending from the compiler.
 generate_element_type_structs : List(TypeRepr) -> Str
 generate_element_type_structs = |type_table| {
 	var $structs = ""
@@ -446,21 +764,32 @@ generate_element_type_structs = |type_table| {
 					$seen_names = $seen_names.append(rec.name)
 
 					struct_name = name_to_struct_name(rec.name)
-					var $field_strs = ""
-					for field in rec.fields {
-						$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, field))
+					native_field_strs = zig_record_fields_decl(type_table, rec.fields)
+					wasm32_fields = if rec.anonymous {
+						record_fields_for_wasm32(type_table, rec.fields)
+					} else {
+						rec.fields
 					}
+					wasm32_field_strs = zig_record_fields_decl(type_table, wasm32_fields)
 
 					# Comptime size/alignment assertions (guarded by pointer width)
-					assertions = if rec.size > 0 {
-						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+					layout = record_layout_from_fields(type_table, rec.fields)
+					wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
+					assertions = if layout.size > 0 or wasm32_layout.size > 0 {
+						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
 					} else {
 						""
 					}
 
+					struct_decl = if rec.anonymous {
+						"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
+					} else {
+						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
+					}
+
 					$structs = Str.concat(
 						$structs,
-						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
+						"${struct_decl}${assertions}",
 					)
 				}
 			RocBox(_) => {}
@@ -577,8 +906,12 @@ generate_single_tag_union = |type_table, tu| {
 			$idx = $idx + 1
 		}
 
+		payload_union_name = "${struct_name}Payload"
+
 		# Payload extern union
 		var $union_fields = ""
+		var $native_accessors = ""
+		var $wasm32_accessors = ""
 		for union_tag in tu.tags {
 			snake = to_lower_snake_case(union_tag.name)
 			if List.is_empty(union_tag.payload) {
@@ -590,20 +923,26 @@ generate_single_tag_union = |type_table, tu| {
 					Err(_) => "*anyopaque"
 				}
 				$union_fields = Str.concat($union_fields, "        ${snake}: ${zig_type},\n")
+				$native_accessors = Str.concat($native_accessors, "    pub fn payload_${snake}(self: *const @This()) ${zig_type} {\n        return self.payload.${snake};\n    }\n")
+				$wasm32_accessors = Str.concat($wasm32_accessors, "    pub fn payload_${snake}(self: *const @This()) ${zig_type} {\n        const ptr: *const ${zig_type} = @ptrCast(@alignCast(&self.payload));\n        return ptr.*;\n    }\n")
 			} else {
 				tuple_name = "${struct_name}${capitalize_first(union_tag.name)}Payload"
 				$union_fields = Str.concat($union_fields, "        ${snake}: ${tuple_name},\n")
+				$native_accessors = Str.concat($native_accessors, "    pub fn payload_${snake}(self: *const @This()) ${tuple_name} {\n        return self.payload.${snake};\n    }\n")
+				$wasm32_accessors = Str.concat($wasm32_accessors, "    pub fn payload_${snake}(self: *const @This()) ${tuple_name} {\n        const ptr: *const ${tuple_name} = @ptrCast(@alignCast(&self.payload));\n        return ptr.*;\n    }\n")
 			}
 		}
 
 		# Comptime assertions
-		assertions = if tu.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+		native_layout = tag_union_layout_64(type_table, tu)
+		wasm32_layout = tag_union_layout_32(type_table, tu)
+		assertions = if tu.size > 0 or wasm32_layout.size > 0 {
+			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(native_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(wasm32_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n}\n\n"
 		} else {
 			""
 		}
 
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = extern struct {\n    payload: extern union {\n${$union_fields}    },\n    tag: ${struct_name}Tag,\n};\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Payload union for ${tu.name}.\npub const ${payload_union_name} = extern union {\n${$union_fields}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n    payload: [${U64.to_str(wasm32_layout.discriminant_offset)}]u8 align(${U64.to_str(wasm32_layout.alignment)}),\n    tag: ${struct_name}Tag,\n${$wasm32_accessors}} else extern struct {\n    payload: ${payload_union_name},\n    tag: ${struct_name}Tag,\n${$native_accessors}};\n\n${assertions}"
 	}
 }
 
@@ -822,9 +1161,9 @@ generate_tag_payload_refcount_branch = |type_table, tag, mode| {
 			match List.first(tag.payload) {
 				Ok(payload_id) =>
 					if mode == "decref" {
-						decref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+						decref_stmt_for_type_id(type_table, payload_id, "value.payload_${snake}()")
 					} else {
-						incref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+						incref_stmt_for_type_id(type_table, payload_id, "value.payload_${snake}()")
 					}
 				_ => ""
 			}
@@ -835,7 +1174,7 @@ generate_tag_payload_refcount_branch = |type_table, tag, mode| {
 			"        .${tag.name} => {\n${indent_lines(body, "    ")}        },\n"
 		}
 	} else {
-		var $body = "        const payload = value.payload.${snake};\n"
+		var $body = "        const payload = value.payload_${snake}();\n"
 		var $idx = 0
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"

@@ -214,6 +214,7 @@ const CustomCase = enum {
     glue_c_header_compiles,
     glue_zig,
     glue_zig_compiles,
+    glue_zig_native_wasm_layouts,
     glue_zig_opaque_box,
     glue_rust,
     glue_zig_bang_record_fields,
@@ -472,6 +473,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue native and wasm layouts compile", .body = .{ .custom = .glue_zig_native_wasm_layouts } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue uses RocBox for opaque boxed app types", .body = .{ .custom = .glue_zig_opaque_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
@@ -1530,6 +1532,7 @@ fn runCustomCase(
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_native_wasm_layouts => customGlueZigNativeWasmLayouts(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_opaque_box => customGlueZigOpaqueBox(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
@@ -2753,6 +2756,102 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         test_zig_path,
         emit_flag,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueZigNativeWasmLayouts(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-layout-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/zig-layout-platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+    for ([_][]const u8{
+        "pub const ProbeLayoutProbe = if (@sizeOf(usize) == 4) extern struct",
+        "payload: [44]u8 align(8)",
+        "pub fn payload_wide",
+        "pub fn payload_aligned",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing layout ABI text {s}", .{needle});
+        }
+    }
+
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const abi = @import("{s}");
+        \\
+        \\comptime {{
+        \\    if (@sizeOf(usize) == 8) {{
+        \\        if (@offsetOf(abi.ProbeLayoutProbe, "tag") != 88) @compileError("native tag offset mismatch");
+        \\        if (@sizeOf(abi.ProbeLayoutProbe) != 96) @compileError("native tag union size mismatch");
+        \\        if (@alignOf(abi.ProbeLayoutProbe) != 8) @compileError("native tag union alignment mismatch");
+        \\    }} else if (@sizeOf(usize) == 4) {{
+        \\        if (@offsetOf(abi.ProbeLayoutProbe, "tag") != 44) @compileError("wasm tag offset mismatch");
+        \\        if (@sizeOf(abi.ProbeLayoutProbe) != 48) @compileError("wasm tag union size mismatch");
+        \\        if (@alignOf(abi.ProbeLayoutProbe) != 8) @compileError("wasm tag union alignment mismatch");
+        \\    }} else {{
+        \\        @compileError("unsupported pointer width");
+        \\    }}
+        \\}}
+        \\
+        \\export fn _roc_glue_layout_accessor_check(value: abi.ProbeLayoutProbe) void {{
+        \\    switch (value.tag) {{
+        \\        .Aligned => {{
+        \\            const payload = value.payload_aligned();
+        \\            _ = payload.marker;
+        \\            _ = payload.token;
+        \\        }},
+        \\        .Wide => {{
+        \\            const payload = value.payload_wide();
+        \\            _ = payload.label;
+        \\            _ = payload.a;
+        \\            _ = payload.b;
+        \\            _ = payload.c;
+        \\            _ = payload.d;
+        \\            _ = payload.e;
+        \\            _ = payload.f;
+        \\            _ = payload.g;
+        \\            _ = payload.h;
+        \\        }},
+        \\        .Empty => {{}},
+        \\    }}
+        \\}}
+    , .{"roc_platform_abi.zig"}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render layout test Zig source: {}", .{err});
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_layout_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate layout test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write layout test Zig file: {}", .{err});
+
+    const native_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_layout_abi_native.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate native layout object path: {}", .{err});
+    const native_emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{native_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate native layout emit flag: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        test_zig_path,
+        native_emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const wasm_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_layout_abi_wasm.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm layout object path: {}", .{err});
+    const wasm_emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{wasm_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm layout emit flag: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        "-target",
+        "wasm32-freestanding-none",
+        test_zig_path,
+        wasm_emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
     return null;
 }
 
