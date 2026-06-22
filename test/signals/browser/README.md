@@ -57,10 +57,15 @@ primitive stays wasm-safe while the rest of the engine is extracted.
 scope interning, active row lookup, and ancestry queries. Native still owns row
 payload refcounts and disposal until keyed-row matching is extracted.
 
+`../src/identity_table.zig` owns node/DOM identity interning, including the
+browser-relevant rule that DOM ids are one-based because id `0` is the mount
+root.
+
 Run the guard with:
 
 ```sh
 zig test test/signals/src/render_commands.zig
 zig test test/signals/src/signal_graph.zig
 zig test test/signals/src/scope_tree.zig
+zig test test/signals/src/identity_table.zig
 ```

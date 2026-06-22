@@ -11,6 +11,7 @@ const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
+const identity_table = @import("identity_table.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -23,6 +24,8 @@ const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
+const HostNodeIdentity = identity_table.NodeIdentity;
+const HostDomIdentity = identity_table.DomIdentity;
 
 const host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -219,20 +222,6 @@ fn deinitHostScopeStep(step: *HostScopeStep, roc_host: *abi.RocHost, metrics: *R
         .root, .component, .when_branch => {},
     }
 }
-
-const HostNodeIdentity = struct {
-    node_id: u64,
-    scope_id: u64,
-    ordinal: u64,
-    active: bool,
-};
-
-const HostDomIdentity = struct {
-    elem_id: u64,
-    scope_id: u64,
-    ordinal: u64,
-    active: bool,
-};
 
 const HostNodeScopeSiteKind = enum {
     component,
@@ -1900,6 +1889,13 @@ fn failScopeTreeError(err: anyerror, unknown_scope_message: []const u8) noreturn
     }
 }
 
+fn failIdentityTableError(err: anyerror) noreturn {
+    switch (err) {
+        error.OutOfMemory => std.process.exit(1),
+        else => failHost("identity table operation failed"),
+    }
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -3380,42 +3376,16 @@ const HostEnv = struct {
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
         self.validateScopeId(scope_id);
-
-        for (self.node_identities.items) |identity| {
-            if (!identity.active) continue;
-            if (identity.scope_id == scope_id and identity.ordinal == ordinal) {
-                return identity.node_id;
-            }
-        }
-
-        const node_id: u64 = @intCast(self.node_identities.items.len);
-        self.node_identities.append(self.gpa.allocator(), .{
-            .node_id = node_id,
-            .scope_id = scope_id,
-            .ordinal = ordinal,
-            .active = true,
-        }) catch std.process.exit(1);
-        return node_id;
+        return identity_table.internNode(self.gpa.allocator(), &self.node_identities, scope_id, ordinal) catch |err| {
+            failIdentityTableError(err);
+        };
     }
 
     fn internDomIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
         self.validateScopeId(scope_id);
-
-        for (self.dom_identities.items) |identity| {
-            if (!identity.active) continue;
-            if (identity.scope_id == scope_id and identity.ordinal == ordinal) {
-                return identity.elem_id;
-            }
-        }
-
-        const elem_id: u64 = @intCast(self.dom_identities.items.len + 1);
-        self.dom_identities.append(self.gpa.allocator(), .{
-            .elem_id = elem_id,
-            .scope_id = scope_id,
-            .ordinal = ordinal,
-            .active = true,
-        }) catch std.process.exit(1);
-        return elem_id;
+        return identity_table.internDom(self.gpa.allocator(), &self.dom_identities, scope_id, ordinal) catch |err| {
+            failIdentityTableError(err);
+        };
     }
 
     fn deactivateDomElement(self: *HostEnv, elem_id: u64) void {

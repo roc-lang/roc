@@ -9,6 +9,7 @@ const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
+const identity_table = @import("identity_table.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
@@ -19,6 +20,8 @@ comptime {
     _ = signal_graph.Node(BuildRecord);
     _ = scope_tree.Scope(BuildRow);
     _ = scope_tree.Branch.false_branch.opposite();
+    _ = identity_table.NodeIdentity;
+    _ = identity_table.DomIdentity;
 }
 
 const HostValueCell = struct {

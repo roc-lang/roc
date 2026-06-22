@@ -227,8 +227,9 @@ The open questions (O1–O9) referenced below are defined in
   instantiates it during build so wasm32 breakage is caught. Third extraction:
   `src/scope_tree.zig` owns scope branch identity, root/component/when/row scope
   interning, active-row lookup, and ancestry queries; native still owns row
-  payload refcounts and disposal. Remaining G-B0 work is extracting node-table
-  identity and keyed-diff row matching, then having both hosts drive the same
+  payload refcounts and disposal. Fourth extraction: `src/identity_table.zig`
+  owns node/DOM identity interning and one-based DOM ids. Remaining G-B0 work is
+  extracting keyed-diff row matching and then having both hosts drive the same
   engine with different render sinks.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
