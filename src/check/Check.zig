@@ -12853,7 +12853,7 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
-    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsStructuralDerive(nominal_type)) {
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
@@ -15383,14 +15383,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        try self.nominalSupportsDerivedIsEq(nominal_type))
+                        try self.nominalSupportsStructuralDerive(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+                        if (exact_method_binding == null and try self.nominalSupportsStructuralDerive(nominal_type)) {
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -15411,7 +15411,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         };
                     } else if (constraint.fn_name.eql(self.cir.idents.to_hash) and
-                        try self.nominalSupportsDerivedToHash(nominal_type))
+                        try self.nominalSupportsStructuralDerive(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
@@ -16329,14 +16329,6 @@ fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
 fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     return try self.varSupportsStructuralDeriveInternal(var_, &self.var_set);
-}
-
-fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
-    return try self.nominalSupportsStructuralDerive(nominal_type);
-}
-
-fn nominalSupportsDerivedToHash(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
-    return try self.nominalSupportsStructuralDerive(nominal_type);
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {

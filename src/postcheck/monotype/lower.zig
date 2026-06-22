@@ -316,14 +316,12 @@ const ConstExprAddress = struct {
     mono_ty: u32,
 };
 
-const InspectDefAddress = struct {
+/// Key for a memoized structural-derivation helper def. `value_ty` is the type
+/// being derived over; `result_ty` is the derivation's auxiliary type (the
+/// produced Str for inspect, the Bool for equality, the Hasher for hashing).
+const GeneratedHelperDefAddress = struct {
     value_ty: u32,
-    str_ty: u32,
-};
-
-const EqualityDefAddress = struct {
-    value_ty: u32,
-    bool_ty: u32,
+    result_ty: u32,
 };
 
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
@@ -339,11 +337,6 @@ const GeneratedHelperDefEntry = union(enum) {
             .ready => |def_id| def_id,
         };
     }
-};
-
-const HashDefAddress = struct {
-    value_ty: u32,
-    hasher_ty: u32,
 };
 
 const Builder = struct {
@@ -362,9 +355,9 @@ const Builder = struct {
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
-    inspect_defs: std.AutoHashMap(InspectDefAddress, GeneratedHelperDefEntry),
-    equality_defs: std.AutoHashMap(EqualityDefAddress, GeneratedHelperDefEntry),
-    hash_defs: std.AutoHashMap(HashDefAddress, GeneratedHelperDefEntry),
+    inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
+    equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
+    hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -389,9 +382,9 @@ const Builder = struct {
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
-            .inspect_defs = std.AutoHashMap(InspectDefAddress, GeneratedHelperDefEntry).init(allocator),
-            .equality_defs = std.AutoHashMap(EqualityDefAddress, GeneratedHelperDefEntry).init(allocator),
-            .hash_defs = std.AutoHashMap(HashDefAddress, GeneratedHelperDefEntry).init(allocator),
+            .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
+            .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
+            .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -2798,9 +2791,9 @@ const Builder = struct {
     }
 
     fn inspectDefForType(self: *Builder, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.DefId {
-        const address = InspectDefAddress{
+        const address = GeneratedHelperDefAddress{
             .value_ty = @intFromEnum(value_ty),
-            .str_ty = @intFromEnum(str_ty),
+            .result_ty = @intFromEnum(str_ty),
         };
         if (self.inspect_defs.get(address)) |entry| return entry.id();
 
@@ -10400,47 +10393,64 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-                if (plan_args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
-                const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural equality target had a non-function type");
-                const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
-                defer self.allocator.free(arg_tys);
-                if (arg_tys.len != 2) Common.invariant("structural equality callable type must have two operands");
-                const lhs = if (pre_lowered != null and pre_lowered.?.index == 0)
-                    pre_lowered.?.expr
-                else
-                    try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
-                const rhs = if (pre_lowered != null and pre_lowered.?.index == 1)
-                    pre_lowered.?.expr
-                else
-                    try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
-                var result = try self.lowerEqualityExpr(arg_tys[0], lhs, rhs, self.view.names.methodNameText(plan.method), ret_ty);
+                var operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                defer operands.deinit(self.allocator);
+                var result = try self.lowerEqualityExpr(operands.arg_tys[0], operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
                 }
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .hash => |hash| if (hash.structural_allowed) blk: {
-                const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-                if (plan_args.len != 2) Common.invariant("structural hash dispatch plan must have two operands");
-                const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural hash target had a non-function type");
-                const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
-                defer self.allocator.free(arg_tys);
-                if (arg_tys.len != 2) Common.invariant("structural hash callable type must have two operands");
-                const value = if (pre_lowered != null and pre_lowered.?.index == 0)
-                    pre_lowered.?.expr
-                else
-                    try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
-                const hasher = if (pre_lowered != null and pre_lowered.?.index == 1)
-                    pre_lowered.?.expr
-                else
-                    try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
-                break :blk try self.lowerHashExpr(arg_tys[0], value, hasher, ret_ty);
+                var operands = try self.lowerStructuralBinaryOperands("hash", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                defer operands.deinit(self.allocator);
+                break :blk try self.lowerHashExpr(operands.arg_tys[0], operands.first, operands.second, ret_ty);
             } else Common.invariant("structural hash dispatch plan did not permit structural hashing"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
             .parser_for => Common.invariant("parser_for dispatch plan reached structural equality lowering"),
             .encode_to => Common.invariant("encode_to dispatch plan reached structural equality lowering"),
         };
+    }
+
+    /// Operands of a structural binary derivation (equality / hash) once both
+    /// have been lowered. `arg_tys` is owned by the caller and freed via
+    /// `deinit`; the terminal lowering reads `arg_tys[0]` for the derived type.
+    const StructuralBinaryOperands = struct {
+        first: Ast.ExprId,
+        second: Ast.ExprId,
+        arg_tys: []Type.TypeId,
+
+        fn deinit(self: *StructuralBinaryOperands, allocator: Allocator) void {
+            allocator.free(self.arg_tys);
+        }
+    };
+
+    /// Lower the two operands of a structural equality/hash dispatch, honoring a
+    /// `pre_lowered` operand at index 0 or 1. `noun` is the derivation name used
+    /// only in invariant diagnostics.
+    fn lowerStructuralBinaryOperands(
+        self: *BodyContext,
+        comptime noun: []const u8,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_mono_ty: Type.TypeId,
+        arg_ctx: *BodyContext,
+        pre_lowered: ?PreLoweredOperand,
+    ) Allocator.Error!StructuralBinaryOperands {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) Common.invariant("structural " ++ noun ++ " dispatch plan must have two operands");
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural " ++ noun ++ " target had a non-function type");
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        errdefer self.allocator.free(arg_tys);
+        if (arg_tys.len != 2) Common.invariant("structural " ++ noun ++ " callable type must have two operands");
+        const first = if (pre_lowered != null and pre_lowered.?.index == 0)
+            pre_lowered.?.expr
+        else
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+        const second = if (pre_lowered != null and pre_lowered.?.index == 1)
+            pre_lowered.?.expr
+        else
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
+        return .{ .first = first, .second = second, .arg_tys = arg_tys };
     }
 
     fn lowerStructuralParser(
@@ -11603,6 +11613,31 @@ const BodyContext = struct {
                 .args = try self.builder.program.addExprSpan(&args),
             } },
         });
+    }
+
+    /// Dispatch an owned (non-structural) type to its real derived method,
+    /// shared by every derivation. The argument types and the per-derivation
+    /// invariant wording come from the comptime `Deriver`; the operand-to-args
+    /// mapping reuses `D.callArgs`.
+    fn derivationOwnedCall(
+        self: *BodyContext,
+        comptime D: type,
+        ty: Type.TypeId,
+        operand: D.Operand,
+        ctx: DerivationCtx,
+    ) Allocator.Error!Ast.ExprId {
+        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
+            Common.invariant(D.owned_missing_owner_msg);
+        const lookup = self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
+            Common.invariant(D.owned_missing_target_msg);
+
+        const arg_tys = D.ownedArgTypes(ty, ctx.result_ty);
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
+        const args = D.callArgs(operand);
+        return try self.builder.program.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+            .args = try self.builder.program.addExprSpan(&args),
+        } } });
     }
 
     fn derivationDefForType(
@@ -14703,12 +14738,12 @@ const EqDeriver = struct {
         return &self.equality_expansion_stack;
     }
 
-    fn defCache(self: *BodyContext) *std.AutoHashMap(EqualityDefAddress, GeneratedHelperDefEntry) {
+    fn defCache(self: *BodyContext) *std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry) {
         return &self.builder.equality_defs;
     }
 
-    fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) EqualityDefAddress {
-        return .{ .value_ty = @intFromEnum(value_ty), .bool_ty = @intFromEnum(result_ty) };
+    fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) GeneratedHelperDefAddress {
+        return .{ .value_ty = @intFromEnum(value_ty), .result_ty = @intFromEnum(result_ty) };
     }
 
     fn fnType(self: *BodyContext, value_ty: Type.TypeId, result_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -14767,19 +14802,15 @@ const EqDeriver = struct {
         return .{ .lhs = lhs_item, .rhs = rhs_item };
     }
 
-    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
-            Common.invariant("owned equality call requested for a type without a method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
-            Common.invariant("checked method registry is missing owned equality target");
+    const owned_missing_owner_msg = "owned equality call requested for a type without a method owner";
+    const owned_missing_target_msg = "checked method registry is missing owned equality target";
 
-        const arg_tys = [_]Type.TypeId{ ty, ty };
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
-        const args = [_]Ast.ExprId{ operand.lhs, operand.rhs };
-        return try self.builder.program.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
-            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-            .args = try self.builder.program.addExprSpan(&args),
-        } } });
+    fn ownedArgTypes(ty: Type.TypeId, _: Type.TypeId) [2]Type.TypeId {
+        return .{ ty, ty };
+    }
+
+    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        return try self.derivationOwnedCall(EqDeriver, ty, operand, ctx);
     }
 
     /// Decomposes structural equality on a nominal type by unwrapping both operands to
@@ -14934,12 +14965,12 @@ const HashDeriver = struct {
         return &self.hash_expansion_stack;
     }
 
-    fn defCache(self: *BodyContext) *std.AutoHashMap(HashDefAddress, GeneratedHelperDefEntry) {
+    fn defCache(self: *BodyContext) *std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry) {
         return &self.builder.hash_defs;
     }
 
-    fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) HashDefAddress {
-        return .{ .value_ty = @intFromEnum(value_ty), .hasher_ty = @intFromEnum(result_ty) };
+    fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) GeneratedHelperDefAddress {
+        return .{ .value_ty = @intFromEnum(value_ty), .result_ty = @intFromEnum(result_ty) };
     }
 
     fn fnType(self: *BodyContext, value_ty: Type.TypeId, result_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -14989,19 +15020,15 @@ const HashDeriver = struct {
         return .{ .value = item_value, .hasher = state };
     }
 
-    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
-            Common.invariant("owned hash call requested for a type without a method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
-            Common.invariant("checked method registry is missing owned to_hash target");
+    const owned_missing_owner_msg = "owned hash call requested for a type without a method owner";
+    const owned_missing_target_msg = "checked method registry is missing owned to_hash target";
 
-        const arg_tys = [_]Type.TypeId{ ty, ctx.result_ty };
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
-        const args = [_]Ast.ExprId{ operand.value, operand.hasher };
-        return try self.builder.program.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
-            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-            .args = try self.builder.program.addExprSpan(&args),
-        } } });
+    fn ownedArgTypes(ty: Type.TypeId, result_ty: Type.TypeId) [2]Type.TypeId {
+        return .{ ty, result_ty };
+    }
+
+    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        return try self.derivationOwnedCall(HashDeriver, ty, operand, ctx);
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
