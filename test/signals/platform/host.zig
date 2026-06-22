@@ -11799,6 +11799,50 @@ test "signals host dispatches through active event records outside descriptor st
     try expectHostValueI64(host.stateValueByNodeId(state_id), 1);
 }
 
+test "signals host keeps live allocations flat across repeated events" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const attrs = [_]abi.NodeAttr{
+        testNodeUnitIncrementEventAttr(&roc_host, .click, state_token),
+    };
+    const button = testElementWith(&roc_host, "button", &attrs, &.{});
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64(0), button);
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.rebuildActiveEventsFromStream(&stream);
+    host.active_stream = stream;
+
+    const button_id = host.active_stream.elements.items[0].elem_id;
+    const event_id = host.dom_elements.items[@intCast(button_id)].bound_click_event orelse unreachable;
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+
+    var live_after_warmup: ?i64 = null;
+    var iteration: usize = 0;
+    while (iteration < 100) : (iteration += 1) {
+        dispatchRocEvent(&host, &roc_host, event_id, .unit, hostValueUnit(&host, &roc_host));
+        const live = @as(i64, @intCast(host.alloc_count)) - @as(i64, @intCast(host.dealloc_count));
+        if (iteration == 9) {
+            live_after_warmup = live;
+        } else if (iteration > 9) {
+            try std.testing.expectEqual(live_after_warmup.?, live);
+        }
+    }
+
+    try expectHostValueI64(host.stateValueByNodeId(state_id), 100);
+}
+
 test "signals host carries binder context into Elem when branch collection" {
     test_erased_callable_drop_count = 0;
 

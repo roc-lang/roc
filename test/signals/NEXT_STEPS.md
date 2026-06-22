@@ -165,10 +165,9 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 - **`ops_dashboard`** now has a real-event fanout assertion (not just the
   synthetic no-op) bounding `nodes_recomputed`, `derived_calls_into_roc`, text
   patches, and active-graph rebuilds.
-- **Long-session leak experiment:** reuse one `HostEnv` across many replayed
-  events and assert the live `allocs − deallocs` gauge is flat after warmup
-  (`retained_alloc_delta` as currently computed cannot prove this — it resets per
-  iteration).
+- **Long-session leak experiment:** host coverage now reuses one `HostEnv`
+  across 100 dispatched events and asserts the live `allocs − deallocs` gauge is
+  flat after warmup.
 
 ## Green Gates
 
