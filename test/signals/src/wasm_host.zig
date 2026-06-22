@@ -61,7 +61,13 @@ const WasmCtx = struct {
     pub fn stateDropCallable(_: anytype, node_id: u64) abi.RocErasedCallable {
         return stateByNodeId(node_id).drop;
     }
+
+    pub fn sink(_: anytype) WasmSink {
+        return .{};
+    }
 };
+
+const WasmSink = struct {};
 
 comptime {
     const BuildRecord = struct { id: u64 };

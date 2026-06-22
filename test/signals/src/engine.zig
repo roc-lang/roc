@@ -142,6 +142,7 @@ pub fn verifyCtx(comptime Ctx: type) void {
         "stateValueByNodeId",
         "stateEqCallable",
         "stateDropCallable",
+        "sink",
     }) |decl_name| {
         if (!@hasDecl(Ctx, decl_name)) {
             @compileError("engine Ctx is missing " ++ decl_name);
@@ -178,6 +179,10 @@ pub const NativeCtx = struct {
 
     pub fn stateDropCallable(ctx: anytype, node_id: u64) abi.RocErasedCallable {
         return ctx.stateDropCallable(node_id);
+    }
+
+    pub fn sink(ctx: anytype) @TypeOf(ctx.sink()) {
+        return ctx.sink();
     }
 };
 

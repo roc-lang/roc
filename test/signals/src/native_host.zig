@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
+const render_sink = @import("render_sink.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
@@ -761,6 +762,46 @@ const HostEnv = struct {
             .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
             .test_state = TestState.init(),
         };
+    }
+
+    pub fn sink(self: *HostEnv) render_sink.DomSink(HostEnv) {
+        return .{ .host = self };
+    }
+
+    pub fn sinkReset(self: *HostEnv) void {
+        resetSimulatedDom(self);
+    }
+
+    pub fn sinkAppendNode(self: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+        appendDomNode(self, elem_id, parent_elem_id, tag);
+    }
+
+    pub fn sinkEnsureNode(self: *HostEnv, elem_id: u64, tag: []const u8, counts: *CommandCounts) void {
+        ensureDomNode(self, elem_id, tag, counts);
+    }
+
+    pub fn sinkRemoveNode(self: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
+        removeDomNode(self, elem_id, counts);
+    }
+
+    pub fn sinkReplaceChildren(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+        replaceDomChildrenForStructuralParent(self, parent_elem_id, next_child_ids, counts);
+    }
+
+    pub fn sinkReplaceChildrenForMoves(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+        replaceDomChildrenForStructuralParentMoves(self, parent_elem_id, next_child_ids, counts);
+    }
+
+    pub fn sinkApplyTextField(self: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) bool {
+        return applyRenderTextField(self, elem_id, field, value);
+    }
+
+    pub fn sinkApplyBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) bool {
+        return applyRenderBoolField(self, elem_id, field, value);
+    }
+
+    pub fn sinkBindEvent(self: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
+        bindNodeEvent(self, desc, event_id);
     }
 
     fn activeRocHost(self: *HostEnv) *abi.RocHost {
@@ -2795,7 +2836,7 @@ const HostEnv = struct {
         var counts: CommandCounts = .{};
         const children = streamDirectChildren(allocator, &self.engine.active_stream, site.parent_elem_id);
         defer allocator.free(children);
-        replaceDomChildrenForStructuralParentMoves(self, site.parent_elem_id, children, &counts);
+        self.sink().replaceChildrenForMoves(site.parent_elem_id, children, &counts);
         self.render_metrics.addCommandCounts(counts);
         return counts;
     }
@@ -4984,7 +5025,7 @@ fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
     const value = evalHostSignalBinding(host, roc_host, signal);
     const text = callErasedHostValueToStr(roc_host, read, value);
     defer text.decref(roc_host);
-    const changed = applyRenderTextField(host, elem_id, field, text.asSlice());
+    const changed = host.sink().applyTextField(elem_id, field, text.asSlice());
     cache_slot.replace(roc_host, &host.engine.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
@@ -4992,7 +5033,7 @@ fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
 fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
     const value = evalHostSignalBinding(host, roc_host, signal);
     const bool_value = callErasedHostValueToBool(roc_host, read, value);
-    const changed = applyRenderBoolField(host, elem_id, field, bool_value);
+    const changed = host.sink().applyBoolField(elem_id, field, bool_value);
     cache_slot.replace(roc_host, &host.engine.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
@@ -5006,7 +5047,7 @@ fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
     const text = callErasedHostValueToStr(roc_host, read, result.value);
     defer text.decref(roc_host);
-    return applyRenderTextField(host, elem_id, field, text.asSlice());
+    return host.sink().applyTextField(elem_id, field, text.asSlice());
 }
 
 fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
@@ -5016,7 +5057,7 @@ fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
         return false;
     }
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
-    return applyRenderBoolField(host, elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
+    return host.sink().applyBoolField(elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
 }
 
 fn updateEffectSourceCacheSlot(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) bool {
@@ -5476,7 +5517,7 @@ fn applyActiveStreamTextAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem
         if (attr_index >= host.engine.active_stream.static_text_attrs.items.len) failHost("active static text attr index exceeded descriptor table");
         const desc = host.engine.active_stream.static_text_attrs.items[attr_index];
         if (desc.elem_id != elem_id or desc.field != field) failHost("active static text attr index pointed at the wrong field");
-        if (applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5496,7 +5537,7 @@ fn applyActiveStreamBoolAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem
         if (attr_index >= host.engine.active_stream.static_bool_attrs.items.len) failHost("active static bool attr index exceeded descriptor table");
         const desc = host.engine.active_stream.static_bool_attrs.items[attr_index];
         if (desc.elem_id != elem_id or desc.field != field) failHost("active static bool attr index pointed at the wrong field");
-        if (applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5532,7 +5573,7 @@ fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_i
         if (text_index >= host.engine.active_stream.text_nodes.items.len) failHost("active text node index exceeded descriptor table");
         const desc = host.engine.active_stream.text_nodes.items[text_index];
         if (desc.elem_id != elem_id) failHost("active text node index pointed at the wrong elem id");
-        if (applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+        if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5579,7 +5620,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
         const parent_elem_id = renderNodeParentElemId(stream, node);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        ensureDomNode(host, node.elem_id, renderNodeTag(stream, node), &counts);
+        host.sink().ensureNode(node.elem_id, renderNodeTag(stream, node), &counts);
         seen[@intCast(node.elem_id)] = true;
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
@@ -5588,14 +5629,14 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     for (host.engine.active_stream.render_nodes.items) |node| {
         if (!host.renderNodeInReplacementTarget(&host.engine.active_stream, node, targets.removed)) continue;
         if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
-        removeDomNode(host, node.elem_id, &counts);
+        host.sink().removeNode(node.elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
         host.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         const children = streamDirectChildren(allocator, stream, parent_elem_id);
         defer allocator.free(children);
-        replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
+        host.sink().replaceChildren(parent_elem_id, children, &counts);
     }
 
     const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
@@ -5617,7 +5658,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
 
     host.engine.recordStreamNodesScanned(stream.text_nodes.items.len);
     for (stream.text_nodes.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5629,7 +5670,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
     host.engine.recordStreamNodesScanned(stream.static_text_attrs.items.len);
     for (stream.static_text_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5641,7 +5682,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
     host.engine.recordStreamNodesScanned(stream.static_bool_attrs.items.len);
     for (stream.static_bool_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5668,28 +5709,28 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
-    resetSimulatedDom(host);
+    host.sink().reset();
 
     for (stream.render_nodes.items) |node| {
         switch (node.kind) {
             .element => {
                 const desc = findElementDesc(stream, node.elem_id) orelse failHost("render node referenced missing element descriptor");
-                appendDomNode(host, desc.elem_id, desc.parent_elem_id, desc.tag);
+                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, desc.tag);
                 counts.addCreateElement();
                 counts.addAppendChild();
             },
             .text => {
                 const desc = findTextNodeDesc(stream, node.elem_id) orelse failHost("render node referenced missing text descriptor");
-                appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
+                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
-                if (applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+                if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
                     counts.addTextField(.text);
                 }
             },
             .signal_text => {
                 const desc = findSignalTextNodeDescMutable(stream, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
-                appendDomNode(host, desc.elem_id, desc.parent_elem_id, "text");
+                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
                 if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
@@ -5700,7 +5741,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
     }
 
     for (stream.static_text_attrs.items) |desc| {
-        if (applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5710,7 +5751,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         }
     }
     for (stream.static_bool_attrs.items) |desc| {
-        if (applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5723,7 +5764,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         evalOnChangeInitial(host, roc_host, desc);
     }
     for (stream.events.items, 0..) |desc, index| {
-        bindNodeEvent(host, desc, @intCast(index + 1));
+        host.sink().bindEvent(desc, @intCast(index + 1));
         counts.addEventBinding();
     }
 
@@ -5766,14 +5807,14 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         const parent_elem_id = streamElemParentElemId(&host.engine.active_stream, elem_id);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        ensureDomNode(host, elem_id, streamElemTag(&host.engine.active_stream, elem_id), &counts);
+        host.sink().ensureNode(elem_id, streamElemTag(&host.engine.active_stream, elem_id), &counts);
         seen[@intCast(elem_id)] = true;
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
 
     for (splice.removed_elem_ids) |elem_id| {
         if (elem_id < seen.len and seen[@intCast(elem_id)]) continue;
-        removeDomNode(host, elem_id, &counts);
+        host.sink().removeNode(elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
@@ -5791,7 +5832,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
             ) catch "spliced structural parent has inactive child";
             failHost(rendered);
         }
-        replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
+        host.sink().replaceChildren(parent_elem_id, children, &counts);
     }
 
     for (splice.replacement_elem_ids) |elem_id| {
@@ -5855,7 +5896,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
             }
         }
 
-        ensureDomNode(host, node.elem_id, renderNodeTag(stream, node), &counts);
+        host.sink().ensureNode(node.elem_id, renderNodeTag(stream, node), &counts);
         seen[@intCast(node.elem_id)] = true;
 
         const new_child_index = next_children[@intCast(parent_elem_id)].items.len;
@@ -5875,7 +5916,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         if (index == 0) continue;
         const still_rendered = index < seen.len and seen[index];
         if (!still_rendered and elem.active) {
-            removeDomNode(host, @intCast(index), &counts);
+            host.sink().removeNode(@intCast(index), &counts);
         }
     }
 
@@ -5906,7 +5947,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
     }
 
     for (stream.text_nodes.items) |desc| {
-        if (applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
+        if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5916,7 +5957,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.static_text_attrs.items) |desc| {
-        if (applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5926,7 +5967,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.static_bool_attrs.items) |desc| {
-        if (applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
+        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
