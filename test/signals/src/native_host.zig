@@ -769,31 +769,27 @@ const HostEnv = struct {
     }
 
     pub fn sinkReset(self: *HostEnv) void {
-        self.engine.resetRenderScalarCache(self);
         resetSimulatedDom(self);
     }
 
     pub fn sinkAppendNode(self: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
-        self.engine.ensureRenderScalarNode(self, elem_id);
         appendDomNode(self, elem_id, parent_elem_id, tag);
     }
 
-    pub fn sinkEnsureNode(self: *HostEnv, elem_id: u64, tag: []const u8, counts: *CommandCounts) void {
-        self.engine.ensureRenderScalarNode(self, elem_id);
-        ensureDomNode(self, elem_id, tag, counts);
+    pub fn sinkEnsureNode(self: *HostEnv, elem_id: u64, tag: []const u8) void {
+        ensureDomNode(self, elem_id, tag);
     }
 
-    pub fn sinkRemoveNode(self: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
-        removeDomNode(self, elem_id, counts);
-        self.engine.tombstoneRenderScalarNode(self, elem_id);
+    pub fn sinkRemoveNode(self: *HostEnv, elem_id: u64) void {
+        removeDomNode(self, elem_id);
     }
 
-    pub fn sinkReplaceChildren(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
-        replaceDomChildrenForStructuralParent(self, parent_elem_id, next_child_ids, counts);
+    pub fn sinkReplaceChildren(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
+        replaceDomChildrenForStructuralParent(self, parent_elem_id, next_child_ids);
     }
 
-    pub fn sinkReplaceChildrenForMoves(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
-        replaceDomChildrenForStructuralParentMoves(self, parent_elem_id, next_child_ids, counts);
+    pub fn sinkReplaceChildrenForMoves(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
+        replaceDomChildrenForStructuralParentMoves(self, parent_elem_id, next_child_ids);
     }
 
     pub fn sinkApplyTextField(self: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) void {
@@ -814,6 +810,33 @@ const HostEnv = struct {
 
     pub fn sinkBindEvent(self: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
         bindNodeEvent(self, desc, event_id);
+    }
+
+    pub fn sinkBindEventKind(self: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
+        bindNodeEventKind(self, elem_id, kind, event_id);
+    }
+
+    pub fn sinkClearEvent(self: *HostEnv, elem_id: u64, kind: RenderEventKind) void {
+        clearNodeEventKind(self, elem_id, kind);
+    }
+
+    pub fn sinkDebugAssertNode(self: *HostEnv, elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
+        if (elem_id >= self.dom_elements.items.len) {
+            if (!active) return;
+            failHost("render cache active node was missing from simulated DOM");
+        }
+
+        const elem = &self.dom_elements.items[@intCast(elem_id)];
+        if (elem.active != active) failHost("render cache active flag disagreed with simulated DOM");
+        if (!active) return;
+
+        const expected_tag = tag orelse failHost("active render cache node had no tag");
+        if (!std.mem.eql(u8, elem.tag, expected_tag)) failHost("render cache tag disagreed with simulated DOM");
+        if (elem.parent_id != parent_id) failHost("render cache parent disagreed with simulated DOM");
+        if (!std.mem.eql(u64, elem.children.items, children)) failHost("render cache child order disagreed with simulated DOM");
+        if (elem.bound_click_event != click_event) failHost("render cache click binding disagreed with simulated DOM");
+        if (elem.bound_input_event != input_event) failHost("render cache input binding disagreed with simulated DOM");
+        if (elem.bound_check_event != check_event) failHost("render cache check binding disagreed with simulated DOM");
     }
 
     fn activeRocHost(self: *HostEnv) *abi.RocHost {
@@ -2032,15 +2055,6 @@ const HostEnv = struct {
         };
     }
 
-    fn deactivateDomElement(self: *HostEnv, elem_id: u64) void {
-        if (elem_id >= self.dom_elements.items.len) return;
-        const elem = &self.dom_elements.items[@intCast(elem_id)];
-        elem.active = false;
-        elem.bound_click_event = null;
-        elem.bound_input_event = null;
-        elem.bound_check_event = null;
-    }
-
     fn disposeScopeSubtree(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64) void {
         self.validateScopeId(scope_id);
 
@@ -2070,7 +2084,6 @@ const HostEnv = struct {
 
         for (self.engine.dom_identities.items) |*identity| {
             if (identity.active and identity.scope_id == scope_id) {
-                self.deactivateDomElement(identity.elem_id);
                 identity.active = false;
             }
         }
@@ -2848,7 +2861,7 @@ const HostEnv = struct {
         var counts: CommandCounts = .{};
         const children = streamDirectChildren(allocator, &self.engine.active_stream, site.parent_elem_id);
         defer allocator.free(children);
-        self.sink().replaceChildrenForMoves(site.parent_elem_id, children, &counts);
+        self.engine.replaceRenderChildrenForMoves(self, site.parent_elem_id, children, &counts);
         self.render_metrics.addCommandCounts(counts);
         return counts;
     }
@@ -4148,7 +4161,7 @@ const HostEnv = struct {
         self.engine.scopes.deinit(allocator);
         self.engine.node_identities.deinit(allocator);
         self.engine.dom_identities.deinit(allocator);
-        self.engine.deinitRenderScalarCache(self);
+        self.engine.deinitRenderCache(self);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -4915,18 +4928,9 @@ fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {
     return null;
 }
 
-fn ensureDomNode(host: *HostEnv, elem_id: u64, tag: []const u8, counts: *CommandCounts) void {
+fn ensureDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
     if (elem_id == 0) failHost("render descriptor cannot claim the host DOM root id");
-
-    if (elem_id < host.dom_elements.items.len) {
-        const elem = &host.dom_elements.items[@intCast(elem_id)];
-        if (!elem.active) failHost("render descriptor referenced an inactive DOM identity");
-        if (!std.mem.eql(u8, elem.tag, tag)) failHost("render descriptor changed the tag for an existing DOM identity");
-        return;
-    }
-
     appendDetachedDomNode(host, elem_id, tag);
-    counts.addCreateElement();
 }
 
 fn recordDerivedCall(host: *HostEnv) void {
@@ -5286,11 +5290,24 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
 }
 
 fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
-    const elem = domElementById(host, desc.elem_id);
-    switch (desc.kind) {
+    bindNodeEventKind(host, desc.elem_id, desc.kind, event_id);
+}
+
+fn bindNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
+    const elem = domElementById(host, elem_id);
+    switch (kind) {
         .click => elem.bound_click_event = event_id,
         .input => elem.bound_input_event = event_id,
         .check => elem.bound_check_event = event_id,
+    }
+}
+
+fn clearNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind) void {
+    const elem = domElementById(host, elem_id);
+    switch (kind) {
+        .click => elem.bound_click_event = null,
+        .input => elem.bound_input_event = null,
+        .check => elem.bound_check_event = null,
     }
 }
 
@@ -5305,14 +5322,6 @@ fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEv
         .click => &bindings.click,
         .input => &bindings.input,
         .check => &bindings.check,
-    };
-}
-
-fn domEventBindingSlot(elem: *DomElement, kind: RenderEventKind) *?u64 {
-    return switch (kind) {
-        .click => &elem.bound_click_event,
-        .input => &elem.bound_input_event,
-        .check => &elem.bound_check_event,
     };
 }
 
@@ -5334,16 +5343,12 @@ fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescripto
     }
 
     const kinds = [_]RenderEventKind{ .click, .input, .check };
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+    for (seen, 0..) |is_seen, index| {
+        if (index == 0 or !is_seen) continue;
 
         for (kinds) |kind| {
             const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
-            const current_event_id = domEventBindingSlot(elem, kind);
-            if (current_event_id.* == next_event_id) continue;
-
-            current_event_id.* = next_event_id;
-            counts.addEventBinding();
+            host.engine.applyRenderEventBinding(host, @intCast(index), kind, next_event_id, counts);
         }
     }
 }
@@ -5366,86 +5371,28 @@ fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNodeDes
     return children.toOwnedSlice(allocator) catch std.process.exit(1);
 }
 
-fn stableSubsequenceLength(indexes: []const usize, scratch: []usize) usize {
-    var len: usize = 0;
-    for (indexes) |index| {
-        var low: usize = 0;
-        var high = len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            if (scratch[mid] < index) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        scratch[low] = index;
-        if (low == len) len += 1;
-    }
-    return len;
+fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
+    replaceDomChildrenForStructuralParent(host, parent_elem_id, next_child_ids);
 }
 
-fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+fn removeDomNode(host: *HostEnv, elem_id: u64) void {
     const allocator = host.gpa.allocator();
-    if (parent_elem_id >= host.dom_elements.items.len) failHost("structural move referenced missing parent");
-    const parent = &host.dom_elements.items[@intCast(parent_elem_id)];
-    if (!parent.active) {
-        var message: [128]u8 = undefined;
-        const rendered = std.fmt.bufPrint(&message, "structural move referenced inactive parent {d}", .{parent_elem_id}) catch "structural move referenced inactive parent";
-        failHost(rendered);
-    }
-    if (parent.children.items.len != next_child_ids.len) failHost("pure structural move changed child count");
-
-    var old_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .{};
-    defer old_child_indexes.deinit(allocator);
-    for (parent.children.items, 0..) |child_id, index| {
-        const entry = old_child_indexes.getOrPut(allocator, child_id) catch std.process.exit(1);
-        if (entry.found_existing) failHost("parent child list contained duplicate element ids");
-        entry.value_ptr.* = index;
-    }
-
-    const old_indexes_in_next_order = allocator.alloc(usize, next_child_ids.len) catch std.process.exit(1);
-    defer allocator.free(old_indexes_in_next_order);
-    for (next_child_ids, 0..) |child_id, index| {
-        if (child_id >= host.dom_elements.items.len) failHost("structural move referenced missing child");
-        const child = &host.dom_elements.items[@intCast(child_id)];
-        if (!child.active) {
-            var message: [128]u8 = undefined;
-            const rendered = std.fmt.bufPrint(&message, "structural move referenced inactive child {d} under parent {d}", .{ child_id, parent_elem_id }) catch "structural move referenced inactive child";
-            failHost(rendered);
-        }
-        if (child.parent_id == null or child.parent_id.? != parent_elem_id) failHost("pure structural move crossed parent boundary");
-        old_indexes_in_next_order[index] = old_child_indexes.get(child_id) orelse failHost("pure structural move inserted a child");
-    }
-
-    const stable_scratch = allocator.alloc(usize, next_child_ids.len) catch std.process.exit(1);
-    defer allocator.free(stable_scratch);
-    const stable_len = stableSubsequenceLength(old_indexes_in_next_order, stable_scratch);
-    const displaced_count = next_child_ids.len - stable_len;
-    var displaced_index: usize = 0;
-    while (displaced_index < displaced_count) : (displaced_index += 1) {
-        counts.addMoveBefore();
-    }
-
-    for (next_child_ids) |child_id| {
-        host.dom_elements.items[@intCast(child_id)].parent_id = parent_elem_id;
-    }
-    parent.children.deinit(allocator);
-    parent.children = .empty;
-    parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
-}
-
-fn removeDomNode(host: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
     if (elem_id == 0) failHost("structural patch attempted to remove host DOM root");
     if (elem_id >= host.dom_elements.items.len) failHost("structural patch removed an element missing from DOM state");
 
-    counts.addRemoveNode();
     const elem = &host.dom_elements.items[@intCast(elem_id)];
+    if (!elem.active) {
+        var message: [128]u8 = undefined;
+        const rendered = std.fmt.bufPrint(&message, "structural patch removed inactive DOM node {d}", .{elem_id}) catch "structural patch removed an inactive DOM node";
+        failHost(rendered);
+    }
     if (elem.parent_id) |parent_id| {
         if (parent_id >= host.dom_elements.items.len) failHost("structural patch removed an element with missing parent");
         const parent = &host.dom_elements.items[@intCast(parent_id)];
-        if (findDomChildIndex(parent, elem_id)) |child_index| {
-            _ = parent.children.orderedRemove(child_index);
+        if (parent.active) {
+            if (findDomChildIndex(parent, elem_id)) |child_index| {
+                _ = parent.children.orderedRemove(child_index);
+            }
         }
     }
     elem.active = false;
@@ -5453,9 +5400,11 @@ fn removeDomNode(host: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
     elem.bound_click_event = null;
     elem.bound_input_event = null;
     elem.bound_check_event = null;
+    elem.children.deinit(allocator);
+    elem.children = .empty;
 }
 
-fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
     const allocator = host.gpa.allocator();
     if (parent_elem_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing parent");
     const parent = &host.dom_elements.items[@intCast(parent_elem_id)];
@@ -5465,26 +5414,13 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
         failHost(rendered);
     }
 
-    for (next_child_ids, 0..) |child_id, new_index| {
+    for (next_child_ids) |child_id| {
         if (child_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing child");
         const child = &host.dom_elements.items[@intCast(child_id)];
         if (!child.active) {
             var message: [128]u8 = undefined;
             const rendered = std.fmt.bufPrint(&message, "structural child replacement referenced inactive child {d} under parent {d}", .{ child_id, parent_elem_id }) catch "structural child replacement referenced inactive child";
             failHost(rendered);
-        }
-        const old_parent_id = child.parent_id;
-        const old_child_index = if (old_parent_id) |id| blk: {
-            if (id >= host.dom_elements.items.len) failHost("active DOM node referenced missing parent");
-            const old_parent = &host.dom_elements.items[@intCast(id)];
-            if (!old_parent.active) failHost("active DOM node referenced inactive parent");
-            break :blk findDomChildIndex(old_parent, child_id);
-        } else null;
-
-        if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
-            counts.addAppendChild();
-        } else if (old_child_index.? != new_index) {
-            counts.addMoveBefore();
         }
         child.parent_id = parent_elem_id;
     }
@@ -5510,16 +5446,12 @@ fn applyStructuralEventBindingsForSeen(host: *HostEnv, stream: *const HostNodeDe
     }
 
     const kinds = [_]RenderEventKind{ .click, .input, .check };
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+    for (seen, 0..) |is_seen, index| {
+        if (index == 0 or !is_seen) continue;
 
         for (kinds) |kind| {
             const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
-            const current_event_id = domEventBindingSlot(elem, kind);
-            if (current_event_id.* == next_event_id) continue;
-
-            current_event_id.* = next_event_id;
-            counts.addEventBinding();
+            host.engine.applyRenderEventBinding(host, @intCast(index), kind, next_event_id, counts);
         }
     }
 }
@@ -5534,15 +5466,10 @@ fn activeEventIdForElemKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind)
 }
 
 fn applyStructuralEventBindingsForElem(host: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
-    const elem = domElementById(host, elem_id);
     const kinds = [_]RenderEventKind{ .click, .input, .check };
     for (kinds) |kind| {
         const next_event_id = activeEventIdForElemKind(host, elem_id, kind);
-        const current_event_id = domEventBindingSlot(elem, kind);
-        if (current_event_id.* == next_event_id) continue;
-
-        current_event_id.* = next_event_id;
-        counts.addEventBinding();
+        host.engine.applyRenderEventBinding(host, elem_id, kind, next_event_id, counts);
     }
 }
 
@@ -5588,17 +5515,16 @@ fn applyActiveStreamBoolAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem
 
 fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, counts: *CommandCounts) void {
     const descriptor_index = host.engine.active_stream.elemDescriptorIndex(elem_id) orelse failHost("active render node had no descriptor index");
-    const elem = domElementById(host, elem_id);
     const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
     const bool_fields = [_]RenderBoolField{ .checked, .disabled };
 
     for (text_fields) |field| {
-        if (!streamHasTextField(&host.engine.active_stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
+        if (!streamHasTextField(&host.engine.active_stream, elem_id, field) and host.engine.clearRenderTextField(host, elem_id, field)) {
             counts.addTextField(field);
         }
     }
     for (bool_fields) |field| {
-        if (!streamHasBoolField(&host.engine.active_stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
+        if (!streamHasBoolField(&host.engine.active_stream, elem_id, field) and host.engine.clearRenderBoolField(host, elem_id, field)) {
             counts.addBoolField(field);
         }
     }
@@ -5630,12 +5556,12 @@ fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_i
 }
 
 fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, targets: HostStructuralPatchTargets) CommandCounts {
-    if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
+    if (!host.engine.hasRenderRoot()) failHost("structural DOM patch requested before initial DOM root creation");
 
     const allocator = host.gpa.allocator();
     const max_elem_id = @max(maxRenderElemId(&host.engine.active_stream), maxRenderElemId(stream));
     const required_child_table_len: usize = @intCast(max_elem_id + 1);
-    const child_table_len = @max(host.dom_elements.items.len, required_child_table_len);
+    const child_table_len = required_child_table_len;
 
     var seen = allocator.alloc(bool, child_table_len) catch std.process.exit(1);
     defer allocator.free(seen);
@@ -5654,7 +5580,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
         const parent_elem_id = renderNodeParentElemId(stream, node);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        host.sink().ensureNode(node.elem_id, renderNodeTag(stream, node), &counts);
+        host.engine.ensureRenderNode(host, node.elem_id, renderNodeTag(stream, node), &counts);
         seen[@intCast(node.elem_id)] = true;
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
@@ -5663,28 +5589,29 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     for (host.engine.active_stream.render_nodes.items) |node| {
         if (!host.renderNodeInReplacementTarget(&host.engine.active_stream, node, targets.removed)) continue;
         if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
-        host.sink().removeNode(node.elem_id, &counts);
+        host.engine.removeRenderNode(host, node.elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
         host.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         const children = streamDirectChildren(allocator, stream, parent_elem_id);
         defer allocator.free(children);
-        host.sink().replaceChildren(parent_elem_id, children, &counts);
+        host.engine.replaceRenderChildren(host, parent_elem_id, children, &counts);
     }
 
     const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
     const bool_fields = [_]RenderBoolField{ .checked, .disabled };
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+    for (seen, 0..) |is_seen, index| {
+        if (index == 0 or !is_seen) continue;
+        const elem_id: u64 = @intCast(index);
 
         for (text_fields) |field| {
-            if (!streamHasTextField(stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
+            if (!streamHasTextField(stream, elem_id, field) and host.engine.clearRenderTextField(host, elem_id, field)) {
                 counts.addTextField(field);
             }
         }
         for (bool_fields) |field| {
-            if (!streamHasBoolField(stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
+            if (!streamHasBoolField(stream, elem_id, field) and host.engine.clearRenderBoolField(host, elem_id, field)) {
                 counts.addBoolField(field);
             }
         }
@@ -5734,6 +5661,8 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
 
     applyStructuralEventBindingsForSeen(host, stream, seen, &counts);
+    host.engine.debugAssertRenderCacheMatchesStream(host, stream);
+    host.engine.debugAssertRenderCacheMatchesSink(host);
 
     host.rebuildActiveSignalGraphFromStream(stream);
     host.render_metrics.addCommandCounts(counts);
@@ -5743,19 +5672,19 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
     var counts: CommandCounts = .{};
     counts.addHostReset();
-    host.sink().reset();
+    host.engine.resetRenderTree(host);
 
     for (stream.render_nodes.items) |node| {
         switch (node.kind) {
             .element => {
                 const desc = findElementDesc(stream, node.elem_id) orelse failHost("render node referenced missing element descriptor");
-                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, desc.tag);
+                host.engine.appendRenderNode(host, desc.elem_id, desc.parent_elem_id, desc.tag);
                 counts.addCreateElement();
                 counts.addAppendChild();
             },
             .text => {
                 const desc = findTextNodeDesc(stream, node.elem_id) orelse failHost("render node referenced missing text descriptor");
-                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, "text");
+                host.engine.appendRenderNode(host, desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
                 if (host.engine.applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
@@ -5764,7 +5693,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
             },
             .signal_text => {
                 const desc = findSignalTextNodeDescMutable(stream, node.elem_id) orelse failHost("render node referenced missing signal text descriptor");
-                host.sink().appendNode(desc.elem_id, desc.parent_elem_id, "text");
+                host.engine.appendRenderNode(host, desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
                 if (evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
@@ -5798,10 +5727,11 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         evalOnChangeInitial(host, roc_host, desc);
     }
     for (stream.events.items, 0..) |desc, index| {
-        host.sink().bindEvent(desc, @intCast(index + 1));
-        counts.addEventBinding();
+        host.engine.applyRenderEventBinding(host, desc.elem_id, desc.kind, @intCast(index + 1), &counts);
     }
 
+    host.engine.debugAssertRenderCacheMatchesStream(host, stream);
+    host.engine.debugAssertRenderCacheMatchesSink(host);
     host.rebuildActiveSignalGraphFromStream(stream);
     host.render_metrics.addCommandCounts(counts);
     return counts;
@@ -5809,10 +5739,10 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
 
 fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, splice: HostStructuralSplice, targets: HostStructuralPatchTargets) CommandCounts {
     _ = targets;
-    if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
+    if (!host.engine.hasRenderRoot()) failHost("structural DOM patch requested before initial DOM root creation");
 
     const allocator = host.gpa.allocator();
-    var max_elem_id: u64 = @intCast(host.dom_elements.items.len - 1);
+    var max_elem_id: u64 = 0;
     for (splice.removed_elem_ids) |elem_id| {
         max_elem_id = @max(max_elem_id, elem_id);
     }
@@ -5820,7 +5750,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         max_elem_id = @max(max_elem_id, elem_id);
     }
     const required_child_table_len: usize = @intCast(max_elem_id + 1);
-    const child_table_len = @max(host.dom_elements.items.len, required_child_table_len);
+    const child_table_len = required_child_table_len;
 
     var seen = allocator.alloc(bool, child_table_len) catch std.process.exit(1);
     defer allocator.free(seen);
@@ -5841,32 +5771,21 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         const parent_elem_id = streamElemParentElemId(&host.engine.active_stream, elem_id);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        host.sink().ensureNode(elem_id, streamElemTag(&host.engine.active_stream, elem_id), &counts);
+        host.engine.ensureRenderNode(host, elem_id, streamElemTag(&host.engine.active_stream, elem_id), &counts);
         seen[@intCast(elem_id)] = true;
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
 
     for (splice.removed_elem_ids) |elem_id| {
         if (elem_id < seen.len and seen[@intCast(elem_id)]) continue;
-        host.sink().removeNode(elem_id, &counts);
+        host.engine.removeRenderNode(host, elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
         host.engine.recordStreamNodesScanned(host.engine.active_stream.render_nodes.items.len);
         const children = streamDirectChildren(allocator, &host.engine.active_stream, parent_elem_id);
         defer allocator.free(children);
-        for (children) |child_id| {
-            if (child_id >= host.dom_elements.items.len or host.dom_elements.items[@intCast(child_id)].active) continue;
-            const was_seen = child_id < seen.len and seen[@intCast(child_id)];
-            var message: [160]u8 = undefined;
-            const rendered = std.fmt.bufPrint(
-                &message,
-                "spliced structural parent {d} has inactive child {d}; replacement target seen={}",
-                .{ parent_elem_id, child_id, was_seen },
-            ) catch "spliced structural parent has inactive child";
-            failHost(rendered);
-        }
-        host.sink().replaceChildren(parent_elem_id, children, &counts);
+        host.engine.replaceRenderChildren(host, parent_elem_id, children, &counts);
     }
 
     for (splice.replacement_elem_ids) |elem_id| {
@@ -5881,17 +5800,19 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         evalOnChangeInitial(host, roc_host, desc);
     }
 
+    host.engine.debugAssertRenderCacheMatchesStream(host, &host.engine.active_stream);
+    host.engine.debugAssertRenderCacheMatchesSink(host);
     host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
 fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
-    if (host.dom_elements.items.len == 0) failHost("structural DOM patch requested before initial DOM root creation");
+    if (!host.engine.hasRenderRoot()) failHost("structural DOM patch requested before initial DOM root creation");
 
     const allocator = host.gpa.allocator();
-    const max_elem_id = maxRenderElemId(stream);
+    const max_elem_id = @max(maxRenderElemId(&host.engine.active_stream), maxRenderElemId(stream));
     const required_child_table_len: usize = @intCast(max_elem_id + 1);
-    const child_table_len = @max(host.dom_elements.items.len, required_child_table_len);
+    const child_table_len = required_child_table_len;
 
     var seen = allocator.alloc(bool, child_table_len) catch std.process.exit(1);
     defer allocator.free(seen);
@@ -5916,65 +5837,36 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         const parent_elem_id = renderNodeParentElemId(stream, node);
         if (parent_elem_id >= child_table_len) failHost("render node referenced parent outside structural DOM patch table");
 
-        const was_active = node.elem_id < host.dom_elements.items.len and host.dom_elements.items[@intCast(node.elem_id)].active;
-        var old_parent_id: ?u64 = null;
-        var old_child_index: ?usize = null;
-        if (was_active) {
-            const elem = host.dom_elements.items[@intCast(node.elem_id)];
-            old_parent_id = elem.parent_id;
-            if (old_parent_id) |parent_id| {
-                if (parent_id >= host.dom_elements.items.len) failHost("active DOM node referenced missing parent");
-                const old_parent = &host.dom_elements.items[@intCast(parent_id)];
-                if (!old_parent.active) failHost("active DOM node referenced inactive parent");
-                old_child_index = findDomChildIndex(old_parent, node.elem_id);
-            }
-        }
-
-        host.sink().ensureNode(node.elem_id, renderNodeTag(stream, node), &counts);
+        host.engine.ensureRenderNode(host, node.elem_id, renderNodeTag(stream, node), &counts);
         seen[@intCast(node.elem_id)] = true;
 
-        const new_child_index = next_children[@intCast(parent_elem_id)].items.len;
         next_children[@intCast(parent_elem_id)].append(allocator, node.elem_id) catch std.process.exit(1);
-
-        if (!was_active or old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
-            counts.addAppendChild();
-        } else if (old_child_index.? != new_child_index) {
-            counts.addMoveBefore();
-        }
-
-        const elem = domElementById(host, node.elem_id);
-        elem.parent_id = parent_elem_id;
     }
 
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0) continue;
-        const still_rendered = index < seen.len and seen[index];
-        if (!still_rendered and elem.active) {
-            host.sink().removeNode(@intCast(index), &counts);
-        }
+    for (host.engine.active_stream.render_nodes.items) |node| {
+        const still_rendered = node.elem_id < seen.len and seen[@intCast(node.elem_id)];
+        if (!still_rendered) host.engine.removeRenderNode(host, node.elem_id, &counts);
     }
 
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        const accepts_children = index == 0 or (index < seen.len and seen[index] and elem.active);
+    for (next_children, 0..) |*children, index| {
+        const accepts_children = index == 0 or (index < seen.len and seen[index]);
         if (!accepts_children) continue;
-
-        elem.children.deinit(allocator);
-        elem.children = next_children[index];
-        next_children[index] = .empty;
+        host.engine.replaceRenderChildren(host, @intCast(index), children.items, &counts);
     }
 
     const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
     const bool_fields = [_]RenderBoolField{ .checked, .disabled };
-    for (host.dom_elements.items, 0..) |*elem, index| {
-        if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
+    for (seen, 0..) |is_seen, index| {
+        if (index == 0 or !is_seen) continue;
+        const elem_id: u64 = @intCast(index);
 
         for (text_fields) |field| {
-            if (!streamHasTextField(stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
+            if (!streamHasTextField(stream, elem_id, field) and host.engine.clearRenderTextField(host, elem_id, field)) {
                 counts.addTextField(field);
             }
         }
         for (bool_fields) |field| {
-            if (!streamHasBoolField(stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
+            if (!streamHasBoolField(stream, elem_id, field) and host.engine.clearRenderBoolField(host, elem_id, field)) {
                 counts.addBoolField(field);
             }
         }
@@ -6015,6 +5907,8 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
     }
 
     applyStructuralEventBindings(host, stream, seen, &counts);
+    host.engine.debugAssertRenderCacheMatchesStream(host, stream);
+    host.engine.debugAssertRenderCacheMatchesSink(host);
 
     host.rebuildActiveSignalGraphFromStream(stream);
     host.render_metrics.addCommandCounts(counts);
@@ -6225,7 +6119,7 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     host.collectActiveElemRootDescriptors(roc_host, &next_stream, root, dirty_source_node_ids);
 
     const start_ns = benchmarkNowNs();
-    const counts = if (host.dom_elements.items.len == 0)
+    const counts = if (!host.engine.hasRenderRoot())
         applyNodeDescriptorStream(host, roc_host, &next_stream)
     else
         applyStructuralNodeDescriptorStream(host, roc_host, &next_stream);

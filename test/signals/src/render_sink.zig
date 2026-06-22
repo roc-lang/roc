@@ -24,20 +24,20 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkAppendNode(elem_id, parent_elem_id, tag);
         }
 
-        pub fn ensureNode(self: @This(), elem_id: u64, tag: []const u8, counts: *Counts) void {
-            self.host.sinkEnsureNode(elem_id, tag, counts);
+        pub fn ensureNode(self: @This(), elem_id: u64, tag: []const u8) void {
+            self.host.sinkEnsureNode(elem_id, tag);
         }
 
-        pub fn removeNode(self: @This(), elem_id: u64, counts: *Counts) void {
-            self.host.sinkRemoveNode(elem_id, counts);
+        pub fn removeNode(self: @This(), elem_id: u64) void {
+            self.host.sinkRemoveNode(elem_id);
         }
 
-        pub fn replaceChildren(self: @This(), parent_elem_id: u64, next_child_ids: []const u64, counts: *Counts) void {
-            self.host.sinkReplaceChildren(parent_elem_id, next_child_ids, counts);
+        pub fn replaceChildren(self: @This(), parent_elem_id: u64, next_child_ids: []const u64) void {
+            self.host.sinkReplaceChildren(parent_elem_id, next_child_ids);
         }
 
-        pub fn replaceChildrenForMoves(self: @This(), parent_elem_id: u64, next_child_ids: []const u64, counts: *Counts) void {
-            self.host.sinkReplaceChildrenForMoves(parent_elem_id, next_child_ids, counts);
+        pub fn replaceChildrenForMoves(self: @This(), parent_elem_id: u64, next_child_ids: []const u64) void {
+            self.host.sinkReplaceChildrenForMoves(parent_elem_id, next_child_ids);
         }
 
         pub fn applyTextField(self: @This(), elem_id: u64, field: TextField, value: []const u8) void {
@@ -58,6 +58,18 @@ pub fn DomSink(comptime Host: type) type {
 
         pub fn bindEvent(self: @This(), desc: anytype, event_id: u64) void {
             self.host.sinkBindEvent(desc, event_id);
+        }
+
+        pub fn bindEventKind(self: @This(), elem_id: u64, kind: EventKind, event_id: u64) void {
+            self.host.sinkBindEventKind(elem_id, kind, event_id);
+        }
+
+        pub fn clearEvent(self: @This(), elem_id: u64, kind: EventKind) void {
+            self.host.sinkClearEvent(elem_id, kind);
+        }
+
+        pub fn debugAssertNode(self: @This(), elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
+            self.host.sinkDebugAssertNode(elem_id, active, tag, parent_id, children, click_event, input_event, check_event);
         }
     };
 }

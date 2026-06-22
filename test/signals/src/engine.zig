@@ -32,6 +32,12 @@ pub const HostValueList = abi.RocListWith(HostValue, false);
 
 const RenderScalarNodeCache = struct {
     active: bool = false,
+    tag: ?[]const u8 = null,
+    parent_id: ?u64 = null,
+    children: std.ArrayListUnmanaged(u64) = .empty,
+    bound_click_event: ?u64 = null,
+    bound_input_event: ?u64 = null,
+    bound_check_event: ?u64 = null,
     text: ?[]const u8 = null,
     role: ?[]const u8 = null,
     label: ?[]const u8 = null,
@@ -41,12 +47,21 @@ const RenderScalarNodeCache = struct {
     disabled: ?bool = null,
 
     fn deinit(self: *RenderScalarNodeCache, allocator: std.mem.Allocator) void {
+        if (self.tag) |tag| allocator.free(tag);
         if (self.text) |text| allocator.free(text);
         if (self.role) |role| allocator.free(role);
         if (self.label) |label| allocator.free(label);
         if (self.test_id) |test_id| allocator.free(test_id);
         if (self.value) |value| allocator.free(value);
+        self.children.deinit(allocator);
         self.* = .{};
+    }
+
+    fn initActive(allocator: std.mem.Allocator, tag: []const u8) RenderScalarNodeCache {
+        return .{
+            .active = true,
+            .tag = allocator.dupe(u8, tag) catch @panic("out of memory"),
+        };
     }
 
     fn textSlot(self: *RenderScalarNodeCache, field: RenderTextField) *?[]const u8 {
@@ -63,6 +78,14 @@ const RenderScalarNodeCache = struct {
         return switch (field) {
             .checked => &self.checked,
             .disabled => &self.disabled,
+        };
+    }
+
+    fn eventSlot(self: *RenderScalarNodeCache, kind: RenderEventKind) *?u64 {
+        return switch (kind) {
+            .click => &self.bound_click_event,
+            .input => &self.bound_input_event,
+            .check => &self.bound_check_event,
         };
     }
 };
@@ -228,6 +251,32 @@ fn u64SliceContains(items: []const u64, target: u64) bool {
         if (item == target) return true;
     }
     return false;
+}
+
+fn u64SliceIndex(items: []const u64, target: u64) ?usize {
+    for (items, 0..) |item, index| {
+        if (item == target) return index;
+    }
+    return null;
+}
+
+fn stableSubsequenceLength(indexes: []const usize, scratch: []usize) usize {
+    var len: usize = 0;
+    for (indexes) |index| {
+        var low: usize = 0;
+        var high = len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (scratch[mid] < index) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        scratch[low] = index;
+        if (low == len) len += 1;
+    }
+    return len;
 }
 
 /// A retained Roc value plus the equality and drop thunks that own it. Holds
@@ -1666,7 +1715,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics = metrics;
         }
 
-        pub fn deinitRenderScalarCache(self: *Self, ctx: anytype) void {
+        pub fn deinitRenderCache(self: *Self, ctx: anytype) void {
             const allocator = Ctx.allocator(ctx);
             for (self.render_scalar_nodes.items) |*node| {
                 node.deinit(allocator);
@@ -1675,45 +1724,261 @@ pub fn Engine(comptime Ctx: type) type {
             self.render_scalar_nodes = .empty;
         }
 
-        pub fn resetRenderScalarCache(self: *Self, ctx: anytype) void {
+        pub fn hasRenderRoot(self: *const Self) bool {
+            return self.render_scalar_nodes.items.len != 0 and self.render_scalar_nodes.items[0].active;
+        }
+
+        pub fn resetRenderTree(self: *Self, ctx: anytype) void {
             const allocator = Ctx.allocator(ctx);
             for (self.render_scalar_nodes.items) |*node| {
                 node.deinit(allocator);
             }
             self.render_scalar_nodes.items.len = 0;
-            self.ensureRenderScalarNode(ctx, 0);
+            self.render_scalar_nodes.append(allocator, RenderScalarNodeCache.initActive(allocator, "root")) catch @panic("out of memory");
+            Ctx.sink(ctx).reset();
         }
 
-        pub fn ensureRenderScalarNode(self: *Self, ctx: anytype, elem_id: u64) void {
+        fn ensureRenderCacheNode(self: *Self, ctx: anytype, elem_id: u64, tag: []const u8) bool {
             const allocator = Ctx.allocator(ctx);
             const index: usize = @intCast(elem_id);
             if (index > self.render_scalar_nodes.items.len) {
-                @panic("render scalar cache node ids must be dense and ordered by elem id");
+                @panic("render cache node ids must be dense and ordered by elem id");
             }
             if (index == self.render_scalar_nodes.items.len) {
-                self.render_scalar_nodes.append(allocator, .{ .active = true }) catch @panic("out of memory");
-                return;
+                self.render_scalar_nodes.append(allocator, RenderScalarNodeCache.initActive(allocator, tag)) catch @panic("out of memory");
+                return true;
             }
-            if (!self.render_scalar_nodes.items[index].active) {
-                @panic("render descriptor referenced an inactive render scalar cache identity");
+            const node = &self.render_scalar_nodes.items[index];
+            if (!node.active) {
+                @panic("render descriptor referenced an inactive render cache identity");
             }
+            if (node.tag == null or !std.mem.eql(u8, node.tag.?, tag)) {
+                @panic("render descriptor changed the tag for an existing render cache identity");
+            }
+            return false;
         }
 
-        pub fn tombstoneRenderScalarNode(self: *Self, ctx: anytype, elem_id: u64) void {
+        pub fn appendRenderNode(self: *Self, ctx: anytype, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+            const created = self.ensureRenderCacheNode(ctx, elem_id, tag);
+            if (!created) @panic("initial render append reused an existing render cache identity");
+            const parent = self.activeRenderScalarNode(parent_elem_id);
+            const child = self.activeRenderScalarNode(elem_id);
+            child.parent_id = parent_elem_id;
+            parent.children.append(Ctx.allocator(ctx), elem_id) catch @panic("out of memory");
+            Ctx.sink(ctx).appendNode(elem_id, parent_elem_id, tag);
+        }
+
+        pub fn ensureRenderNode(self: *Self, ctx: anytype, elem_id: u64, tag: []const u8, counts: *render.Counts) void {
+            if (!self.ensureRenderCacheNode(ctx, elem_id, tag)) return;
+            Ctx.sink(ctx).ensureNode(elem_id, tag);
+            counts.addCreateElement();
+        }
+
+        pub fn removeRenderNode(self: *Self, ctx: anytype, elem_id: u64, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             const index: usize = @intCast(elem_id);
             if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
-                @panic("render scalar cache tombstoned a missing element");
+                @panic("render cache removed a missing element");
+            }
+            if (elem_id == 0) @panic("render cache attempted to remove the host DOM root");
+
+            if (self.render_scalar_nodes.items[index].parent_id) |parent_id| {
+                const parent_index: usize = @intCast(parent_id);
+                if (parent_index < self.render_scalar_nodes.items.len and self.render_scalar_nodes.items[parent_index].active) {
+                    const parent = &self.render_scalar_nodes.items[parent_index];
+                    if (u64SliceIndex(parent.children.items, elem_id)) |child_index| {
+                        _ = parent.children.orderedRemove(child_index);
+                    }
+                }
             }
             self.render_scalar_nodes.items[index].deinit(allocator);
+            Ctx.sink(ctx).removeNode(elem_id);
+            counts.addRemoveNode();
         }
 
         fn activeRenderScalarNode(self: *Self, elem_id: u64) *RenderScalarNodeCache {
             const index: usize = @intCast(elem_id);
             if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
-                @panic("render scalar command referenced missing element cache");
+                @panic("render command referenced missing element cache");
             }
             return &self.render_scalar_nodes.items[index];
+        }
+
+        pub fn replaceRenderChildren(self: *Self, ctx: anytype, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
+            const allocator = Ctx.allocator(ctx);
+            const parent = self.activeRenderScalarNode(parent_elem_id);
+
+            for (next_child_ids, 0..) |child_id, new_index| {
+                const child = self.activeRenderScalarNode(child_id);
+                const old_parent_id = child.parent_id;
+                const old_child_index = if (old_parent_id) |id| u64SliceIndex(self.activeRenderScalarNode(id).children.items, child_id) else null;
+
+                if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
+                    counts.addAppendChild();
+                } else if (old_child_index.? != new_index) {
+                    counts.addMoveBefore();
+                }
+                child.parent_id = parent_elem_id;
+            }
+
+            parent.children.deinit(allocator);
+            parent.children = .empty;
+            parent.children.appendSlice(allocator, next_child_ids) catch @panic("out of memory");
+            Ctx.sink(ctx).replaceChildren(parent_elem_id, next_child_ids);
+        }
+
+        pub fn replaceRenderChildrenForMoves(self: *Self, ctx: anytype, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
+            const allocator = Ctx.allocator(ctx);
+            const parent = self.activeRenderScalarNode(parent_elem_id);
+            if (parent.children.items.len != next_child_ids.len) @panic("pure structural move changed child count");
+
+            var old_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .{};
+            defer old_child_indexes.deinit(allocator);
+            for (parent.children.items, 0..) |child_id, index| {
+                const entry = old_child_indexes.getOrPut(allocator, child_id) catch @panic("out of memory");
+                if (entry.found_existing) @panic("parent child list contained duplicate element ids");
+                entry.value_ptr.* = index;
+            }
+
+            const old_indexes_in_next_order = allocator.alloc(usize, next_child_ids.len) catch @panic("out of memory");
+            defer allocator.free(old_indexes_in_next_order);
+            for (next_child_ids, 0..) |child_id, index| {
+                const child = self.activeRenderScalarNode(child_id);
+                if (child.parent_id == null or child.parent_id.? != parent_elem_id) @panic("pure structural move crossed parent boundary");
+                old_indexes_in_next_order[index] = old_child_indexes.get(child_id) orelse @panic("pure structural move inserted a child");
+            }
+
+            const stable_scratch = allocator.alloc(usize, next_child_ids.len) catch @panic("out of memory");
+            defer allocator.free(stable_scratch);
+            const stable_len = stableSubsequenceLength(old_indexes_in_next_order, stable_scratch);
+            const displaced_count = next_child_ids.len - stable_len;
+            var displaced_index: usize = 0;
+            while (displaced_index < displaced_count) : (displaced_index += 1) {
+                counts.addMoveBefore();
+            }
+
+            for (next_child_ids) |child_id| {
+                self.activeRenderScalarNode(child_id).parent_id = parent_elem_id;
+            }
+            parent.children.deinit(allocator);
+            parent.children = .empty;
+            parent.children.appendSlice(allocator, next_child_ids) catch @panic("out of memory");
+            Ctx.sink(ctx).replaceChildrenForMoves(parent_elem_id, next_child_ids);
+        }
+
+        pub fn applyRenderEventBinding(self: *Self, ctx: anytype, elem_id: u64, kind: RenderEventKind, event_id: ?u64, counts: *render.Counts) void {
+            const slot = self.activeRenderScalarNode(elem_id).eventSlot(kind);
+            if (slot.* == event_id) return;
+
+            slot.* = event_id;
+            if (event_id) |id| {
+                Ctx.sink(ctx).bindEventKind(elem_id, kind, id);
+            } else {
+                Ctx.sink(ctx).clearEvent(elem_id, kind);
+            }
+            counts.addEventBinding();
+        }
+
+        fn descriptorStreamNodeTag(stream: *const HostNodeDescriptorStream, node: HostRenderNode) []const u8 {
+            const descriptor_index = stream.elemDescriptorIndex(node.elem_id) orelse @panic("render node had no descriptor index");
+            return switch (node.kind) {
+                .element => blk: {
+                    const index = descriptor_index.element orelse @panic("element render node had no element descriptor");
+                    if (index >= stream.elements.items.len) @panic("element descriptor index exceeded descriptor table");
+                    const desc = stream.elements.items[index];
+                    if (desc.elem_id != node.elem_id) @panic("element descriptor index pointed at the wrong elem id");
+                    break :blk desc.tag;
+                },
+                .text, .signal_text => "text",
+            };
+        }
+
+        fn descriptorStreamNodeParent(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
+            const descriptor_index = stream.elemDescriptorIndex(node.elem_id) orelse @panic("render node had no descriptor index");
+            return switch (node.kind) {
+                .element => blk: {
+                    const index = descriptor_index.element orelse @panic("element render node had no element descriptor");
+                    if (index >= stream.elements.items.len) @panic("element descriptor index exceeded descriptor table");
+                    const desc = stream.elements.items[index];
+                    if (desc.elem_id != node.elem_id) @panic("element descriptor index pointed at the wrong elem id");
+                    break :blk desc.parent_elem_id;
+                },
+                .text => blk: {
+                    const index = descriptor_index.text_node orelse @panic("text render node had no text descriptor");
+                    if (index >= stream.text_nodes.items.len) @panic("text descriptor index exceeded descriptor table");
+                    const desc = stream.text_nodes.items[index];
+                    if (desc.elem_id != node.elem_id) @panic("text descriptor index pointed at the wrong elem id");
+                    break :blk desc.parent_elem_id;
+                },
+                .signal_text => blk: {
+                    const index = descriptor_index.signal_text_node orelse @panic("signal text render node had no signal text descriptor");
+                    if (index >= stream.signal_text_nodes.items.len) @panic("signal text descriptor index exceeded descriptor table");
+                    const desc = stream.signal_text_nodes.items[index];
+                    if (desc.elem_id != node.elem_id) @panic("signal text descriptor index pointed at the wrong elem id");
+                    break :blk desc.parent_elem_id;
+                },
+            };
+        }
+
+        pub fn debugAssertRenderCacheMatchesStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+            if (comptime builtin.mode != .Debug) return;
+
+            const allocator = Ctx.allocator(ctx);
+            var seen = allocator.alloc(bool, self.render_scalar_nodes.items.len) catch @panic("out of memory");
+            defer allocator.free(seen);
+            @memset(seen, false);
+            if (seen.len != 0) seen[0] = true;
+
+            for (stream.render_nodes.items) |node| {
+                const index: usize = @intCast(node.elem_id);
+                if (index >= self.render_scalar_nodes.items.len) @panic("descriptor stream referenced render cache node outside table");
+                const cached = &self.render_scalar_nodes.items[index];
+                if (!cached.active) @panic("descriptor stream referenced inactive render cache node");
+                if (cached.tag == null or !std.mem.eql(u8, cached.tag.?, descriptorStreamNodeTag(stream, node))) {
+                    @panic("descriptor stream tag disagreed with render cache");
+                }
+                const parent_id = descriptorStreamNodeParent(stream, node);
+                if (cached.parent_id == null or cached.parent_id.? != parent_id) {
+                    @panic("descriptor stream parent disagreed with render cache");
+                }
+                seen[index] = true;
+            }
+
+            for (self.render_scalar_nodes.items, 0..) |cached, index| {
+                if (index == 0 or !cached.active) continue;
+                if (index >= seen.len or !seen[index]) @panic("active render cache node was absent from descriptor stream");
+            }
+
+            for (self.render_scalar_nodes.items, 0..) |cached, parent_id| {
+                if (!cached.active) continue;
+                var expected_children: std.ArrayListUnmanaged(u64) = .empty;
+                defer expected_children.deinit(allocator);
+                for (stream.render_nodes.items) |node| {
+                    if (descriptorStreamNodeParent(stream, node) == parent_id) {
+                        expected_children.append(allocator, node.elem_id) catch @panic("out of memory");
+                    }
+                }
+                if (!std.mem.eql(u64, cached.children.items, expected_children.items)) {
+                    @panic("descriptor stream child order disagreed with render cache");
+                }
+            }
+        }
+
+        pub fn debugAssertRenderCacheMatchesSink(self: *Self, ctx: anytype) void {
+            if (comptime builtin.mode != .Debug) return;
+
+            for (self.render_scalar_nodes.items, 0..) |cached, index| {
+                Ctx.sink(ctx).debugAssertNode(
+                    @intCast(index),
+                    cached.active,
+                    cached.tag,
+                    cached.parent_id,
+                    cached.children.items,
+                    cached.bound_click_event,
+                    cached.bound_input_event,
+                    cached.bound_check_event,
+                );
+            }
         }
 
         pub fn applyRenderTextField(self: *Self, ctx: anytype, elem_id: u64, field: RenderTextField, value: []const u8) bool {
