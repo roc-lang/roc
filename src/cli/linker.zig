@@ -13,6 +13,7 @@ const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
 const DwarfSplice = @import("macho/DwarfSplice.zig");
 const RocTarget = @import("roc_target").RocTarget;
+const WasmModule = @import("backend").wasm.WasmModule;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -123,6 +124,9 @@ pub const LinkConfig = struct {
 
     /// Whether the final WASM module imports `env.memory` instead of defining memory.
     wasm_import_memory: bool = false,
+
+    /// Whether the final WASM memory is guaranteed to start zero-filled.
+    wasm_zero_filled_memory: bool = false,
 
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
@@ -806,6 +810,13 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         error.LinkFailed => return LinkError.LinkFailed,
     };
 
+    if (config.target_format == .wasm and config.wasm_zero_filled_memory and !config.disable_output) {
+        omitNoopZeroActiveDataSegments(ctx, config.output_path) catch |err| {
+            std.log.warn("Failed to omit zero-filled wasm data segments from {s}: {}", .{ config.output_path, err });
+            return LinkError.LinkFailed;
+        };
+    }
+
     // On macOS, ld64.lld does not write LC_MAIN.stacksize from a `-stack_size`
     // arg (zig's own MachO linker does, but we link via the LLVM ld64.lld C
     // API). Patch it ourselves so the main thread gets 64 MiB instead of the
@@ -829,6 +840,16 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
             std.log.warn("Failed to re-sign {s} after stacksize patch: {}", .{ config.output_path, err });
         };
     }
+}
+
+fn omitNoopZeroActiveDataSegments(ctx: *CliCtx, output_path: []const u8) anyerror!void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, output_path, ctx.gpa, .limited(std.math.maxInt(u32)));
+    defer ctx.gpa.free(bytes);
+
+    const rewritten = try WasmModule.omitNoopZeroActiveDataSegments(ctx.gpa, bytes) orelse return;
+    defer ctx.gpa.free(rewritten);
+
+    try @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, output_path, rewritten);
 }
 
 const macho = std.macho;

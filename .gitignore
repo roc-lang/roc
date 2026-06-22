@@ -46,6 +46,7 @@ zig-pkg
 *.def
 *.tmp
 *.wasm
+!test/cli/rocci_bird_postcheck_panic/platform/targets/wasm32/host.wasm
 *.exe
 *.pdb
 

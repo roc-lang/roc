@@ -317,6 +317,9 @@ pub const DefinedGlobal = struct {
 const DataSegment = struct {
     offset: u32, // offset in linear memory
     data: []u8, // bytes to place
+    /// Segment reserves zero-filled memory. This is object segment metadata, not
+    /// a byte-pattern optimization.
+    zero_fill: bool = false,
     /// Byte offset of this segment's payload within the original data section body.
     /// Used to normalize reloc.DATA entries during preload.
     section_offset: u32 = 0,
@@ -327,6 +330,11 @@ const DataSegment = struct {
     /// Segment flags from linking metadata.
     flags: u32 = 0,
 };
+
+fn isZeroFillSegmentName(name: ?[]const u8) bool {
+    const text = name orelse return false;
+    return std.mem.eql(u8, text, ".bss") or std.mem.startsWith(u8, text, ".bss.");
+}
 
 /// An imported function
 pub const Import = struct {
@@ -418,6 +426,7 @@ global_imports: std.ArrayList(GlobalImport),
 /// Table imports (e.g. __indirect_function_table for PIC modules).
 table_imports: std.ArrayList(TableImport),
 data_segments: std.ArrayList(DataSegment),
+omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
 has_memory: bool,
@@ -474,6 +483,7 @@ pub fn init(allocator: Allocator) Self {
         .global_imports = .empty,
         .table_imports = .empty,
         .data_segments = .empty,
+        .omit_zero_fill_data_segments = false,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
         .memory_import = false,
@@ -878,6 +888,7 @@ pub fn addDataSegmentWithInfo(
     try self.data_segments.append(self.allocator, .{
         .offset = offset,
         .data = data_copy,
+        .zero_fill = isZeroFillSegmentName(name),
         .section_offset = 0,
         .name = name,
         .alignment = alignmentLog2(alignment),
@@ -2455,6 +2466,7 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
 pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
     import_memory: bool = false,
+    imported_memory_zeroed: bool = false,
     minimum_memory: ?usize = null,
     maximum_memory: ?usize = null,
     export_memory: bool = true,
@@ -2506,6 +2518,7 @@ pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) 
     // Ensure memory is present in the final module.
     self.has_memory = true;
     self.memory_import = config.import_memory;
+    self.omit_zero_fill_data_segments = !config.import_memory or config.imported_memory_zeroed;
 
     // Configure table if we have any function indices to place in it.
     if (self.table_func_indices.items.len > 0) {
@@ -2566,6 +2579,7 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
         segment.name = info.name;
         segment.alignment = info.alignment;
         segment.flags = info.flags;
+        segment.zero_fill = isZeroFillSegmentName(info.name);
     }
 
     // Adjust reloc.CODE offsets: they are relative to the code section body
@@ -2903,6 +2917,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             try self.data_segments.append(self.allocator, .{
                 .offset = 0,
                 .data = data_copy,
+                .zero_fill = false,
                 .section_offset = @intCast(data_start - section_body_start),
                 .name = null,
                 .alignment = 0,
@@ -2922,6 +2937,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             try self.data_segments.append(self.allocator, .{
                 .offset = offset,
                 .data = data_copy,
+                .zero_fill = false,
                 .section_offset = @intCast(data_start - section_body_start),
                 .name = null,
                 .alignment = 0,
@@ -3027,8 +3043,8 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Data section
-    if (self.data_segments.items.len > 0) {
-        try self.encodeDataSection(allocator, &output);
+    if (self.encodedDataSegmentCount(self.omit_zero_fill_data_segments) > 0) {
+        try self.encodeDataSection(allocator, &output, self.omit_zero_fill_data_segments);
     }
 
     return output.toOwnedSlice(allocator);
@@ -3080,9 +3096,9 @@ pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeErr
         break :blk count_leb_size;
     } else 0;
 
-    if (self.data_segments.items.len > 0) {
+    if (self.encodedDataSegmentCount(false) > 0) {
         data_section_index = section_index;
-        try self.encodeDataSection(allocator, &output);
+        try self.encodeDataSection(allocator, &output, false);
         section_index += 1;
     }
 
@@ -3532,12 +3548,26 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
+fn shouldEncodeDataSegment(segment: DataSegment, omit_zero_fill: bool) bool {
+    return !(omit_zero_fill and segment.zero_fill);
+}
+
+fn encodedDataSegmentCount(self: *const Self, omit_zero_fill: bool) u32 {
+    var count: u32 = 0;
+    for (self.data_segments.items) |segment| {
+        if (shouldEncodeDataSegment(segment, omit_zero_fill)) count += 1;
+    }
+    return count;
+}
+
+fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8), omit_zero_fill: bool) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, @intCast(self.data_segments.items.len));
+    try leb128WriteU32(gpa, &section_data, self.encodedDataSegmentCount(omit_zero_fill));
     for (self.data_segments.items) |*ds| {
+        if (!shouldEncodeDataSegment(ds.*, omit_zero_fill)) continue;
+
         // Active segment for memory 0
         try leb128WriteU32(gpa, &section_data, 0); // flags: active, memory 0
         // Offset expression: i32.const <offset>; end
@@ -3553,6 +3583,185 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
     try output.append(gpa, @intFromEnum(SectionId.data_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
+}
+
+pub const ZeroDataRewriteError = Allocator.Error || ParseError;
+
+const DataSectionRewrite = struct {
+    payload: []u8,
+    original_count: u32,
+    rewritten_count: u32,
+    changed: bool,
+
+    fn deinit(self: DataSectionRewrite, gpa: Allocator) void {
+        gpa.free(self.payload);
+    }
+};
+
+fn appendRawSection(gpa: Allocator, output: *std.ArrayList(u8), section_id: u8, payload: []const u8) Allocator.Error!void {
+    try output.append(gpa, section_id);
+    try leb128WriteU32(gpa, output, @intCast(payload.len));
+    try output.appendSlice(gpa, payload);
+}
+
+fn allZero(bytes: []const u8) bool {
+    for (bytes) |byte| {
+        if (byte != 0) return false;
+    }
+    return true;
+}
+
+fn rewriteDataSectionOmittingZeroActiveSegments(gpa: Allocator, payload: []const u8) ZeroDataRewriteError!DataSectionRewrite {
+    var cursor: usize = 0;
+    const original_count = try readU32(payload, &cursor);
+
+    var segments: std.ArrayList(u8) = .empty;
+    defer segments.deinit(gpa);
+
+    var rewritten_count: u32 = 0;
+    var changed = false;
+
+    for (0..original_count) |_| {
+        const segment_start = cursor;
+        const flags = try readU32(payload, &cursor);
+        const active = switch (flags) {
+            0 => true,
+            1 => false,
+            2 => blk: {
+                _ = try readU32(payload, &cursor);
+                break :blk true;
+            },
+            else => return error.InvalidSection,
+        };
+
+        if (active) {
+            if (cursor >= payload.len) return error.UnexpectedEnd;
+            if (payload[cursor] != Op.i32_const) return error.InvalidSection;
+            cursor += 1;
+            _ = try readI32(payload, &cursor);
+            if (cursor >= payload.len) return error.UnexpectedEnd;
+            if (payload[cursor] != Op.end) return error.InvalidSection;
+            cursor += 1;
+        }
+
+        const data_len = try readU32(payload, &cursor);
+        const data_start = cursor;
+        const data_end = cursor + data_len;
+        if (data_end > payload.len) return error.UnexpectedEnd;
+        cursor = data_end;
+
+        if (active and allZero(payload[data_start..data_end])) {
+            changed = true;
+            continue;
+        }
+
+        try segments.appendSlice(gpa, payload[segment_start..cursor]);
+        rewritten_count += 1;
+    }
+
+    if (cursor != payload.len) return error.InvalidSection;
+
+    var rewritten: std.ArrayList(u8) = .empty;
+    errdefer rewritten.deinit(gpa);
+    try leb128WriteU32(gpa, &rewritten, rewritten_count);
+    try rewritten.appendSlice(gpa, segments.items);
+
+    return .{
+        .payload = try rewritten.toOwnedSlice(gpa),
+        .original_count = original_count,
+        .rewritten_count = rewritten_count,
+        .changed = changed,
+    };
+}
+
+/// Remove no-op zero active data segments from a final wasm binary.
+///
+/// This is only semantics-preserving when the final memory is guaranteed to
+/// start zero-filled. Passive segments are retained because code may reference
+/// them with bulk-memory instructions.
+pub fn omitNoopZeroActiveDataSegments(gpa: Allocator, bytes: []const u8) ZeroDataRewriteError!?[]u8 {
+    if (bytes.len < 8) return error.UnexpectedEnd;
+    if (!std.mem.eql(u8, bytes[0..4], wasm_magic)) return error.InvalidMagic;
+    if (std.mem.readInt(u32, bytes[4..8], .little) != wasm_version) return error.InvalidVersion;
+
+    var cursor: usize = 8;
+    var data_payload_start: ?usize = null;
+    var data_payload_end: ?usize = null;
+    var data_count_payload_start: ?usize = null;
+    var data_count_payload_end: ?usize = null;
+    var declared_data_count: ?u32 = null;
+    var rewrite: ?DataSectionRewrite = null;
+    errdefer if (rewrite) |rewritten| rewritten.deinit(gpa);
+
+    while (cursor < bytes.len) {
+        const section_start = cursor;
+        const section_id = bytes[cursor];
+        cursor += 1;
+        const section_size = try readU32(bytes, &cursor);
+        const section_payload_start = cursor;
+        const section_payload_end = cursor + section_size;
+        if (section_payload_end > bytes.len) return error.UnexpectedEnd;
+
+        if (section_id == @intFromEnum(SectionId.data_count_section)) {
+            var count_cursor = section_payload_start;
+            const count = try readU32(bytes, &count_cursor);
+            if (count_cursor != section_payload_end) return error.InvalidSection;
+            data_count_payload_start = section_payload_start;
+            data_count_payload_end = section_payload_end;
+            declared_data_count = count;
+        } else if (section_id == @intFromEnum(SectionId.data_section)) {
+            data_payload_start = section_payload_start;
+            data_payload_end = section_payload_end;
+            rewrite = try rewriteDataSectionOmittingZeroActiveSegments(gpa, bytes[section_payload_start..section_payload_end]);
+        }
+
+        cursor = section_payload_end;
+        _ = section_start;
+    }
+
+    const rewritten = rewrite orelse return null;
+    if (!rewritten.changed) {
+        rewritten.deinit(gpa);
+        rewrite = null;
+        return null;
+    }
+    if (declared_data_count) |count| {
+        if (count != rewritten.original_count) return error.InvalidSection;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(gpa);
+    try output.appendSlice(gpa, bytes[0..8]);
+
+    cursor = 8;
+    while (cursor < bytes.len) {
+        const section_start = cursor;
+        const section_id = bytes[cursor];
+        cursor += 1;
+        const section_size = try readU32(bytes, &cursor);
+        const section_payload_start = cursor;
+        const section_payload_end = cursor + section_size;
+        if (section_payload_end > bytes.len) return error.UnexpectedEnd;
+
+        if (data_count_payload_start != null and section_payload_start == data_count_payload_start.? and section_payload_end == data_count_payload_end.?) {
+            var data_count_payload: std.ArrayList(u8) = .empty;
+            defer data_count_payload.deinit(gpa);
+            try leb128WriteU32(gpa, &data_count_payload, rewritten.rewritten_count);
+            try appendRawSection(gpa, &output, section_id, data_count_payload.items);
+        } else if (section_payload_start == data_payload_start.? and section_payload_end == data_payload_end.?) {
+            if (rewritten.rewritten_count > 0) {
+                try appendRawSection(gpa, &output, section_id, rewritten.payload);
+            }
+        } else {
+            try output.appendSlice(gpa, bytes[section_start..section_payload_end]);
+        }
+
+        cursor = section_payload_end;
+    }
+
+    rewritten.deinit(gpa);
+    rewrite = null;
+    return try output.toOwnedSlice(gpa);
 }
 
 fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
@@ -5486,6 +5695,142 @@ test "mergeModule + resolveDataRelocations — patches merged data segment bytes
     const patched = std.mem.readInt(u32, patch_segment.data[0..4], .little);
 
     try std.testing.expectEqual(target_segment.offset, patched);
+}
+
+const EncodedDataSummary = struct {
+    count: u32,
+    payload_len: u32,
+};
+
+fn encodedDataSummary(bytes: []const u8) ParseError!EncodedDataSummary {
+    if (bytes.len < 8) return error.UnexpectedEnd;
+    var cursor: usize = 8;
+    while (cursor < bytes.len) {
+        const section_id = bytes[cursor];
+        cursor += 1;
+        const section_size = try readU32(bytes, &cursor);
+        const section_end = cursor + section_size;
+        if (section_end > bytes.len) return error.UnexpectedEnd;
+
+        if (section_id == @intFromEnum(SectionId.data_section)) {
+            const count = try readU32(bytes, &cursor);
+            var payload_len: u32 = 0;
+            for (0..count) |_| {
+                const flags = try readU32(bytes, &cursor);
+                switch (flags) {
+                    0 => {
+                        if (cursor >= bytes.len) return error.UnexpectedEnd;
+                        if (bytes[cursor] != Op.i32_const) return error.InvalidSection;
+                        cursor += 1;
+                        _ = try readI32(bytes, &cursor);
+                        if (cursor >= bytes.len) return error.UnexpectedEnd;
+                        if (bytes[cursor] != Op.end) return error.InvalidSection;
+                        cursor += 1;
+                    },
+                    1 => {},
+                    2 => {
+                        _ = try readU32(bytes, &cursor);
+                        if (cursor >= bytes.len) return error.UnexpectedEnd;
+                        if (bytes[cursor] != Op.i32_const) return error.InvalidSection;
+                        cursor += 1;
+                        _ = try readI32(bytes, &cursor);
+                        if (cursor >= bytes.len) return error.UnexpectedEnd;
+                        if (bytes[cursor] != Op.end) return error.InvalidSection;
+                        cursor += 1;
+                    },
+                    else => return error.InvalidSection,
+                }
+                const len = try readU32(bytes, &cursor);
+                if (cursor + len > section_end) return error.UnexpectedEnd;
+                cursor += len;
+                payload_len += len;
+            }
+            return .{ .count = count, .payload_len = payload_len };
+        }
+
+        cursor = section_end;
+    }
+    return .{ .count = 0, .payload_len = 0 };
+}
+
+test "encode — omits bss payload when final memory starts zero-filled" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
+    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+    try std.testing.expect(module.data_segments.items[1].zero_fill);
+
+    try module.finalizeMemoryAndTableWithConfig(.{
+        .stack_bytes = 16,
+        .import_memory = true,
+        .imported_memory_zeroed = true,
+        .minimum_memory = 65536,
+        .maximum_memory = 65536,
+        .export_memory = false,
+    });
+
+    const encoded = try module.encode(allocator);
+    defer allocator.free(encoded);
+
+    const summary = try encodedDataSummary(encoded);
+    try std.testing.expectEqual(@as(u32, 1), summary.count);
+    try std.testing.expectEqual(@as(u32, 4), summary.payload_len);
+}
+
+test "encode — keeps bss payload when imported memory may be uninitialized" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
+    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+
+    try module.finalizeMemoryAndTableWithConfig(.{
+        .stack_bytes = 16,
+        .import_memory = true,
+        .imported_memory_zeroed = false,
+        .minimum_memory = 65536,
+        .maximum_memory = 65536,
+        .export_memory = false,
+    });
+
+    const encoded = try module.encode(allocator);
+    defer allocator.free(encoded);
+
+    const summary = try encodedDataSummary(encoded);
+    try std.testing.expectEqual(@as(u32, 2), summary.count);
+    try std.testing.expectEqual(@as(u32, 68), summary.payload_len);
+}
+
+test "omitNoopZeroActiveDataSegments — removes zero active payload from final wasm" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
+    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
+
+    try module.finalizeMemoryAndTableWithConfig(.{
+        .stack_bytes = 16,
+        .import_memory = true,
+        .imported_memory_zeroed = false,
+        .minimum_memory = 65536,
+        .maximum_memory = 65536,
+        .export_memory = false,
+    });
+
+    const encoded = try module.encode(allocator);
+    defer allocator.free(encoded);
+    try std.testing.expectEqual(@as(u32, 68), (try encodedDataSummary(encoded)).payload_len);
+
+    const rewritten = (try omitNoopZeroActiveDataSegments(allocator, encoded)) orelse return error.TestUnexpectedResult;
+    defer allocator.free(rewritten);
+
+    const summary = try encodedDataSummary(rewritten);
+    try std.testing.expectEqual(@as(u32, 1), summary.count);
+    try std.testing.expectEqual(@as(u32, 4), summary.payload_len);
 }
 
 test "mergeModule — element section entries remapped and appended" {

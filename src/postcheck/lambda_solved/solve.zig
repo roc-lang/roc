@@ -642,7 +642,8 @@ const Solver = struct {
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
             .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
-            else => expected,
+            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(Lifted.callProcCallee(call))])).ret,
+            else => try self.lowerTypeFresh(expr.ty),
         };
         try self.unify(ty, expected);
         self.expr_tys[index] = ty;

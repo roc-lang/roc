@@ -2469,6 +2469,12 @@ const Cloner = struct {
                 .args = try self.cloneExprSpan(args_span),
             } } }) },
         };
+        if (exprContainsReturn(self.pass.program, body)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
 
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -2539,6 +2545,8 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
+        if (exprContainsReturn(self.pass.program, body)) return .{ .expr = try self.cloneExprPlain(original_expr) };
+
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
         const args = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(args_span));
@@ -3132,6 +3140,102 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
         .local => |local| local,
         else => null,
     };
+}
+
+/// A body with an early return can be cloned into a worker with the same return
+/// target, but it cannot be directly inlined into a different caller body.
+fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
+    return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
+        .return_ => true,
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .fn_ref,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        => false,
+        .list,
+        .tuple,
+        => |items| exprSpanContainsReturn(program, items),
+        .record => |fields| blk: {
+            for (program.fieldExprSpan(fields)) |field| {
+                if (exprContainsReturn(program, field.value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag => |tag| exprSpanContainsReturn(program, tag.payloads),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| exprContainsReturn(program, child),
+        .expect_err => |expect_err| exprContainsReturn(program, expect_err.msg),
+        .comptime_branch_taken => |taken| exprContainsReturn(program, taken.body),
+        .let_ => |let_| exprContainsReturn(program, let_.value) or exprContainsReturn(program, let_.rest),
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => Common.invariant("pre-lift function expression reached call-pattern return scan"),
+        .call_value => |call| exprContainsReturn(program, call.callee) or exprSpanContainsReturn(program, call.args),
+        .call_proc => |call| exprSpanContainsReturn(program, call.args),
+        .low_level => |call| exprSpanContainsReturn(program, call.args),
+        .field_access => |field| exprContainsReturn(program, field.receiver),
+        .tuple_access => |access| exprContainsReturn(program, access.tuple),
+        .structural_eq => |eq| exprContainsReturn(program, eq.lhs) or exprContainsReturn(program, eq.rhs),
+        .match_ => |match| blk: {
+            if (exprContainsReturn(program, match.scrutinee)) break :blk true;
+            for (program.branchSpan(match.branches)) |branch| {
+                if (branch.guard) |guard| {
+                    if (exprContainsReturn(program, guard)) break :blk true;
+                }
+                if (exprContainsReturn(program, branch.body)) break :blk true;
+            }
+            break :blk false;
+        },
+        .if_ => |if_| blk: {
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                if (exprContainsReturn(program, branch.cond) or exprContainsReturn(program, branch.body)) {
+                    break :blk true;
+                }
+            }
+            break :blk exprContainsReturn(program, if_.final_else);
+        },
+        .block => |block| stmtSpanContainsReturn(program, block.statements) or exprContainsReturn(program, block.final_expr),
+        .loop_ => |loop| exprSpanContainsReturn(program, loop.initial_values) or exprContainsReturn(program, loop.body),
+        .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
+        .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
+    };
+}
+
+fn exprSpanContainsReturn(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
+    for (program.exprSpan(span)) |expr_id| {
+        if (exprContainsReturn(program, expr_id)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
+    return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .return_ => true,
+        .let_ => |let_| exprContainsReturn(program, let_.value),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr_id| exprContainsReturn(program, expr_id),
+        .uninitialized,
+        .crash,
+        => false,
+    };
+}
+
+fn stmtSpanContainsReturn(program: *const Ast.Program, span: Ast.Span(Ast.StmtId)) bool {
+    for (program.stmtSpan(span)) |stmt_id| {
+        if (stmtContainsReturn(program, stmt_id)) return true;
+    }
+    return false;
 }
 
 fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
