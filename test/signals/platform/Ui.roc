@@ -49,7 +49,7 @@ Ui := [].{
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box({})
-				boxed = HostValue.take_tagged(payload_hv, payload_unit_tag)
+				boxed = HostValue.take(payload_hv)
 				_ = boxed
 				{}
 			}
@@ -78,7 +78,7 @@ Ui := [].{
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box(Str)
-				boxed = HostValue.take_tagged(payload_hv, payload_str_tag)
+				boxed = HostValue.take(payload_hv)
 				_ = boxed
 				{}
 			}
@@ -107,7 +107,7 @@ Ui := [].{
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box(Bool)
-				boxed = HostValue.take_tagged(payload_hv, payload_bool_tag)
+				boxed = HostValue.take(payload_hv)
 				_ = boxed
 				{}
 			}
@@ -138,7 +138,7 @@ Ui := [].{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(a)
-			boxed = HostValue.take_tagged(host_value, tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -230,7 +230,7 @@ Ui := [].{
 		key_drop_hv : HostValue -> {}
 		key_drop_hv = |key_hv| {
 			boxed : Box(k)
-			boxed = HostValue.take_tagged(key_hv, key_tag)
+			boxed = HostValue.take(key_hv)
 			_ = boxed
 			{}
 		}
@@ -245,7 +245,7 @@ Ui := [].{
 		item_drop_hv : HostValue -> {}
 		item_drop_hv = |item_hv| {
 			boxed : Box(item)
-			boxed = HostValue.take_tagged(item_hv, item_tag)
+			boxed = HostValue.take(item_hv)
 			_ = boxed
 			{}
 		}

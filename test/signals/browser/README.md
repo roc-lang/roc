@@ -45,8 +45,28 @@ node --test test/signals/browser/wasm_memory_views.test.mjs
 
 `../src/render_commands.zig` owns the shared render op ids, command-count
 rollup, metrics accumulator, and fixed-width command-buffer record shape. The
-native host consumes the shared counters; the wasm host exposes an empty command
-buffer surface that the future browser render sink will fill.
+native host consumes the shared counters; the wasm host serializes browser DOM
+patches through the same fixed-width record shape. Browser string payloads are
+stored in the wasm host string buffer and referenced by command records as
+offset/length pairs.
+
+`runtime.mjs` is the browser-side command executor. It instantiates a Signals
+wasm app, calls `roc_ui_mount`, applies command-buffer records to the DOM, and
+routes click/input/check events back through `roc_ui_event`.
+
+The first manual browser app is `../apps/counter.roc`. Build the local ignored
+wasm next to the page, then serve the repo root:
+
+```sh
+./zig-out/bin/roc build --target=wasm32 --output=test/signals/browser/counter.wasm test/signals/apps/counter.roc
+python3 -m http.server 8000
+```
+
+Open:
+
+```text
+http://localhost:8000/test/signals/browser/counter.html
+```
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
 mutation, reachable-dependent traversal, and rank sorting. The native host

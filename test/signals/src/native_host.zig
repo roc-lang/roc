@@ -6760,7 +6760,7 @@ fn dispatchEffectSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
     return applyDirtySignalBatch(host, roc_host, &.{}, changed_record_ids, dirty_generation);
 }
 
-fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct74) CommandCounts {
+fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) CommandCounts {
     const record = host.activeTaskRecordByToken(cmd.task_token) orelse failHost("StartTask referenced a task source that is not active");
     const task_payload = switch (record.payload) {
         .task_source => |payload| payload,
@@ -6831,7 +6831,7 @@ fn evalDirtyOnChange(host: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnCh
     if (!updateDirtySignalCache(host, roc_host, &desc.cached_value, result.value)) return .{};
 
     const cmd = callErasedHostValueToStartTaskCmd(roc_host, desc.to_cmd, result.value);
-    defer abi.decref__AnonStruct74(cmd, roc_host);
+    defer abi.decref__AnonStruct76(cmd, roc_host);
     return startTaskCommand(host, roc_host, desc.scope_id, cmd);
 }
 
@@ -7759,10 +7759,10 @@ fn callErasedHostValueToHostValue(roc_host: *abi.RocHost, callable: abi.RocErase
     return result;
 }
 
-fn callErasedHostValueToStartTaskCmd(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) abi.__AnonStruct74 {
+fn callErasedHostValueToStartTaskCmd(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) abi.__AnonStruct76 {
     const payload = erasedCallablePayload(callable);
     var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
-    var result: abi.__AnonStruct74 = undefined;
+    var result: abi.__AnonStruct76 = undefined;
     payload.callable_fn_ptr(
         roc_host,
         @ptrCast(&result),

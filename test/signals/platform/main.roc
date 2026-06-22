@@ -15,10 +15,10 @@ platform ""
 		"roc_host_value_take_tagged": HostValue.take_tagged,
 	}
 	targets: {
-		inputs: "../targets/",
-		wasm32: { inputs: ["host.wasm", app], output: Shared },
+		inputs_dir: "../targets/",
 		x64mac: { inputs: ["libhost.a", app] },
 		arm64mac: { inputs: ["libhost.a", app] },
+		wasm32: { inputs: ["host.wasm", app], output: Shared },
 	}
 
 import Elem exposing [Elem]

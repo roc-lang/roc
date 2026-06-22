@@ -99,7 +99,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(TaskStatus(a, err))
-			boxed = HostValue.take_tagged(host_value, status_tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -107,7 +107,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		payload_drop : HostValue -> {}
 		payload_drop = |host_value| {
 			boxed : Box(Str)
-			boxed = HostValue.take_tagged(host_value, payload_tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -138,7 +138,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		request_drop : HostValue -> {}
 		request_drop = |value| {
 			boxed : Box(Str)
-			boxed = HostValue.take_tagged(value, request_tag)
+			boxed = HostValue.take(value)
 			_ = boxed
 			{}
 		}
@@ -189,7 +189,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 			drop : HostValue -> {}
 			drop = |host_value| {
 				boxed : Box(a)
-				boxed = HostValue.take_tagged(host_value, tag)
+				boxed = HostValue.take(host_value)
 				_ = boxed
 				{}
 			}
@@ -235,7 +235,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(a)
-			boxed = HostValue.take_tagged(host_value, tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -282,7 +282,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(b)
-			boxed = HostValue.take_tagged(host_value, output_tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -330,7 +330,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(c)
-			boxed = HostValue.take_tagged(host_value, output_tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
@@ -382,7 +382,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(List(a))
-			boxed = HostValue.take_tagged(host_value, output_tag)
+			boxed = HostValue.take(host_value)
 			_ = boxed
 			{}
 		}
