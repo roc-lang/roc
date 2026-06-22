@@ -11,9 +11,11 @@ const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
 const keyed_rows = @import("keyed_rows.zig");
+const host_value_registry = @import("host_value_registry.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
+const HostValueRegistry = host_value_registry.Registry(HostValueTypeTag, true);
 
 comptime {
     const BuildRecord = struct { id: u64 };
@@ -26,17 +28,7 @@ comptime {
     _ = keyed_rows.RowPlan.create;
 }
 
-const HostValueCell = struct {
-    box: abi.RocBox,
-    tag: ?HostValueTypeTag,
-};
-
-const HostValueSlot = union(enum) {
-    vacant,
-    occupied: HostValueCell,
-};
-
-var host_values: std.ArrayListUnmanaged(HostValueSlot) = .empty;
+var host_values: HostValueRegistry = .{};
 var command_buffer: render.Buffer = .{};
 var roc_host_env: u8 = 0;
 var roc_host = abi.RocHost{
@@ -161,97 +153,76 @@ fn tagFromBox(box: abi.RocBox) HostValueTypeTag {
     return @ptrCast(@alignCast(box orelse failHost()));
 }
 
-fn retainBox(box: abi.RocBox) void {
-    abi.increfBox(box, 1);
-}
-
-fn releaseBox(box: abi.RocBox) void {
-    abi.decrefBox(box, &roc_host);
-}
-
-fn tagId(tag: HostValueTypeTag) u64 {
-    return tag.*;
-}
-
-fn tagsMatch(actual: HostValueTypeTag, expected: HostValueTypeTag) bool {
-    return actual == expected or (tagId(actual) != 0 and tagId(actual) == tagId(expected));
-}
-
-fn storeHostValue(box: abi.RocBox, tag: ?HostValueTypeTag) HostValue {
-    for (host_values.items, 0..) |*slot, index| {
-        switch (slot.*) {
-            .vacant => {
-                slot.* = .{ .occupied = .{ .box = box, .tag = tag } };
-                return @intCast(index + 1);
-            },
-            .occupied => {},
-        }
+const HostValueRegistryOps = struct {
+    pub fn retainBox(_: @This(), box: abi.RocBox) void {
+        abi.increfBox(box, 1);
     }
 
-    host_values.append(std.heap.wasm_allocator, .{ .occupied = .{ .box = box, .tag = tag } }) catch failHost();
-    return @intCast(host_values.items.len);
+    pub fn releaseBox(_: @This(), box: abi.RocBox) void {
+        abi.decrefBox(box, &roc_host);
+    }
+
+    pub fn retainTag(_: @This(), tag: HostValueTypeTag) void {
+        abi.increfBox(@ptrCast(tag), 1);
+    }
+
+    pub fn releaseTag(_: @This(), tag: HostValueTypeTag) void {
+        abi.decrefBox(@ptrCast(tag), &roc_host);
+    }
+
+    pub fn tagId(_: @This(), tag: HostValueTypeTag) u64 {
+        return tag.*;
+    }
+};
+
+fn failHostValueRegistryError(_: host_value_registry.Error) noreturn {
+    failHost();
 }
 
-fn hostValueSlot(value: HostValue) *HostValueSlot {
-    if (value == 0) failHost();
-    const index = value - 1;
-    if (index >= host_values.items.len) failHost();
-    return &host_values.items[@intCast(index)];
-}
-
-fn occupiedCell(value: HostValue) HostValueCell {
-    return switch (hostValueSlot(value).*) {
-        .vacant => failHost(),
-        .occupied => |cell| cell,
-    };
-}
-
-fn assertTag(value: HostValue, expected: HostValueTypeTag) void {
-    const actual = occupiedCell(value).tag orelse failHost();
-    if (!tagsMatch(actual, expected)) failHost();
+fn registryOps() HostValueRegistryOps {
+    return .{};
 }
 
 export fn roc_host_value_clone(value: HostValue) callconv(.c) HostValue {
-    const cell = occupiedCell(value);
-    retainBox(cell.box);
-    if (cell.tag) |tag| retainBox(@ptrCast(tag));
-    return storeHostValue(cell.box, cell.tag);
+    return host_values.clone(std.heap.wasm_allocator, value, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }
 
 export fn roc_host_value_get(value: HostValue) callconv(.c) abi.RocBox {
-    const cell = occupiedCell(value);
-    retainBox(cell.box);
-    return cell.box;
+    return host_values.get(value, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }
 
 export fn roc_host_value_get_tagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
-    defer releaseBox(@ptrCast(tag));
-    assertTag(value, tag);
-    return roc_host_value_get(value);
+    defer registryOps().releaseTag(tag);
+    return host_values.getTagged(value, tag, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }
 
 export fn roc_host_value_store(box: abi.RocBox) callconv(.c) HostValue {
-    return storeHostValue(box, null);
+    return host_values.storeOwnedTag(std.heap.wasm_allocator, box, null, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }
 
 export fn roc_host_value_store_tagged(box: abi.RocBox, tag_box: abi.RocBox) callconv(.c) HostValue {
-    return storeHostValue(box, tagFromBox(tag_box));
+    return host_values.storeOwnedTag(std.heap.wasm_allocator, box, tagFromBox(tag_box), registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }
 
 export fn roc_host_value_take(value: HostValue) callconv(.c) abi.RocBox {
-    const slot = hostValueSlot(value);
-    return switch (slot.*) {
-        .vacant => failHost(),
-        .occupied => |cell| blk: {
-            slot.* = .vacant;
-            if (cell.tag) |tag| releaseBox(@ptrCast(tag));
-            break :blk cell.box;
-        },
+    return host_values.take(value, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
     };
 }
 
 export fn roc_host_value_take_tagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
-    defer releaseBox(@ptrCast(tag));
-    assertTag(value, tag);
-    return roc_host_value_take(value);
+    defer registryOps().releaseTag(tag);
+    return host_values.takeTagged(value, tag, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
 }

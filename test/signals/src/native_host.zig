@@ -13,6 +13,7 @@ const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
 const keyed_rows = @import("keyed_rows.zig");
+const host_value_registry = @import("host_value_registry.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -27,6 +28,7 @@ const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
 const HostNodeIdentity = identity_table.NodeIdentity;
 const HostDomIdentity = identity_table.DomIdentity;
+const HostValueRegistry = host_value_registry.Registry(HostValueTypeTag, host_value_type_tags_enabled);
 
 const host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -1906,6 +1908,18 @@ fn failKeyedRowsError(err: anyerror) noreturn {
     }
 }
 
+fn failHostValueRegistryError(err: anyerror) noreturn {
+    switch (err) {
+        error.OutOfMemory => std.process.exit(1),
+        error.InvalidHandle => failHost("HostValue handle referenced an unknown value"),
+        error.ReleasedHandle => failHost("HostValue handle referenced a released value"),
+        error.MissingTag => failHost("HostValue read crossed erasure boundary without a type tag"),
+        error.TagMismatch => failHost("HostValue read crossed erasure boundary with the wrong type tag"),
+        error.ConflictingTag => failHost("HostValue was tagged with a conflicting type tag"),
+        else => failHost("HostValue registry operation failed"),
+    }
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -1915,18 +1929,6 @@ const RocAllocation = struct {
 const RocAllocationHeader = extern struct {
     total_size: usize,
     ledger_index: usize,
-};
-
-const HostValueRegistryCell = if (host_value_type_tags_enabled) struct {
-    box: abi.RocBox,
-    tag: ?HostValueTypeTag,
-} else struct {
-    box: abi.RocBox,
-};
-
-const HostValueRegistrySlot = union(enum) {
-    vacant,
-    occupied: HostValueRegistryCell,
 };
 
 const TestHostValueKind = enum {
@@ -1941,7 +1943,7 @@ const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
-    host_values: std.ArrayListUnmanaged(HostValueRegistrySlot) = .empty,
+    host_values: HostValueRegistry = .{},
     test_host_value_kinds: std.ArrayListUnmanaged(?TestHostValueKind) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
@@ -1987,26 +1989,37 @@ const HostEnv = struct {
         return self.roc_host orelse failHost("HostValue type tag release requires an active Roc host");
     }
 
-    fn hostValueRegistryCell(box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValueRegistryCell {
-        if (comptime host_value_type_tags_enabled) {
-            return .{ .box = box, .tag = owned_tag };
-        } else {
-            return .{ .box = box };
-        }
-    }
-
     fn releaseOwnedHostValueTypeTag(self: *HostEnv, tag: HostValueTypeTag) void {
         abi.decrefBox(@ptrCast(tag), self.activeRocHost());
     }
 
-    fn releaseRegistryHostValueTag(self: *HostEnv, cell: HostValueRegistryCell) void {
-        if (comptime host_value_type_tags_enabled) {
-            if (cell.tag) |tag| self.releaseOwnedHostValueTypeTag(tag);
-        }
-    }
+    const HostValueRegistryOps = struct {
+        host: *HostEnv,
 
-    fn retainHostValueTypeTag(tag: HostValueTypeTag) void {
-        abi.increfBox(@ptrCast(tag), 1);
+        pub fn retainBox(_: @This(), box: abi.RocBox) void {
+            abi.increfBox(box, 1);
+        }
+
+        pub fn releaseBox(self: @This(), box: abi.RocBox) void {
+            abi.decrefBox(box, self.host.activeRocHost());
+        }
+
+        pub fn retainTag(_: @This(), tag: HostValueTypeTag) void {
+            abi.increfBox(@ptrCast(tag), 1);
+        }
+
+        pub fn releaseTag(self: @This(), tag: HostValueTypeTag) void {
+            self.host.releaseOwnedHostValueTypeTag(tag);
+        }
+
+        pub fn tagId(_: @This(), tag: HostValueTypeTag) u64 {
+            const payload: *const u64 = @ptrCast(@alignCast(tag));
+            return payload.*;
+        }
+    };
+
+    fn hostValueRegistryOps(self: *HostEnv) HostValueRegistryOps {
+        return .{ .host = self };
     }
 
     fn hostValueTypeTagId(tag: HostValueTypeTag) u64 {
@@ -2020,36 +2033,34 @@ const HostEnv = struct {
         return actual_id != 0 and actual_id == HostEnv.hostValueTypeTagId(expected_tag);
     }
 
-    fn storeHostValueWithOwnedTag(self: *HostEnv, box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValue {
-        const allocator = self.gpa.allocator();
-        const registry_tag: ?HostValueTypeTag = if (comptime host_value_type_tags_enabled) owned_tag else blk: {
-            if (owned_tag) |tag| self.releaseOwnedHostValueTypeTag(tag);
-            break :blk null;
-        };
-        for (self.host_values.items, 0..) |*slot, index| {
-            switch (slot.*) {
-                .vacant => {
-                    slot.* = .{ .occupied = HostEnv.hostValueRegistryCell(box, registry_tag) };
-                    if (builtin.is_test) self.test_host_value_kinds.items[index] = null;
-                    return @intCast(index + 1);
-                },
-                .occupied => {},
+    fn resetTestHostValueKind(self: *HostEnv, value: HostValue) void {
+        if (builtin.is_test) {
+            const allocator = self.gpa.allocator();
+            const index = value - 1;
+            if (index >= self.test_host_value_kinds.items.len) {
+                self.test_host_value_kinds.append(allocator, null) catch std.process.exit(1);
+            } else {
+                self.test_host_value_kinds.items[@intCast(index)] = null;
             }
         }
-        self.host_values.append(allocator, .{ .occupied = HostEnv.hostValueRegistryCell(box, registry_tag) }) catch std.process.exit(1);
-        if (builtin.is_test) {
-            self.test_host_value_kinds.append(allocator, null) catch std.process.exit(1);
-        }
-        return @intCast(self.host_values.items.len);
+    }
+
+    fn storeHostValueWithOwnedTag(self: *HostEnv, box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValue {
+        const allocator = self.gpa.allocator();
+        const value = self.host_values.storeOwnedTag(allocator, box, owned_tag, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        self.resetTestHostValueKind(value);
+        return value;
     }
 
     fn storeHostValueWithRetainedTag(self: *HostEnv, box: abi.RocBox, borrowed_tag: ?HostValueTypeTag) HostValue {
-        if (comptime host_value_type_tags_enabled) {
-            if (borrowed_tag) |tag| HostEnv.retainHostValueTypeTag(tag);
-            return self.storeHostValueWithOwnedTag(box, borrowed_tag);
-        } else {
-            return self.storeHostValueWithOwnedTag(box, null);
-        }
+        const allocator = self.gpa.allocator();
+        const value = self.host_values.storeRetainedTag(allocator, box, borrowed_tag, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        self.resetTestHostValueKind(value);
+        return value;
     }
 
     fn storeHostValue(self: *HostEnv, box: abi.RocBox) HostValue {
@@ -2074,34 +2085,16 @@ const HostEnv = struct {
         return self.test_host_value_kinds.items[@intCast(index)] orelse @panic("test HostValue kind was not recorded");
     }
 
-    fn hostValueSlot(self: *HostEnv, value: HostValue) *HostValueRegistrySlot {
-        if (value == 0) failHost("HostValue handle 0 is invalid");
-        const index = value - 1;
-        if (index >= self.host_values.items.len) failHost("HostValue handle referenced an unknown value");
-        return &self.host_values.items[@intCast(index)];
-    }
-
     fn getHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
-        const slot = self.hostValueSlot(value);
-        return switch (slot.*) {
-            .vacant => failHost("HostValue handle referenced a released value"),
-            .occupied => |cell| blk: {
-                abi.increfBox(cell.box, 1);
-                break :blk cell.box;
-            },
+        return self.host_values.get(value, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
         };
     }
 
     fn hostValueTypeTag(self: *HostEnv, value: HostValue) ?HostValueTypeTag {
-        if (comptime host_value_type_tags_enabled) {
-            const slot = self.hostValueSlot(value);
-            return switch (slot.*) {
-                .vacant => failHost("HostValue handle referenced a released value"),
-                .occupied => |cell| cell.tag,
-            };
-        } else {
-            return null;
-        }
+        return self.host_values.tag(value) catch |err| {
+            failHostValueRegistryError(err);
+        };
     }
 
     fn assertHostValueTypeTag(self: *HostEnv, value: HostValue, expected_tag: HostValueTypeTag) void {
@@ -2120,20 +2113,9 @@ const HostEnv = struct {
     }
 
     fn setHostValueTypeTag(self: *HostEnv, value: HostValue, borrowed_tag: HostValueTypeTag) void {
-        if (comptime host_value_type_tags_enabled) {
-            const slot = self.hostValueSlot(value);
-            switch (slot.*) {
-                .vacant => failHost("HostValue handle referenced a released value"),
-                .occupied => |*cell| {
-                    if (cell.tag) |actual_tag| {
-                        if (!HostEnv.hostValueTypeTagsMatch(actual_tag, borrowed_tag)) failHost("HostValue was tagged with a conflicting type tag");
-                        return;
-                    }
-                    HostEnv.retainHostValueTypeTag(borrowed_tag);
-                    cell.tag = borrowed_tag;
-                },
-            }
-        }
+        self.host_values.setTag(value, borrowed_tag, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
     }
 
     fn getTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
@@ -2142,16 +2124,11 @@ const HostEnv = struct {
     }
 
     fn takeHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
-        const slot = self.hostValueSlot(value);
-        return switch (slot.*) {
-            .vacant => failHost("HostValue handle referenced a released value"),
-            .occupied => |cell| blk: {
-                slot.* = .vacant;
-                self.releaseRegistryHostValueTag(cell);
-                if (builtin.is_test) self.test_host_value_kinds.items[@intCast(value - 1)] = null;
-                break :blk cell.box;
-            },
+        const box = self.host_values.take(value, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
         };
+        if (builtin.is_test) self.test_host_value_kinds.items[@intCast(value - 1)] = null;
+        return box;
     }
 
     fn takeTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
@@ -2160,9 +2137,11 @@ const HostEnv = struct {
     }
 
     fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
-        const tag = self.hostValueTypeTag(value);
-        const box = self.getHostValue(value);
-        const cloned = self.storeHostValueWithRetainedTag(box, tag);
+        const allocator = self.gpa.allocator();
+        const cloned = self.host_values.clone(allocator, value, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        self.resetTestHostValueKind(cloned);
         if (builtin.is_test) {
             self.setTestHostValueKind(cloned, self.testHostValueKind(value));
         }
@@ -5614,12 +5593,7 @@ const HostEnv = struct {
 
         freeSpecCommands(allocator, self.test_state.commands);
 
-        for (self.host_values.items) |slot| {
-            switch (slot) {
-                .vacant => {},
-                .occupied => failHost("host value registry still owned a typed cell at shutdown"),
-            }
-        }
+        if (self.host_values.hasLiveValues()) failHost("host value registry still owned a typed cell at shutdown");
         self.host_values.deinit(allocator);
         self.test_host_value_kinds.deinit(allocator);
 
@@ -8830,12 +8804,7 @@ fn deinitTestHostIdentity(host: *HostEnv) void {
     host.scopes.deinit(allocator);
     host.node_identities.deinit(allocator);
     host.dom_identities.deinit(allocator);
-    for (host.host_values.items) |slot| {
-        switch (slot) {
-            .vacant => {},
-            .occupied => failHost("test host value registry still owned a typed cell at shutdown"),
-        }
-    }
+    if (host.host_values.hasLiveValues()) failHost("test host value registry still owned a typed cell at shutdown");
     host.host_values.deinit(allocator);
     host.test_host_value_kinds.deinit(allocator);
     host.roc_allocations.deinit(allocator);

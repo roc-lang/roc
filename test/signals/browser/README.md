@@ -65,6 +65,9 @@ root.
 currently executes that plan through its HostValue/thunk/scope adapter; the wasm
 host should grow the same adapter surface rather than a separate row matcher.
 
+`../src/host_value_registry.zig` owns the shared `roc_host_value_*` handle table:
+one-based handles, vacant-slot reuse, clone/get/take, and debug type tags.
+
 Run the guard with:
 
 ```sh
@@ -73,4 +76,5 @@ zig test test/signals/src/signal_graph.zig
 zig test test/signals/src/scope_tree.zig
 zig test test/signals/src/identity_table.zig
 zig test test/signals/src/keyed_rows.zig
+zig test test/signals/src/host_value_registry.zig
 ```

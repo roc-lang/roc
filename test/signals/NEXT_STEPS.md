@@ -233,8 +233,12 @@ The open questions (O1–O9) referenced below are defined in
   detection, hash-bucket probing, survivor matching, create slots, and removed
   row ids. Native currently supplies the HostValue/thunk/scope adapter that
   executes the plan; the wasm host must supply the same adapter surface when it
-  grows row scopes. Remaining G-B0 work is moving that adapter boundary into the
-  shared engine so both hosts drive the same engine with different render sinks.
+  grows row scopes. Sixth extraction: `src/host_value_registry.zig` owns the
+  shared HostValue handle table used by the `roc_host_value_*` ABI in both
+  hosts: one-based handles, vacant-slot reuse, clone/get/take, and debug type
+  tags. Remaining G-B0 work is moving the retained HostValue/thunk/scope adapter
+  boundary into the shared engine so both hosts drive the same engine with
+  different render sinks.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
