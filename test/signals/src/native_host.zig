@@ -677,6 +677,27 @@ fn failScopeOrIdentityTableError(err: anyerror, unknown_scope_message: []const u
     }
 }
 
+fn failEventLookupError(err: HostEngine.EventLookupError) noreturn {
+    switch (err) {
+        error.EventIdZero => failHost("event id 0 is not registered"),
+        error.MissingSignalEventRoute => failHost("event id has no host source signal route descriptor"),
+        error.SignalEventRouteIndexMismatch => failHost("host signal event route table is not indexed by event id"),
+        error.MissingEventDescriptor => failHost("event id has no host event descriptor"),
+        error.EventDescriptorIndexMismatch => failHost("host event descriptor table is not indexed by event id"),
+    }
+}
+
+fn failSignalLookupError(err: HostEngine.SignalLookupError) noreturn {
+    switch (err) {
+        error.MissingSignalRoute => failHost("state id has no host signal route descriptor"),
+        error.SignalRouteIndexMismatch => failHost("host signal route table is not indexed by state id"),
+        error.MissingSignalDependentRoute => failHost("signal id has no host dependent route descriptor"),
+        error.SignalDependentRouteIndexMismatch => failHost("host signal dependent route table is not indexed by signal id"),
+        error.MissingSignalDescriptor => failHost("signal id has no host signal descriptor"),
+        error.SignalDescriptorIndexMismatch => failHost("host signal descriptor table is not indexed by signal id"),
+    }
+}
+
 fn failKeyedRowsError(err: anyerror) noreturn {
     switch (err) {
         error.OutOfMemory => std.process.exit(1),
@@ -990,25 +1011,15 @@ const HostEnv = struct {
     }
 
     fn sourceSignalIdsForEvent(self: *HostEnv, event_id: u64) []const u64 {
-        if (event_id == 0) failHost("event id 0 is not registered");
-
-        const route_index = event_id - 1;
-        if (route_index >= self.engine.signal_event_routes.items.len) failHost("event id has no host source signal route descriptor");
-
-        const route = self.engine.signal_event_routes.items[@intCast(route_index)];
-        if (route.event_id != event_id) failHost("host signal event route table is not indexed by event id");
-        return route.signal_ids;
+        return self.engine.sourceSignalIdsForEvent(event_id) catch |err| {
+            failEventLookupError(err);
+        };
     }
 
     fn eventPayloadKind(self: *HostEnv, event_id: u64) EventPayloadKind {
-        if (event_id == 0) failHost("event id 0 is not registered");
-
-        const event_index = event_id - 1;
-        if (event_index >= self.engine.event_descriptors.items.len) failHost("event id has no host event descriptor");
-
-        const descriptor = self.engine.event_descriptors.items[@intCast(event_index)];
-        if (descriptor.event_id != event_id) failHost("host event descriptor table is not indexed by event id");
-        return descriptor.payload_kind;
+        return self.engine.eventPayloadKind(event_id) catch |err| {
+            failEventLookupError(err);
+        };
     }
 
     fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: EventPayloadKind) void {
@@ -1683,19 +1694,15 @@ const HostEnv = struct {
     }
 
     fn signalIdsForState(self: *HostEnv, state_id: u64) []const u64 {
-        if (state_id >= self.engine.signal_routes.items.len) failHost("state id has no host signal route descriptor");
-
-        const route = self.engine.signal_routes.items[@intCast(state_id)];
-        if (route.state_id != state_id) failHost("host signal route table is not indexed by state id");
-        return route.signal_ids;
+        return self.engine.signalIdsForState(state_id) catch |err| {
+            failSignalLookupError(err);
+        };
     }
 
     fn dependentSignalIdsForSignal(self: *HostEnv, signal_id: u64) []const u64 {
-        if (signal_id >= self.engine.signal_dependents.items.len) failHost("signal id has no host dependent route descriptor");
-
-        const route = self.engine.signal_dependents.items[@intCast(signal_id)];
-        if (route.signal_id != signal_id) failHost("host signal dependent route table is not indexed by signal id");
-        return route.signal_ids;
+        return self.engine.dependentSignalIdsForSignal(signal_id) catch |err| {
+            failSignalLookupError(err);
+        };
     }
 
     fn appendSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, signal_ids: *std.ArrayListUnmanaged(u64), signal_id: u64) void {
@@ -1715,11 +1722,9 @@ const HostEnv = struct {
     }
 
     fn signalRank(self: *HostEnv, signal_id: u64) u64 {
-        if (signal_id >= self.engine.signal_descriptors.items.len) failHost("signal id has no host signal descriptor");
-
-        const descriptor = self.engine.signal_descriptors.items[@intCast(signal_id)];
-        if (descriptor.signal_id != signal_id) failHost("host signal descriptor table is not indexed by signal id");
-        return descriptor.rank;
+        return self.engine.signalRank(signal_id) catch |err| {
+            failSignalLookupError(err);
+        };
     }
 
     fn sortSignalIdsByRank(self: *HostEnv, signal_ids: []u64) void {
@@ -1986,13 +1991,15 @@ const HostEnv = struct {
     }
 
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
-        return self.engine.states.items[state_index].cell.eq;
+        return self.engine.stateEqCallable(node_id) catch |err| switch (err) {
+            error.MissingActiveState => failHost("active state has no equality callable"),
+        };
     }
 
     fn stateDropCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("active state has no drop callable");
-        return self.engine.states.items[state_index].cell.drop;
+        return self.engine.stateDropCallable(node_id) catch |err| switch (err) {
+            error.MissingActiveState => failHost("active state has no drop callable"),
+        };
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
@@ -3020,18 +3027,21 @@ const HostEnv = struct {
     }
 
     fn activeEventTransformByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
-        if (event_index >= self.engine.active_events.items.len) failHost("active event table is missing a retained transform");
-        return self.engine.active_events.items[event_index].transform;
+        return self.engine.activeEventTransformByIndex(event_index) catch |err| switch (err) {
+            error.MissingActiveEvent => failHost("active event table is missing a retained transform"),
+        };
     }
 
     fn activeEventPayloadDropByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
-        if (event_index >= self.engine.active_events.items.len) failHost("active event table is missing a retained payload drop");
-        return self.engine.active_events.items[event_index].payload_drop;
+        return self.engine.activeEventPayloadDropByIndex(event_index) catch |err| switch (err) {
+            error.MissingActiveEvent => failHost("active event table is missing a retained payload drop"),
+        };
     }
 
     fn activeEventPayloadTagByIndex(self: *HostEnv, event_index: usize) HostValueTypeTag {
-        if (event_index >= self.engine.active_events.items.len) failHost("active event table is missing a retained payload tag");
-        return self.engine.active_events.items[event_index].payload_tag;
+        return self.engine.activeEventPayloadTagByIndex(event_index) catch |err| switch (err) {
+            error.MissingActiveEvent => failHost("active event table is missing a retained payload tag"),
+        };
     }
 
     fn scopeIsEachSiteRowDescendantOrSelf(self: *HostEnv, scope_id: u64, site: HostEachSite) bool {

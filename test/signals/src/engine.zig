@@ -1517,6 +1517,27 @@ pub fn Engine(comptime Ctx: type) type {
         pub const HostValueRegistry = host_value_registry.Registry(Ctx.HostValueTypeTag, Ctx.host_value_type_tags_enabled);
         pub const ActiveEventDesc = HostActiveEventDesc(Ctx.HostValueTypeTag);
         pub const IdentityInternError = scope_tree.Error || identity_table.Error;
+        pub const EventLookupError = error{
+            EventIdZero,
+            MissingSignalEventRoute,
+            SignalEventRouteIndexMismatch,
+            MissingEventDescriptor,
+            EventDescriptorIndexMismatch,
+        };
+        pub const SignalLookupError = error{
+            MissingSignalRoute,
+            SignalRouteIndexMismatch,
+            MissingSignalDependentRoute,
+            SignalDependentRouteIndexMismatch,
+            MissingSignalDescriptor,
+            SignalDescriptorIndexMismatch,
+        };
+        pub const ActiveEventLookupError = error{
+            MissingActiveEvent,
+        };
+        pub const StateLookupError = error{
+            MissingActiveState,
+        };
 
         host_values: HostValueRegistry = .{},
         active_events: std.ArrayListUnmanaged(ActiveEventDesc) = .empty,
@@ -1608,11 +1629,82 @@ pub fn Engine(comptime Ctx: type) type {
             return count;
         }
 
+        pub fn sourceSignalIdsForEvent(self: *Self, event_id: u64) EventLookupError![]const u64 {
+            if (event_id == 0) return EventLookupError.EventIdZero;
+
+            const route_index = event_id - 1;
+            if (route_index >= self.signal_event_routes.items.len) return EventLookupError.MissingSignalEventRoute;
+
+            const route = self.signal_event_routes.items[@intCast(route_index)];
+            if (route.event_id != event_id) return EventLookupError.SignalEventRouteIndexMismatch;
+            return route.signal_ids;
+        }
+
+        pub fn eventPayloadKind(self: *Self, event_id: u64) EventLookupError!EventPayloadKind {
+            if (event_id == 0) return EventLookupError.EventIdZero;
+
+            const event_index = event_id - 1;
+            if (event_index >= self.event_descriptors.items.len) return EventLookupError.MissingEventDescriptor;
+
+            const descriptor = self.event_descriptors.items[@intCast(event_index)];
+            if (descriptor.event_id != event_id) return EventLookupError.EventDescriptorIndexMismatch;
+            return descriptor.payload_kind;
+        }
+
+        pub fn signalIdsForState(self: *Self, state_id: u64) SignalLookupError![]const u64 {
+            if (state_id >= self.signal_routes.items.len) return SignalLookupError.MissingSignalRoute;
+
+            const route = self.signal_routes.items[@intCast(state_id)];
+            if (route.state_id != state_id) return SignalLookupError.SignalRouteIndexMismatch;
+            return route.signal_ids;
+        }
+
+        pub fn dependentSignalIdsForSignal(self: *Self, signal_id: u64) SignalLookupError![]const u64 {
+            if (signal_id >= self.signal_dependents.items.len) return SignalLookupError.MissingSignalDependentRoute;
+
+            const route = self.signal_dependents.items[@intCast(signal_id)];
+            if (route.signal_id != signal_id) return SignalLookupError.SignalDependentRouteIndexMismatch;
+            return route.signal_ids;
+        }
+
+        pub fn signalRank(self: *Self, signal_id: u64) SignalLookupError!u64 {
+            if (signal_id >= self.signal_descriptors.items.len) return SignalLookupError.MissingSignalDescriptor;
+
+            const descriptor = self.signal_descriptors.items[@intCast(signal_id)];
+            if (descriptor.signal_id != signal_id) return SignalLookupError.SignalDescriptorIndexMismatch;
+            return descriptor.rank;
+        }
+
         pub fn stateIndexByNodeId(self: *Self, node_id: u64) ?usize {
             for (self.states.items, 0..) |state, index| {
                 if (state.active and state.state_id == node_id) return index;
             }
             return null;
+        }
+
+        pub fn stateEqCallable(self: *Self, node_id: u64) StateLookupError!abi.RocErasedCallable {
+            const state_index = self.stateIndexByNodeId(node_id) orelse return StateLookupError.MissingActiveState;
+            return self.states.items[state_index].cell.eq;
+        }
+
+        pub fn stateDropCallable(self: *Self, node_id: u64) StateLookupError!abi.RocErasedCallable {
+            const state_index = self.stateIndexByNodeId(node_id) orelse return StateLookupError.MissingActiveState;
+            return self.states.items[state_index].cell.drop;
+        }
+
+        pub fn activeEventTransformByIndex(self: *Self, event_index: usize) ActiveEventLookupError!abi.RocErasedCallable {
+            if (event_index >= self.active_events.items.len) return ActiveEventLookupError.MissingActiveEvent;
+            return self.active_events.items[event_index].transform;
+        }
+
+        pub fn activeEventPayloadDropByIndex(self: *Self, event_index: usize) ActiveEventLookupError!abi.RocErasedCallable {
+            if (event_index >= self.active_events.items.len) return ActiveEventLookupError.MissingActiveEvent;
+            return self.active_events.items[event_index].payload_drop;
+        }
+
+        pub fn activeEventPayloadTagByIndex(self: *Self, event_index: usize) ActiveEventLookupError!Ctx.HostValueTypeTag {
+            if (event_index >= self.active_events.items.len) return ActiveEventLookupError.MissingActiveEvent;
+            return self.active_events.items[event_index].payload_tag;
         }
 
         pub fn activeScopeSiteByNodeId(self: *Self, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
