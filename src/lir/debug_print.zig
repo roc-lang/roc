@@ -106,7 +106,9 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call p{d}(", .{@intFromEnum(s.proc)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeByte(')');
+                    if (s.is_cold) try writer.writeAll(" cold");
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_call_erased => |s| {
@@ -184,6 +186,15 @@ const Printer = struct {
                     try writer.print("decref l{d}\n", .{@intFromEnum(s.value)});
                     current = s.next;
                 },
+                .decref_if_initialized => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("decref_if_initialized cond=l{d} mask=0x{x} value=l{d}\n", .{
+                        @intFromEnum(s.cond),
+                        s.cond_mask,
+                        @intFromEnum(s.value),
+                    });
+                    current = s.next;
+                },
                 .free => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("free l{d}\n", .{@intFromEnum(s.value)});
@@ -191,7 +202,10 @@ const Printer = struct {
                 },
                 .switch_stmt => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("switch l{d}\n", .{@intFromEnum(s.cond)});
+                    try writer.print("switch l{d} default_cold={}\n", .{
+                        @intFromEnum(s.cond),
+                        s.default_is_cold,
+                    });
                     for (self.store.getCFSwitchBranches(s.branches)) |branch| {
                         try writeIndent(indent + 1, writer);
                         try writer.print("case {d}:\n", .{branch.value});
@@ -205,6 +219,22 @@ const Printer = struct {
                         try writer.writeAll("continuation:\n");
                         try self.writeChainInner(gpa, continuation, indent + 2, writer);
                     }
+                    return;
+                },
+                .switch_initialized_payload => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("switch_initialized_payload cond=l{d} mask=0x{x} payload=l{d} uninitialized_cold={}\n", .{
+                        @intFromEnum(s.cond),
+                        s.cond_mask,
+                        @intFromEnum(s.payload),
+                        s.uninitialized_is_cold,
+                    });
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("initialized:\n");
+                    try self.writeChainInner(gpa, s.initialized_branch, indent + 2, writer);
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("uninitialized:\n");
+                    try self.writeChainInner(gpa, s.uninitialized_branch, indent + 2, writer);
                     return;
                 },
                 .str_match => |s| {
@@ -255,7 +285,23 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("join j{d} params=[", .{@intFromEnum(s.id)});
                     try self.writeLocals(s.params, writer);
-                    try writer.writeAll("]\n");
+                    try writer.writeAll("]");
+                    if (!s.maybe_uninitialized_params.isEmpty()) {
+                        try writer.writeAll(" maybe_uninitialized=[");
+                        try self.writeLocals(s.maybe_uninitialized_params, writer);
+                        try writer.writeAll("]");
+                        try writer.writeAll(" conditions=[");
+                        try self.writeLocals(s.maybe_uninitialized_conditions, writer);
+                        try writer.writeAll("]");
+                        try writer.writeAll(" masks=[");
+                        const masks = self.store.getU64Span(s.maybe_uninitialized_condition_masks);
+                        for (masks, 0..) |mask, index| {
+                            if (index > 0) try writer.writeAll(", ");
+                            try writer.print("0x{x}", .{mask});
+                        }
+                        try writer.writeAll("]");
+                    }
+                    try writer.writeAll("\n");
                     try writeIndent(indent + 1, writer);
                     try writer.writeAll("remainder:\n");
                     try self.writeChainInner(gpa, s.remainder, indent + 2, writer);

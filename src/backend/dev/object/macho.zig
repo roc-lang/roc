@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
+const roc_target = @import("roc_target");
 
 /// Mach-O constants
 const MachO = struct {
@@ -691,14 +692,14 @@ pub const MachOWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&dysymtab_cmd));
 
-        // Write build version command (required for modern macOS)
-        // minos/sdk format: nibbles are xxxx.yy.zz (e.g., 0x000d0000 = 13.0.0)
+        // Write build version command (required for modern macOS).
+        // minos/sdk format: nibbles are xxxx.yy.zz (e.g. 0x000b0000 = 11.0.0).
         const build_version_cmd = BuildVersionCommand{
             .cmd = MachO.LC_BUILD_VERSION,
             .cmdsize = build_version_cmd_size,
             .platform = MachO.PLATFORM_MACOS,
-            .minos = 0x000d0000, // macOS 13.0.0
-            .sdk = 0x000d0000, // macOS 13.0.0
+            .minos = roc_target.macos_deployment.macho_encoded_version,
+            .sdk = roc_target.macos_deployment.macho_encoded_version,
             .ntools = 0,
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&build_version_cmd));

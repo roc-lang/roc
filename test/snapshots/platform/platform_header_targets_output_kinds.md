@@ -11,7 +11,7 @@ platform "foo"
     packages {}
     provides {}
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64glibc: { inputs: [app] },
         wasm32: { inputs: ["libhost.a", app], output: Shared },
         arm64mac: { inputs: ["libhost.a", app], output: Shared },
@@ -56,7 +56,7 @@ platform "foo"
 	packages {}
 	provides {}
 	targets: {
-		inputs: "targets/",
+		inputs_dir: "targets/",
 		x64glibc: { inputs: [app] },
 		wasm32: {
 			inputs: ["libhost.a", app],

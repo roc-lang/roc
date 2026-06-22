@@ -173,6 +173,7 @@ const Pass = struct {
                 .comptime_branch_taken => |s| try self.pushStmt(s.next),
                 .incref => |s| try self.pushStmt(s.next),
                 .decref => |s| try self.pushStmt(s.next),
+                .decref_if_initialized => |s| try self.pushStmt(s.next),
                 .free => |s| try self.pushStmt(s.next),
                 .switch_stmt => |s| {
                     if (s.continuation) |continuation| try self.pushStmt(continuation);
@@ -180,6 +181,10 @@ const Pass = struct {
                     for (self.store.getCFSwitchBranches(s.branches)) |branch| {
                         try self.pushStmt(branch.body);
                     }
+                },
+                .switch_initialized_payload => |s| {
+                    try self.pushStmt(s.initialized_branch);
+                    try self.pushStmt(s.uninitialized_branch);
                 },
                 .str_match => |s| {
                     try self.pushStmt(s.on_match);
@@ -322,6 +327,14 @@ const Pass = struct {
                         try self.pushStmt(branch_body);
                     }
                 },
+                .switch_initialized_payload => |*s| {
+                    const initialized = s.initialized_branch;
+                    const uninitialized = s.uninitialized_branch;
+                    s.initialized_branch = self.remapStmt(initialized);
+                    s.uninitialized_branch = self.remapStmt(uninitialized);
+                    try self.pushStmt(initialized);
+                    try self.pushStmt(uninitialized);
+                },
                 .str_match => |*s| {
                     const on_match = s.on_match;
                     const on_miss = s.on_miss;
@@ -361,6 +374,7 @@ const Pass = struct {
                 .comptime_branch_taken,
                 .incref,
                 .decref,
+                .decref_if_initialized,
                 .free,
                 => |*s| {
                     const next = s.next;
@@ -553,6 +567,7 @@ const Pass = struct {
             .comptime_branch_taken,
             .incref,
             .decref,
+            .decref_if_initialized,
             .free,
             => |s| self.verifyStmtRef(s.next, stmt_count),
             .switch_stmt => |s| {
@@ -561,6 +576,10 @@ const Pass = struct {
                 for (self.store.getCFSwitchBranches(s.branches)) |branch| {
                     self.verifyStmtRef(branch.body, stmt_count);
                 }
+            },
+            .switch_initialized_payload => |s| {
+                self.verifyStmtRef(s.initialized_branch, stmt_count);
+                self.verifyStmtRef(s.uninitialized_branch, stmt_count);
             },
             .str_match => |s| {
                 self.verifyStmtRef(s.on_match, stmt_count);
