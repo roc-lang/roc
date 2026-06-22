@@ -555,7 +555,11 @@ record_layout_from_fields = |type_table, fields| {
 	var $alignment = 1
 
 	for field in fields {
-		field_layout = type_layout_64(type_table, field.type_id)
+		field_layout = if field.is_padding {
+			{ size: field.size, alignment: field.alignment }
+		} else {
+			type_layout_64(type_table, field.type_id)
+		}
 		if field_layout.alignment > $alignment {
 			$alignment = field_layout.alignment
 		}
@@ -572,7 +576,11 @@ record_layout_from_fields_32 = |type_table, fields| {
 	var $alignment = 1
 
 	for field in fields {
-		field_layout = type_layout_32(type_table, field.type_id)
+		field_layout = if field.is_padding {
+			{ size: field.size, alignment: field.alignment }
+		} else {
+			type_layout_32(type_table, field.type_id)
+		}
 		if field_layout.alignment > $alignment {
 			$alignment = field_layout.alignment
 		}

@@ -113,7 +113,7 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_sto
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
-    const mono_digest = types.typeDigest(name_store, template.mono_fn_ty);
+    const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }

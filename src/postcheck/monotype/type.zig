@@ -217,7 +217,14 @@ pub const Store = struct {
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var visiting = DigestVisiting{};
-        self.writeTypeDigest(name_store, &hasher, ty, &visiting);
+        self.writeTypeDigest(name_store, &hasher, ty, &visiting, .full);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    pub fn specializationDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var visiting = DigestVisiting{};
+        self.writeTypeDigest(name_store, &hasher, ty, &visiting, .identity_only);
         return .{ .bytes = hasher.finalResult() };
     }
 
@@ -231,12 +238,18 @@ pub const Store = struct {
 
     const digest_visiting_max = 256;
 
+    const NamedDigestMode = enum {
+        full,
+        identity_only,
+    };
+
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         ty: TypeId,
         visiting: *DigestVisiting,
+        named_mode: NamedDigestMode,
     ) void {
         for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
@@ -268,7 +281,7 @@ pub const Store = struct {
                         writeBytes(hasher, "alias-without-backing");
                         return;
                     };
-                    self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
+                    self.writeTypeDigest(name_store, hasher, backing.ty, visiting, named_mode);
                     return;
                 }
                 writeBytes(hasher, "named");
@@ -285,9 +298,13 @@ pub const Store = struct {
                 } else {
                     writeBytes(hasher, "not-builtin");
                 }
-                self.writeTypeSpanDigest(name_store, hasher, named.args, visiting);
-                self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
-                self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
+                self.writeTypeSpanDigest(name_store, hasher, named.args, visiting, named_mode);
+                if (named_mode == .full) {
+                    self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
+                    self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
+                } else {
+                    writeBytes(hasher, "specialization-named-identity");
+                }
             },
             .record => |fields| {
                 writeBytes(hasher, "record");
@@ -295,12 +312,12 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(field_slice.len));
                 for (field_slice) |field| {
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    self.writeTypeDigest(name_store, hasher, field.ty, visiting);
+                    self.writeTypeDigest(name_store, hasher, field.ty, visiting, named_mode);
                 }
             },
             .tuple => |items| {
                 writeBytes(hasher, "tuple");
-                self.writeTypeSpanDigest(name_store, hasher, items, visiting);
+                self.writeTypeSpanDigest(name_store, hasher, items, visiting, named_mode);
             },
             .tag_union => |tags| {
                 writeBytes(hasher, "tag_union");
@@ -308,21 +325,21 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(tag_slice.len));
                 for (tag_slice) |tag| {
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
-                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting);
+                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting, named_mode);
                 }
             },
             .list => |elem| {
                 writeBytes(hasher, "list");
-                self.writeTypeDigest(name_store, hasher, elem, visiting);
+                self.writeTypeDigest(name_store, hasher, elem, visiting, named_mode);
             },
             .box => |elem| {
                 writeBytes(hasher, "box");
-                self.writeTypeDigest(name_store, hasher, elem, visiting);
+                self.writeTypeDigest(name_store, hasher, elem, visiting, named_mode);
             },
             .func => |function| {
                 writeBytes(hasher, "func");
-                self.writeTypeSpanDigest(name_store, hasher, function.args, visiting);
-                self.writeTypeDigest(name_store, hasher, function.ret, visiting);
+                self.writeTypeSpanDigest(name_store, hasher, function.args, visiting, named_mode);
+                self.writeTypeDigest(name_store, hasher, function.ret, visiting, named_mode);
             },
             .erased => |erased| {
                 writeBytes(hasher, "erased");
@@ -338,11 +355,12 @@ pub const Store = struct {
         hasher: *std.crypto.hash.sha2.Sha256,
         span_: Span,
         visiting: *DigestVisiting,
+        named_mode: NamedDigestMode,
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
         for (values) |child| {
-            self.writeTypeDigest(name_store, hasher, child, visiting);
+            self.writeTypeDigest(name_store, hasher, child, visiting, named_mode);
         }
     }
 
@@ -356,7 +374,7 @@ pub const Store = struct {
         writeBytes(hasher, "backing");
         if (backing) |named_backing| {
             writeBytes(hasher, @tagName(named_backing.use));
-            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting);
+            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting, .identity_only);
         } else {
             writeBytes(hasher, "none");
         }
@@ -380,7 +398,7 @@ pub const Store = struct {
                 },
                 .padding => |padding_ty| {
                     writeBytes(hasher, "padding");
-                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting);
+                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting, .identity_only);
                 },
             }
         }
@@ -608,6 +626,10 @@ test "monotype named type digest includes backing" {
     const i64_digest = store.typeDigest(&name_store, named_i64);
     const str_digest = store.typeDigest(&name_store, named_str);
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+
+    const i64_spec_digest = store.specializationDigest(&name_store, named_i64);
+    const str_spec_digest = store.specializationDigest(&name_store, named_str);
+    try std.testing.expect(std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
 }
 
 test "monotype named type digest includes declared field order" {
