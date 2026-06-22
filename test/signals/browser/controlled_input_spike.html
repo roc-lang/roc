@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signals Controlled Input Spike</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.45;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        max-width: 860px;
+      }
+
+      label,
+      input,
+      button {
+        font: inherit;
+      }
+
+      input {
+        display: block;
+        box-sizing: border-box;
+        width: min(100%, 420px);
+        margin: 8px 0 16px;
+        padding: 8px 10px;
+      }
+
+      button {
+        margin: 0 8px 8px 0;
+        padding: 7px 10px;
+      }
+
+      pre {
+        overflow: auto;
+        min-height: 240px;
+        padding: 12px;
+        border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Controlled Input Spike</h1>
+    <label for="controlled">Controlled input</label>
+    <input id="controlled" autocomplete="off" value="">
+
+    <div>
+      <button id="set-host" type="button">SetValue("host")</button>
+      <button id="set-current" type="button">SetValue(current)</button>
+      <button id="clear-log" type="button">Clear Log</button>
+    </div>
+
+    <p>
+      Focus the input, type normally, then try the buttons. Repeat with an IME
+      composition in progress. The guard is correct when differing host values
+      are deferred while focused or composing, and equal echoes are skipped.
+    </p>
+
+    <pre id="log"></pre>
+
+    <script type="module">
+      import { attachControlledInputSpike } from "./controlled_input_policy.mjs";
+
+      const input = document.getElementById("controlled");
+      const log = document.getElementById("log");
+      const buttons = [
+        document.getElementById("set-host"),
+        document.getElementById("set-current"),
+        document.getElementById("clear-log"),
+      ];
+      const write = (op) => {
+        log.textContent += `${new Date().toISOString()} ${JSON.stringify(op)}\n`;
+        log.scrollTop = log.scrollHeight;
+      };
+
+      const spike = attachControlledInputSpike(input, write);
+
+      for (const button of buttons) {
+        button.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+        });
+      }
+
+      document.getElementById("set-host").addEventListener("click", () => {
+        spike.applySetValue("host");
+        input.focus();
+      });
+
+      document.getElementById("set-current").addEventListener("click", () => {
+        spike.applySetValue(input.value);
+        input.focus();
+      });
+
+      document.getElementById("clear-log").addEventListener("click", () => {
+        log.textContent = "";
+        input.focus();
+      });
+
+      write({
+        status: "ready",
+        value: input.value,
+        note: "Use node --test test/signals/browser/controlled_input_policy.test.mjs for the deterministic guard.",
+      });
+    </script>
+  </body>
+</html>

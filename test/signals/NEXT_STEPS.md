@@ -197,7 +197,7 @@ regression of it.
 The open questions (O1–O8) referenced below are defined in
 `BROWSER_RUNTIME_DESIGN.md` §11.
 
-### G-B1 — Controlled-input / focus / IME spike (Critical, highest external risk)
+### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
 - **Why first:** this is the single risk the simulated DOM cannot surface
   (`DESIGN.md` Open Questions, design O5). A `SetValue` on a focused `<input>`
@@ -208,10 +208,17 @@ The open questions (O1–O8) referenced below are defined in
 - **Spike:** a hand-written minimal WASM-stub or even a JS-only mock that drives a
   real controlled `<input>` through `SetValue` patches while focused, typing, and
   composing (CJK/IME). No full engine required.
-- **Finding to record:** whether `SetValue` can be applied unconditionally, must
-  be suppressed while focused/composing, or requires a new pull primitive. Feed
-  the answer back into `BROWSER_RUNTIME_DESIGN.md` O5 and the command set before
-  G-B4.
+- **Status:** `browser/controlled_input_policy.mjs` now carries the executor
+  policy and `browser/controlled_input_policy.test.mjs` asserts it. The manual
+  real-browser harness is `browser/controlled_input_spike.html`.
+- **Finding:** `SetValue` cannot be applied unconditionally. Equal values are
+  no-ops; differing values are deferred while the input is focused or composing;
+  the latest deferred value is applied after blur unless a later input echo
+  already matched it. The command set stays unchanged for G-B4, but focused
+  masking/validation needs an explicit future input-reconciliation design.
+- **Remaining:** run the harness in the target browser/IME matrix and record the
+  observed behavior before declaring text-input-heavy browser apps complete.
+  G-B2 is the next implementation slice.
 
 ### G-B2 — `memory.grow` view invalidation + marshalling spike (Critical)
 
@@ -322,6 +329,8 @@ Browser-runtime slices (G-B*) additionally gate on:
 
 - Wasm host build links and exports the control surface:
   `zig build build-test-hosts -Dplatform=signals` (wasm32 target)
+- Controlled-input spike policy:
+  `node --test test/signals/browser/controlled_input_policy.test.mjs`
 - The browser executor + spike findings: each G-B slice records its finding in
   `BROWSER_RUNTIME_DESIGN.md` (O1–O8) and lands a JS/host test or assertion that
   would catch a regression. A browser spike with no recorded finding or guard is

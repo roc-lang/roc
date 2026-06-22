@@ -948,10 +948,12 @@ These are future-stage questions, not gates on the Definition of Done.
 
 - **Real-browser host (highest future risk).** The simulated DOM is structurally
   blind to controlled-`<input>` cursor/selection/IME behavior, event arrival
-  during propagation, and layout-driven reads (`getBoundingClientRect`). A thin
-  browser-host spike against one controlled input is the right way to surface
-  these *after* the Definition of Done, and may force a first-class
-  effectful/pull primitive rather than an escape hatch.
+  during propagation, and layout-driven reads (`getBoundingClientRect`). The G-B1
+  spike in `BROWSER_RUNTIME_DESIGN.md` found that `SetValue` must not be a blind
+  DOM assignment: equal values are no-ops, and differing values are deferred
+  while the input is focused or composing. Full focused-input normalization and
+  browser/IME matrix validation remain future-stage work, and may still require
+  a first-class input-reconciliation primitive rather than an escape hatch.
 - **Animation / high-frequency continuous values.** A push graph driven by
   discrete updates may need a dedicated `interval`-driven path for smooth
   animation; revisit after benchmarks.

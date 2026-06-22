@@ -1,8 +1,9 @@
 # Signals Browser Runtime — JS/WASM Architecture Design
 
-> Status: design only, no implementation. This document proposes how a JavaScript
-> runtime loads, instantiates, mounts, and drives a Signals Roc app compiled to
-> `wasm32`. It is written against the *actual* code in this directory:
+> Status: design plus the G-B1 controlled-input spike; no wasm runtime
+> implementation yet. This document proposes how a JavaScript runtime loads,
+> instantiates, mounts, and drives a Signals Roc app compiled to `wasm32`.
+> It is written against the *actual* code in this directory:
 > `src/native_host.zig`, `src/wasm_host.zig`, `src/roc_platform_abi.zig`,
 > `platform/main.roc`, and the authoritative `DESIGN.md`.
 
@@ -154,7 +155,7 @@ Op-code table (mirrors the existing Zig render command set 1:1):
 | `CreateText` | node_id, (ptr,len) | `nodes[id]=document.createTextNode(s)` |
 | `AppendChild` | parent_id, child_id | `nodes[parent].appendChild(nodes[child])` |
 | `SetText` | node_id, (ptr,len) | `nodes[id].nodeValue = s` |
-| `SetValue` | node_id, (ptr,len) | controlled-input value set |
+| `SetValue` | node_id, (ptr,len) | guarded controlled-input value set |
 | `SetChecked` | node_id, 0/1 | checkbox |
 | `SetDisabled` | node_id, 0/1 | disabled attr |
 | `SetRole`/`SetLabel`/`SetTestId` | node_id, (ptr,len) | a11y/test attrs |
@@ -173,6 +174,15 @@ Free-form strings (text content, input values) still cross as (ptr,len) UTF-8.
 > detach/move ops to honor the `DESIGN.md` reorder budget ("reorder moves, it
 > does not rebuild") against a live DOM. These are **new render commands the
 > host emits**, not JS-side reconstruction — see Open Question O1.
+
+The G-B1 controlled-input spike (`browser/controlled_input_policy.mjs`) rejects
+blind `input.value = next` as the executor rule. `SetValue` is a guarded op:
+equal values are no-ops; differing values are deferred while the target input is
+focused or while composition is active; the latest deferred value is applied
+after blur unless a later input echo already matched it. This keeps the command
+set unchanged for the first browser milestone, but it means focused
+normalization/masking needs an explicit future input-reconciliation design
+instead of being smuggled into the thin executor.
 
 ---
 
@@ -446,11 +456,12 @@ the same metric assertions the native host uses (one recompute, one patch per
 click; zero retained-closure leak on unmount) hold.
 
 Deliberately **out of milestone 1**: `Ui.each`/`Ui.when` structural splicing,
-controlled-input cursor/IME, async tasks, intervals, event delegation
-sophistication, `memory.grow` view-rebuild edge cases (use a fixed initial
-memory large enough for the counter, then add the generation-counter rebuild in
-milestone 2). These line up with the `DESIGN.md` "Definition of Done" being
-*simulated-host* scoped — the browser host is explicitly the next stage.
+focused-input normalization beyond the guarded `SetValue` rule, async tasks,
+intervals, event delegation sophistication, `memory.grow` view-rebuild edge
+cases (use a fixed initial memory large enough for the counter, then add the
+generation-counter rebuild in milestone 2). These line up with the `DESIGN.md`
+"Definition of Done" being *simulated-host* scoped — the browser host is
+explicitly the next stage.
 
 ---
 
@@ -485,12 +496,15 @@ browser constraints, and should be settled before milestone 2.
   so JS rebuilds views correctly. This is a browser-constraint detail with no
   simulated-host analogue.
 
-- **O5 — Controlled inputs / focus / IME / selection.** `DESIGN.md` flags this
-  as the single highest external risk: the simulated DOM is structurally blind to
-  cursor/selection/IME. A real `SetValue` on a focused `<input>` mid-composition
-  can clobber the caret. This likely forces a first-class effectful/pull
-  primitive (DESIGN.md Open Questions), not an executor patch. Needs a browser
-  spike against one controlled input.
+- **O5 — Controlled inputs / focus / IME / selection.** G-B1 has a repo-local
+  spike and guard in `browser/controlled_input_policy.mjs` plus a manual browser
+  harness in `browser/controlled_input_spike.html`. Finding: `SetValue` must not
+  be applied unconditionally. Equal values are no-ops, and differing values are
+  deferred while the input is focused or composing. This is enough for the G-B4
+  counter milestone because it has no text input. It is not the full answer for
+  focused masking, validation, or selection-preserving normalization; those need
+  an explicit future input-reconciliation design before text-input-heavy browser
+  apps are declared complete.
 
 - **O6 — Event payload accessor serialization format.** The native host's event
   payloads are typed (`EventPayloadKind` unit/str/bool, `native_host.zig:55`).
