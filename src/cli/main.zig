@@ -237,6 +237,7 @@ const CliMainError =
         FormattingFailed,
         HandleInheritanceFailed,
         HashMismatch,
+        HotReloadSlotsExhausted,
         Internal,
         InvalidArguments,
         InvalidDependency,
@@ -3662,6 +3663,19 @@ const HotReloadSourceRewrite = struct {
     source_dir_override: []const u8,
 };
 
+const HotReloadImageSlot = struct {
+    index: u32,
+    start: usize,
+    end: usize,
+};
+
+const HotReloadSlotChoice = struct {
+    slot_index: u32,
+    slot_start: usize,
+    slot_end: usize,
+    append_offset: usize,
+};
+
 fn buildHotReloadChildArgv(
     ctx: *CliCtx,
     arg0: []const u8,
@@ -3670,7 +3684,7 @@ fn buildHotReloadChildArgv(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    append_offset: usize,
+    slot_choice: HotReloadSlotChoice,
     inputs_path: []const u8,
     source_rewrite: ?HotReloadSourceRewrite,
 ) Allocator.Error!WatchChildArgv {
@@ -3689,7 +3703,10 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{append_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-index={}", .{slot_choice.slot_index});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-start={}", .{slot_choice.slot_start});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-end={}", .{slot_choice.slot_end});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{slot_choice.append_offset});
     if (comptime is_windows) {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
     } else {
@@ -3720,7 +3737,7 @@ fn spawnHotReloadRebuild(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    append_offset: usize,
+    slot_choice: HotReloadSlotChoice,
     source_rewrite: ?HotReloadSourceRewrite,
 ) CliMainError!HotReloadRebuild {
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
@@ -3729,7 +3746,7 @@ fn spawnHotReloadRebuild(
     errdefer ctx.gpa.free(inputs_path);
     errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
 
-    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, append_offset, inputs_path, source_rewrite);
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, slot_choice, inputs_path, source_rewrite);
     errdefer argv.deinit(ctx.gpa);
 
     const child = try spawnWatchChild(ctx, argv.argv);
@@ -3802,6 +3819,108 @@ fn reportHotReloadAcknowledgement(
     return generation;
 }
 
+fn hotReloadSweepImageSlots(
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    acknowledged_generation: u64,
+) error{InvalidSharedMemory}!void {
+    const current = ipc.hot_reload.publishedImage(control);
+
+    var i: u32 = 0;
+    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
+        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
+        switch (snapshot.state) {
+            .published => {
+                const is_current = current != null and
+                    current.?.slot_index == i and
+                    current.?.generation == snapshot.generation;
+                if (!is_current or
+                    (acknowledged_generation >= snapshot.generation and snapshot.generation != 0))
+                {
+                    ipc.hot_reload.markSlotRetired(control, i);
+                }
+            },
+            .writing => {
+                if (snapshot.readers == 0) ipc.hot_reload.markSlotFree(control, i);
+            },
+            .retired, .free => {},
+        }
+    }
+
+    var used_size = reusable_boundary;
+    i = 0;
+    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
+        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
+        if (snapshot.state == .retired and snapshot.readers == 0) {
+            ipc.hot_reload.markSlotFree(control, i);
+            continue;
+        }
+        if (snapshot.state != .free) {
+            used_size = @max(used_size, snapshot.slot_end);
+        }
+    }
+
+    try SharedMemoryAllocator.rewindMappedHeader(
+        @ptrCast(@alignCast(shm_handle.ptr)),
+        shm_handle.mapped_size,
+        used_size,
+    );
+}
+
+fn hotReloadChooseImageSlot(
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    acknowledged_generation: u64,
+) CliMainError!HotReloadSlotChoice {
+    try hotReloadSweepImageSlots(control, shm_handle, reusable_boundary, acknowledged_generation);
+
+    const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
+        @ptrCast(@alignCast(shm_handle.ptr)),
+        shm_handle.mapped_size,
+    );
+
+    var first_free_index: ?u32 = null;
+    var best_reusable: ?HotReloadImageSlot = null;
+
+    var i: u32 = 1;
+    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
+        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
+        if (snapshot.state != .free or snapshot.readers != 0) continue;
+        if (first_free_index == null) first_free_index = i;
+
+        if (snapshot.image_offset >= reusable_boundary and snapshot.slot_end > snapshot.image_offset) {
+            const candidate = HotReloadImageSlot{
+                .index = i,
+                .start = snapshot.image_offset,
+                .end = snapshot.slot_end,
+            };
+            if (best_reusable == null or
+                candidate.end - candidate.start > best_reusable.?.end - best_reusable.?.start)
+            {
+                best_reusable = candidate;
+            }
+        }
+    }
+
+    if (best_reusable) |slot| {
+        return .{
+            .slot_index = slot.index,
+            .slot_start = slot.start,
+            .slot_end = slot.end,
+            .append_offset = append_offset,
+        };
+    }
+
+    return .{
+        .slot_index = first_free_index orelse return error.HotReloadSlotsExhausted,
+        .slot_start = 0,
+        .slot_end = 0,
+        .append_offset = append_offset,
+    };
+}
+
 fn runHotReloadDevShim(
     ctx: *CliCtx,
     arg0: []const u8,
@@ -3841,8 +3960,6 @@ fn runHotReloadDevShim(
     const initial_image = ipc.hot_reload.publishedImage(hot_reload_control) orelse return error.InvalidSharedMemory;
     const hot_reload_reclaim_boundary = initial_image.image_size;
     var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
-    var last_reclaimed_ack = last_reported_ack;
-    var last_finished_generation: u64 = 1;
     var active_rebuild: ?HotReloadRebuild = null;
     defer {
         if (active_rebuild) |*rebuild| {
@@ -3852,38 +3969,28 @@ fn runHotReloadDevShim(
     }
 
     while (!host_child.done.load(.seq_cst)) {
-        if (try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack)) |ack_generation| {
-            if (active_rebuild == null and
-                ack_generation >= last_finished_generation and
-                ack_generation > last_reclaimed_ack)
-            {
-                try SharedMemoryAllocator.rewindMappedHeader(
-                    @ptrCast(@alignCast(shm_handle.ptr)),
-                    shm_handle.mapped_size,
+        if (try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack)) |_| {
+            if (active_rebuild == null) {
+                try hotReloadSweepImageSlots(
+                    hot_reload_control,
+                    shm_handle,
                     hot_reload_reclaim_boundary,
+                    last_reported_ack,
                 );
-                last_reclaimed_ack = ack_generation;
             }
         }
 
         if (active_rebuild) |*rebuild| {
             if (rebuild.child.done.load(.seq_cst)) {
-                const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
-                const rebuild_generation = rebuild.generation;
                 pending_rebuild = (try finishHotReloadRebuild(ctx, &state, &signal, rebuild)) or pending_rebuild;
-                if (rebuild_succeeded) last_finished_generation = rebuild_generation;
                 rebuild.deinit(ctx);
                 active_rebuild = null;
-                if (last_reported_ack >= last_finished_generation and
-                    last_reported_ack > last_reclaimed_ack)
-                {
-                    try SharedMemoryAllocator.rewindMappedHeader(
-                        @ptrCast(@alignCast(shm_handle.ptr)),
-                        shm_handle.mapped_size,
-                        hot_reload_reclaim_boundary,
-                    );
-                    last_reclaimed_ack = last_reported_ack;
-                }
+                try hotReloadSweepImageSlots(
+                    hot_reload_control,
+                    shm_handle,
+                    hot_reload_reclaim_boundary,
+                    last_reported_ack,
+                );
             }
         }
 
@@ -3897,9 +4004,11 @@ fn runHotReloadDevShim(
         }
 
         if (pending_rebuild and active_rebuild == null) {
-            const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
-                @ptrCast(@alignCast(shm_handle.ptr)),
-                shm_handle.mapped_size,
+            const slot_choice = try hotReloadChooseImageSlot(
+                hot_reload_control,
+                shm_handle,
+                hot_reload_reclaim_boundary,
+                last_reported_ack,
             );
             active_rebuild = try spawnHotReloadRebuild(
                 ctx,
@@ -3909,7 +4018,7 @@ fn runHotReloadDevShim(
                 shm_handle,
                 expected_host_identity,
                 next_generation,
-                append_offset,
+                slot_choice,
                 source_rewrite,
             );
             next_generation += 1;
@@ -3996,6 +4105,9 @@ test "hot reload worker args require append offset" {
         "--path=app.roc",
         "--target=x64linux",
         "--generation=2",
+        "--slot-index=1",
+        "--slot-start=1024",
+        "--slot-end=3072",
         "--append-offset=4096",
         "--shm-handle=3",
         "--shm-size=8192",
@@ -4004,6 +4116,9 @@ test "hot reload worker args require append offset" {
     });
 
     try std.testing.expectEqual(@as(u64, 2), parsed.generation);
+    try std.testing.expectEqual(@as(u32, 1), parsed.slot_index);
+    try std.testing.expectEqual(@as(usize, 1024), parsed.slot_start);
+    try std.testing.expectEqual(@as(usize, 3072), parsed.slot_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4014,6 +4129,65 @@ test "hot reload worker args require append offset" {
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
     }));
+}
+
+fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
+    return .{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+        .mapped_size = shm.total_size,
+    };
+}
+
+test "hot reload slot choice reuses retired unleased slot without waiting for latest acknowledgement" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    ipc.hot_reload.init(control, 512, 2048);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+    ipc.hot_reload.publishSlot(control, 3, 2, 4096, 8192, 8192);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const choice = try hotReloadChooseImageSlot(control, handle, 2048, 0);
+
+    try std.testing.expectEqual(@as(u32, 1), choice.slot_index);
+    try std.testing.expectEqual(@as(usize, 2048), choice.slot_start);
+    try std.testing.expectEqual(@as(usize, 4096), choice.slot_end);
+    try std.testing.expectEqual(@as(usize, 8192), choice.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.SlotState.free, ipc.hot_reload.slotSnapshot(control, 1).?.state);
+    try std.testing.expectEqual(ipc.hot_reload.SlotState.published, ipc.hot_reload.slotSnapshot(control, 2).?.state);
+    try std.testing.expectEqual(@as(usize, 8192), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload sweep can reclaim acknowledged current slot for latest wins reuse" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    ipc.hot_reload.init(control, 512, 2048);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+    ipc.hot_reload.acknowledge(control, 2, .accepted);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const choice = try hotReloadChooseImageSlot(control, handle, 2048, 2);
+
+    try std.testing.expectEqual(@as(u32, 1), choice.slot_index);
+    try std.testing.expectEqual(@as(usize, 2048), choice.slot_start);
+    try std.testing.expectEqual(@as(usize, 4096), choice.slot_end);
+    try std.testing.expectEqual(@as(usize, 2048), choice.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.SlotState.free, ipc.hot_reload.slotSnapshot(control, 1).?.state);
+    try std.testing.expectEqual(@as(usize, 2048), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 }
 
 /// Result of setting up shared memory with type checking information.
@@ -4174,6 +4348,7 @@ const DevRunImagePublication = struct {
     header: *backend.RunImage.Header,
     image_offset: usize,
     image_bound: usize,
+    slot_end: usize,
 };
 
 const hot_reload_dev_command = "__roc_hot_reload_dev";
@@ -4182,6 +4357,9 @@ const HotReloadDevWorkerArgs = struct {
     path: []const u8,
     target: []const u8,
     generation: u64,
+    slot_index: u32,
+    slot_start: usize,
+    slot_end: usize,
     append_offset: usize,
     shm_handle: []const u8,
     shm_size: usize,
@@ -4216,6 +4394,9 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var path: ?[]const u8 = null;
     var target: ?[]const u8 = null;
     var generation: ?u64 = null;
+    var slot_index: ?u32 = null;
+    var slot_start: ?usize = null;
+    var slot_end: ?usize = null;
     var append_offset: ?usize = null;
     var shm_handle: ?[]const u8 = null;
     var shm_size: ?usize = null;
@@ -4234,6 +4415,12 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             target = value;
         } else if (hotReloadFlagValue(arg, "--generation")) |value| {
             generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--slot-index")) |value| {
+            slot_index = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--slot-start")) |value| {
+            slot_start = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--slot-end")) |value| {
+            slot_end = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--append-offset")) |value| {
             append_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
@@ -4265,6 +4452,9 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .path = path orelse return error.InvalidArguments,
         .target = target orelse return error.InvalidArguments,
         .generation = generation orelse return error.InvalidArguments,
+        .slot_index = slot_index orelse return error.InvalidArguments,
+        .slot_start = slot_start orelse return error.InvalidArguments,
+        .slot_end = slot_end orelse return error.InvalidArguments,
         .append_offset = append_offset orelse return error.InvalidArguments,
         .shm_handle = shm_handle orelse return error.InvalidArguments,
         .shm_size = shm_size orelse return error.InvalidArguments,
@@ -4344,16 +4534,21 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
-    try shm.resetToUsedSize(args.append_offset);
     const publication = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
         selected_target,
         lowered_result.entrypoint_names,
         lowered,
+        .{
+            .slot_index = args.slot_index,
+            .slot_start = args.slot_start,
+            .slot_end = args.slot_end,
+            .append_offset = args.append_offset,
+        },
     );
     shm.updateHeader();
-    ipc.hot_reload.publish(control, args.generation, publication.image_offset, publication.image_bound);
+    ipc.hot_reload.publishSlot(control, args.generation, args.slot_index, publication.image_offset, publication.image_bound, publication.slot_end);
 }
 
 fn writeDevRunImageToSharedMemory(
@@ -4362,6 +4557,7 @@ fn writeDevRunImageToSharedMemory(
     selected_target: RocTarget,
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
+    hot_reload_slot: ?HotReloadSlotChoice,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
         try ctx.io.stderr().print(
@@ -4424,20 +4620,53 @@ fn writeDevRunImageToSharedMemory(
             };
         }
 
+        const generated_code = codegen.getGeneratedCode();
+        const relocations = codegen.getRelocations();
+
+        var empty_slot_buffer: [0]u8 = .{};
+        var fixed_slot_buffer = std.heap.FixedBufferAllocator.init(&empty_slot_buffer);
+        var image_allocator = shm.allocator();
+        var slot_end: usize = 0;
+
+        if (hot_reload_slot) |slot| {
+            const reusable_capacity = if (slot.slot_end > slot.slot_start)
+                slot.slot_end - slot.slot_start
+            else
+                0;
+            const required_capacity = try backend.RunImage.requiredCapacity(
+                generated_code,
+                entrypoints,
+                relocations,
+                static_strings.exports,
+            );
+
+            if (reusable_capacity >= required_capacity) {
+                const slot_bytes = shm.base_ptr[slot.slot_start..slot.slot_end];
+                fixed_slot_buffer = std.heap.FixedBufferAllocator.init(slot_bytes);
+                image_allocator = fixed_slot_buffer.allocator();
+                slot_end = slot.slot_end;
+            } else {
+                try shm.resetToUsedSize(slot.append_offset);
+            }
+        }
+
         const header = try backend.RunImage.writeToSharedMemory(
             ctx.gpa,
-            shm.allocator(),
+            image_allocator,
             shm.base_ptr,
-            codegen.getGeneratedCode(),
+            generated_code,
             entrypoints,
-            codegen.getRelocations(),
+            relocations,
             static_strings.exports,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
+        const image_bound: usize = @intCast(header.image_size);
+        if (slot_end == 0) slot_end = image_bound;
         return .{
             .header = header,
             .image_offset = image_offset,
-            .image_bound = @intCast(header.image_size),
+            .image_bound = image_bound,
+            .slot_end = slot_end,
         };
     }
 }
@@ -4453,7 +4682,7 @@ fn publishDevRunImage(
     var shm = try createSharedMemory(ctx.io.std_io, page_size);
     errdefer shm.deinit(ctx.gpa);
 
-    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered);
+    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered, null);
     if (enable_hot_reload) {
         ipc.hot_reload.init(ipc.hot_reload.controlFromBase(shm.base_ptr), publication.image_offset, publication.image_bound);
     }

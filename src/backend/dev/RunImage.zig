@@ -249,6 +249,52 @@ pub fn writeToSharedMemory(
     return header;
 }
 
+/// Return the exact allocator capacity needed to serialize this run image.
+pub fn requiredCapacity(
+    code: []const u8,
+    entrypoint_inputs: []const EntrypointInput,
+    relocations: []const Relocation,
+    data_exports: []const StaticDataExport,
+) WriteError!usize {
+    var symbol_names_len: usize = 0;
+    var relocation_count: usize = 0;
+    for (relocations) |relocation| {
+        switch (relocation) {
+            .linked_function => |function| {
+                symbol_names_len = try addNoOverflow(symbol_names_len, function.name.len);
+                relocation_count = try addNoOverflow(relocation_count, 1);
+            },
+            .linked_data => |data| {
+                symbol_names_len = try addNoOverflow(symbol_names_len, data.name.len);
+                relocation_count = try addNoOverflow(relocation_count, 1);
+            },
+            .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
+        }
+    }
+
+    var data_len: usize = 0;
+    var max_data_alignment: usize = 1;
+    for (data_exports) |data_export| {
+        if (data_export.relocations.len != 0) return error.UnsupportedStaticDataRelocation;
+        const alignment = if (data_export.alignment == 0) 1 else data_export.alignment;
+        if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
+        max_data_alignment = @max(max_data_alignment, alignment);
+        data_len = std.mem.alignForward(usize, data_len, alignment);
+        data_len = try addNoOverflow(data_len, data_export.bytes.len);
+        symbol_names_len = try addNoOverflow(symbol_names_len, data_export.symbol_name.len);
+    }
+
+    var capacity: usize = 0;
+    capacity = try addAllocationCapacity(capacity, @alignOf(Header), @sizeOf(Header));
+    capacity = try addAllocationCapacity(capacity, @alignOf(Entrypoint), try mulNoOverflow(entrypoint_inputs.len, @sizeOf(Entrypoint)));
+    capacity = try addAllocationCapacity(capacity, 16, code.len);
+    capacity = try addAllocationCapacity(capacity, @alignOf(RelocationRecord), try mulNoOverflow(relocation_count, @sizeOf(RelocationRecord)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(u8), symbol_names_len);
+    capacity = try addAllocationCapacity(capacity, max_data_alignment, data_len);
+    capacity = try addAllocationCapacity(capacity, @alignOf(DataSymbol), try mulNoOverflow(data_exports.len, @sizeOf(DataSymbol)));
+    return capacity;
+}
+
 /// Validate and view an already-mapped dev run image.
 pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
     if (header.magic != MAGIC) return error.InvalidDevRunImage;
@@ -282,6 +328,21 @@ fn appendStringRef(scratch: Allocator, symbol_names: *std.ArrayList(u8), name: [
         .offset = @intCast(offset),
         .len = @intCast(name.len),
     };
+}
+
+fn addNoOverflow(a: usize, b: usize) ImageError!usize {
+    if (b > std.math.maxInt(usize) - a) return error.InvalidDevRunImage;
+    return a + b;
+}
+
+fn mulNoOverflow(a: usize, b: usize) ImageError!usize {
+    if (a != 0 and b > std.math.maxInt(usize) / a) return error.InvalidDevRunImage;
+    return a * b;
+}
+
+fn addAllocationCapacity(capacity: usize, alignment: usize, len: usize) ImageError!usize {
+    const aligned = std.mem.alignForward(usize, capacity, alignment);
+    return addNoOverflow(aligned, len);
 }
 
 fn allocRuntimeAlignedBytes(allocator: Allocator, alignment: std.mem.Alignment, len: usize) Allocator.Error![]u8 {
@@ -377,6 +438,7 @@ test "writeToSharedMemory serializes only executable image sections" {
             .alignment = 8,
         },
     };
+    const capacity = try requiredCapacity(&code, &entrypoint_inputs, &relocations, &data_exports);
 
     const header = try writeToSharedMemory(
         scratch,
@@ -391,6 +453,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(MAGIC, header.magic);
     try std.testing.expectEqual(FORMAT_VERSION, header.format_version);
     try std.testing.expect(header.image_size <= image_bytes.len);
+    try std.testing.expect(header.image_size <= capacity);
 
     const view = try viewMappedImage(header, &image_bytes, @intCast(header.image_size));
 

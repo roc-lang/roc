@@ -48,6 +48,10 @@ const DevProgram = struct {
 const RuntimeState = struct {
     shm: SharedMemoryAllocator,
     program: *DevProgram,
+    /// Process-local executable copies that are no longer the active entrypoint
+    /// target. Shared-memory image slots are leased only while being copied and
+    /// reclaimed by the compiler parent; the shim destroys only executable
+    /// mappings it allocated in this process.
     retired_programs: std.ArrayList(*DevProgram),
     control: ?*hot_reload.Control,
 };
@@ -497,25 +501,28 @@ fn refreshRuntimeProgramIfNeeded(
     const control = state.control orelse return;
     const published_image = hot_reload.publishedImage(control) orelse return;
     if (published_image.generation <= state.program.generation) return;
+    const leased_image = hot_reload.acquirePublishedImage(control) orelse return;
+    defer hot_reload.releaseImage(control, leased_image.slot_index);
+    if (leased_image.generation <= state.program.generation) return;
 
     const view = viewRuntimeImage(
         &state.shm,
-        published_image.image_offset,
-        published_image.image_size,
+        leased_image.image_offset,
+        leased_image.image_size,
     ) catch {
-        hot_reload.acknowledge(control, published_image.generation, .rejected);
+        hot_reload.acknowledge(control, leased_image.generation, .rejected);
         return;
     };
 
     const gpa = allocator();
-    const next_program = createDevProgram(gpa, &view, published_image.generation) catch {
-        hot_reload.acknowledge(control, published_image.generation, .rejected);
+    const next_program = createDevProgram(gpa, &view, leased_image.generation) catch {
+        hot_reload.acknowledge(control, leased_image.generation, .rejected);
         return;
     };
 
     state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
         destroyDevProgram(gpa, next_program);
-        hot_reload.acknowledge(control, published_image.generation, .rejected);
+        hot_reload.acknowledge(control, leased_image.generation, .rejected);
         return;
     };
 
@@ -523,7 +530,7 @@ fn refreshRuntimeProgramIfNeeded(
     state.program = next_program;
     state.retired_programs.appendAssumeCapacity(old_program);
     releaseDevProgramRefLocked(state, old_program);
-    hot_reload.acknowledge(control, published_image.generation, .accepted);
+    hot_reload.acknowledge(control, leased_image.generation, .accepted);
 }
 
 fn evaluateEntrypoint(
