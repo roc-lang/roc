@@ -16,6 +16,7 @@ const keyed_rows = @import("keyed_rows.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const erased_calls = @import("erased_calls.zig");
 const hv = @import("host_values.zig");
+const engine = @import("engine.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -140,47 +141,7 @@ const HostSignalEventRoute = struct {
     signal_ids: []u64,
 };
 
-const HostValueCell = struct {
-    value: HostValue,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-
-    fn initRetained(value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable, metrics: *RuntimeMetrics) HostValueCell {
-        abi.increfErasedCallable(eq, 1);
-        abi.increfErasedCallable(drop, 1);
-        metrics.bump(.closure_retains, 2);
-        return .{ .value = value, .eq = eq, .drop = drop };
-    }
-
-    fn cloneRetained(self: HostValueCell, host: *HostEnv, metrics: *RuntimeMetrics) HostValueCell {
-        const value = host.cloneHostValue(self.value);
-        abi.increfErasedCallable(self.eq, 1);
-        abi.increfErasedCallable(self.drop, 1);
-        metrics.bump(.closure_retains, 2);
-        return .{ .value = value, .eq = self.eq, .drop = self.drop };
-    }
-
-    fn deinit(self: *HostValueCell, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
-        callErasedHostValueToUnit(roc_host, self.drop, self.value);
-        abi.decrefErasedCallable(self.eq, roc_host);
-        abi.decrefErasedCallable(self.drop, roc_host);
-        metrics.bump(.closure_releases, 2);
-        self.* = undefined;
-    }
-
-    fn valueEquals(self: *const HostValueCell, roc_host: *abi.RocHost, value: HostValue) bool {
-        return callErasedHostValueHostValueToBool(roc_host, self.eq, self.value, value);
-    }
-
-    fn dropIncoming(self: *const HostValueCell, roc_host: *abi.RocHost, value: HostValue) void {
-        callErasedHostValueToUnit(roc_host, self.drop, value);
-    }
-
-    fn replaceValue(self: *HostValueCell, roc_host: *abi.RocHost, value: HostValue) void {
-        callErasedHostValueToUnit(roc_host, self.drop, self.value);
-        self.value = value;
-    }
-};
+const HostValueCell = engine.HostValueCell;
 
 const HostState = struct {
     state_id: u64,
@@ -240,24 +201,10 @@ const HostSignalCacheSlot = union(enum) {
     }
 };
 
-const HostEachRowScopeStep = struct {
-    site_ordinal: u64,
-    key: HostValueCell,
-    item: HostValueCell,
-};
-
-const HostScopeStep = scope_tree.Step(HostEachRowScopeStep);
-const HostScope = scope_tree.Scope(HostEachRowScopeStep);
-
-fn deinitHostScopeStep(step: *HostScopeStep, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
-    switch (step.*) {
-        .each_row => |*row| {
-            row.key.deinit(roc_host, metrics);
-            row.item.deinit(roc_host, metrics);
-        },
-        .root, .component, .when_branch => {},
-    }
-}
+const HostEachRowScopeStep = engine.HostEachRowScopeStep;
+const HostScopeStep = engine.HostScopeStep;
+const HostScope = engine.HostScope;
+const deinitHostScopeStep = engine.deinitHostScopeStep;
 
 const HostNodeScopeSiteKind = enum {
     component,
@@ -285,11 +232,7 @@ const HostBinderBinding = struct {
     node_id: u64,
 };
 
-fn retainHostCallable(callable: abi.RocErasedCallable, metrics: *RuntimeMetrics) abi.RocErasedCallable {
-    abi.increfErasedCallable(callable, 1);
-    metrics.bump(.closure_retains, 1);
-    return callable;
-}
+const retainHostCallable = engine.retainHostCallable;
 
 fn retainHostSignalToken(token: HostSignalToken) HostSignalToken {
     abi.increfBox(@ptrCast(token), 1);
@@ -2159,7 +2102,9 @@ const HostEnv = struct {
         return self.takeHostValue(value);
     }
 
-    fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
+    // `pub` so the shared `engine.HostValueCell.cloneRetained` can clone a value
+    // through the host's registry (the engine treats `self` as its clone ctx).
+    pub fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
         const allocator = self.gpa.allocator();
         const cloned = self.host_values.clone(allocator, value, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
