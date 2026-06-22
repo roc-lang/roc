@@ -22,7 +22,8 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 │                                                                             │
 │      10 => 4                                                                │
 │      ‾‾                                                                     │
-└──────────────────────────────────────────────────── literal_patterns.md:5:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    literal_patterns.md:5:5
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -33,7 +34,8 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 │                                                                             │
 │      Zero => "hello"                                                        │
 │              ‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────── literal_patterns.md:3:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    literal_patterns.md:3:13
 
     The type was determined to be:
 

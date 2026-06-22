@@ -17,7 +17,8 @@ PARSE ERROR - can_var_scoping_invalid_top_level.md:2:1:2:4
 │                                                                             │
 │  var topLevelVar_ = 0                                                       │
 │  ‾‾‾                                                                        │
-└─────────────────────────────────── can_var_scoping_invalid_top_level.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_var_scoping_invalid_top_level.md:2:1
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

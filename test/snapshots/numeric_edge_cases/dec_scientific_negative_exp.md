@@ -16,7 +16,8 @@ INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
 │                                                                             │
 │  1.23456789012345678e-10                                                    │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────── dec_scientific_negative_exp.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    dec_scientific_negative_exp.md:1:1
 
     The inferred type is:
 

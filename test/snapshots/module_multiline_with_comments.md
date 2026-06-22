@@ -23,7 +23,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │                                                                             │
 │   [ # Comment After exposes open                                            │
 │   ‾                                                                         │
-└────────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    module_multiline_with_comments.md:1:2
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -32,7 +33,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │                                                                             │
 │    something, # Comment after exposed item                                  │
 │    ‾‾‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    module_multiline_with_comments.md:2:3
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -41,7 +43,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │                                                                             │
 │    something, # Comment after exposed item                                  │
 │             ‾                                                               │
-└───────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    module_multiline_with_comments.md:2:12
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -50,7 +53,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │                                                                             │
 │    SomeType, # Comment after final exposed item                             │
 │            ‾                                                                │
-└───────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    module_multiline_with_comments.md:3:11
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -71,7 +75,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │                                                                             │
 │   ]                                                                         │
 │   ‾                                                                         │
-└────────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    module_multiline_with_comments.md:4:2
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

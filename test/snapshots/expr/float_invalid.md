@@ -16,7 +16,8 @@ MISSING METHOD - float_invalid.md:1:1:1:5
 │                                                                             │
 │  3.14.15                                                                    │
 │  ‾‾‾‾                                                                       │
-└─────────────────────────────────────────────────────── float_invalid.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    float_invalid.md:1:1
 
     The value's type, which does not have a method named from_numeral, is:
 

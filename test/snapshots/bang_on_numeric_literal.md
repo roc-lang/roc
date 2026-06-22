@@ -16,7 +16,8 @@ MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
 │                                                                             │
 │  !3                                                                         │
 │  ‾‾                                                                         │
-└───────────────────────────────────────────── bang_on_numeric_literal.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    bang_on_numeric_literal.md:1:1
 
     The value's type, which does not have a method named not, is:
 

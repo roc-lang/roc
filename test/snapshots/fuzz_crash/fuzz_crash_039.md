@@ -19,7 +19,8 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 │                                                                             │
 │  module[}('                                                                 │
 │           ‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_039.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_039.md:1:10
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: exposed_item_unexpected_token ──────┤ PARSE ERROR │
@@ -27,7 +28,8 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 │                                                                             │
 │  module[}('                                                                 │
 │         ‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_039.md:1:8
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -36,7 +38,8 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 │                                                                             │
 │  module[}('                                                                 │
 │          ‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_039.md:1:9
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

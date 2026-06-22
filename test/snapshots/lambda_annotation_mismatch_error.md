@@ -23,7 +23,8 @@ INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 │                                                                             │
 │  string_function = |x| x + 42                                               │
 │                        ‾‾‾‾‾‾                                               │
-└─────────────────────────────────── lambda_annotation_mismatch_error.md:3:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    lambda_annotation_mismatch_error.md:3:23
 
     The value's type, which does not have a method named plus, is:
 
@@ -37,7 +38,8 @@ INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 │                                                                             │
 │  wrong_type_function = |x| x * 3.14                                         │
 │                                ‾‾‾‾                                         │
-└─────────────────────────────────── lambda_annotation_mismatch_error.md:7:31 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    lambda_annotation_mismatch_error.md:7:31
 
     The inferred type is:
 

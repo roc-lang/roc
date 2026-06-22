@@ -26,7 +26,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                     ‾‾                                      │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:36 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:36
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -39,7 +40,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                        ‾                                    │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:39 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:39
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -48,7 +50,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                         ‾‾                                  │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:40 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:40
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -57,7 +60,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                            ‾‾                               │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:43 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:43
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -70,7 +74,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                               ‾‾                            │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:46 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:46
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -79,7 +84,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 │                                                                             │
 │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
 │                                                 ‾                           │
-└──────────────────────────────────── type_higher_order_multiple_vars.md:3:48 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_higher_order_multiple_vars.md:3:48
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

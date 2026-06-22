@@ -17,7 +17,8 @@ PARSE ERROR - fuzz_crash_052.md:2:1:2:2
 │                                                                             │
 │  0                                                                          │
 │  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_052.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_052.md:2:1
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

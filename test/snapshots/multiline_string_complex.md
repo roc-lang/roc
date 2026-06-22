@@ -63,7 +63,8 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 │                                                                             │
 │   e: !\\                                                                    │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────── multiline_string_complex.md:40:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multiline_string_complex.md:40:5
 
     The value's type, which does not have a method named not, is:
 
@@ -77,7 +78,8 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 │                                                                             │
 │    0 - \\                                                                   │
 │    ‾                                                                        │
-└─────────────────────────────────────────── multiline_string_complex.md:37:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multiline_string_complex.md:37:3
 
     The method minus has the type:
 

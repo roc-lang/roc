@@ -24,7 +24,8 @@ DECLARATION HAS NO VALUE - canon_revamp_anno_only_between_pairs.md:5:5:5:17
 │                                                                             │
 │      middle : Foo                                                           │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└──────────────────────────────── canon_revamp_anno_only_between_pairs.md:5:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_anno_only_between_pairs.md:5:5
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

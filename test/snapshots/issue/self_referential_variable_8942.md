@@ -16,7 +16,8 @@ INVALID ASSIGNMENT TO ITSELF - self_referential_variable_8942.md:1:5:1:6
 │                                                                             │
 │  a = a                                                                      │
 │      ‾                                                                      │
-└────────────────────────────────────── self_referential_variable_8942.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    self_referential_variable_8942.md:1:5
 
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to

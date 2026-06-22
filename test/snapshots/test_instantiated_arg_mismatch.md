@@ -21,7 +21,8 @@ TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 │                                                                             │
 │      pair(42, "hello")                                                      │
 │               ‾‾‾‾‾‾‾                                                       │
-└───────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_instantiated_arg_mismatch.md:5:14
 
     The type was determined to be:
 

@@ -16,7 +16,8 @@ UNDEFINED VARIABLE - add_var_with_spaces.md:1:8:1:9
 │                                                                             │
 │  add2 = x +      2                                                          │
 │         ‾                                                                   │
-└───────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    add_var_with_spaces.md:1:8
 
     Is there an import or exposing missing up-top?
 # TOKENS

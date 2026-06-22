@@ -16,7 +16,8 @@ POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 │                                                                             │
 │  -rec1.field                                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────── unary_negation_access.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unary_negation_access.md:1:1
 
     Its type is:
     a where [a.negate : a -> a]

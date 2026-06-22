@@ -23,7 +23,8 @@ TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 │                                                                             │
 │      (a(1), a("x"), b(2))                                                   │
 │               ‾‾‾                                                           │
-└────────────────────────────────────────── generalize_alias_in_tuple.md:7:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    generalize_alias_in_tuple.md:7:14
 
     The type was determined to be:
 

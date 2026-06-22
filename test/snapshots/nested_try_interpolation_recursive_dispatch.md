@@ -26,7 +26,8 @@ RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
 │                                                                             │
 │      url = "https://${domain}.com"                                          │
 │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└──────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nested_try_interpolation_recursive_dispatch.md:9:11
 
     The dispatcher type is:
 

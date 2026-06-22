@@ -28,7 +28,8 @@ UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 │                                                                             │
 │   Stdout.line!("Hello, world!")                                             │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
-└───────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    hello_world_with_block.md:11:2
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -37,7 +38,8 @@ UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 │                                                                             │
 │   world = "World"                                                           │
 │   ‾‾‾‾‾                                                                     │
-└────────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    hello_world_with_block.md:9:2
 
     If you don't need this variable, prefix it with an underscore like _world
     to suppress this warning.

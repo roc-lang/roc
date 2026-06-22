@@ -40,7 +40,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)      │
 │                            ‾‾‾‾‾                                            │
-└──────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:4:27
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -49,7 +50,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)      │
 │                                                 ‾‾‾‾‾                       │
-└──────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:4:48
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -58,7 +60,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │          Ok(maybeList) => []                                                │
 │             ‾‾‾‾‾‾‾‾‾                                                       │
-└──────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:7:12
 
     If you don't need this variable, prefix it with an underscore like
     _maybeList to suppress this warning.
@@ -68,7 +71,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │  deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a                       │
 │               ‾‾‾‾‾                                                         │
-└─────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:12:14
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -77,7 +81,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))               │
 │                               ‾‾‾‾‾                                         │
-└─────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:18:30
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -86,7 +91,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 │                                                                             │
 │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))               │
 │                                                    ‾‾‾‾‾                    │
-└─────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_complex_nested.md:18:51
 
     This type is referenced here:
 # TOKENS

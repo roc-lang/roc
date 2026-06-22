@@ -24,7 +24,8 @@ UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
 │                                                                             │
 │  bad_function = |msg| Stdout.line!(msg)                                     │
 │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pure_annotation_effectful_body_error.md:7:22
 
     Is there an import or exposing missing up-top?
 # TOKENS

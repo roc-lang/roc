@@ -28,7 +28,8 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 │                                                                             │
 │  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                         │
 │                         ‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_external_fully_qualified.md:3:24
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -38,7 +39,8 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 │                                                                             │
 │          MyTryModule.MyTryType.Ok(value) => value                           │
 │                     ‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_external_fully_qualified.md:6:20
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -48,7 +50,8 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 │                                                                             │
 │          MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"        │
 │                     ‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_external_fully_qualified.md:7:20
 
     You're attempting to use this type here:
                                                              ┌─────────────────┐
@@ -57,7 +60,8 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 │                                                                             │
 │          MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"        │
 │                                    ‾‾‾‾                                     │
-└─────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_external_fully_qualified.md:7:35
 
     If you don't need this variable, prefix it with an underscore like _code to
     suppress this warning.

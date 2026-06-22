@@ -32,7 +32,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────── type_declarations.md:3:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_declarations.md:3:8
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -41,7 +42,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │              ‾‾‾                                                            │
-└────────────────────────────────────────────────── type_declarations.md:3:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_declarations.md:3:13
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -50,7 +52,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : Something }                                 │
 │                    ‾‾                                                       │
-└────────────────────────────────────────────────── type_declarations.md:5:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_declarations.md:5:19
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -59,7 +62,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : Something }                                 │
 │                                 ‾‾‾‾‾‾‾‾‾                                   │
-└────────────────────────────────────────────────── type_declarations.md:5:32 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_declarations.md:5:32
 
     This type is referenced here:
                                                          ┌─────────────────────┐
@@ -68,7 +72,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 │                                                                             │
 │  MyType2 : Module.Thingy                                                    │
 │            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────────────── type_declarations.md:13:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_declarations.md:13:11
 
     You're attempting to use this module here:
 # TOKENS

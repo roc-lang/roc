@@ -30,7 +30,8 @@ DOES NOT EXIST - canon_revamp_nested_short_alias_not_module.md:13:7:13:17
 │                                                                             │
 │  bad = Nested.val                                                           │
 │        ‾‾‾‾‾‾‾‾‾‾                                                           │
-└───────────────────────── canon_revamp_nested_short_alias_not_module.md:13:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_nested_short_alias_not_module.md:13:7
 
 # TOKENS
 ~~~zig

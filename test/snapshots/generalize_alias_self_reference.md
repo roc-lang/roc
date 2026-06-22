@@ -18,7 +18,8 @@ INVALID ASSIGNMENT TO ITSELF - generalize_alias_self_reference.md:1:5:1:6
 │                                                                             │
 │  x = x                                                                      │
 │      ‾                                                                      │
-└───────────────────────────────────── generalize_alias_self_reference.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    generalize_alias_self_reference.md:1:5
 
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to

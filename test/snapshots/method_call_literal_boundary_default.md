@@ -24,7 +24,8 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 │                                                                             │
 │   add_x(5).plus(add_y(5))                                                   │
 │         ‾                                                                   │
-└──────────────────────────────── method_call_literal_boundary_default.md:4:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    method_call_literal_boundary_default.md:4:8
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.
@@ -35,7 +36,8 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 │                                                                             │
 │   add_x(5).plus(add_y(5))                                                   │
 │                       ‾                                                     │
-└─────────────────────────────── method_call_literal_boundary_default.md:4:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    method_call_literal_boundary_default.md:4:22
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.

@@ -37,7 +37,8 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 │                                                                             │
 │  unused_regular = |x| 42                                                    │
 │                    ‾                                                        │
-└───────────────────────────────────────────────── unused_vars_simple.md:4:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unused_vars_simple.md:4:19
 
     If you don't need this variable, prefix it with an underscore like _x to
     suppress this warning.
@@ -47,7 +48,8 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 │                                                                             │
 │  used_underscore = |_value| _value                                          │
 │                             ‾‾‾‾‾‾                                          │
-└───────────────────────────────────────────────── unused_vars_simple.md:7:28 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unused_vars_simple.md:7:28
 
     Variables prefixed with _ are intended to be unused. Remove the underscore
     prefix: value.

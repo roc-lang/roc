@@ -21,7 +21,8 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 │                                                                             │
 │  Hash(a, hasher) : a                                                        │
 │   where [a.hash : hasher -> hasher, hasher.Hasher]                          │
-└───────────────────────────────────────────────────── where_clauses_1.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    where_clauses_1.md:1:1
 
     You're attempting do this here:
                                 ┌──────────────────────────────────────────────┐
@@ -31,7 +32,8 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 │                                                                             │
 │  Decode(a) : a where [a.decode : List(U8) -> a]                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                             │
-└───────────────────────────────────────────────────── where_clauses_1.md:4:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    where_clauses_1.md:4:1
 
     You're attempting do this here:
 # TOKENS

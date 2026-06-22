@@ -16,7 +16,8 @@ INVALID NUMBER - frac_huge_scientific.md:1:1:1:8
 │                                                                             │
 │  1.0e100                                                                    │
 │  ‾‾‾‾‾‾‾                                                                    │
-└──────────────────────────────────────────────── frac_huge_scientific.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    frac_huge_scientific.md:1:1
 
     The inferred type is:
 

@@ -20,7 +20,8 @@ MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
 │                                                                             │
 │  red : Color.RGB                                                            │
 │             ‾‾‾‾                                                            │
-└──────────────────────────────────────────────── nominal_import_type.md:3:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_import_type.md:3:12
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -29,7 +30,8 @@ MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
 │                                                                             │
 │  red = Color.RGB.Red                                                        │
 │             ‾‾‾‾                                                            │
-└──────────────────────────────────────────────── nominal_import_type.md:4:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_import_type.md:4:12
 
     You're attempting to use this type here:
 # TOKENS

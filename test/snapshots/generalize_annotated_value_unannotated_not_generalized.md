@@ -26,7 +26,8 @@ TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:
 │                                                                             │
 │  strs = bare                                                                │
 │         ‾‾‾‾                                                                │
-└────────────── generalize_annotated_value_unannotated_not_generalized.md:9:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    generalize_annotated_value_unannotated_not_generalized.md:9:8
 
     It has the type:
 

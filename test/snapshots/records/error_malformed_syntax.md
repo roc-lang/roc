@@ -17,7 +17,8 @@ PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 │                                                                             │
 │  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
 │                   ‾                                                         │
-└───────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    error_malformed_syntax.md:1:18
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -26,7 +27,8 @@ PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 │                                                                             │
 │  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
 │                     ‾‾                                                      │
-└───────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    error_malformed_syntax.md:1:20
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

@@ -20,7 +20,8 @@ UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
 │                                                                             │
 │  x = Foo.Bar.Baz.X                                                          │
 │             ‾‾‾‾                                                            │
-└──────────────────────────────── nominal_undefined_deeply_nested_tag.md:5:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_undefined_deeply_nested_tag.md:5:12
 
     This type is referenced here:
 # TOKENS

@@ -60,7 +60,8 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 │                                                                             │
 │  Try(ok, err) : [Ok(ok), Err(err)]                                          │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└───────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_decl.md:7:1
 
     The redeclaration is here:
 
@@ -76,7 +77,8 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 │                                                                             │
 │  Letters : [A, B, ..]                                                       │
 │                   ‾‾                                                        │
-└─────────────────────────────────────────────────── type_alias_decl.md:22:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_decl.md:22:18
 
     Hint: You need a named variable, like ..others, to use this here.
                                                              ┌─────────────────┐
@@ -85,7 +87,8 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 │                                                                             │
 │      person = { name: "Alice", age: 30 }                                    │
 │      ‾‾‾‾‾‾                                                                 │
-└──────────────────────────────────────────────────── type_alias_decl.md:36:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_decl.md:36:5
 
     If you don't need this variable, prefix it with an underscore like _person
     to suppress this warning.
@@ -95,7 +98,8 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 │                                                                             │
 │      color = Red                                                            │
 │      ‾‾‾‾‾                                                                  │
-└──────────────────────────────────────────────────── type_alias_decl.md:39:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_decl.md:39:5
 
     If you don't need this variable, prefix it with an underscore like _color
     to suppress this warning.

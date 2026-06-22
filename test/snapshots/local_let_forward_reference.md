@@ -21,7 +21,8 @@ USED BEFORE DEFINITION - local_let_forward_reference.md:2:13:2:14
 │                                                                             │
 │      g = |x| f(x)                                                           │
 │              ‾                                                              │
-└──────────────────────────────────────── local_let_forward_reference.md:2:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    local_let_forward_reference.md:2:13
 
     Local definitions are evaluated in order: a definition can refer to itself
     or to definitions written before it, but not to definitions written later

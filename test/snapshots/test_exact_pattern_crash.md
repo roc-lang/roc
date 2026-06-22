@@ -42,7 +42,8 @@ TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 │                                                                             │
 │      p1 = swap_pair((1, 2))                                                 │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────── test_exact_pattern_crash.md:19:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_exact_pattern_crash.md:19:5
 
     If you don't need this variable, prefix it with an underscore like _p1 to
     suppress this warning.
@@ -52,7 +53,8 @@ TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 │                                                                             │
 │      p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))                          │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
-└────────────────────────────────────────── test_exact_pattern_crash.md:23:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_exact_pattern_crash.md:23:10
 
     The map_pair function has the type:
 

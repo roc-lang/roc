@@ -26,7 +26,8 @@ DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 │                                                                             │
 │      provides { "roc_processString": processString }                        │
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
-└─────────────────────────────────────────────────────── platform_str.md:7:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform_str.md:7:16
 
     You can fix this by either defining processString in this module, or by
     removing it from the list of exposed values.
@@ -36,7 +37,8 @@ DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 │                                                                             │
 │  processString : Str -> Str                                                 │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└──────────────────────────────────────────────────────── platform_str.md:9:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform_str.md:9:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

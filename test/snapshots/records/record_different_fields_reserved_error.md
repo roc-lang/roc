@@ -40,7 +40,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      if: "conditional",                                                     │
 │        ‾                                                                    │
-└────────────────────────────── record_different_fields_reserved_error.md:2:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:2:7
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -49,7 +50,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      if: "conditional",                                                     │
 │                       ‾                                                     │
-└───────────────────────────── record_different_fields_reserved_error.md:2:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:2:22
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -58,7 +60,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      when: "pattern match",                                                 │
 │            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:3:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:3:11
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -67,7 +70,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      when: "pattern match",                                                 │
 │             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└───────────────────────────── record_different_fields_reserved_error.md:3:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:3:12
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -76,7 +80,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      when: "pattern match",                                                 │
 │                          ‾                                                  │
-└───────────────────────────── record_different_fields_reserved_error.md:3:25 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:3:25
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -85,7 +90,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      when: "pattern match",                                                 │
 │                           ‾                                                 │
-└───────────────────────────── record_different_fields_reserved_error.md:3:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:3:26
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -94,7 +100,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      expect: "test assertion",                                              │
 │            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:4:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:4:11
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -103,7 +110,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      expect: "test assertion",                                              │
 │                              ‾                                              │
-└───────────────────────────── record_different_fields_reserved_error.md:4:29 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:4:29
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                     ┌──────────────────────────┐
@@ -112,7 +120,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      import: "module load",                                                 │
 │      ‾‾‾‾‾‾                                                                 │
-└────────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:5:5
 
     Move this import to the top of the file, after the module header but before
     any definitions.
@@ -122,7 +131,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      import: "module load",                                                 │
 │            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:5:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:5:11
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -131,7 +141,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      import: "module load",                                                 │
 │                           ‾                                                 │
-└───────────────────────────── record_different_fields_reserved_error.md:5:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:5:26
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -140,7 +151,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      and: Bool.true,                                                        │
 │      ‾‾‾                                                                    │
-└────────────────────────────── record_different_fields_reserved_error.md:6:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:6:5
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -149,7 +161,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      and: Bool.true,                                                        │
 │                    ‾                                                        │
-└───────────────────────────── record_different_fields_reserved_error.md:6:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:6:19
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -158,7 +171,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      or: Bool.false,                                                        │
 │      ‾‾                                                                     │
-└────────────────────────────── record_different_fields_reserved_error.md:7:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:7:5
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -167,7 +181,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      or: Bool.false,                                                        │
 │                    ‾                                                        │
-└───────────────────────────── record_different_fields_reserved_error.md:7:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:7:19
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                     ┌──────────────────────────┐
@@ -176,7 +191,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      when: "pattern match",                                                 │
 │      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:3:5
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -186,7 +202,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      expect: "test assertion",                                              │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└───────────────────────────── record_different_fields_reserved_error.md:4:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:4:13
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -197,7 +214,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │                                                                             │
 │      import: "module load",                                                 │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└───────────────────────────── record_different_fields_reserved_error.md:5:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_different_fields_reserved_error.md:5:13
 
     The value's type, which does not have a method named from_quote, is:
 

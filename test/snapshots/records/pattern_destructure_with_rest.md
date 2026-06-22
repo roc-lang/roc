@@ -21,7 +21,8 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 │                                                                             │
 │  match person {                                                             │
 │        ‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_with_rest.md:1:7
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -30,7 +31,8 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 │                                                                             │
 │      { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)│
 │                                  ‾‾‾‾‾‾‾                                    │
-└────────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_with_rest.md:2:33
 
     Str is in scope, but it has no associated len.
 
@@ -41,7 +43,8 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 │                                                                             │
 │      { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)│
 │                                                        ‾‾‾‾‾‾‾              │
-└────────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_with_rest.md:2:55
 
     Str is in scope, but it has no associated len.
 

@@ -40,7 +40,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │             ‾‾‾‾‾                                                           │
-└──────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:12
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -49,7 +50,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                  ‾‾‾‾‾                                                      │
-└──────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:17
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -58,7 +60,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                       ‾‾‾‾‾‾‾                                               │
-└──────────────────────────────────────────── multi_qualified_import.md:12:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:22
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -67,7 +70,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                              ‾                                              │
-└──────────────────────────────────────────── multi_qualified_import.md:12:29 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:29
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -76,7 +80,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                               ‾                                             │
-└──────────────────────────────────────────── multi_qualified_import.md:12:30 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:30
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -85,7 +90,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                                ‾‾‾‾‾                                        │
-└──────────────────────────────────────────── multi_qualified_import.md:12:31 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:31
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -94,7 +100,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                                     ‾                                       │
-└──────────────────────────────────────────── multi_qualified_import.md:12:36 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:36
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -103,7 +110,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │                                      ‾                                      │
-└──────────────────────────────────────────── multi_qualified_import.md:12:37 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:37
 
     This is an unexpected parsing error. Please check your syntax.
                                                              ┌─────────────────┐
@@ -112,7 +120,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  json_encoder : Encoder                                                     │
 │                 ‾‾‾‾‾‾‾                                                     │
-└───────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:3:16
 
     This type is referenced here:
                                                               ┌────────────────┐
@@ -121,7 +130,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  json_encoder = Json.Core.Utf8.defaultEncoder                               │
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
-└───────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:4:16
 
                                                          ┌─────────────────────┐
 ┌─ There is no module with the name json.Core.Utf8 ──────┤ MODULE NOT IMPORTED │
@@ -129,7 +139,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  process : json.Core.Utf8.Encoder -> Str                                    │
 │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└───────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:7:11
 
     You're attempting to use this module here:
                                                              ┌─────────────────┐
@@ -138,7 +149,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  process = |encoder| "processing"                                           │
 │             ‾‾‾‾‾‾‾                                                         │
-└───────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:8:12
 
     If you don't need this variable, prefix it with an underscore like _encoder
     to suppress this warning.
@@ -148,7 +160,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data : json.Core.Utf8.EncodedData                                          │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└───────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:11:8
 
     You're attempting to use this module here:
                                                           ┌────────────────────┐
@@ -157,7 +170,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 │                                                                             │
 │  data = json.Core.Utf8.encode("hello")                                      │
 │         ‾‾‾‾                                                                │
-└───────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    multi_qualified_import.md:12:8
 
     Is there an import or exposing missing up-top?
 # TOKENS

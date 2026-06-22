@@ -16,7 +16,8 @@ POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 │                                                                             │
 │  person.age + 5                                                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└───────────────────────────────────────── record_access_in_expression.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_access_in_expression.md:1:1
 
     Its type is:
     a where [a.plus : a, Dec -> a]

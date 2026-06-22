@@ -29,7 +29,8 @@ UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 │                                                                             │
 │  print_number! = |n| Stdout.line!(n)                                        │
 │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└───────────────────────────────────────────── function_no_annotation.md:9:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    function_no_annotation.md:9:21
 
     Is there an import or exposing missing up-top?
 # TOKENS

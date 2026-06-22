@@ -25,7 +25,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │              ‾‾‾                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:13
 
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
@@ -33,7 +34,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │     ‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:4
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -54,7 +56,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:5
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -63,7 +66,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │          ‾‾‾‾                                                               │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:9
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -72,7 +76,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │              ‾                                                              │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:13
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -81,7 +86,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │               ‾‾                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:14
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -90,7 +96,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Fli/main.roc" }                                                            │
 │                 ‾                                                           │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:1:16
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -99,7 +106,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │                                                                             │
 │  Pair(a, b+ : (                                                             │
 │  ‾‾‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_021.md:3:1
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

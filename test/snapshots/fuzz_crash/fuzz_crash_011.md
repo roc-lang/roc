@@ -18,7 +18,8 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 │                                                                             │
 │  module P]F                                                                 │
 │         ‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_011.md:1:8
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -27,7 +28,8 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 │                                                                             │
 │  module P]F                                                                 │
 │          ‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_011.md:1:9
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -36,7 +38,8 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_011.md:2:1
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

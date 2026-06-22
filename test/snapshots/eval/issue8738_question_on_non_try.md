@@ -28,7 +28,8 @@ TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 │                                                                             │
 │   _x = ok_or(Err(""), Exit(5))?                                             │
 │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────── issue8738_question_on_non_try.md:9:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    issue8738_question_on_non_try.md:9:7
 
     This expression has type:
 

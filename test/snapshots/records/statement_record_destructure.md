@@ -16,7 +16,8 @@ UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
 │                                                                             │
 │  { name, age, email } = person                                              │
 │                         ‾‾‾‾‾‾                                              │
-└─────────────────────────────────────── statement_record_destructure.md:1:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    statement_record_destructure.md:1:24
 
     Is there an import or exposing missing up-top?
 # TOKENS

@@ -23,7 +23,8 @@ DECLARATION HAS NO VALUE - package.md:5:1:5:16
 │                                                                             │
 │  package [a!, b!] { a: "a", b: "b" }                                        │
 │           ‾‾                                                                │
-└──────────────────────────────────────────────────────────── package.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package.md:1:10
 
     You can fix this by either defining a! in this module, or by removing it
     from the list of exposed values.
@@ -33,7 +34,8 @@ DECLARATION HAS NO VALUE - package.md:5:1:5:16
 │                                                                             │
 │  package [a!, b!] { a: "a", b: "b" }                                        │
 │               ‾‾                                                            │
-└──────────────────────────────────────────────────────────── package.md:1:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package.md:1:14
 
     You can fix this by either defining b! in this module, or by removing it
     from the list of exposed values.
@@ -43,7 +45,8 @@ DECLARATION HAS NO VALUE - package.md:5:1:5:16
 │                                                                             │
 │  a! : Str => Str                                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└───────────────────────────────────────────────────────────── package.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package.md:3:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -53,7 +56,8 @@ DECLARATION HAS NO VALUE - package.md:5:1:5:16
 │                                                                             │
 │  b! : Str => Str                                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└───────────────────────────────────────────────────────────── package.md:5:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package.md:5:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

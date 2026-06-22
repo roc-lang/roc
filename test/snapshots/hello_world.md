@@ -20,7 +20,8 @@ UNDEFINED VARIABLE - hello_world.md:5:13:5:25
 │                                                                             │
 │  main! = |_| Stdout.line!("Hello, world!")                                  │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└──────────────────────────────────────────────────────── hello_world.md:5:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    hello_world.md:5:13
 
     Is there an import or exposing missing up-top?
 # TOKENS

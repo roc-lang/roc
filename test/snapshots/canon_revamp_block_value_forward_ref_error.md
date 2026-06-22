@@ -20,7 +20,8 @@ UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 │                                                                             │
 │      y + 1                                                                  │
 │      ‾                                                                      │
-└────────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_block_value_forward_ref_error.md:2:5
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -29,7 +30,8 @@ UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 │                                                                             │
 │      y = 5                                                                  │
 │      ‾                                                                      │
-└────────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_block_value_forward_ref_error.md:3:5
 
     If you don't need this variable, prefix it with an underscore like _y to
     suppress this warning.

@@ -16,7 +16,8 @@ UNDEFINED VARIABLE - formatter_idempotence_issue_8851.md:1:8:1:9
 │                                                                             │
 │  a = 0->b().c()                                                             │
 │         ‾                                                                   │
-└──────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    formatter_idempotence_issue_8851.md:1:8
 
     Is there an import or exposing missing up-top?
 # TOKENS

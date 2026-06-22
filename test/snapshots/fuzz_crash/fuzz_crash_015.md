@@ -29,7 +29,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0o0.0                                                                      │
 │  ‾‾‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:1:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -38,7 +39,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0o0.0                                                                      │
 │     ‾‾                                                                      │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:1:4 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:1:4
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -47,7 +49,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0_0                                                                        │
 │  ‾‾‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:2:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -56,7 +59,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0u8.0                                                                      │
 │  ‾‾‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:3:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -65,7 +69,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0u8.0                                                                      │
 │     ‾‾                                                                      │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:3:4 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:3:4
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -74,7 +79,8 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  0_                                                                         │
 │  ‾‾                                                                         │
-└────────────────────────────────────────────────────── fuzz_crash_015.md:4:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_015.md:4:1
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

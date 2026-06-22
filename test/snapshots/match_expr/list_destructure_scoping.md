@@ -21,7 +21,8 @@ POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 │      [first] => first                                                       │
 │      [first, second] => first + second                                      │
 │  }                                                                          │
-└──────────────────────────────────────────── list_destructure_scoping.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_destructure_scoping.md:1:1
 
     Its type is:
     a where [a.plus : a, a -> a]

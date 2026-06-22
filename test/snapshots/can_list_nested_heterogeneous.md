@@ -16,7 +16,8 @@ TYPE MISMATCH - can_list_nested_heterogeneous.md:1:12:1:19
 │                                                                             │
 │  [[], [1], ["hello"]]                                                       │
 │             ‾‾‾‾‾‾‾                                                         │
-└────────────────────────────────────── can_list_nested_heterogeneous.md:1:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_nested_heterogeneous.md:1:12
 
     The type was determined to be:
 

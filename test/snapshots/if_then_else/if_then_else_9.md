@@ -24,7 +24,8 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 │                                                                             │
 │  } else if 10 { # Comment after else open                                   │
 │            ‾‾                                                               │
-└───────────────────────────────────────────────────── if_then_else_9.md:3:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    if_then_else_9.md:3:11
 
     Other code expects this to have the type:
 
@@ -35,7 +36,8 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 │                                                                             │
 │   1                                                                         │
 │   ‾                                                                         │
-└────────────────────────────────────────────────────── if_then_else_9.md:2:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    if_then_else_9.md:2:2
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -46,7 +48,8 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 │                                                                             │
 │   3                                                                         │
 │   ‾                                                                         │
-└────────────────────────────────────────────────────── if_then_else_9.md:6:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    if_then_else_9.md:6:2
 
     The value's type, which does not have a method named from_numeral, is:
 

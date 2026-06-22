@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
 │                                                                             │
 │  1 ++ 2                                                                     │
 │     ‾                                                                       │
-└──────────────────────────────────────────────────── unknown_operator.md:1:4 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unknown_operator.md:1:4
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

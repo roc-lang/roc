@@ -47,7 +47,8 @@ TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 │                                                                             │
 │    _result2 = f(b)                                                          │
 │                 ‾                                                           │
-└───────────────────────────────────────────── type_local_scope_vars.md:19:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_local_scope_vars.md:19:16
 
     This argument has the type:
 

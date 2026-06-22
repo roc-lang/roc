@@ -21,7 +21,8 @@ PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_private_top
 │                                                                             │
 │      field : InternalType,                                                  │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└───────── type_module_nominal_field_depends_on_private_toplevel_type.md:4:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_module_nominal_field_depends_on_private_toplevel_type.md:4:13
 
     Other modules can see this field because ModuleType is exposed and not
     opaque, but they cannot name this private type.

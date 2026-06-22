@@ -27,7 +27,8 @@ MISSING METHOD - tag_applications_simple.md:2:10:2:12
 │                                                                             │
 │      Some(42),                                                              │
 │           ‾‾                                                                │
-└──────────────────────────────────────────── tag_applications_simple.md:2:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tag_applications_simple.md:2:10
 
     The value's type, which does not have a method named from_numeral, is:
 

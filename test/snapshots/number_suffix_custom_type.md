@@ -21,7 +21,8 @@ TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 │                                                                             │
 │  main = 123.Foo                                                             │
 │         ‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────── number_suffix_custom_type.md:6:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    number_suffix_custom_type.md:6:8
 
     The method from_numeral has the type:
 

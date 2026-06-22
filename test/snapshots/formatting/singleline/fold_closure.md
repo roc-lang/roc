@@ -16,7 +16,8 @@ UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
 │                                                                             │
 │  sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)                        │
 │              ‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────── fold_closure.md:1:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fold_closure.md:1:13
 
     Is there an import or exposing missing up-top?
 # TOKENS

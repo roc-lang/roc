@@ -22,7 +22,8 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 │                                                                             │
 │  blue : CC.Color                                                            │
 │           ‾‾‾‾‾‾                                                            │
-└───────────────────────────────────────── nominal_tag_package_import.md:5:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_tag_package_import.md:5:10
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -31,7 +32,8 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 │                                                                             │
 │  blue = CC.Color.RGB(0,0,255)                                               │
 │           ‾‾‾‾‾‾                                                            │
-└───────────────────────────────────────── nominal_tag_package_import.md:6:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_tag_package_import.md:6:10
 
     You're attempting to use this type here:
 # TOKENS

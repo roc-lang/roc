@@ -20,7 +20,8 @@ UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 │                                                                             │
 │  import "users.json" as data : Str                                          │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└──────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    inline_ingested_file.md:1:1
 
     Make sure the file exists relative to your source file:
                                                           ┌────────────────────┐
@@ -29,7 +30,8 @@ UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 │                                                                             │
 │  foo = Json.parse(data)                                                     │
 │        ‾‾‾‾‾‾‾‾‾‾                                                           │
-└──────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    inline_ingested_file.md:4:7
 
     Is there an import or exposing missing up-top?
 # TOKENS

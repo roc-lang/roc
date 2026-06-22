@@ -17,7 +17,8 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 │                                                                             │
 │  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }          │
 │            ‾‾‾                                                              │
-└──────────────────────────────────────────────────────────────── app.md:1:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    app.md:1:11
 
     You can fix this by either defining a2! in this module, or by removing it
     from the list of exposed values.
@@ -27,7 +28,8 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 │                                                                             │
 │  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }          │
 │       ‾‾‾                                                                   │
-└───────────────────────────────────────────────────────────────── app.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    app.md:1:6
 
     You can fix this by either defining a1! in this module, or by removing it
     from the list of exposed values.

@@ -16,7 +16,8 @@ TYPE MISMATCH - can_list_heterogeneous.md:1:5:1:12
 │                                                                             │
 │  [1, "hello", 3.14]                                                         │
 │      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────────────── can_list_heterogeneous.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_heterogeneous.md:1:5
 
     The type was determined to be:
 

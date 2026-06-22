@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
 │                                                                             │
 │  { x = "hello"; x.inspect() }                                               │
 │               ‾                                                             │
-└──────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    method_call_inspect_defined.md:1:14
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

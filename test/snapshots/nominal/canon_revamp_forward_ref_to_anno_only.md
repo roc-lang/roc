@@ -22,7 +22,8 @@ DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 │                                                                             │
 │      callMe = absent                                                        │
 │               ‾‾‾‾‾‾                                                        │
-└────────────────────────────── canon_revamp_forward_ref_to_anno_only.md:3:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_forward_ref_to_anno_only.md:3:14
 
     Is there an import or exposing missing up-top?
                                                     ┌──────────────────────────┐
@@ -31,7 +32,8 @@ DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 │                                                                             │
 │      absent : Foo                                                           │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────── canon_revamp_forward_ref_to_anno_only.md:5:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_forward_ref_to_anno_only.md:5:5
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

@@ -23,7 +23,8 @@ TOO MANY ARGS - type_alias_parameterized.md:8:13:8:27
 │                                                                             │
 │  main! = |_| swapPair(1, 2)                                                 │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────── type_alias_parameterized.md:8:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_parameterized.md:8:13
 
     The swapPair function has the type:
 

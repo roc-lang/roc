@@ -23,7 +23,8 @@ MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 │                                                                             │
 │      is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)                 │
 │                                               ‾‾‾‾‾‾                        │
-└───────────────────────────────────────── local_let_mutual_recursion.md:2:46 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    local_let_mutual_recursion.md:2:46
 
     Local definitions are evaluated in order and can only refer to themselves
     or to earlier definitions. Move these mutually recursive definitions to the

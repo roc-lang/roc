@@ -16,7 +16,8 @@ TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 │                                                                             │
 │  [42, 4.2, "hello"]                                                         │
 │            ‾‾‾‾‾‾‾                                                          │
-└───────────────────────────────────────────── let_polymorphism_error.md:1:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    let_polymorphism_error.md:1:11
 
     The type was determined to be:
 

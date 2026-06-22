@@ -24,7 +24,8 @@ UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 │                                                                             │
 │      encoded = encode(data)                                                 │
 │                ‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    import_exposing_basic.md:5:15
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -33,7 +34,8 @@ UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 │                                                                             │
 │      decoded = decode(encoded)                                              │
 │                ‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────── import_exposing_basic.md:6:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    import_exposing_basic.md:6:15
 
     Is there an import or exposing missing up-top?
 # TOKENS

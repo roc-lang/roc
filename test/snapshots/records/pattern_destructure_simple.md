@@ -20,7 +20,8 @@ UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 │                                                                             │
 │  match person {                                                             │
 │        ‾‾‾‾‾‾                                                               │
-└────────────────────────────────────────── pattern_destructure_simple.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_simple.md:1:7
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -29,7 +30,8 @@ UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 │                                                                             │
 │      { name, age } => name                                                  │
 │              ‾‾‾                                                            │
-└───────────────────────────────────────── pattern_destructure_simple.md:2:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_simple.md:2:13
 
     If you don't need this variable, prefix it with an underscore like _age to
     suppress this warning.

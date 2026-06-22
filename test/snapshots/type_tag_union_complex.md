@@ -40,7 +40,8 @@ DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
 │                                                                             │
 │  Try : [Success(Str), Error(Str), Warning(Str, I32)]                        │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
-└────────────────────────────────────────────── type_tag_union_complex.md:7:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_tag_union_complex.md:7:1
 
     The redeclaration is here:
 

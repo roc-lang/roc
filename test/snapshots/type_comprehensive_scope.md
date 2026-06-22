@@ -55,7 +55,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │                                                                             │
 │  Try(ok, err) : [Ok(ok), Err(err)]                                          │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────────────────── type_comprehensive_scope.md:10:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_comprehensive_scope.md:10:1
 
     The redeclaration is here:
 
@@ -71,7 +72,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │                                                                             │
 │  Tree(a) : [Branch(Node(a)), Leaf(a)]                                       │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└─────────────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_comprehensive_scope.md:13:1
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
     you need recursive types, use nominal types (:=) instead.
@@ -90,7 +92,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │                                                                             │
 │  Node(a) : { value: a, children: List(Tree(a)) }                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
-└─────────────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_comprehensive_scope.md:16:1
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
     you need recursive types, use nominal types (:=) instead.
@@ -109,7 +112,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │                                                                             │
 │  Person : U64                                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────────── type_comprehensive_scope.md:22:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_comprehensive_scope.md:22:1
 
     The redeclaration is here:
 
@@ -125,7 +129,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │                                                                             │
 │  BadType : SomeUndeclaredType                                               │
 │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└────────────────────────────────────────── type_comprehensive_scope.md:25:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_comprehensive_scope.md:25:11
 
     This type is referenced here:
 # TOKENS

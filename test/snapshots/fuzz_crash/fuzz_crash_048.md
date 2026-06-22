@@ -35,7 +35,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  bar : Thing(a, b, _)                                                       │
 │        ‾‾‾‾‾                                                                │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:2:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:2:7
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -44,7 +45,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │               ‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_048.md:6:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:6:14
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -53,7 +55,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  tag_tuple : Value((a, b, c))                                               │
 │              ‾‾‾‾‾                                                          │
-└───────────────────────────────────────────────────── fuzz_crash_048.md:7:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:7:13
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -62,7 +65,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  foo : U64                                                                  │
 │  ‾‾‾‾‾‾‾‾‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -72,7 +76,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  bar : Thing(a, b, _)                                                       │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:2:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -82,7 +87,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  biz : (a, b, c)                                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:3:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -92,7 +98,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  add_one : (                                                               │
 │  U8, U16 -> U32)                                                            │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:4:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:4:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -102,7 +109,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:6:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:6:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -112,7 +120,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  tag_tuple : Value((a, b, c))                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└────────────────────────────────────────────────────── fuzz_crash_048.md:7:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_048.md:7:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

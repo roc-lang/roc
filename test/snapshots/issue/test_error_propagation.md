@@ -22,7 +22,8 @@ TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 │                                                                             │
 │  BadBase := _                                                               │
 │  ‾                                                                          │
-└────────────────────────────────────────────── test_error_propagation.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_error_propagation.md:1:1
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -33,7 +34,8 @@ TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 │                                                                             │
 │  value = "test"                                                             │
 │          ‾‾‾‾‾‾                                                             │
-└────────────────────────────────────────────── test_error_propagation.md:6:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_error_propagation.md:6:9
 
     The type was determined to be:
 

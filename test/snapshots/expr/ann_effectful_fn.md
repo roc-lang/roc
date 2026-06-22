@@ -23,7 +23,8 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 │                                                                             │
 │      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└──────────────────────────────────────────────────── ann_effectful_fn.md:2:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    ann_effectful_fn.md:2:5
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -33,7 +34,8 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 │                                                                             │
 │      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
 │                                 ‾‾‾‾                                        │
-└─────────────────────────────────────────────────── ann_effectful_fn.md:2:32 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    ann_effectful_fn.md:2:32
 
     It has the type:
 
@@ -47,7 +49,8 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 │                                                                             │
 │      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
 │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
-└─────────────────────────────────────────────────── ann_effectful_fn.md:2:37 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    ann_effectful_fn.md:2:37
 
     It has the type:
 

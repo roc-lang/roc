@@ -22,7 +22,8 @@ INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 │                                                                             │
 │  yellow = Color.Yellow                                                      │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└───────────────────────────────────────────────── nominal_tag_simple.md:7:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_tag_simple.md:7:10
 
     The tag is:
 

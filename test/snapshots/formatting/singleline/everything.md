@@ -65,7 +65,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │  A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                │
-└────────────────────────────────────────────────────────── everything.md:6:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:6:1
 
     You're attempting do this here:
                                 ┌──────────────────────────────────────────────┐
@@ -75,7 +76,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │  B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                │
-└────────────────────────────────────────────────────────── everything.md:8:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:8:1
 
     You're attempting do this here:
                                                              ┌─────────────────┐
@@ -84,7 +86,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │    Z1((a, b)) => a                                                          │
 │           ‾                                                                 │
-└──────────────────────────────────────────────────────── everything.md:30:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:30:10
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -94,7 +97,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │    Z2(a, b) => a                                                            │
 │          ‾                                                                  │
-└───────────────────────────────────────────────────────── everything.md:31:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:31:9
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -104,7 +108,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │    Z3({ a, b }) => a                                                        │
 │            ‾                                                                │
-└──────────────────────────────────────────────────────── everything.md:32:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:32:11
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -114,7 +119,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │    Z4([a, b]) => a                                                          │
 │           ‾                                                                 │
-└──────────────────────────────────────────────────────── everything.md:33:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:33:10
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -124,7 +130,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │   h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }                        │
 │   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:23:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:23:2
 
     If you don't need this variable, prefix it with an underscore like _h1 to
     suppress this warning.
@@ -134,7 +141,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │   h2 = h(x, y)                                                              │
 │   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:24:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:24:2
 
     If you don't need this variable, prefix it with an underscore like _h2 to
     suppress this warning.
@@ -144,7 +152,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │   h3 = A(x, y)                                                              │
 │   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:25:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:25:2
 
     If you don't need this variable, prefix it with an underscore like _h3 to
     suppress this warning.
@@ -154,7 +163,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │   h4 = [x, y]                                                               │
 │   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:26:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:26:2
 
     If you don't need this variable, prefix it with an underscore like _h4 to
     suppress this warning.
@@ -164,7 +174,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │   h5 = (x, y)                                                               │
 │   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:27:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:27:2
 
     If you don't need this variable, prefix it with an underscore like _h5 to
     suppress this warning.
@@ -174,7 +185,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │  g : e -> e where [e.A, e.B]                                                │
 │                    ‾‾‾                                                      │
-└──────────────────────────────────────────────────────── everything.md:20:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:20:19
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
@@ -184,7 +196,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │  g : e -> e where [e.A, e.B]                                                │
 │                         ‾‾‾                                                 │
-└──────────────────────────────────────────────────────── everything.md:20:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:20:24
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
@@ -194,7 +207,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │                                                                             │
 │  g : e -> e where [e.A, e.B]                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
-└───────────────────────────────────────────────────────── everything.md:20:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:20:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -208,7 +222,8 @@ NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 │    Z3({ a, b }) => a                                                        │
 │    Z4([a, b]) => a                                                          │
 │   }                                                                         │
-└───────────────────────────────────────────────────────── everything.md:29:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    everything.md:29:2
 
     The value being matched on has type:
             [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]

@@ -28,7 +28,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │       ‾                                                                     │
-└────────────────────────────────────────────────────── fuzz_crash_002.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:6
 
     Type annotations should contain types like Str, Num a, or List U64.
                                                                  ┌─────────────┐
@@ -37,7 +38,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │        ‾‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_002.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:7
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -46,7 +48,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │          ‾‾                                                                 │
-└────────────────────────────────────────────────────── fuzz_crash_002.md:1:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:9
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -55,7 +58,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │            ‾‾                                                               │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:11
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -64,7 +68,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │              ‾‾                                                             │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:13
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -73,7 +78,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                ‾‾                                                           │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:15
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -82,7 +88,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                  ‾‾                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:17
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -91,7 +98,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                    ‾‾                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:19
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -100,7 +108,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                      ‾‾                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:21
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -109,7 +118,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                        ‾                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:23
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -118,7 +128,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │                         ‾                                                   │
-└───────────────────────────────────────────────────── fuzz_crash_002.md:1:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:24
 
     This is an unexpected parsing error. Please check your syntax.
                                                               ┌────────────────┐
@@ -127,7 +138,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │       ‾                                                                     │
-└────────────────────────────────────────────────────── fuzz_crash_002.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:6
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -135,7 +147,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │                                                                             │
 │  modu:;::::::::::::::le[%                                                   │
 │  ‾‾‾‾‾‾                                                                     │
-└────────────────────────────────────────────────────── fuzz_crash_002.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_002.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

@@ -51,7 +51,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  parseConfig : Config.Settings -> Str                                       │
 │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└────────────────────────────────────────── can_import_nested_modules.md:6:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:6:15
 
     You're attempting to use this module here:
                                                               ┌────────────────┐
@@ -60,7 +61,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  parseConfig = |settings| Config.toString(settings)                         │
 │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└────────────────────────────────────────── can_import_nested_modules.md:7:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:7:26
 
                                                             ┌──────────────────┐
 ┌─ The type Token is qualified by the module http.Client, ──┤ MODULE NOT FOUND │
@@ -68,7 +70,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  authenticate : Str, Str -> HttpAuth.Token                                  │
 │                                     ‾‾‾‾‾‾                                  │
-└───────────────────────────────────────── can_import_nested_modules.md:10:36 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:10:36
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -77,7 +80,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  authenticate = |user, pass| HttpAuth.login(user, pass)                     │
 │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
-└───────────────────────────────────────── can_import_nested_modules.md:11:29 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:11:29
 
     Is there an import or exposing missing up-top?
                                                          ┌─────────────────────┐
@@ -86,7 +90,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error) │
 │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└───────────────────────────────────────── can_import_nested_modules.md:14:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:14:15
 
     You're attempting to use this module here:
                                                          ┌─────────────────────┐
@@ -95,7 +100,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error) │
 │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  │
-└───────────────────────────────────────── can_import_nested_modules.md:14:55 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:14:55
 
     You're attempting to use this module here:
                                                               ┌────────────────┐
@@ -104,7 +110,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │      Config.Parser.Advanced.parseWith(advancedConfig, input)                │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└────────────────────────────────────────── can_import_nested_modules.md:16:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:16:5
 
                                                           ┌────────────────────┐
 ┌─ Nothing is named padLeft in this scope. ───────────────┤ UNDEFINED VARIABLE │
@@ -112,7 +119,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  formatOutput = |text| padLeft(text, Config.defaultPadding)                 │
 │                        ‾‾‾‾‾‾‾                                              │
-└───────────────────────────────────────── can_import_nested_modules.md:20:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:20:23
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -121,7 +129,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  formatOutput = |text| padLeft(text, Config.defaultPadding)                 │
 │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                  │
-└───────────────────────────────────────── can_import_nested_modules.md:20:37 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:20:37
 
                                                             ┌──────────────────┐
 ┌─ The type Credentials is qualified by the module ─────────┤ MODULE NOT FOUND │
@@ -130,7 +139,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error) │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└───────────────────────────────────────── can_import_nested_modules.md:23:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:23:24
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -139,7 +149,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error) │
 │                                                     ‾‾‾‾‾‾                  │
-└───────────────────────────────────────── can_import_nested_modules.md:23:52 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:23:52
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -148,7 +159,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error) │
 │                                                                     ‾‾‾‾‾‾  │
-└───────────────────────────────────────── can_import_nested_modules.md:23:68 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:23:68
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -157,7 +169,8 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 │                                                                             │
 │  validateAuth = |creds| HttpAuth.validate(creds)                            │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└───────────────────────────────────────── can_import_nested_modules.md:24:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_nested_modules.md:24:24
 
     Is there an import or exposing missing up-top?
 # TOKENS

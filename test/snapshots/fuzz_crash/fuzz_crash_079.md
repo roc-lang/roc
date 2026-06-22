@@ -17,7 +17,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_079.md:2:1:2:4
 │                                                                             │
 │  b:r                                                                        │
 │  ‾‾‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_079.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_079.md:2:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

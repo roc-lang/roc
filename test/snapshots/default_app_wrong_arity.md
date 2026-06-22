@@ -20,7 +20,8 @@ MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 │                                                                             │
 │  main! = |arg1, arg2| {                                                     │
 │                 ‾‾‾‾                                                        │
-└──────────────────────────────────────────── default_app_wrong_arity.md:1:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    default_app_wrong_arity.md:1:16
 
     If you don't need this variable, prefix it with an underscore like _arg2 to
     suppress this warning.
@@ -31,7 +32,8 @@ MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 │  main! = |arg1, arg2| {                                                     │
 │      arg1                                                                   │
 │  }                                                                          │
-└───────────────────────────────────────────── default_app_wrong_arity.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    default_app_wrong_arity.md:1:1
 
     Found 2 arguments.
 

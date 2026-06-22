@@ -38,7 +38,8 @@ UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 │                                                                             │
 │      result3 = pair(result1, result2)                                       │
 │      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────────── type_var_collision_simple.md:20:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_collision_simple.md:20:5
 
     If you don't need this variable, prefix it with an underscore like _result3
     to suppress this warning.

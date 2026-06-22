@@ -95,7 +95,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  parseJson : Str -> Try(Value, Error)                                       │
 │                         ‾‾‾‾‾                                               │
-└────────────────────────────────────────── can_import_exposing_types.md:6:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:6:24
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -104,7 +105,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  parseJson : Str -> Try(Value, Error)                                       │
 │                                ‾‾‾‾‾                                        │
-└────────────────────────────────────────── can_import_exposing_types.md:6:31 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:6:31
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -113,7 +115,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  parseJson = |input| Json.parse(input)                                      │
 │                      ‾‾‾‾‾‾‾‾‾‾                                             │
-└────────────────────────────────────────── can_import_exposing_types.md:7:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:7:21
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -122,7 +125,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  handleRequest : Request -> Response                                        │
 │                  ‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:10:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:10:17
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -131,7 +135,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  handleRequest : Request -> Response                                        │
 │                             ‾‾‾‾‾‾‾‾                                        │
-└───────────────────────────────────────── can_import_exposing_types.md:10:28 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:10:28
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -140,7 +145,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │      result = Json.decode(req.body)                                         │
 │               ‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└───────────────────────────────────────── can_import_exposing_types.md:12:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:12:14
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -149,7 +155,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          Ok(value) => Http.ok(value)                                        │
 │                       ‾‾‾‾‾‾‾                                               │
-└───────────────────────────────────────── can_import_exposing_types.md:14:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:14:22
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -158,7 +165,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          Err(error) => Http.badRequest(error)                               │
 │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
-└───────────────────────────────────────── can_import_exposing_types.md:15:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:15:23
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -167,7 +175,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  processData : Config, List(Value) -> Try(List(Value), Error)               │
 │                ‾‾‾‾‾‾                                                       │
-└───────────────────────────────────────── can_import_exposing_types.md:20:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:20:15
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -176,7 +185,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  processData : Config, List(Value) -> Try(List(Value), Error)               │
 │                             ‾‾‾‾‾                                           │
-└───────────────────────────────────────── can_import_exposing_types.md:20:28 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:20:28
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -185,7 +195,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  processData : Config, List(Value) -> Try(List(Value), Error)               │
 │                                                ‾‾‾‾‾                        │
-└───────────────────────────────────────── can_import_exposing_types.md:20:47 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:20:47
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -194,7 +205,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  processData : Config, List(Value) -> Try(List(Value), Error)               │
 │                                                        ‾‾‾‾‾                │
-└───────────────────────────────────────── can_import_exposing_types.md:20:55 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:20:55
 
     This type is referenced here:
                                                               ┌────────────────┐
@@ -203,7 +215,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │      List.mapTry(                                                           │
 │      ‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└────────────────────────────────────────── can_import_exposing_types.md:22:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:22:5
 
     List is in scope, but it has no associated mapTry.
 
@@ -214,7 +227,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          |v| Json.validateWith(config, v),                                  │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└───────────────────────────────────────── can_import_exposing_types.md:24:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:24:13
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -223,7 +237,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │      jsonConfig : Config,                                                   │
 │                   ‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:29:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:29:18
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -232,7 +247,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │      httpStatus : Status,                                                   │
 │                   ‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:30:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:30:18
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -241,7 +257,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │      defaultResponse : Response,                                            │
 │                        ‾‾‾‾‾‾‾‾                                             │
-└───────────────────────────────────────── can_import_exposing_types.md:31:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:31:23
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -250,7 +267,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  createClient : Config -> Http.Client                                       │
 │                 ‾‾‾‾‾‾                                                      │
-└───────────────────────────────────────── can_import_exposing_types.md:35:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:35:16
 
     This type is referenced here:
                                                             ┌──────────────────┐
@@ -259,7 +277,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  createClient : Config -> Http.Client                                       │
 │                               ‾‾‾‾‾‾‾                                       │
-└───────────────────────────────────────── can_import_exposing_types.md:35:30 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:35:30
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -268,7 +287,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  createClient = |config| Http.clientWith(config)                            │
 │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:36:25 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:36:25
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -277,7 +297,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  handleResponse : Response -> Str                                           │
 │                   ‾‾‾‾‾‾‾‾                                                  │
-└───────────────────────────────────────── can_import_exposing_types.md:39:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:39:18
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -286,7 +307,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          Ok(status) => Http.statusToString(status)                          │
 │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
-└───────────────────────────────────────── can_import_exposing_types.md:42:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:42:23
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -295,7 +317,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          Err(error) => Error.toString(error)                                │
 │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└───────────────────────────────────────── can_import_exposing_types.md:43:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:43:23
 
                                                              ┌─────────────────┐
 ┌─ The type Value is not declared in this scope. ────────────┤ UNDECLARED TYPE │
@@ -303,7 +326,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)            │
 │                    ‾‾‾‾‾                                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:47:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:47:19
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -312,7 +336,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)            │
 │                           ‾‾‾‾‾                                             │
-└───────────────────────────────────────── can_import_exposing_types.md:47:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:47:26
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -321,7 +346,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)            │
 │                                   ‾‾‾‾‾‾                                    │
-└───────────────────────────────────────── can_import_exposing_types.md:47:34 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:47:34
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -330,7 +356,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)            │
 │                                                 ‾‾‾‾‾‾‾‾                    │
-└───────────────────────────────────────── can_import_exposing_types.md:47:48 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:47:48
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -339,7 +366,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)            │
 │                                                           ‾‾‾‾‾             │
-└───────────────────────────────────────── can_import_exposing_types.md:47:58 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:47:58
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -348,7 +376,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 │                                                                             │
 │          Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })  │
 │                                  ‾‾‾‾‾‾‾‾‾‾‾                                │
-└───────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_exposing_types.md:50:33
 
     Is there an import or exposing missing up-top?
 # TOKENS

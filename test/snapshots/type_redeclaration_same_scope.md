@@ -18,7 +18,8 @@ TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 │                                                                             │
 │  Maybe(a) : [Ok(a), Err]                                                    │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────── type_redeclaration_same_scope.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_redeclaration_same_scope.md:3:1
 
     The redeclaration is here:
 

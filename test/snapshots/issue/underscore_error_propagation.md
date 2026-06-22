@@ -30,7 +30,8 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 │                                                                             │
 │  BadBase := _                                                               │
 │  ‾                                                                          │
-└──────────────────────────────────────── underscore_error_propagation.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_error_propagation.md:1:1
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -41,7 +42,8 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 │                                                                             │
 │  value = "test"                                                             │
 │          ‾‾‾‾‾‾                                                             │
-└──────────────────────────────────────── underscore_error_propagation.md:6:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_error_propagation.md:6:9
 
     The type was determined to be:
 
@@ -52,7 +54,8 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 │                                                                             │
 │  goodValue = "test"                                                         │
 │              ‾‾‾‾‾‾                                                         │
-└────────────────────────────────────── underscore_error_propagation.md:13:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_error_propagation.md:13:13
 
     The type was determined to be:
 

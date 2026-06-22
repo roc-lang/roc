@@ -19,7 +19,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
 │                                                                             │
 │  import json.Json [foo, BAR]                                                │
 │                   ‾                                                         │
-└──────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    stmt_import.md:1:18
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -28,7 +29,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
 │                                                                             │
 │  import json.Json [foo, BAR]                                                │
 │                    ‾‾‾                                                      │
-└──────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    stmt_import.md:1:19
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -37,7 +39,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
 │                                                                             │
 │  import json.Json [foo, BAR]                                                │
 │                       ‾                                                     │
-└──────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    stmt_import.md:1:22
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -46,7 +49,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
 │                                                                             │
 │  import json.Json [foo, BAR]                                                │
 │                            ‾                                                │
-└──────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    stmt_import.md:1:27
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

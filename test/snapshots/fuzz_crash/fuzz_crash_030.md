@@ -42,7 +42,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │    [ .                                                                      │
 │      ‾                                                                      │
-└────────────────────────────────────────────────────── fuzz_crash_030.md:8:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:8:5
 
     This is an unexpected parsing error. Please check your syntax.
                                                       ┌────────────────────────┐
@@ -51,7 +52,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │    { # pen                                                                  │
 │    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:11:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:11:3
 
     For example:     packages { base: "../base/main.roc" }
                                                                  ┌─────────────┐
@@ -60,7 +62,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  pkg: 77"..c", mm} #                                                        │
 │          ‾‾‾                                                                │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:12:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:12:9
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -69,7 +72,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  pkg: 77"..c", mm} #                                                        │
 │             ‾                                                               │
-└──────────────────────────────────────────────────── fuzz_crash_030.md:12:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:12:12
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -78,7 +82,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  pkg: 77"..c", mm} #                                                        │
 │              ‾                                                              │
-└──────────────────────────────────────────────────── fuzz_crash_030.md:12:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:12:13
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -87,7 +92,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  pkg: 77"..c", mm} #                                                        │
 │                ‾‾                                                           │
-└──────────────────────────────────────────────────── fuzz_crash_030.md:12:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:12:15
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -96,7 +102,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  pkg: 77"..c", mm} #                                                        │
 │                  ‾                                                          │
-└──────────────────────────────────────────────────── fuzz_crash_030.md:12:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:12:17
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -105,7 +112,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │   provides # Cd                                                             │
 │   ‾‾‾‾‾‾‾‾                                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:13:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:13:2
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -114,7 +122,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │    [ # pen                                                                  │
 │    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:14:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:14:3
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -123,7 +132,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  ar,                                                                        │
 │  ‾‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:15:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:15:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -132,7 +142,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │  ar,                                                                        │
 │    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:15:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:15:3
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -141,7 +152,8 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 │                                                                             │
 │    ]                                                                        │
 │    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_030.md:16:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_030.md:16:3
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

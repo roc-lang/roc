@@ -22,7 +22,8 @@ TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 │                                                                             │
 │  result = f(3)?                                                             │
 │           ‾‾‾‾‾                                                             │
-└──────────────────────────────────── question_in_top_level_def_error.md:6:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    question_in_top_level_def_error.md:6:10
 
 # TOKENS
 ~~~zig

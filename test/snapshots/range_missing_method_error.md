@@ -19,7 +19,8 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 │                                                                             │
 │  r = "a"..<"z"                                                              │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_missing_method_error.md:1:5
 
     The value's type, which does not have a method named add_checked, is:
 
@@ -33,7 +34,8 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 │                                                                             │
 │  r = "a"..<"z"                                                              │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_missing_method_error.md:1:5
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -47,7 +49,8 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 │                                                                             │
 │  r = "a"..<"z"                                                              │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_missing_method_error.md:1:5
 
     The value's type, which does not have a method named is_lt, is:
 
@@ -61,7 +64,8 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 │                                                                             │
 │  r = "a"..<"z"                                                              │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_missing_method_error.md:1:5
 
     The value's type, which does not have a method named steps_between, is:
 

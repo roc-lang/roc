@@ -21,7 +21,8 @@ DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 │                                                                             │
 │   a,                                                                        │
 │   ‾                                                                         │
-└──────────────────────────────────────────── open_tag_union_stability.md:2:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    open_tag_union_stability.md:2:2
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -32,7 +33,8 @@ DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 │                                                                             │
 │   ..,                                                                       │
 │  ]                                                                          │
-└──────────────────────────────────────────── open_tag_union_stability.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    open_tag_union_stability.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

@@ -42,7 +42,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  single_use = |x| "hello"                                                   │
 │                ‾                                                            │
-└──────────────────────────────────── type_var_underscore_conventions.md:5:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:5:15
 
     If you don't need this variable, prefix it with an underscore like _x to
     suppress this warning.
@@ -52,7 +53,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  starting_dollar = |list| "default"                                         │
 │                     ‾‾‾‾                                                    │
-└──────────────────────────────────── type_var_underscore_conventions.md:9:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:9:20
 
     If you don't need this variable, prefix it with an underscore like _list to
     suppress this warning.
@@ -62,7 +64,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  combo_single = |x| "combo"                                                 │
 │                  ‾                                                          │
-└─────────────────────────────────── type_var_underscore_conventions.md:13:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:13:17
 
     If you don't need this variable, prefix it with an underscore like _x to
     suppress this warning.
@@ -72,7 +75,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  valid_single = |x| "valid"                                                 │
 │                  ‾                                                          │
-└─────────────────────────────────── type_var_underscore_conventions.md:17:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:17:17
 
     If you don't need this variable, prefix it with an underscore like _x to
     suppress this warning.
@@ -82,7 +86,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  main = |x| "done"                                                          │
 │          ‾                                                                  │
-└──────────────────────────────────── type_var_underscore_conventions.md:22:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:22:9
 
     If you don't need this variable, prefix it with an underscore like _x to
     suppress this warning.
@@ -92,7 +97,8 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 │                                                                             │
 │  starting_dollar = |list| "default"                                         │
 │                           ‾‾‾‾‾‾‾‾‾                                         │
-└──────────────────────────────────── type_var_underscore_conventions.md:9:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_underscore_conventions.md:9:26
 
     The type was determined to be:
 

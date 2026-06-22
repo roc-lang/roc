@@ -33,7 +33,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │                                                                             │
 │      import Color.RGB                                                       │
 │      ‾‾‾‾‾‾                                                                 │
-└───────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_mixed_scope.md:7:5
 
     Move this import to the top of the file, after the module header but before
     any definitions.
@@ -43,7 +44,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │                                                                             │
 │      import Color.RGB                                                       │
 │             ‾‾‾‾‾                                                           │
-└──────────────────────────────────────────────── nominal_mixed_scope.md:7:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_mixed_scope.md:7:12
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -52,7 +54,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │                                                                             │
 │          RGB.Red => LocalStatus.Pending                                     │
 │          ‾‾‾                                                                │
-└──────────────────────────────────────────────── nominal_mixed_scope.md:10:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_mixed_scope.md:10:9
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -61,7 +64,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │                                                                             │
 │          RGB.Green => LocalStatus.Complete                                  │
 │          ‾‾‾                                                                │
-└──────────────────────────────────────────────── nominal_mixed_scope.md:11:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_mixed_scope.md:11:9
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -70,7 +74,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │                                                                             │
 │          RGB.Blue => LocalStatus.Pending                                    │
 │          ‾‾‾                                                                │
-└──────────────────────────────────────────────── nominal_mixed_scope.md:12:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_mixed_scope.md:12:9
 
     This type is referenced here:
 # TOKENS

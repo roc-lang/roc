@@ -20,7 +20,8 @@ TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 │                                                                             │
 │  BadType := _                                                               │
 │  ‾                                                                          │
-└───────────────────────────────────────────── simple_underscore_error.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    simple_underscore_error.md:1:1
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -31,7 +32,8 @@ TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 │                                                                             │
 │  foo = 42                                                                   │
 │        ‾‾                                                                   │
-└───────────────────────────────────────────── simple_underscore_error.md:4:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    simple_underscore_error.md:4:7
 
     Other code expects this to have the type:
 

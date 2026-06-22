@@ -36,7 +36,8 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 │                                                                             │
 │      num = identity(42)                                                     │
 │      ‾‾‾                                                                    │
-└──────────────────────────────────────────── rigid_var_instantiation.md:10:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    rigid_var_instantiation.md:10:5
 
     If you don't need this variable, prefix it with an underscore like _num to
     suppress this warning.
@@ -46,7 +47,8 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 │                                                                             │
 │      str = identity("hello")                                                │
 │      ‾‾‾                                                                    │
-└──────────────────────────────────────────── rigid_var_instantiation.md:13:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    rigid_var_instantiation.md:13:5
 
     If you don't need this variable, prefix it with an underscore like _str to
     suppress this warning.
@@ -56,7 +58,8 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 │                                                                             │
 │      lst = identity([1, 2, 3])                                              │
 │      ‾‾‾                                                                    │
-└──────────────────────────────────────────── rigid_var_instantiation.md:16:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    rigid_var_instantiation.md:16:5
 
     If you don't need this variable, prefix it with an underscore like _lst to
     suppress this warning.

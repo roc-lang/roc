@@ -19,7 +19,8 @@ TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 │                                                                             │
 │  y = "value: ${x}"                                                          │
 │                ‾                                                            │
-└───────────────────────────────── string_interpolation_type_mismatch.md:4:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    string_interpolation_type_mismatch.md:4:15
 
     It has the type:
 

@@ -41,7 +41,8 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 │                                                                             │
 │      result1 = testEllipsis(42)                                             │
 │      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────── crash_and_ellipsis_test.md:20:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    crash_and_ellipsis_test.md:20:5
 
     If you don't need this variable, prefix it with an underscore like _result1
     to suppress this warning.
@@ -51,7 +52,8 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 │                                                                             │
 │      result2 = testCrash(42)                                                │
 │      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────── crash_and_ellipsis_test.md:21:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    crash_and_ellipsis_test.md:21:5
 
     If you don't need this variable, prefix it with an underscore like _result2
     to suppress this warning.
@@ -61,7 +63,8 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 │                                                                             │
 │      result3 = testCrashSimple(42)                                          │
 │      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────── crash_and_ellipsis_test.md:22:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    crash_and_ellipsis_test.md:22:5
 
     If you don't need this variable, prefix it with an underscore like _result3
     to suppress this warning.

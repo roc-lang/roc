@@ -16,7 +16,8 @@ MISSING METHOD - call_float_literal.md:1:5:1:10
 │                                                                             │
 │  x = 12.34()                                                                │
 │      ‾‾‾‾‾                                                                  │
-└────────────────────────────────────────────────── call_float_literal.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    call_float_literal.md:1:5
 
     The value's type, which does not have a method named from_numeral, is:
 

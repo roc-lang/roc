@@ -19,7 +19,8 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 │                                                                             │
 │  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
 │                                       ‾‾‾‾‾                                 │
-└───────────────────────────────────────────────────────── tuple_bool.md:1:38 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tuple_bool.md:1:38
 
     The value's type, which does not have a method named not, is:
 
@@ -30,7 +31,8 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 │                                                                             │
 │  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
 │                                              ‾‾‾‾‾‾                         │
-└───────────────────────────────────────────────────────── tuple_bool.md:1:45 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tuple_bool.md:1:45
 
     The value's type, which does not have a method named not, is:
 
@@ -41,7 +43,8 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 │                                                                             │
 │  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
 │                                                                      ‾‾‾‾‾  │
-└───────────────────────────────────────────────────────── tuple_bool.md:1:69 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tuple_bool.md:1:69
 
     The value's type, which does not have a method named not, is:
 
@@ -52,7 +55,8 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 │                                                                             │
 │  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
 │                                                                               ‾‾‾‾‾│
-└───────────────────────────────────────────────────────── tuple_bool.md:1:78 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tuple_bool.md:1:78
 
     The value's type, which does not have a method named not, is:
 

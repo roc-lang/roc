@@ -16,7 +16,8 @@ INVALID UNICODE ESCAPE SEQUENCE - unicode_overflow_str.md:1:2:1:12
 │                                                                             │
 │  "\u(FFFFFF)"                                                               │
 │   ‾‾‾‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────────── unicode_overflow_str.md:1:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unicode_overflow_str.md:1:2
 
 # TOKENS
 ~~~zig

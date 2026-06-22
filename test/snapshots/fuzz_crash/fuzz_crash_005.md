@@ -16,7 +16,8 @@ PARSE ERROR - fuzz_crash_005.md:1:1:1:5
 │                                                                             │
 │  modu                                                                       │
 │  ‾‾‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_005.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_005.md:1:1
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

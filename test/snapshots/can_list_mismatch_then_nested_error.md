@@ -18,7 +18,8 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 │                                                                             │
 │  [1, "hello", [3, "world"]]                                                 │
 │   ‾                                                                         │
-└───────────────────────────────── can_list_mismatch_then_nested_error.md:1:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_mismatch_then_nested_error.md:1:2
 
     The type was determined to be non-numeric here:
       ┌─────────────────────────────────
@@ -40,7 +41,8 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 │                                                                             │
 │  [1, "hello", [3, "world"]]                                                 │
 │      ‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────── can_list_mismatch_then_nested_error.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_mismatch_then_nested_error.md:1:5
 
     The type was determined to be:
 
@@ -55,7 +57,8 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 │                                                                             │
 │  [1, "hello", [3, "world"]]                                                 │
 │                   ‾‾‾‾‾‾‾                                                   │
-└──────────────────────────────── can_list_mismatch_then_nested_error.md:1:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_mismatch_then_nested_error.md:1:18
 
     The type was determined to be:
 

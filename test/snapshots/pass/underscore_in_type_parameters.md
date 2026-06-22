@@ -34,7 +34,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  MyType(_) : Str                                                            │
 │         ‾                                                                   │
-└─────────────────────────────────────── underscore_in_type_parameters.md:2:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:2:8
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -45,7 +46,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  MyType2(_, b) : b                                                          │
 │          ‾                                                                  │
-└─────────────────────────────────────── underscore_in_type_parameters.md:5:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:5:9
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -56,7 +58,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  MyType3(a, _) : a                                                          │
 │             ‾                                                               │
-└────────────────────────────────────── underscore_in_type_parameters.md:8:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:8:12
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -67,7 +70,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  ComplexType(_, b) : { field: b }                                           │
 │              ‾                                                              │
-└───────────────────────────────────── underscore_in_type_parameters.md:11:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:11:13
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -78,7 +82,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  MultiType(_, _, c) : c                                                     │
 │            ‾                                                                │
-└───────────────────────────────────── underscore_in_type_parameters.md:14:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:14:11
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -89,7 +94,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 │                                                                             │
 │  MultiType(_, _, c) : c                                                     │
 │               ‾                                                             │
-└───────────────────────────────────── underscore_in_type_parameters.md:14:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    underscore_in_type_parameters.md:14:14
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type

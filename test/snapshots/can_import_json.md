@@ -18,7 +18,8 @@ UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
 │                                                                             │
 │  main = Json.utf8                                                           │
 │         ‾‾‾‾‾‾‾‾‾                                                           │
-└───────────────────────────────────────────────────── can_import_json.md:3:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_json.md:3:8
 
     Is there an import or exposing missing up-top?
 # TOKENS

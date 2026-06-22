@@ -22,7 +22,8 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 │                                                                             │
 │  expect result == result                                                    │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────── tag_union_multiple_ineligible.md:6:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    tag_union_multiple_ineligible.md:6:8
 
     The type is:
 

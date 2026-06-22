@@ -16,7 +16,8 @@ UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
 │                                                                             │
 │  f=||{var c:[]}                                                             │
 │       ‾‾‾‾‾‾‾‾                                                              │
-└───────────────────────────────────────────── fmt_var_in_record_field.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fmt_var_in_record_field.md:1:6
 
     If you don't need this variable, prefix it with an underscore like _c to
     suppress this warning.

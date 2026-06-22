@@ -42,7 +42,8 @@ UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 │                                                                             │
 │      pair = combine(num, text)                                              │
 │      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────── type_annotation_basic.md:21:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotation_basic.md:21:5
 
     If you don't need this variable, prefix it with an underscore like _pair to
     suppress this warning.

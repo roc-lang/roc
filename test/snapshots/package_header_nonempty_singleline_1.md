@@ -17,7 +17,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 │                                                                             │
 │  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
 │                      ‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────── package_header_nonempty_singleline_1.md:1:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package_header_nonempty_singleline_1.md:1:21
 
     You're attempting to use this module here:
                                                      ┌─────────────────────────┐
@@ -27,7 +28,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 │                                                                             │
 │  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
 │           ‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package_header_nonempty_singleline_1.md:1:10
 
     You can fix this by either defining something in this module, or by
     removing it from the list of exposed values.

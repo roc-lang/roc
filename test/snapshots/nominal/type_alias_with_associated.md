@@ -16,7 +16,8 @@ TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 │                                                                             │
 │  Foo : [A, B, C].{ x = 5 }                                                  │
 │                 ‾                                                           │
-└───────────────────────────────────────── type_alias_with_associated.md:1:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_with_associated.md:1:16
 
     Only nominal types (defined with :=) can have associated items. Type
     aliases (defined with :) only define names for other types.

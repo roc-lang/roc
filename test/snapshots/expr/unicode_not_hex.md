@@ -16,7 +16,8 @@ INVALID UNICODE ESCAPE SEQUENCE - unicode_not_hex.md:1:5:1:13
 │                                                                             │
 │  "abc\u(zzzz)def"                                                           │
 │      ‾‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────────────────── unicode_not_hex.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    unicode_not_hex.md:1:5
 
 # TOKENS
 ~~~zig

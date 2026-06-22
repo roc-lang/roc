@@ -26,7 +26,8 @@ UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 │                                                                             │
 │      result = Json.utf8("Hello from external module!")                      │
 │               ‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    external_decl_lookup.md:8:14
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -35,7 +36,8 @@ UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 │                                                                             │
 │      Stdout.line!(result)                                                   │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└──────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    external_decl_lookup.md:9:5
 
     Is there an import or exposing missing up-top?
 # TOKENS

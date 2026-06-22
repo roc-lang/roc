@@ -19,7 +19,8 @@ UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
 │                                                                             │
 │  hello! = Stdout.line!("Hello")                                             │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└──────────────────────────────────────────── simple_module_no_blanks.md:2:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    simple_module_no_blanks.md:2:10
 
     Is there an import or exposing missing up-top?
 # TOKENS

@@ -42,7 +42,8 @@ Variables declared with var can only be reassigned within the same function scop
 │                                                                             │
 │  processItems = |items| {                                                   │
 │                  ‾‾‾‾‾                                                      │
-└──────────────────────────────────────── can_var_scoping_regular_var.md:2:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_var_scoping_regular_var.md:2:17
 
     If you don't need this variable, prefix it with an underscore like _items
     to suppress this warning.

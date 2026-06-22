@@ -17,7 +17,8 @@ MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
 │                                                                             │
 │  app[]{f:platform""}import S exposing[c as                                  │
 │  f]                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_054.md:1:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_054.md:1:20
 
     You're attempting to use this module here:
 # TOKENS

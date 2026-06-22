@@ -35,7 +35,8 @@ INVALID HOSTED SECTION - :0:0:0:0
 │                                                                             │
 │    "roc_not implemented": pr1,                                              │
 │    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────── platform.md:14:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform.md:14:3
 
     You can fix this by either defining pr1 in this module, or by removing it
     from the list of exposed values.
@@ -45,7 +46,8 @@ INVALID HOSTED SECTION - :0:0:0:0
 │                                                                             │
 │    "roc_not implemented": pr2,                                              │
 │    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────── platform.md:15:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform.md:15:3
 
     You can fix this by either defining pr2 in this module, or by removing it
     from the list of exposed values.
@@ -55,7 +57,8 @@ INVALID HOSTED SECTION - :0:0:0:0
 │                                                                             │
 │    E1,                                                                      │
 │    ‾‾                                                                       │
-└──────────────────────────────────────────────────────────── platform.md:6:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform.md:6:3
 
     You can fix this by either defining E1 in this module, or by removing it
     from the list of exposed values.
@@ -65,7 +68,8 @@ INVALID HOSTED SECTION - :0:0:0:0
 │                                                                             │
 │    E2,                                                                      │
 │    ‾‾                                                                       │
-└──────────────────────────────────────────────────────────── platform.md:7:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    platform.md:7:3
 
     You can fix this by either defining E2 in this module, or by removing it
     from the list of exposed values.

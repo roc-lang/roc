@@ -21,7 +21,8 @@ TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 │                                                                             │
 │  main! = |_| mapList([1,2,3,4,5])                                           │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└───────────────────────────────────────────────── type_app_with_vars.md:6:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_app_with_vars.md:6:13
 
     The mapList function has the type:
 

@@ -19,7 +19,8 @@ INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:2:1:2:10
 │                                                                             │
 │  dbg "foo"                                                                  │
 │  ‾‾‾‾‾‾‾‾‾                                                                  │
-└──────────────────────────────────── dbg_stmt_not_permitted_top_level.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    dbg_stmt_not_permitted_top_level.md:2:1
 
     Only definitions, type annotations, and imports are allowed at the top
     level.

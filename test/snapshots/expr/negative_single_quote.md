@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
 │                                                                             │
 │  -'i'                                                                       │
 │  ‾                                                                          │
-└─────────────────────────────────────────────── negative_single_quote.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    negative_single_quote.md:1:1
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

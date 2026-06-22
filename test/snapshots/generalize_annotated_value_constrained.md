@@ -21,7 +21,8 @@ POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
 │                                                                             │
 │  items = []                                                                 │
 │  ‾‾‾‾‾                                                                      │
-└────────────────────────────── generalize_annotated_value_constrained.md:4:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    generalize_annotated_value_constrained.md:4:1
 
     Its type is:
     List(a) where [a.to_str : a -> Str]

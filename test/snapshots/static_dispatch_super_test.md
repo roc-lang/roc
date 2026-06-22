@@ -22,7 +22,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │  ‾‾‾‾‾‾‾                                                                    │
-└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:1
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -31,7 +32,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │          ‾‾‾‾                                                               │
-└────────────────────────────────────────── static_dispatch_super_test.md:1:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:9
 
     Is there an import or exposing missing up-top?
                                                ┌───────────────────────────────┐
@@ -41,7 +43,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:1
 
                                                ┌───────────────────────────────┐
 ┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
@@ -50,7 +53,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:1
 
                                                ┌───────────────────────────────┐
 ┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
@@ -59,7 +63,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾    │
-└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:1
 
                                                ┌───────────────────────────────┐
 ┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
@@ -68,7 +73,8 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 │                                                                             │
 │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾│
-└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_super_test.md:1:1
 
 # TOKENS
 ~~~zig

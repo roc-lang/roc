@@ -20,7 +20,8 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
 │                                                                             │
 │      [x, [y]] => x * y                                                      │
 │                  ‾‾‾‾‾                                                      │
-└──────────────────────────────────────────────── nested_list_scoping.md:4:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nested_list_scoping.md:4:17
 
     The value's type, which does not have a method named times, is:
 

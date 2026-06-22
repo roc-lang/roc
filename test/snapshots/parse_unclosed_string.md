@@ -16,7 +16,8 @@ UNCLOSED STRING - parse_unclosed_string.md:1:1:1:7
 │                                                                             │
 │  "hello                                                                     │
 │  ‾‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────── parse_unclosed_string.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    parse_unclosed_string.md:1:1
 
 # TOKENS
 ~~~zig

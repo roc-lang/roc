@@ -16,7 +16,8 @@ UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
 │                                                                             │
 │  foo = asd.0                                                                │
 │        ‾‾‾                                                                  │
-└─────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    expr_no_space_dot_int.md:1:7
 
     Is there an import or exposing missing up-top?
 # TOKENS

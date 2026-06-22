@@ -20,7 +20,8 @@ TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 │  describe = |rec| match rec {                                               │
 │      { x, y } => x + y                                                      │
 │  }                                                                          │
-└──────────────────────────────────────────── destructure_closed_match.md:2:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    destructure_closed_match.md:2:5
 
     The first pattern is trying to match:
 

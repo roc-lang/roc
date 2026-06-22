@@ -22,7 +22,8 @@ BREAK OUTSIDE LOOP - break_outside_loop.md:4:2:4:7
 │                                                                             │
 │   break                                                                     │
 │   ‾‾‾‾‾                                                                     │
-└────────────────────────────────────────────────── break_outside_loop.md:4:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    break_outside_loop.md:4:2
 
 # TOKENS
 ~~~zig

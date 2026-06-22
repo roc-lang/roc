@@ -16,7 +16,8 @@ TYPE MISMATCH - can_list_triple_nested_heterogeneous.md:1:23:1:30
 │                                                                             │
 │  [[], [[], [1]], [[], ["hello"]]]                                           │
 │                        ‾‾‾‾‾‾‾                                              │
-└─────────────────────────────── can_list_triple_nested_heterogeneous.md:1:23 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_triple_nested_heterogeneous.md:1:23
 
     The type was determined to be:
 

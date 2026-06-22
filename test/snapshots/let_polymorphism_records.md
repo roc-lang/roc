@@ -68,7 +68,8 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 │                                                                             │
 │   1 + update_data                                                           │
 │       ‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    let_polymorphism_records.md:48:6
 
     Both sides of and must be Bool values, but the right side is:
 
@@ -82,7 +83,8 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 │                                                                             │
 │  str = "hello"                                                              │
 │        ‾‾‾‾‾‾‾                                                              │
-└──────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    let_polymorphism_records.md:8:7
 
     The type was determined to be:
 

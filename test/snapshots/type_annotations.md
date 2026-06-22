@@ -45,7 +45,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  bar : Thing(_a, _b, _)                                                     │
 │        ‾‾‾‾‾                                                                │
-└──────────────────────────────────────────────────── type_annotations.md:3:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:3:7
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -54,7 +55,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │               ‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────── type_annotations.md:9:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:9:14
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -63,7 +65,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  tag_tuple : Value((_a, _b, _c))                                            │
 │              ‾‾‾‾‾                                                          │
-└────────────────────────────────────────────────── type_annotations.md:11:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:11:13
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -72,7 +75,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  foo : U64                                                                  │
 │  ‾‾‾‾‾‾‾‾‾                                                                  │
-└──────────────────────────────────────────────────── type_annotations.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -82,7 +86,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  bar : Thing(_a, _b, _)                                                     │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└──────────────────────────────────────────────────── type_annotations.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:3:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -92,7 +97,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  baz : (_a, _b, _c)                                                         │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└──────────────────────────────────────────────────── type_annotations.md:5:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:5:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -102,7 +108,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  add_one : (U8, U16 -> U32)                                                 │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└──────────────────────────────────────────────────── type_annotations.md:7:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:7:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -112,7 +119,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
-└──────────────────────────────────────────────────── type_annotations.md:9:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:9:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -122,7 +130,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │                                                                             │
 │  tag_tuple : Value((_a, _b, _c))                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
-└─────────────────────────────────────────────────── type_annotations.md:11:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:11:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -133,7 +142,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │  closed_record_with_comma : {                                               │
 │   a : U8,                                                                   │
 │  }                                                                          │
-└─────────────────────────────────────────────────── type_annotations.md:13:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:13:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -145,7 +155,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 │   a : U8,                                                                   │
 │   ..,                                                                       │
 │  }                                                                          │
-└─────────────────────────────────────────────────── type_annotations.md:17:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotations.md:17:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

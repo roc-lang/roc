@@ -20,7 +20,8 @@ TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 │                                                                             │
 │   Green => "3"                                                              │
 │            ‾‾‾                                                              │
-└──────────────────────────────────────────────────── basic_tag_union.md:4:11 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    basic_tag_union.md:4:11
 
     The type was determined to be:
 

@@ -39,7 +39,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │                         ‾                                                   │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:24 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:24
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -48,7 +49,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │                           ‾                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:26
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -57,7 +59,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │                                   ‾                                         │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:34 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:34
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -78,7 +81,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │                                             ‾                               │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:44 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:44
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -99,7 +103,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  olor = |color| { import Color.RGB                                          │
 │                   ‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:4:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:4:18
 
     Move this import to the top of the file, after the module header but before
     any definitions.
@@ -109,7 +114,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  Green => LocalStatus-Complete                                              │
 │                      ‾                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:7:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:7:21
 
     Patterns can contain identifiers, literals, lists, records, or tags.
                                                                  ┌─────────────┐
@@ -118,7 +124,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  Green => LocalStatus-Complete                                              │
 │                       ‾                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:7:22 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:7:22
 
     This is an unexpected parsing error. Please check your syntax.
                                                     ┌──────────────────────────┐
@@ -127,7 +134,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │               ‾‾‾                                                           │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:14
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -139,7 +147,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  LocalStatus :lue => Loc= [Pending, Complete]                               │
 │                      ‾‾‾                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:1:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:1:21
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -148,7 +157,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │  olor = |color| { import Color.RGB                                          │
 │                          ‾‾‾‾‾                                              │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:4:25 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:4:25
 
     This type is referenced here:
                                                        ┌───────────────────────┐
@@ -157,7 +167,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                                                             │
 │      match color { RGB => LocalStatus.Pending                               │
 │                           ‾‾‾‾‾‾‾‾‾‾‾                                       │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:6:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:6:26
 
     This type is referenced here:
 
@@ -171,7 +182,8 @@ This pattern contains invalid syntax or uses unsupported features.
 │                                                                             │
 │    B.Blue => LocalStatus.Pending                                            │
 │    ‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_032.md:8:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:8:3
 
     This type is referenced here:
                                                        ┌───────────────────────┐
@@ -180,7 +192,8 @@ This pattern contains invalid syntax or uses unsupported features.
 │                                                                             │
 │    B.Blue => LocalStatus.Pending                                            │
 │              ‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:8:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:8:13
 
     This type is referenced here:
 
@@ -192,7 +205,8 @@ This pattern contains invalid syntax or uses unsupported features.
 │                                                                             │
 │  Green => LocalStatus-Complete                                              │
 │           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_032.md:7:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_032.md:7:10
 
     The second branch is:
 

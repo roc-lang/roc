@@ -18,7 +18,8 @@ DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 │                                                                             │
 │  hey : MyType                                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└──────────────────────────────────────────────── type_alias_anno_only.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_alias_anno_only.md:3:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

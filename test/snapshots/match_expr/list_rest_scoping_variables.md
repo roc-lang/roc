@@ -24,7 +24,8 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
 │                                                                             │
 │      [..items] => 1                                                         │
 │       ‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────── list_rest_scoping_variables.md:2:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping_variables.md:2:6
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                 ┌──────────────────────────────┐
@@ -33,7 +34,8 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
 │                                                                             │
 │      [first, ..items] => first                                              │
 │              ‾‾‾‾‾‾‾                                                        │
-└──────────────────────────────────────── list_rest_scoping_variables.md:3:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping_variables.md:3:13
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                 ┌──────────────────────────────┐
@@ -42,7 +44,8 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
 │                                                                             │
 │      [..items, last] => last                                                │
 │       ‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────── list_rest_scoping_variables.md:4:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping_variables.md:4:6
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                 ┌──────────────────────────────┐
@@ -51,7 +54,8 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
 │                                                                             │
 │      [first, ..items, last] => first + last                                 │
 │              ‾‾‾‾‾‾‾                                                        │
-└──────────────────────────────────────── list_rest_scoping_variables.md:5:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping_variables.md:5:13
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 # TOKENS

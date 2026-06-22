@@ -56,7 +56,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │  import utils.String as Str                                                 │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└──────────────────────────────────────────── can_import_comprehensive.md:3:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:3:1
 
     The redeclaration is here:
 
@@ -72,7 +73,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      client = Http.get                                                      │
 │               ‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────── can_import_comprehensive.md:6:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:6:14
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -81,7 +83,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      parser = Json.utf8                                                     │
 │               ‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────── can_import_comprehensive.md:7:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:7:14
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -90,7 +93,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      helper = Str.trim                                                      │
 │               ‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────── can_import_comprehensive.md:8:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:8:14
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -99,7 +103,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      result1 = Json.parse                                                   │
 │                ‾‾‾‾‾‾‾‾‾‾                                                   │
-└────────────────────────────────────────── can_import_comprehensive.md:11:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:11:15
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -108,7 +113,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      result2 = Http.post                                                    │
 │                ‾‾‾‾‾‾‾‾‾                                                    │
-└────────────────────────────────────────── can_import_comprehensive.md:14:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:14:15
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -117,7 +123,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      result3 = get                                                          │
 │                ‾‾‾                                                          │
-└────────────────────────────────────────── can_import_comprehensive.md:17:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:17:15
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -126,7 +133,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      result4 = post                                                         │
 │                ‾‾‾‾                                                         │
-└────────────────────────────────────────── can_import_comprehensive.md:18:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:18:15
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -135,7 +143,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 │                                                                             │
 │      combined = Str.concat                                                  │
 │                 ‾‾‾‾‾‾‾‾‾‾                                                  │
-└────────────────────────────────────────── can_import_comprehensive.md:21:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_import_comprehensive.md:21:16
 
     Is there an import or exposing missing up-top?
 # TOKENS

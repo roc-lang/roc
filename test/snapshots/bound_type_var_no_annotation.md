@@ -40,7 +40,8 @@ UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 │                                                                             │
 │      pair = combine(num, text)                                              │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────── bound_type_var_no_annotation.md:19:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    bound_type_var_no_annotation.md:19:5
 
     If you don't need this variable, prefix it with an underscore like _pair to
     suppress this warning.

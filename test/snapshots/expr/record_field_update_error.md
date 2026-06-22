@@ -18,7 +18,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 │                                                                             │
 │  { person & age: 31 }                                                       │
 │           ‾                                                                 │
-└────────────────────────────────────────── record_field_update_error.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_field_update_error.md:1:10
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -27,7 +28,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 │                                                                             │
 │  { person & age: 31 }                                                       │
 │                  ‾‾                                                         │
-└────────────────────────────────────────── record_field_update_error.md:1:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_field_update_error.md:1:17
 
     Type annotations should contain types like Str, Num a, or List U64.
                                                     ┌──────────────────────────┐
@@ -36,7 +38,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 │                                                                             │
 │  { person & age: 31 }                                                       │
 │             ‾‾‾‾‾‾‾                                                         │
-└────────────────────────────────────────── record_field_update_error.md:1:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_field_update_error.md:1:12
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

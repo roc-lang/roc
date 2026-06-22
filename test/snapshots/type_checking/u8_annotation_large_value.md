@@ -17,7 +17,8 @@ INVALID NUMBER - u8_annotation_large_value.md:2:5:2:8
 │                                                                             │
 │  x = 500                                                                    │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────── u8_annotation_large_value.md:2:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    u8_annotation_large_value.md:2:5
 
     The inferred type is:
 

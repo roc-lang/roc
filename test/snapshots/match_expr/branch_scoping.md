@@ -25,7 +25,8 @@ POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 │      Ok(different) => different * 2                                         │
 │      Err(different) => different / 2                                        │
 │  }                                                                          │
-└────────────────────────────────────────────────────── branch_scoping.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    branch_scoping.md:1:1
 
     Its type is:
     a

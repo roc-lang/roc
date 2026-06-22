@@ -20,7 +20,8 @@ TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
 │                                                                             │
 │      { x } = { x: 1, y: 2, z: 3 }                                           │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└────────────────────────────────────── destructure_closed_hint_multi.md:3:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    destructure_closed_hint_multi.md:3:13
 
     It has the type:
 

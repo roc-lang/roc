@@ -82,7 +82,8 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 │                                                                             │
 │      result3 = combine(result1, result2)                                    │
 │      ‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────────── type_var_name_avoids_collision.md:59:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_name_avoids_collision.md:59:5
 
     If you don't need this variable, prefix it with an underscore like _result3
     to suppress this warning.
@@ -92,7 +93,8 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 │                                                                             │
 │      result4 = yetAnotherIdentity(True)                                     │
 │      ‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────────── type_var_name_avoids_collision.md:60:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_name_avoids_collision.md:60:5
 
     If you don't need this variable, prefix it with an underscore like _result4
     to suppress this warning.
@@ -102,7 +104,8 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 │                                                                             │
 │      result5 = finalIdentity(3.14)                                          │
 │      ‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────────── type_var_name_avoids_collision.md:61:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_name_avoids_collision.md:61:5
 
     If you don't need this variable, prefix it with an underscore like _result5
     to suppress this warning.

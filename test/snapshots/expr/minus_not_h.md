@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 │                                                                             │
 │  -!h                                                                        │
 │  ‾                                                                          │
-└───────────────────────────────────────────────────────── minus_not_h.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    minus_not_h.md:1:1
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

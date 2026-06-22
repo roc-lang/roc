@@ -20,7 +20,8 @@ TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 │                                                                             │
 │      "hello world",                                                         │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
-└───────────────────────────────────────── can_list_multiline_mismatch.md:3:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_list_multiline_mismatch.md:3:5
 
     The type was determined to be:
 

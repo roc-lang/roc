@@ -22,7 +22,8 @@ PARSE ERROR - type_function_basic.md:3:29:3:31
 │                                                                             │
 │  apply : (_a -> _b) -> _a -> _b                                             │
 │                           ‾‾                                                │
-└──────────────────────────────────────────────── type_function_basic.md:3:26 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_basic.md:3:26
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -35,7 +36,8 @@ PARSE ERROR - type_function_basic.md:3:29:3:31
 │                                                                             │
 │  apply : (_a -> _b) -> _a -> _b                                             │
 │                              ‾‾                                             │
-└──────────────────────────────────────────────── type_function_basic.md:3:29 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_basic.md:3:29
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

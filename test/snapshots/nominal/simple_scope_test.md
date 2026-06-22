@@ -22,7 +22,8 @@ UNDEFINED VARIABLE - simple_scope_test.md:6:17:6:26
 │                                                                             │
 │      outer_val = inner_val                                                  │
 │                  ‾‾‾‾‾‾‾‾‾                                                  │
-└────────────────────────────────────────────────── simple_scope_test.md:6:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    simple_scope_test.md:6:17
 
     Is there an import or exposing missing up-top?
 # TOKENS

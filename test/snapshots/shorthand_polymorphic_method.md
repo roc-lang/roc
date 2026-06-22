@@ -29,7 +29,8 @@ MODULE HEADER DEPRECATED - shorthand_polymorphic_method.md:1:1:1:14
 │                                                                             │
 │  module [main]                                                              │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
-└──────────────────────────────────────── shorthand_polymorphic_method.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    shorthand_polymorphic_method.md:1:1
 
     Type modules (headerless files with a top-level type matching the filename)
     are now the preferred way to define modules.

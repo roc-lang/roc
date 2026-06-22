@@ -21,7 +21,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 │                                                                             │
 │  c : L                                                                      │
 │      ‾                                                                      │
-└────────────────────────────────────────────────────── fuzz_crash_080.md:1:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_080.md:1:5
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -33,7 +34,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 │                  o                                                          │
 │                  .h : a,                                                    │
 │          ]                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_080.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_080.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

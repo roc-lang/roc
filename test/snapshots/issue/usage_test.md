@@ -23,7 +23,8 @@ TYPE MISMATCH - usage_test.md:6:9:6:11
 │                                                                             │
 │  UnusedType := _                                                            │
 │  ‾                                                                          │
-└────────────────────────────────────────────────────────── usage_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    usage_test.md:1:1
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -34,7 +35,8 @@ TYPE MISMATCH - usage_test.md:6:9:6:11
 │                                                                             │
 │  UnusedType := _                                                            │
 │  ‾                                                                          │
-└────────────────────────────────────────────────────────── usage_test.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    usage_test.md:1:1
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -45,7 +47,8 @@ TYPE MISMATCH - usage_test.md:6:9:6:11
 │                                                                             │
 │  value = 42                                                                 │
 │          ‾‾                                                                 │
-└────────────────────────────────────────────────────────── usage_test.md:6:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    usage_test.md:6:9
 
     Other code expects this to have the type:
 

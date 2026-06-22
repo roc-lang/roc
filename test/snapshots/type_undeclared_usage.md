@@ -26,7 +26,8 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 │                                                                             │
 │  MyType : UnknownType                                                       │
 │           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_undeclared_usage.md:1:10
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -35,7 +36,8 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 │                                                                             │
 │  processValue : UndeclaredResult -> Str                                     │
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
-└────────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_undeclared_usage.md:3:16
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -44,7 +46,8 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 │                                                                             │
 │  processValue = |value| {                                                   │
 │                  ‾‾‾‾‾                                                      │
-└────────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_undeclared_usage.md:4:17
 
     If you don't need this variable, prefix it with an underscore like _value
     to suppress this warning.
@@ -54,7 +57,8 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 │                                                                             │
 │  AnotherType : SomeModule.MissingType                                       │
 │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└────────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_undeclared_usage.md:8:15
 
     You're attempting to use this module here:
 # TOKENS

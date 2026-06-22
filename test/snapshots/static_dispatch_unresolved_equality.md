@@ -18,7 +18,8 @@ MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 │                                                                             │
 │  result = poly() == poly()                                                  │
 │           ‾‾‾‾‾‾                                                            │
-└──────────────────────────────── static_dispatch_unresolved_equality.md:3:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_unresolved_equality.md:3:10
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

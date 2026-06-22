@@ -17,7 +17,8 @@ TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 │                                                                             │
 │  get_sum = |{ x, y }| x + y                                                 │
 │             ‾‾‾‾‾‾‾‾                                                        │
-└────────────────────────────────────────── destructure_closed_fn_arg.md:2:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    destructure_closed_fn_arg.md:2:12
 
     It has the type:
 

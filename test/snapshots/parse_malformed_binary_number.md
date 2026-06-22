@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_binary_number.md:1:1:1:3
 │                                                                             │
 │  0b                                                                         │
 │  ‾‾                                                                         │
-└─────────────────────────────────────── parse_malformed_binary_number.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    parse_malformed_binary_number.md:1:1
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

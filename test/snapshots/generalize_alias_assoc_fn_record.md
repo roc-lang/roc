@@ -23,7 +23,8 @@ MISSING METHOD - generalize_alias_assoc_fn_record.md:8:13:8:16
 │                                                                             │
 │  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                           │
 │              ‾‾‾                                                            │
-└─────────────────────────────────── generalize_alias_assoc_fn_record.md:8:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    generalize_alias_assoc_fn_record.md:8:13
 
     The value's type, which does not have a method named run, is:
 

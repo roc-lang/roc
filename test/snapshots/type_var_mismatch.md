@@ -31,7 +31,8 @@ TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 │                                                                             │
 │   item = 42                                                                 │
 │          ‾‾                                                                 │
-└─────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_var_mismatch.md:7:9
 
     The type was determined to be non-numeric here:
        ┌─────────────────────────────────────────────────

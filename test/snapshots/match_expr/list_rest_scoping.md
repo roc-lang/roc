@@ -23,7 +23,8 @@ POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 │                                                                             │
 │      [first, ..rest] => first + 1                                           │
 │              ‾‾‾‾‾‾                                                         │
-└────────────────────────────────────────────────── list_rest_scoping.md:2:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping.md:2:13
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                 ┌──────────────────────────────┐
@@ -32,7 +33,8 @@ POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 │                                                                             │
 │      [..rest, last] => last + 2                                             │
 │       ‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────── list_rest_scoping.md:3:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping.md:3:6
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                 ┌──────────────────────────────┐
@@ -41,7 +43,8 @@ POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 │                                                                             │
 │      [x, ..rest, y] => x + y                                                │
 │          ‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────── list_rest_scoping.md:4:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping.md:4:9
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                            ┌───────────────────┐
@@ -53,7 +56,8 @@ POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 │      [..rest, last] => last + 2                                             │
 │      [x, ..rest, y] => x + y                                                │
 │  }                                                                          │
-└─────────────────────────────────────────────────── list_rest_scoping.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    list_rest_scoping.md:1:1
 
     Its type is:
     a where [a.plus : a, a -> a]

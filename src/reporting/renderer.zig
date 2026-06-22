@@ -390,17 +390,22 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     }
 
     // Bottom edge with the filename tucked into the bottom-right corner.
+    // Bottom edge is a plain rule; the location goes on its own line beneath,
+    // where a long path can't overflow the box.
+    try writer.writeAll(sec);
+    try writer.writeAll("└");
+    try writer.splatBytesAll("─", rw -| 2);
+    try writer.writeAll("┘");
+    try writer.writeAll(rst);
+    try writer.writeByte('\n');
+
     {
         const fname = if (region.filename) |f| sanitisePathForSnapshots(f) else "<source>";
         const loc = try std.fmt.allocPrint(gpa, "{s}:{}:{}", .{ fname, region.start_line, region.start_column });
         defer gpa.free(loc);
-
+        try writer.writeAll("    ");
         try writer.writeAll(sec);
-        try writer.writeAll("└");
-        try writer.splatBytesAll("─", (rw -| 4) -| source_region.displayWidth(loc));
-        try writer.writeAll(" ");
         try writer.writeAll(loc);
-        try writer.writeAll(" ┘");
         try writer.writeAll(rst);
         try writer.writeByte('\n');
     }

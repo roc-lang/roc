@@ -24,7 +24,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
 │                                                                             │
 │    SomeType,                                                                │
 │    ‾‾‾‾‾‾‾‾                                                                 │
-└───────────────────────────────── package_header_nonempty_multiline_4.md:4:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package_header_nonempty_multiline_4.md:4:3
 
     You're attempting to use this module here:
                                                      ┌─────────────────────────┐
@@ -34,7 +35,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
 │                                                                             │
 │    something,                                                               │
 │    ‾‾‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────── package_header_nonempty_multiline_4.md:3:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    package_header_nonempty_multiline_4.md:3:3
 
     You can fix this by either defining something in this module, or by
     removing it from the list of exposed values.

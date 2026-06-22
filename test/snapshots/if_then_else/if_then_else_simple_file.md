@@ -21,7 +21,8 @@ MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 │                                                                             │
 │  foo = if 1 A                                                               │
 │           ‾                                                                 │
-└─────────────────────────────────────────── if_then_else_simple_file.md:1:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    if_then_else_simple_file.md:1:10
 
     Other code expects this to have the type:
 
@@ -32,7 +33,8 @@ MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 │                                                                             │
 │   "hello"                                                                   │
 │   ‾‾‾‾‾‾‾                                                                   │
-└──────────────────────────────────────────── if_then_else_simple_file.md:4:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    if_then_else_simple_file.md:4:2
 
     The value's type, which does not have a method named from_quote, is:
 

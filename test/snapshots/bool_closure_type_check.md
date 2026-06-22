@@ -16,7 +16,8 @@ MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 │                                                                             │
 │  (|x| !x)(True)                                                             │
 │       ‾‾                                                                    │
-└───────────────────────────────────────────── bool_closure_type_check.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    bool_closure_type_check.md:1:6
 
     The value's type, which does not have a method named not, is:
 

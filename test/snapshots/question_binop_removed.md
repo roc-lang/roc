@@ -26,7 +26,8 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 │                                                                             │
 │   value = f(x) ? BadInput                                                   │
 │                ‾                                                            │
-└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    question_binop_removed.md:7:15
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                          ┌─────────────────────┐
@@ -35,7 +36,8 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 │                                                                             │
 │   value = f(x) ? BadInput                                                   │
 │                ‾                                                            │
-└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    question_binop_removed.md:7:15
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                                ┌───────────────┐
@@ -44,7 +46,8 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 │                                                                             │
 │   value = f(x) ? BadInput                                                   │
 │                  ‾‾‾‾‾‾‾‾                                                   │
-└───────────────────────────────────────────── question_binop_removed.md:7:17 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    question_binop_removed.md:7:17
 
     It has the type:
 

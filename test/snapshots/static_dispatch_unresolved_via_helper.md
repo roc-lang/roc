@@ -23,7 +23,8 @@ MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 │                                                                             │
 │  ambiguous = conv(poly())                                                   │
 │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└────────────────────────────── static_dispatch_unresolved_via_helper.md:5:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    static_dispatch_unresolved_via_helper.md:5:13
 
     The type was left undetermined by this call:
       ┌───────────────────────────────

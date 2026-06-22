@@ -20,7 +20,8 @@ UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 │                                                                             │
 │   where [a.Decode]                                                          │
 │          ‾‾‾‾‾‾‾‾                                                           │
-└───────────────────────────────────────────────────── where_clauses_4.md:4:9 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    where_clauses_4.md:4:9
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.

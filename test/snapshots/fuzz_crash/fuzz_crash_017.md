@@ -18,7 +18,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 │                                                                             │
 │  foo = "hello ${namF                                                        │
 │        ‾                                                                    │
-└────────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_017.md:2:7
 
     This is an unexpected parsing error. Please check your syntax.
                                                          ┌─────────────────────┐
@@ -27,7 +28,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 │                                                                             │
 │  foo = "hello ${namF                                                        │
 │        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_017.md:2:7
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

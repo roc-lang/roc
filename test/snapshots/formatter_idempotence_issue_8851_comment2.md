@@ -17,7 +17,8 @@ UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 │                                                                             │
 │  a=()->b()()()                                                              │
 │    ‾‾                                                                       │
-└─────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    formatter_idempotence_issue_8851_comment2.md:1:3
 
     If you want to represent nothing, try using an empty record: {}.
                                                           ┌────────────────────┐
@@ -26,7 +27,8 @@ UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 │                                                                             │
 │  a=()->b()()()                                                              │
 │        ‾                                                                    │
-└─────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    formatter_idempotence_issue_8851_comment2.md:1:7
 
     Is there an import or exposing missing up-top?
 # TOKENS

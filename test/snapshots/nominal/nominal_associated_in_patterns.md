@@ -21,7 +21,8 @@ UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 │                                                                             │
 │  handleSuccess = |res| "success"                                            │
 │                   ‾‾‾                                                       │
-└───────────────────────────────────── nominal_associated_in_patterns.md:6:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_associated_in_patterns.md:6:18
 
     If you don't need this variable, prefix it with an underscore like _res to
     suppress this warning.

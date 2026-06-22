@@ -22,7 +22,8 @@ MISSING METHOD - polymorphism.md:6:29:6:35
 │                                                                             │
 │      { pair1, pair2, pair3 }.to_str()                                       │
 │                              ‾‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────── polymorphism.md:6:29 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    polymorphism.md:6:29
 
     The value's type, which does not have a method named to_str, is:
 

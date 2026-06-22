@@ -29,7 +29,8 @@ TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 │                                                                             │
 │  composed = |n| get_value(make_record(n))                                   │
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└─────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    test_nested_instantiation_crash.md:12:16
 
     It has the type:
 

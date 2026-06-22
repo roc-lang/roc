@@ -21,7 +21,8 @@ TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 │                                                                             │
 │      b = Dec.to_str(n)                                                      │
 │                     ‾                                                       │
-└──────────────────────────────────── numeric_let_generalize_in_block.md:4:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    numeric_let_generalize_in_block.md:4:20
 
     This argument has the type:
 

@@ -491,7 +491,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                                                                             │
 │              val3 = val4 + 1                                 # Unqualified  │
 │                     ‾‾‾‾                                                    │
-└───────────────────────────── associated_items_truly_comprehensive.md:382:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    associated_items_truly_comprehensive.md:382:20
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -500,7 +501,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                                                                             │
 │      val1 = val2 + 1                                         # Unqualified  │
 │             ‾‾‾‾                                                            │
-└───────────────────────────── associated_items_truly_comprehensive.md:388:12 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    associated_items_truly_comprehensive.md:388:12
 
     Is there an import or exposing missing up-top?
                                                    ┌───────────────────────────┐
@@ -511,7 +513,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                                                                             │
 │              val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)│
 │              ‾‾‾‾                                                           │
-└───────────────────────────── associated_items_truly_comprehensive.md:167:13 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    associated_items_truly_comprehensive.md:167:13
 
     Only functions can be recursive. Non-function top-level values must be
     fully computable without depending on themselves through other values.
@@ -523,7 +526,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                                                                             │
 │              val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)│
 │                     ‾‾‾‾                                                    │
-└───────────────────────────── associated_items_truly_comprehensive.md:167:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    associated_items_truly_comprehensive.md:167:20
 
     Only functions can be recursive. Non-function top-level values must be
     fully computable without depending on themselves through other values.
@@ -535,7 +539,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                                                                             │
 │              val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)│
 │                            ‾‾‾‾                                             │
-└───────────────────────────── associated_items_truly_comprehensive.md:167:27 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    associated_items_truly_comprehensive.md:167:27
 
     Only functions can be recursive. Non-function top-level values must be
     fully computable without depending on themselves through other values.

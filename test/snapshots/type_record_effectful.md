@@ -25,7 +25,8 @@ UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 │                                                                             │
 │      Stdout.line!(person.name)                                              │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_record_effectful.md:7:5
 
     Is there an import or exposing missing up-top?
 # TOKENS

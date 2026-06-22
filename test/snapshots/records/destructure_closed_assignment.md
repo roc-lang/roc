@@ -20,7 +20,8 @@ TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 │                                                                             │
 │      { x, y } = { x: 1, y: 2, z: 3 }                                        │
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└────────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    destructure_closed_assignment.md:3:16
 
     It has the type:
 

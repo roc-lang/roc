@@ -24,7 +24,8 @@ DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 │                                                                             │
 │   var x_ = 10 # Redeclare var - should warn but proceed                     │
 │   ‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────── can_var_scoping_var_redeclaration.md:4:2 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    can_var_scoping_var_redeclaration.md:4:2
 
     The redeclaration is here:
 

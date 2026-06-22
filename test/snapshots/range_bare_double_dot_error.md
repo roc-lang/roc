@@ -17,7 +17,8 @@ UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 │                                                                             │
 │  r = 1..5                                                                   │
 │         ‾                                                                   │
-└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_bare_double_dot_error.md:1:8
 
                                                          ┌─────────────────────┐
 ┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
@@ -25,7 +26,8 @@ UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 │                                                                             │
 │  r = 1..5                                                                   │
 │         ‾                                                                   │
-└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    range_bare_double_dot_error.md:1:8
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

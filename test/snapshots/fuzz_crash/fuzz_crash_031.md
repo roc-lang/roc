@@ -25,7 +25,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  vavar t= '                                                                 │
 │           ‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:4:10
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
@@ -33,7 +34,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  mule []                                                                    │
 │  ‾‾‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_031.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:1:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -42,7 +44,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  mule []                                                                    │
 │       ‾                                                                     │
-└────────────────────────────────────────────────────── fuzz_crash_031.md:1:6 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:1:6
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -51,7 +54,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  mule []                                                                    │
 │        ‾                                                                    │
-└────────────────────────────────────────────────────── fuzz_crash_031.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:1:7
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -60,7 +64,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  vavar t= '                                                                 │
 │  ‾‾‾‾‾                                                                      │
-└────────────────────────────────────────────────────── fuzz_crash_031.md:4:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:4:1
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -69,7 +74,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  vavar t= '                                                                 │
 │           ‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:4:10
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                          ┌─────────────────────┐
@@ -78,7 +84,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 │                                                                             │
 │  vavar t= '                                                                 │
 │           ‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_031.md:4:10
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

@@ -24,7 +24,8 @@ MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 │                                                                             │
 │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
 │                            ‾                                                │
-└──────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_multi_arg.md:3:27
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -33,7 +34,8 @@ MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 │                                                                             │
 │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
 │                                         ‾‾                                  │
-└──────────────────────────────────────────── type_function_multi_arg.md:3:40 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_multi_arg.md:3:40
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -42,7 +44,8 @@ MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 │                                                                             │
 │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
 │                                           ‾                                 │
-└──────────────────────────────────────────── type_function_multi_arg.md:3:42 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_multi_arg.md:3:42
 
     This is an unexpected parsing error. Please check your syntax.
                                                               ┌────────────────┐
@@ -51,7 +54,8 @@ MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 │                                                                             │
 │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
 │                            ‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└──────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_function_multi_arg.md:3:27
 
 # TOKENS
 ~~~zig

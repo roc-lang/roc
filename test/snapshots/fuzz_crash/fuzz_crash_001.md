@@ -18,7 +18,8 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 │                                                                             │
 │  mo|%                                                                       │
 │  ‾‾                                                                         │
-└────────────────────────────────────────────────────── fuzz_crash_001.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_001.md:1:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -27,7 +28,8 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 │                                                                             │
 │  mo|%                                                                       │
 │    ‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_001.md:1:3 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_001.md:1:3
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -36,7 +38,8 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 │                                                                             │
 │  mo|%                                                                       │
 │     ‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_001.md:1:4 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_001.md:1:4
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

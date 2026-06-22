@@ -17,7 +17,8 @@ TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
 │                                                                             │
 │  { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25", process: |y| y }│
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾│
-└──────────────────────────────────────────── record_with_lambda_field.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    record_with_lambda_field.md:1:1
 
     The type is:
 

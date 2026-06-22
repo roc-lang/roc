@@ -20,7 +20,8 @@ UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 │                                                                             │
 │  match person {                                                             │
 │        ‾‾‾‾‾‾                                                               │
-└────────────────────────────────────────── pattern_destructure_nested.md:1:7 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_nested.md:1:7
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -29,7 +30,8 @@ UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 │                                                                             │
 │      { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"│
 │                                       ‾‾‾‾‾‾‾                               │
-└───────────────────────────────────────── pattern_destructure_nested.md:2:38 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    pattern_destructure_nested.md:2:38
 
     If you don't need this variable, prefix it with an underscore like _zipCode
     to suppress this warning.

@@ -30,7 +30,8 @@ MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 │                                                                             │
 │  makeAdder = |x| |y| x + y                                                  │
 │                      ‾‾‾‾‾                                                  │
-└───────────────────────────────────────── lambda_currying_constraint.md:3:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    lambda_currying_constraint.md:3:21
 
     The value's type, which does not have a method named plus, is:
 

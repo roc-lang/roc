@@ -18,7 +18,8 @@ EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:2:1
 │                                                                             │
 │  x }                                                                        │
 │  ‾                                                                          │
-└──────────────────────────── nominal_associated_with_final_expression.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    nominal_associated_with_final_expression.md:2:1
 
     To fix this, remove the expression at the very end.
 # TOKENS

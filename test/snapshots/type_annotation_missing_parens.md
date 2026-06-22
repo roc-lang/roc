@@ -18,7 +18,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└────────────────────────────────────── type_annotation_missing_parens.md:2:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotation_missing_parens.md:2:1
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -39,7 +40,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 │                                                                             │
 │  nums : List U8                                                             │
 │         ‾‾‾‾                                                                │
-└────────────────────────────────────── type_annotation_missing_parens.md:1:8 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotation_missing_parens.md:1:8
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -47,7 +49,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 │                                                                             │
 │  nums : List U8                                                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────── type_annotation_missing_parens.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_annotation_missing_parens.md:1:1
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

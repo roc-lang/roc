@@ -34,7 +34,8 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 │       -> # After arrow                                                      │
 │        hasher, # After first clause                                         │
 │      hasher.Hasher]                                                         │
-└───────────────────────────────────────────────────── where_clauses_7.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    where_clauses_7.md:1:1
 
     You're attempting do this here:
                                 ┌──────────────────────────────────────────────┐
@@ -44,7 +45,8 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 │                                                                             │
 │  Decode(a) : a                                                              │
 │   where [a.decode : List(U8) -> a]                                          │
-└──────────────────────────────────────────────────── where_clauses_7.md:10:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    where_clauses_7.md:10:1
 
     You're attempting do this here:
 # TOKENS

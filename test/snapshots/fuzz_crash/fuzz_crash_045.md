@@ -16,7 +16,8 @@ PARSE ERROR - fuzz_crash_045.md:1:50:1:51
 │                                                                             │
 │  platform""requires{}{}exposes[]packages{}provides[                         │
 │                                                   ‾                         │
-└───────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_045.md:1:50
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

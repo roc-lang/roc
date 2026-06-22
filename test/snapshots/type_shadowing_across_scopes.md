@@ -31,7 +31,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │      Try : [Success, Failure]                                               │
 │      ‾‾‾                                                                    │
-└──────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:9:5
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -40,7 +41,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │      Try : [Success, Failure]                                               │
 │                      ‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:9:21
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -49,7 +51,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │      Try : [Success, Failure]                                               │
 │                             ‾                                               │
-└─────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:9:28
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -58,7 +61,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:10:1
 
     This is an unexpected parsing error. Please check your syntax.
                                                         ┌──────────────────────┐
@@ -67,7 +71,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │  Try(a, b) : [Ok(a), Err(b)]                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
-└──────────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:1:1
 
     The redeclaration is here:
 
@@ -83,7 +88,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │  processData = |data|                                                       │
 │                 ‾‾‾‾                                                        │
-└─────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:4:16
 
     If you don't need this variable, prefix it with an underscore like _data to
     suppress this warning.
@@ -93,7 +99,8 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 │                                                                             │
 │      Try : [Success, Failure]                                               │
 │                      ‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_shadowing_across_scopes.md:9:21
 
 # TOKENS
 ~~~zig

@@ -22,7 +22,8 @@ UNDEFINED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 │                                                                             │
 │      callsGhost = ghostName                                                 │
 │                   ‾‾‾‾‾‾‾‾‾                                                 │
-└────────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    canon_revamp_undefined_in_assoc_error.md:3:18
 
     Is there an import or exposing missing up-top?
 # TOKENS

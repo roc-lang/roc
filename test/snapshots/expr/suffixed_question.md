@@ -16,7 +16,8 @@ UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 │                                                                             │
 │  Stdout.line???                                                             │
 │               ‾                                                             │
-└────────────────────────────────────────────────── suffixed_question.md:1:14 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    suffixed_question.md:1:14
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

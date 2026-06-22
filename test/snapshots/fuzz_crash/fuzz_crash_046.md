@@ -21,7 +21,8 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  app[]{f:platform""}import fS                                              │
 │                     ‾‾‾‾‾‾                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_046.md:1:20 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    fuzz_crash_046.md:1:20
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

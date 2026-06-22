@@ -21,7 +21,8 @@ TYPE MISMATCH - type_record_basic.md:6:13:6:13
 │                                                                             │
 │  main! = |_| getName({namee: "luke", age:21})                               │
 │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
-└────────────────────────────────────────────────── type_record_basic.md:6:21 ┘
+└─────────────────────────────────────────────────────────────────────────────┘
+    type_record_basic.md:6:21
 
     This argument has the type:
 
