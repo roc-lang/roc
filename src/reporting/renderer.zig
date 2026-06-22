@@ -218,6 +218,16 @@ fn padTo(writer: *std.Io.Writer, from_col: usize, to_col: usize) error{WriteFail
     if (to_col > from_col) try writer.splatByteAll(' ', to_col - from_col);
 }
 
+/// Write `s` with every ASCII letter uppercased. Titles are authored in title
+/// case (so the markdown renderer can preserve it), and shouted in ALL CAPS in
+/// the box/HTML/LSP/plain renderers. Titles are validated as ASCII, so a byte
+/// uppercase is sufficient.
+fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
+    for (s) |c| {
+        try writer.writeByte(if (c >= 'a' and c <= 'z') c - ('a' - 'A') else c);
+    }
+}
+
 /// Pad with spaces and write the right wall `│` at column `rw`.
 fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize) error{WriteFailed}!void {
     try writer.splatByteAll(' ', (rw -| 1) -| col);
@@ -315,7 +325,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         try writer.writeAll("┤ ");
         try writer.writeAll(palette.bold);
         try writer.writeAll(palette.primary);
-        try writer.writeAll(title);
+        try writeShouted(writer, title);
         try writer.writeAll(rst);
         try writer.writeAll(sec);
         try writer.writeAll(" │");
@@ -557,7 +567,7 @@ fn wrapAndEmitBelowLine(writer: *std.Io.Writer, line: []const u8, base_indent: u
 fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     try writer.writeAll(palette.bold);
     try writer.writeAll(palette.primary);
-    try writer.writeAll(report.title);
+    try writeShouted(writer, report.title);
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
     if (report.headline.elementCount() > 0) {
@@ -586,7 +596,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 
     try writer.print("<div class=\"report {s}\">\n", .{title_class});
     try writer.writeAll("<h1 class=\"report-title\">");
-    try writeEscapedHtml(writer, report.title);
+    try writeShouted(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
     if (report.headline.elementCount() > 0) {
@@ -600,7 +610,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 /// Render a report for language server protocol.
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     // LSP typically wants plain text without formatting
-    try writer.writeAll(report.title);
+    try writeShouted(writer, report.title);
     try writer.writeAll("\n\n");
     if (report.headline.elementCount() > 0) {
         try renderDocumentToLsp(&report.headline, writer, config);
