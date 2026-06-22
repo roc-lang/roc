@@ -13671,18 +13671,20 @@ fn freshRecursiveMethodPlaceholder(
     else
         ModuleEnv.varFrom(def.pattern);
 
-    _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-        .expected = constraint_expected,
-        .actual = method_var,
-        .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
-        .is_cross_reference = is_cross_reference,
-        // A literal argument is pinned to an annotated parameter only; record the
-        // annotated body var solely when the referenced def carries an annotation.
-        .recursive_annotated_fn_var = if (def.annotation != null)
-            ModuleEnv.varFrom(def.expr)
-        else
-            null,
-    } });
+    _ = try self.constraints.append(self.gpa, Constraint{
+        .eql = .{
+            .expected = constraint_expected,
+            .actual = method_var,
+            .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+            .is_cross_reference = is_cross_reference,
+            // A literal argument is pinned to an annotated parameter only; record the
+            // annotated body var solely when the referenced def carries an annotation.
+            .recursive_annotated_fn_var = if (def.annotation != null)
+                ModuleEnv.varFrom(def.expr)
+            else
+                null,
+        },
+    });
 
     return method_var;
 }

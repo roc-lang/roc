@@ -11861,7 +11861,6 @@ const BodyContext = struct {
         return try self.builder.lowLevelExpr(.num_is_eq, &.{ lhs, rhs }, bool_ty);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Structural hashing (mirror of structural equality above).
     //
     // `to_hash : self, Hasher -> Hasher` threads a Hasher through the value's
@@ -11870,7 +11869,6 @@ const BodyContext = struct {
     // unwrap to their backing, and scalar/str leaves emit a `structural_hash`
     // node that the LIR lowerer turns into the matching `hasher_write_*` op.
     // Recursive types break the expansion via a memoized generated helper def.
-    // ─────────────────────────────────────────────────────────────────────
 
     fn lowerDirectStructuralHash(
         self: *BodyContext,
@@ -11922,8 +11920,8 @@ const BodyContext = struct {
 
         return switch (shape) {
             .list => try self.lowerOwnedHashCall(value_ty, value, hasher, hasher_ty),
-            .record => |fields| try self.lowerRecordHashExpr(value_ty, self.builder.program.types.fieldSpan(fields), value, hasher, hasher_ty),
-            .tuple => |items| try self.lowerTupleHashExpr(value_ty, self.builder.program.types.span(items), value, hasher, hasher_ty),
+            .record => |fields| try self.lowerRecordHashExpr(self.builder.program.types.fieldSpan(fields), value, hasher, hasher_ty),
+            .tuple => |items| try self.lowerTupleHashExpr(self.builder.program.types.span(items), value, hasher, hasher_ty),
             .tag_union => |tags| try self.lowerTagUnionHashExpr(value_ty, tags, value, hasher, hasher_ty),
             .named => |named| if (named.backing) |backing|
                 try self.lowerNamedHashExpr(value_ty, backing.ty, value, hasher, hasher_ty)
@@ -12014,13 +12012,11 @@ const BodyContext = struct {
 
     fn lowerRecordHashExpr(
         self: *BodyContext,
-        value_ty: Type.TypeId,
         fields: []const Type.Field,
         value: Ast.ExprId,
         hasher: Ast.ExprId,
         hasher_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        _ = value_ty;
         // Copy because recursive lowerHashExpr may reallocate types.fields.
         const fields_copy = try self.allocator.dupe(Type.Field, fields);
         defer self.allocator.free(fields_copy);
@@ -12037,13 +12033,11 @@ const BodyContext = struct {
 
     fn lowerTupleHashExpr(
         self: *BodyContext,
-        value_ty: Type.TypeId,
         items: []const Type.TypeId,
         value: Ast.ExprId,
         hasher: Ast.ExprId,
         hasher_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        _ = value_ty;
         // Copy because recursive lowerHashExpr may reallocate types.spans.
         const items_copy = try self.allocator.dupe(Type.TypeId, items);
         defer self.allocator.free(items_copy);
