@@ -1275,15 +1275,8 @@ const HostEnv = struct {
         failHost("active source signal route rewrite missed its record");
     }
 
-    fn recordSliceContains(records: []const *HostSignalRecord, record: *HostSignalRecord) bool {
-        for (records) |existing| {
-            if (existing == record) return true;
-        }
-        return false;
-    }
-
     fn appendUniqueActiveInputRecord(self: *HostEnv, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
-        if (!HostEnv.recordSliceContains(records.items, record)) {
+        if (!HostEngine.recordSliceContains(records.items, record)) {
             records.append(self.gpa.allocator(), record) catch std.process.exit(1);
         }
     }
@@ -1334,7 +1327,7 @@ const HostEnv = struct {
             },
             .combine => |payload| {
                 for (payload.children, 0..) |child, index| {
-                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    if (HostEngine.recordSliceContains(payload.children[0..index], child)) continue;
                     self.retainActiveSignalRecord(child);
                     const child_id = self.requireActiveSignalRecordId(child);
                     rank = @max(rank, self.engine.active_signal_graph.items[@intCast(child_id)].rank + 1);
@@ -1356,7 +1349,7 @@ const HostEnv = struct {
             },
             .combine => |payload| {
                 for (payload.children, 0..) |child, index| {
-                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    if (HostEngine.recordSliceContains(payload.children[0..index], child)) continue;
                     self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(child), record_id);
                 }
             },
@@ -1376,7 +1369,7 @@ const HostEnv = struct {
             },
             .combine => |payload| {
                 for (payload.children, 0..) |child, index| {
-                    if (HostEnv.recordSliceContains(payload.children[0..index], child)) continue;
+                    if (HostEngine.recordSliceContains(payload.children[0..index], child)) continue;
                     self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(child), old_record_id, new_record_id);
                 }
             },
@@ -2652,7 +2645,7 @@ const HostEnv = struct {
     }
 
     fn activeWhenBranchScopeId(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) ?u64 {
-        return scope_tree.activeWhenBranch(HostEachRowScopeStep, self.engine.scopes.items, parent_scope_id, site_ordinal, branch) catch |err| {
+        return self.engine.activeWhenBranchScopeId(parent_scope_id, site_ordinal, branch) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
     }
@@ -2823,20 +2816,6 @@ const HostEnv = struct {
         }
 
         return ids.toOwnedSlice(allocator) catch std.process.exit(1);
-    }
-
-    fn eachDiffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
-        var old_index: usize = 0;
-        for (next_scope_ids) |next_scope_id| {
-            if (!u64SliceContains(old_render_rows, next_scope_id)) continue;
-            while (old_index < old_render_rows.len and !u64SliceContains(next_scope_ids, old_render_rows[old_index])) {
-                old_index += 1;
-            }
-            if (old_index >= old_render_rows.len) return false;
-            if (old_render_rows[old_index] != next_scope_id) return false;
-            old_index += 1;
-        }
-        return true;
     }
 
     fn eachDiffIsPurePermutation(self: *HostEnv, old_render_rows: []const u64, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) bool {
@@ -6464,7 +6443,7 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
                 const diff = host.syncActiveEachRowScopes(roc_host, site, each_desc);
                 defer diff.deinit(allocator);
 
-                if (old_active_rows.len == old_render_rows.len and HostEnv.eachDiffPreservesSurvivorRenderOrder(old_render_rows, diff.scope_ids)) {
+                if (old_active_rows.len == old_render_rows.len and HostEngine.eachDiffPreservesSurvivorRenderOrder(old_render_rows, diff.scope_ids)) {
                     const counts = host.applyDirtyEachRowScopeSplices(roc_host, site, each_desc, diff, dirty_source_node_ids);
                     total_counts.addAll(counts);
                     applied_any = true;

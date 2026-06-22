@@ -154,6 +154,13 @@ pub const NativeCtx = struct {
     }
 };
 
+fn u64SliceContains(items: []const u64, target: u64) bool {
+    for (items) |item| {
+        if (item == target) return true;
+    }
+    return false;
+}
+
 /// A retained Roc value plus the equality and drop thunks that own it. Holds
 /// exactly one refcount on each thunk while live.
 pub const HostValueCell = struct {
@@ -1626,6 +1633,31 @@ pub fn Engine(comptime Ctx: type) type {
                 if (each.node_id == node_id) return index;
             }
             return null;
+        }
+
+        pub fn recordSliceContains(records: []const *HostSignalRecord, record: *HostSignalRecord) bool {
+            for (records) |existing| {
+                if (existing == record) return true;
+            }
+            return false;
+        }
+
+        pub fn activeWhenBranchScopeId(self: *Self, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!?u64 {
+            return scope_tree.activeWhenBranch(HostEachRowScopeStep, self.scopes.items, parent_scope_id, site_ordinal, branch);
+        }
+
+        pub fn eachDiffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
+            var old_index: usize = 0;
+            for (next_scope_ids) |next_scope_id| {
+                if (!u64SliceContains(old_render_rows, next_scope_id)) continue;
+                while (old_index < old_render_rows.len and !u64SliceContains(next_scope_ids, old_render_rows[old_index])) {
+                    old_index += 1;
+                }
+                if (old_index >= old_render_rows.len) return false;
+                if (old_render_rows[old_index] != next_scope_id) return false;
+                old_index += 1;
+            }
+            return true;
         }
     };
 }
