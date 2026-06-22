@@ -14,21 +14,25 @@ fallbacks/heuristics (per `AGENTS.md` / `.rules`).
 | [#9686](#9686--sort-differs-in-imported-type-module) | `src/eval/test/eval_issue_tests.zig` (`issue 9686`) | **DONE** (fix landed, test GREEN) |
 | [#9635](#9635--assigned-to-itself-false-positive) | `test/snapshots/repro_issue_9635_self_assignment.md` | **DONE** (fix landed, repro GREEN) |
 | [#9740](#9740--numeric-literal-0-inferred-dec-not-u64) | `test/snapshots/repro_issue_9740_numeric_literal_dec.md` | **DONE** (fix landed, repro GREEN) |
-| [#9725](#9725--record-cannot-be-a-dict-key) | `test/snapshots/repro_issue_9725_record_dict_key.md` | **TODO** (repro RED; fix in progress) |
+| [#9725](#9725--record-cannot-be-a-dict-key) | `test/snapshots/repro_issue_9725_record_dict_key.md` (+ 4 runtime eval tests) | **DONE** (fix landed, repro + eval tests GREEN) |
 | #9645 | — | **already fixed** (host-ABI migration; verified end-to-end) |
 | #9670 | — | **out of scope** — fixed separately by PR #9688; intentionally not implemented or tested here |
 
 ## Running the tests
 
+All in-scope work is complete and verified: eval suite **1387/0**, zig unit tests **2817/0**,
+LSP **41/41**, `zig build -Dno-bin` clean.
+
 ```bash
-# Snapshots — DONE ones now pass; #9725 is still RED until its fix lands.
+# Snapshot repros — all GREEN now.
 ./zig-out/bin/snapshot test/snapshots/repro_issue_9635_self_assignment.md          --check-expected  # GREEN
 ./zig-out/bin/snapshot test/snapshots/repro_issue_9740_numeric_literal_dec.md      --check-expected  # GREEN
 ./zig-out/bin/snapshot test/snapshots/repro_issue_9712_mod_floordiv_precedence.md  --check-output    # GREEN
-./zig-out/bin/snapshot test/snapshots/repro_issue_9725_record_dict_key.md          --check-expected  # RED (TODO)
+./zig-out/bin/snapshot test/snapshots/repro_issue_9725_record_dict_key.md          --check-expected  # GREEN
 # whole suite also enforces these via the `snapshot validation` zig test
 
 zig build run-test-eval -- --filter "issue 9686"       # GREEN (cross-module alias dispatch)
+zig build run-test-eval -- --filter "issue 9725"       # GREEN (record/tuple/tag-union Dict keys round-trip)
 zig build run-test-zig  -- --test-filter "issue 9733"  # GREEN (2 expect roots collected)
 ```
 
