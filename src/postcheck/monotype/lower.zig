@@ -5465,22 +5465,6 @@ const BodyContext = struct {
                 .type_only => {},
             }
         }
-        // An unresolved dispatch whose receiver type has no concrete owner, and which is not an
-        // equality dispatch that may fall back to structural comparison, is genuinely ambiguous:
-        // the type checker could neither pin the receiver nor flag it. This happens when the
-        // unresolved receiver is buried in a value's representation and the requiring dispatch
-        // lives in another (already-compiled) body, so no in-module dispatch use exists to flag —
-        // e.g. a `Dict` key left undetermined by `Dict.join_map(_, |_, _| Dict.empty())` whose
-        // `to_hash` is dispatched inside `Dict.join_map`'s body (issue 9644). Lower it to a
-        // deterministic runtime crash rather than panicking in the compiler; code paths that never
-        // actually perform the dispatch at runtime (such as an empty Dict) still run normally.
-        // (Resolved plans need no owner; `from_numeral`/type-position callers handle ownerless
-        // receivers themselves, so this only fires for an unresolved value/method dispatch here.)
-        if (owner_is_null and plan.resolution == .unresolved_checked_plan and
-            !(plan.result_mode == .equality and plan.result_mode.equality.structural_allowed))
-        {
-            return try self.runtimeCrashExpr(plan_ret_ty, "Cannot determine the receiver type for this method call.");
-        }
         const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
