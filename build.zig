@@ -3027,6 +3027,28 @@ pub fn build(b: *std.Build) void {
     _ = builtins32_core_extern_bc_obj.getEmittedBin();
     const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
+    // Native object exporting the compiler-rt 128-bit libcalls (`__divti3`,
+    // `__fixdfti`, ...) that the eval LLVM backend's host re-codegen emits but
+    // does not define. The eval shared library links this in on Windows, whose
+    // LoadLibrary cannot bind undefined symbols the way the Unix loaders do (see
+    // src/builtins/eval_compiler_rt_libcalls.zig). Built for the host target
+    // since the eval backend only ever runs natively.
+    const eval_compiler_rt_obj = b.addObject(.{
+        .name = "eval_compiler_rt_libcalls",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/eval_compiler_rt_libcalls.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .single_threaded = true,
+        }),
+    });
+    eval_compiler_rt_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    eval_compiler_rt_obj.root_module.stack_check = false;
+    eval_compiler_rt_obj.bundle_compiler_rt = false;
+    configureBackend(eval_compiler_rt_obj, target);
+    const eval_compiler_rt_obj_file = eval_compiler_rt_obj.getEmittedBin();
+
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
@@ -3036,6 +3058,7 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(eval_compiler_rt_obj_file, "eval_compiler_rt_libcalls.obj");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -3047,6 +3070,7 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
         \\pub const builtins_bc = builtins64_bc;
+        \\pub const eval_compiler_rt_libcalls_obj = @embedFile("eval_compiler_rt_libcalls.obj");
         \\
     ;
 

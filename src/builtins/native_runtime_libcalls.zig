@@ -115,6 +115,19 @@ pub fn resolve(name: []const u8) ?usize {
     return null;
 }
 
+/// Emit every libcall in `entries` as an exported symbol under its compiler-rt
+/// name. The standalone `eval_compiler_rt_libcalls` object calls this from a
+/// `comptime` block so it can be linked into the eval shared library on targets
+/// whose loader cannot bind undefined symbols at load time. The in-process
+/// `eval_loader` (static-musl Linux) and the OS dynamic loader (other Unixes)
+/// bind them via `resolve` / their own compiler-rt instead, but Windows loads
+/// the eval image with `LoadLibrary`, which requires a fully linked DLL.
+pub fn exportLibcalls() void {
+    inline for (entries) |entry| {
+        @export(entry[1], .{ .name = entry[0] });
+    }
+}
+
 test "resolve maps known compiler-rt symbols and rejects others" {
     try std.testing.expect(resolve("__divti3") != null);
     try std.testing.expect(resolve("__fixsfti") != null);
