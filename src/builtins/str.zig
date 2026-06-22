@@ -277,11 +277,11 @@ pub const RocStr = extern struct {
     }
 
     pub fn eql(self: RocStr, other: RocStr) bool {
-        // If they are byte-for-byte equal, they're definitely equal!
-        if (self.bytes == other.bytes and self.length == other.length) {
-            if (!self.isSmallStr() or self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
-                return true;
-            }
+        // For non-small strings, equal byte pointers and lengths imply equal
+        // contents. Small strings store their payload across these same struct
+        // fields, so they must always compare the inline bytes below.
+        if (!self.isSmallStr() and !other.isSmallStr() and self.bytes == other.bytes and self.length == other.length) {
+            return true;
         }
 
         const self_len = self.len();
@@ -292,21 +292,13 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        // Now we have to look at the string contents
-        const self_bytes = self.asU8ptr();
-        const other_bytes = other.asU8ptr();
-        // TODO: we can make an optimization like memcmp does in glibc.
-        // We can check the min shared alignment 1, 2, 4, or 8.
-        // Then do a copy at that alignment before falling back on one byte at a time.
-        // Currently we have to be unaligned because slices can be at any alignment.
-        var b: usize = 0;
-        while (b < self_len) : (b += 1) {
-            if (self_bytes[b] != other_bytes[b]) {
-                return false;
-            }
+        if (self.isSmallStr() and other.isSmallStr()) {
+            const self_bytes: [@sizeOf(RocStr)]u8 = @bitCast(self);
+            const other_bytes: [@sizeOf(RocStr)]u8 = @bitCast(other);
+            return smallBytesEqual(self_bytes, other_bytes, self_len);
         }
 
-        return true;
+        return bytesEqualFast(self.asU8ptr(), other.asU8ptr(), self_len);
     }
 
     /// Compare this RocStr with a byte slice for equality.
@@ -317,15 +309,63 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_bytes = self.asU8ptr();
-        var b: usize = 0;
-        while (b < self_len) : (b += 1) {
-            if (self_bytes[b] != slice[b]) {
-                return false;
-            }
-        }
+        return bytesEqualFast(self.asU8ptr(), slice.ptr, self_len);
+    }
 
-        return true;
+    /// Compare this RocStr against up to 24 static bytes packed little-endian
+    /// into three u64 words. This is an internal compiler/runtime helper for
+    /// generated record-field dispatch; it is not a user-facing primitive.
+    ///
+    /// The static side is already known by the compiler. The runtime side may be
+    /// small, heap-backed, or a seamless slice, so all fixed-width loads stay
+    /// inside the logical `self.len()` range. Short slices below one full word
+    /// use a bounded byte build instead of over-reading past their allocation.
+    pub fn eqlStaticSmall(self: RocStr, static_len: usize, word0: u64, word1: u64, word2: u64) bool {
+        if (static_len > 24) return false;
+
+        const self_len = self.len();
+        if (self_len != static_len) return false;
+
+        return bytesEqualStaticSmall(self.asU8ptr(), static_len, word0, word1, word2);
+    }
+
+    /// Compare one packed static word lane against this RocStr. This is an
+    /// internal discriminator for generated field-name dispatch. It is separate
+    /// from `eqlStaticSmall` so generated code can cheaply reject most fields
+    /// with one selected lane before doing full verification on a rare hit.
+    ///
+    /// `active_len` says how many low byte lanes in `word` are meaningful. The
+    /// runtime string may be small, heap-backed, or a seamless slice; every load
+    /// is either proven in-bounds or assembled byte-by-byte.
+    pub fn staticSmallWordEq(self: RocStr, offset: usize, active_len: usize, word: u64) bool {
+        if (active_len > @sizeOf(u64)) return false;
+
+        const self_len = self.len();
+        if (offset > self_len) return false;
+        if (active_len > self_len - offset) return false;
+
+        const mask = lowBytesMask64(active_len);
+        const runtime_word = staticSmallRuntimeWord(self, offset, active_len);
+        return (runtime_word & mask) == (word & mask);
+    }
+
+    /// Compare one packed static word lane against this RocStr using the same
+    /// ASCII-caseless semantics as `strCaselessAsciiEquals`.
+    ///
+    /// This is an internal discriminator for generated field-name dispatch. It
+    /// does not lowercase, allocate, or normalize either side. Exact-equal byte
+    /// lanes can contain any byte; differing lanes must differ by `0x20` and be
+    /// ASCII letters.
+    pub fn staticSmallWordCaselessEq(self: RocStr, offset: usize, active_len: usize, word: u64) bool {
+        if (active_len > @sizeOf(u64)) return false;
+
+        const self_len = self.len();
+        if (offset > self_len) return false;
+        if (active_len > self_len - offset) return false;
+
+        const active = lowBytesMask64(active_len);
+        const runtime_word = staticSmallRuntimeWord(self, offset, active_len);
+        return wordCaselessAsciiEqualMasked(runtime_word, word, active);
     }
 
     pub fn clone(
@@ -562,6 +602,105 @@ pub const RocStr = extern struct {
     }
 };
 
+inline fn bytesEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
+    const word_size = @sizeOf(u64);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
+        if (left_word != right_word) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len != 0) {
+        const mask = lowBytesMask64(tail_len);
+        const left_tail = readTailU64(left, len, index, tail_len);
+        const right_tail = readTailU64(right, len, index, tail_len);
+        return (left_tail & mask) == (right_tail & mask);
+    }
+
+    return true;
+}
+
+inline fn bytesEqualStaticSmall(bytes: [*]const u8, len: usize, word0: u64, word1: u64, word2: u64) bool {
+    const static_words = [3]u64{ word0, word1, word2 };
+    const word_size = @sizeOf(u64);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const runtime_word = std.mem.readInt(u64, bytes[index..][0..word_size], .little);
+        if (runtime_word != static_words[index / word_size]) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len == 0) return true;
+
+    const mask = lowBytesMask64(tail_len);
+    const runtime_tail = readTailU64(bytes, len, index, tail_len);
+    return (runtime_tail & mask) == (static_words[index / word_size] & mask);
+}
+
+inline fn staticSmallRuntimeWord(str: RocStr, offset: usize, active_len: usize) u64 {
+    if (str.isSmallStr()) {
+        const bytes: [@sizeOf(RocStr)]u8 = @bitCast(str);
+        return readSmallStringU64(bytes, offset);
+    }
+
+    const bytes = str.asU8ptr();
+    const len = str.len();
+    if (offset + @sizeOf(u64) <= len) {
+        return std.mem.readInt(u64, bytes[offset..][0..@sizeOf(u64)], .little);
+    }
+
+    return readTailU64(bytes, len, offset, active_len);
+}
+
+inline fn smallBytesEqual(left: [@sizeOf(RocStr)]u8, right: [@sizeOf(RocStr)]u8, len: usize) bool {
+    const word_size = @sizeOf(u64);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
+        if (left_word != right_word) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len == 0) return true;
+
+    const left_tail = readSmallStringU64(left, index);
+    const right_tail = readSmallStringU64(right, index);
+    const mask = lowBytesMask64(tail_len);
+    return (left_tail & mask) == (right_tail & mask);
+}
+
+inline fn readSmallStringU64(bytes: [@sizeOf(RocStr)]u8, index: usize) u64 {
+    // Roc small strings store their bytes inline in the RocStr value and zero
+    // unused inline bytes. That gives the hot equality path a real fixed-width
+    // source to load from even when the logical string length is not a multiple
+    // of eight.
+    //
+    // On 64-bit targets the inline buffer is 24 bytes, so every 8-byte SSO lane
+    // can be loaded directly. On 32-bit targets the inline buffer is 12 bytes:
+    // a string with 9-11 bytes has its tail starting at byte 8, where an
+    // ordinary 8-byte load would run past the RocStr value. In that rare case,
+    // load the final in-bounds u64 and shift the requested lane down to byte 0.
+    if (index + @sizeOf(u64) <= @sizeOf(RocStr)) {
+        return std.mem.readInt(u64, bytes[index..][0..@sizeOf(u64)], .little);
+    }
+
+    const load_index = @sizeOf(RocStr) - @sizeOf(u64);
+    const shift = (index - load_index) * 8;
+    const word = std.mem.readInt(u64, bytes[load_index..][0..@sizeOf(u64)], .little);
+    return word >> @intCast(shift);
+}
+
+inline fn lowBytesMask64(byte_count: usize) u64 {
+    if (byte_count >= @sizeOf(u64)) return std.math.maxInt(u64);
+    return (@as(u64, 1) << @intCast(byte_count * 8)) - 1;
+}
+
 pub fn init(
     bytes_ptr: [*]const u8,
     length: usize,
@@ -574,6 +713,21 @@ pub fn init(
 /// TODO: Document strEqual.
 pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
     return self.eql(other);
+}
+
+/// Internal helper for compiler-generated static small string comparison.
+pub fn strEqualStaticSmall(self: RocStr, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
+    return self.eqlStaticSmall(@intCast(static_len), word0, word1, word2);
+}
+
+/// Internal helper for generated static small word-lane comparison.
+pub fn strStaticSmallWordEq(self: RocStr, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    return self.staticSmallWordEq(@intCast(offset), @intCast(active_len), word);
+}
+
+/// Internal helper for generated static small ASCII-caseless word-lane comparison.
+pub fn strStaticSmallWordCaselessEq(self: RocStr, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    return self.staticSmallWordCaselessEq(@intCast(offset), @intCast(active_len), word);
 }
 
 // Str.numberOfBytes
@@ -770,12 +924,69 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
+/// Result layout for `Str.find_first`.
+pub const FindFirstResult = struct {
+    before: RocStr,
+    found: bool,
+    after: RocStr,
+};
+
+/// Result layout for `Str.drop_prefix_caseless_ascii`.
+pub const DropPrefixCaselessAsciiResult = struct {
+    after: RocStr,
+    found: bool,
+};
+
+fn retainedSlice(source: RocStr, start: usize, length: usize, roc_ops: *RocOps) RocStr {
+    if (length == 0) return RocStr.empty();
+
+    source.incref(1, roc_ops);
+    return substringUnsafe(source, start, length, roc_ops);
+}
+
+fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
+    std.debug.assert(length < SMALL_STRING_SIZE);
+
+    var result = RocStr.empty();
+    result.setLen(length);
+    @memcpy(result.asU8ptrMut()[0..length], bytes[0..length]);
+    return result;
+}
+
+/// Find the first delimiter occurrence and return seamless slices around it.
+pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
+    const source_bytes = source.asSlice();
+    const delimiter_bytes = delimiter.asSlice();
+
+    if (delimiter_bytes.len == 0) {
+        return .{
+            .before = RocStr.empty(),
+            .found = true,
+            .after = retainedSlice(source, 0, source_bytes.len, roc_ops),
+        };
+    }
+
+    const index = std.mem.find(u8, source_bytes, delimiter_bytes) orelse {
+        return .{
+            .before = RocStr.empty(),
+            .found = false,
+            .after = RocStr.empty(),
+        };
+    };
+
+    return .{
+        .before = retainedSlice(source, 0, index, roc_ops),
+        .found = true,
+        .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
+    };
+}
+
 /// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,
     start: usize,
     length: usize,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) RocStr {
     if (string.isSmallStr()) {
         if (start == 0) {
@@ -783,8 +994,7 @@ pub fn substringUnsafe(
             output.setLen(length);
             return output;
         }
-        const slice = string.asSlice()[start .. start + length];
-        return RocStr.fromSlice(slice, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + start, length);
     }
     if (string.bytes) |source_ptr| {
         if (start == 0 and string.isUnique()) {
@@ -858,6 +1068,37 @@ pub fn strDropPrefix(
     const new_len = string.len() - prefix_len;
 
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
+}
+
+/// Drop a prefix using the same ASCII-caseless semantics as
+/// `strCaselessAsciiEquals`.
+///
+/// On success, the returned `after` string is a retained seamless slice of
+/// `string`. On failure, `after` is empty and the source string is not retained.
+/// This shape is important for parser field dispatch: a miss must be only byte
+/// comparison work, not temporary string construction or refcount traffic.
+pub fn strDropPrefixCaselessAscii(
+    string: RocStr,
+    prefix: RocStr,
+    roc_ops: *RocOps,
+) DropPrefixCaselessAsciiResult {
+    const string_len = string.len();
+    const prefix_len = prefix.len();
+
+    if (prefix_len > string_len) {
+        return .{ .after = RocStr.empty(), .found = false };
+    }
+
+    if (!bytesCaselessAsciiEqualFast(string.asU8ptr(), prefix.asU8ptr(), prefix_len)) {
+        return .{ .after = RocStr.empty(), .found = false };
+    }
+
+    const after_len = string_len - prefix_len;
+    string.incref(1, roc_ops);
+    return .{
+        .after = substringUnsafe(string, prefix_len, after_len, roc_ops),
+        .found = true,
+    };
 }
 
 /// Str.drop_suffix - Returns string with suffix removed, or original if no match.
@@ -1536,7 +1777,7 @@ pub fn strTrim(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
     } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -1602,7 +1843,7 @@ pub fn strTrimStart(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
     } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -1668,7 +1909,7 @@ pub fn strTrimEnd(
     if (string.isSmallStr()) {
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
-        return RocStr.init(string.asU8ptr(), new_len, roc_ops);
+        return smallStringFromPtr(string.asU8ptr(), new_len);
     } else if (update_mode == .InPlace or string.isUnique()) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
@@ -1797,7 +2038,163 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
         return true;
     }
 
-    return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
+    const self_len = self.len();
+    if (self_len != other.len()) return false;
+
+    if (self_len > 0 and self_len < @sizeOf(u64) and self.isSmallStr() and other.isSmallStr()) {
+        const left_word = std.mem.readInt(u64, self.asU8ptr()[0..@sizeOf(u64)], .little);
+        const right_word = std.mem.readInt(u64, other.asU8ptr()[0..@sizeOf(u64)], .little);
+        const active = (@as(u64, 1) << @intCast(self_len * 8)) - 1;
+        return wordCaselessAsciiEqualMasked(left_word, right_word, active);
+    }
+
+    return bytesCaselessAsciiEqualFast(self.asU8ptr(), other.asU8ptr(), self_len);
+}
+
+inline fn bytesCaselessAsciiEqualFast(left: [*]const u8, right: [*]const u8, len: usize) bool {
+    const word_size = @sizeOf(u64);
+
+    var index: usize = 0;
+    while (index + word_size <= len) : (index += word_size) {
+        const left_word = std.mem.readInt(u64, left[index..][0..word_size], .little);
+        const right_word = std.mem.readInt(u64, right[index..][0..word_size], .little);
+        if (left_word != right_word and !wordCaselessAsciiEqual(left_word, right_word)) return false;
+    }
+
+    const tail_len = len - index;
+    if (tail_len != 0) {
+        const active = (@as(u64, 1) << @intCast(tail_len * 8)) - 1;
+        const left_word = readTailU64(left, len, index, tail_len);
+        const right_word = readTailU64(right, len, index, tail_len);
+        return wordCaselessAsciiEqualMasked(left_word, right_word, active);
+    }
+
+    return true;
+}
+
+inline fn wordCaselessAsciiEqual(left: u64, right: u64) bool {
+    return wordCaselessAsciiEqualMasked(left, right, std.math.maxInt(u64));
+}
+
+// SWAR = SIMD Within A Register. These routines compare eight independent byte
+// lanes inside one u64. This is deliberately written in terms of fixed u64
+// masks and shifts, not slice loops or higher-level ASCII helpers, because this
+// is on a hot path for record-field dispatch in parsers such as HTTP headers.
+//
+// The machine shape we want is:
+//   1. one unaligned 8-byte load from each string,
+//   2. one xor to find differing bytes,
+//   3. a small fixed sequence of integer mask operations,
+//   4. no per-byte branch unless we are in the rare short non-small tail path.
+//
+// ASCII case-insensitive equality per byte is:
+//   - equal bytes are always equal, even for punctuation, underscores, UTF-8
+//     continuation bytes, or bytes with the high bit set;
+//   - differing bytes must differ by exactly 0x20;
+//   - bytes that differ by 0x20 are equal only when they are ASCII letters.
+//
+// This is intentionally narrower than "can I lowercase both whole words with
+// bit 0x20?" We do not need to prove that exact-equal bytes are lowercase-safe.
+// That matters for field names such as "x_auth_token" and for UTF-8 bytes that
+// are identical on both sides.
+const SWAR_ONES: u64 = 0x0101010101010101;
+const SWAR_LOW7: u64 = 0x7f7f7f7f7f7f7f7f;
+const SWAR_HIGHS: u64 = 0x8080808080808080;
+const SWAR_ASCII_CASE: u64 = 0x2020202020202020;
+
+inline fn swarSplat(byte: u8) u64 {
+    return @as(u64, byte) * SWAR_ONES;
+}
+
+// Return 0x80 in each byte lane where that lane is zero, else 0x00.
+//
+// This is the classic has-zero-byte trick, expressed so the optimizer sees a
+// fixed u64 dataflow. Masking with SWAR_LOW7 keeps carries inside each 7-bit
+// lane from depending on the input high bit; OR-ing the original word back in
+// makes non-ASCII bytes non-zero for this predicate.
+inline fn swarZeroHigh(word: u64) u64 {
+    return ~(((word & SWAR_LOW7) + SWAR_LOW7) | word) & SWAR_HIGHS;
+}
+
+// Return 0x80 in each byte lane equal to `byte`, else 0x00.
+inline fn swarByteEq(word: u64, byte: u8) u64 {
+    return swarZeroHigh(word ^ swarSplat(byte));
+}
+
+// Return 0x80 in each ASCII byte lane >= `lo`, else 0x00. High-bit bytes are
+// always rejected. This is used only after the xor has proved that a lane differs
+// by 0x20, so the only remaining question is whether that lane is a letter.
+inline fn swarByteGeAscii(word: u64, lo: u8) u64 {
+    return ((word & SWAR_LOW7) + swarSplat(0x80 - lo)) & ~word & SWAR_HIGHS;
+}
+
+// Return 0x80 in each ASCII byte lane <= `hi`, else 0x00. High-bit bytes are
+// always rejected.
+inline fn swarByteLeAscii(word: u64, hi: u8) u64 {
+    return ~(((word & SWAR_LOW7) + swarSplat(0x7f - hi)) | word) & SWAR_HIGHS;
+}
+
+inline fn swarByteInAsciiRange(word: u64, lo: u8, hi: u8) u64 {
+    return swarByteGeAscii(word, lo) & swarByteLeAscii(word, hi);
+}
+
+inline fn wordCaselessAsciiEqualMasked(left: u64, right: u64, active: u64) bool {
+    // `active` has 0xff in the byte lanes that belong to the logical string and
+    // 0x00 in ignored lanes. Full 8-byte chunks pass all ones; tails pass a low
+    // byte mask. Masking the xor here means inactive tail bytes behave exactly
+    // like equal bytes and disappear from all later predicates.
+    const diff = (left ^ right) & active;
+    if (diff == 0) return true;
+
+    // Convert the active byte mask into one high bit per active lane. All SWAR
+    // predicates below produce the same shape: 0x80 for "this lane passed."
+    const active_highs = active & SWAR_HIGHS;
+
+    // First prove that every active byte lane is either identical or differs by
+    // exactly the ASCII case bit. If any lane differs by another amount, the
+    // words cannot be caseless-ASCII-equal. This rejects cases such as "_" vs
+    // "\x7f" before any alphabetic range test can accidentally accept them.
+    const exact_bytes = swarZeroHigh(diff) & active_highs;
+    const case_diff_bytes = swarByteEq(diff, 0x20) & active_highs;
+    if ((exact_bytes | case_diff_bytes) != active_highs) return false;
+
+    // Only lanes that differ by 0x20 need to be letters. Exact-equal lanes can
+    // be anything at all, including underscores, dashes, digits, punctuation, or
+    // non-ASCII UTF-8 bytes.
+    //
+    // It is enough to test `left | 0x20` because a byte pair whose xor is 0x20
+    // has the same lowercase value on either side if it is an ASCII letter.
+    const left_lower = left | SWAR_ASCII_CASE;
+    const left_alpha = swarByteInAsciiRange(left_lower, 'a', 'z') & active_highs;
+    return (case_diff_bytes & ~left_alpha) == 0;
+}
+
+inline fn readTailU64(bytes: [*]const u8, len: usize, index: usize, tail_len: usize) u64 {
+    // For any string with at least one full u64, load the final u64 ending at
+    // `len` and shift the requested tail down to byte lane 0. This avoids a
+    // byte-building loop without reading past the logical end of an owned string
+    // or seamless slice.
+    if (len >= @sizeOf(u64)) {
+        const load_index = len - @sizeOf(u64);
+        const shift = (index - load_index) * 8;
+        const word = std.mem.readInt(u64, bytes[load_index..][0..@sizeOf(u64)], .little);
+        return word >> @intCast(shift);
+    }
+
+    // The only remaining case is a non-small string/slice shorter than 8 bytes.
+    // A short seamless slice may sit at the end of its allocation, and RocStr
+    // does not store the original allocation capacity for string slices, so do
+    // not over-read here.
+    return readTailU64ZeroPadded(bytes, index, tail_len);
+}
+
+inline fn readTailU64ZeroPadded(bytes: [*]const u8, index: usize, tail_len: usize) u64 {
+    var word: u64 = 0;
+    var i: usize = 0;
+    while (i < tail_len) : (i += 1) {
+        word |= @as(u64, bytes[index + i]) << @intCast(i * 8);
+    }
+    return word;
 }
 
 /// A backwards version of Utf8View from std.unicode
@@ -2064,6 +2461,365 @@ test "RocStr.eq: small, not equal after first word" {
     }
 
     try std.testing.expect(!roc_str1.eql(roc_str2));
+}
+
+test "RocStr.eq: small, exact u64 chunk" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str1 = RocStr.init("abcdefgh", 8, test_env.getOps());
+    const roc_str2 = RocStr.init("abcdefgh", 8, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 8), roc_str1.len());
+    try std.testing.expect(roc_str1.eql(roc_str2));
+}
+
+test "RocStr.eq: small, masked tail detects last byte difference" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const equal_text = if (SMALL_STR_MAX_LENGTH >= 23)
+        "abcdefghijklmnopqrstuvw"
+    else
+        "abcdefghijk";
+    const different_text = if (SMALL_STR_MAX_LENGTH >= 23)
+        "abcdefghijklmnopqrstuvX"
+    else
+        "abcdefghijX";
+
+    const roc_str1 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
+    const roc_str2 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
+    const roc_str3 = RocStr.init(different_text, different_text.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.isSmallStr());
+    try std.testing.expect(roc_str2.isSmallStr());
+    try std.testing.expect(roc_str3.isSmallStr());
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: all small lengths compare by bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var left_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+    var right_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+
+    for (0..SMALL_STR_MAX_LENGTH) |i| {
+        left_buf[i] = @as(u8, @intCast('a' + (i % 26)));
+        right_buf[i] = left_buf[i];
+    }
+
+    for (0..SMALL_STR_MAX_LENGTH + 1) |len| {
+        const equal_left = RocStr.init(&left_buf, len, test_env.getOps());
+        const equal_right = RocStr.init(&right_buf, len, test_env.getOps());
+
+        try std.testing.expect(equal_left.isSmallStr());
+        try std.testing.expect(equal_right.isSmallStr());
+        try std.testing.expect(equal_left.eql(equal_right));
+
+        equal_left.decref(test_env.getOps());
+        equal_right.decref(test_env.getOps());
+
+        if (len == 0) continue;
+
+        right_buf[len - 1] ^= 1;
+        const unequal_left = RocStr.init(&left_buf, len, test_env.getOps());
+        const unequal_right = RocStr.init(&right_buf, len, test_env.getOps());
+
+        try std.testing.expect(unequal_left.isSmallStr());
+        try std.testing.expect(unequal_right.isSmallStr());
+        try std.testing.expect(!unequal_left.eql(unequal_right));
+
+        unequal_left.decref(test_env.getOps());
+        unequal_right.decref(test_env.getOps());
+        right_buf[len - 1] = left_buf[len - 1];
+    }
+}
+
+fn packStaticSmallForTest(text: []const u8) [3]u64 {
+    var words = [3]u64{ 0, 0, 0 };
+    for (text, 0..) |byte, index| {
+        words[index / @sizeOf(u64)] |= @as(u64, byte) << @intCast((index % @sizeOf(u64)) * 8);
+    }
+    return words;
+}
+
+test "RocStr.eqStaticSmall: all static lengths compare by bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var buf: [24]u8 = undefined;
+    for (&buf, 0..) |*byte, index| {
+        byte.* = @as(u8, @intCast('A' + (index % 26)));
+    }
+
+    for (0..25) |len| {
+        const text = buf[0..len];
+        const words = packStaticSmallForTest(text);
+        const roc_str = RocStr.init(text.ptr, text.len, test_env.getOps());
+        defer roc_str.decref(test_env.getOps());
+
+        try std.testing.expect(roc_str.eqlStaticSmall(len, words[0], words[1], words[2]));
+
+        if (len > 0) {
+            var changed = buf;
+            changed[len - 1] ^= 1;
+            const changed_words = packStaticSmallForTest(changed[0..len]);
+            try std.testing.expect(!roc_str.eqlStaticSmall(len, changed_words[0], changed_words[1], changed_words[2]));
+        }
+    }
+}
+
+test "RocStr.eqStaticSmall: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "abcdefghijklmnopqrstuvxy";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 2, 2, test_env.getOps());
+
+    const words = packStaticSmallForTest("xy");
+    const mismatch = packStaticSmallForTest("xz");
+
+    try std.testing.expect(slice.eqlStaticSmall(2, words[0], words[1], words[2]));
+    try std.testing.expect(!slice.eqlStaticSmall(2, mismatch[0], mismatch[1], mismatch[2]));
+}
+
+test "RocStr.eqStaticSmall: rejects long static metadata" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "abcdefghijklmnopqrstuvwx";
+    const roc_str = RocStr.init(text, text.len, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    try std.testing.expect(!roc_str.eqlStaticSmall(25, 0, 0, 0));
+}
+
+test "RocStr.staticSmallWordEq: compares selected full lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "cacheControlUserIdValue";
+    const roc_str = RocStr.init(text, text.len, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest(text);
+    try std.testing.expect(roc_str.staticSmallWordEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordEq(8, 8, words[1]));
+    try std.testing.expect(roc_str.staticSmallWordEq(16, text.len - 16, words[2]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(8, 8, words[1] ^ 0x01));
+}
+
+test "RocStr.staticSmallWordEq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "abcdefghijklmnopqrstuvxyz";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 3, 3, test_env.getOps());
+    const words = packStaticSmallForTest("xyz");
+    const mismatch = packStaticSmallForTest("xyZ");
+
+    try std.testing.expect(slice.staticSmallWordEq(0, 3, words[0]));
+    try std.testing.expect(!slice.staticSmallWordEq(0, 3, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordEq: rejects out-of-range lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.init("abc", 3, test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("abc");
+    try std.testing.expect(!roc_str.staticSmallWordEq(0, 9, words[0]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(4, 1, words[0]));
+    try std.testing.expect(!roc_str.staticSmallWordEq(2, 2, words[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: compares selected lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("content-length");
+    const mismatch = packStaticSmallForTest("lengxh");
+
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(8, 6, words[1]));
+    try std.testing.expect(!roc_str.staticSmallWordCaselessEq(8, 6, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: compares Cache-Control tail lane" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("Cache-Control", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("cache-control");
+    const mismatch = packStaticSmallForTest("contrxl");
+
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(8, 5, words[1]));
+    try std.testing.expect(!roc_str.staticSmallWordCaselessEq(8, 5, mismatch[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: exact ineligible bytes and unicode lanes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const roc_str = RocStr.fromSlice("A_\x7Fé-Z9", test_env.getOps());
+    defer roc_str.decref(test_env.getOps());
+
+    const words = packStaticSmallForTest("a_\x7Fé-z9");
+    try std.testing.expectEqual(@as(usize, 8), roc_str.len());
+    try std.testing.expect(roc_str.staticSmallWordCaselessEq(0, 8, words[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: rejects punctuation case-bit pairs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const leading = RocStr.fromSlice("_abc", test_env.getOps());
+    defer leading.decref(test_env.getOps());
+    try std.testing.expect(!leading.staticSmallWordCaselessEq(0, 4, packStaticSmallForTest("\x7FABC")[0]));
+
+    const trailing = RocStr.fromSlice("abc_", test_env.getOps());
+    defer trailing.decref(test_env.getOps());
+    try std.testing.expect(!trailing.staticSmallWordCaselessEq(0, 4, packStaticSmallForTest("ABC\x7F")[0]));
+}
+
+test "RocStr.staticSmallWordCaselessEq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing_text = "012345678901234567890123456789aBc";
+    var backing = RocStr.init(backing_text, backing_text.len, test_env.getOps());
+    defer backing.decref(test_env.getOps());
+
+    const slice = substringUnsafe(backing, backing_text.len - 3, 3, test_env.getOps());
+    const words = packStaticSmallForTest("AbC");
+    const mismatch = packStaticSmallForTest("AbD");
+
+    try std.testing.expect(slice.staticSmallWordCaselessEq(0, 3, words[0]));
+    try std.testing.expect(!slice.staticSmallWordCaselessEq(0, 3, mismatch[0]));
+}
+
+test "RocStr.eq: embedded nul bytes use byte equality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const text = "ab\x00cd";
+    const same = "ab\x00cd";
+    const different = "ab\x00ce";
+
+    const roc_str1 = RocStr.init(text, text.len, test_env.getOps());
+    const roc_str2 = RocStr.init(same, same.len, test_env.getOps());
+    const roc_str3 = RocStr.init(different, different.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: utf8 content uses exact byte equality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const composed = "caf\xc3\xa9";
+    const same = "caf\xc3\xa9";
+    const decomposed = "cafe\xcc\x81";
+
+    const roc_str1 = RocStr.init(composed, composed.len, test_env.getOps());
+    const roc_str2 = RocStr.init(same, same.len, test_env.getOps());
+    const roc_str3 = RocStr.init(decomposed, decomposed.len, test_env.getOps());
+
+    defer {
+        roc_str1.decref(test_env.getOps());
+        roc_str2.decref(test_env.getOps());
+        roc_str3.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(roc_str1.eql(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "RocStr.eq: boundary between small and heap strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var small_buf: [SMALL_STR_MAX_LENGTH]u8 = undefined;
+    var heap_buf: [SMALL_STRING_SIZE]u8 = undefined;
+
+    for (&small_buf, 0..) |*byte, i| {
+        byte.* = @as(u8, @intCast('a' + (i % 26)));
+    }
+    for (&heap_buf, 0..) |*byte, i| {
+        byte.* = @as(u8, @intCast('a' + (i % 26)));
+    }
+
+    const small1 = RocStr.init(&small_buf, small_buf.len, test_env.getOps());
+    const small2 = RocStr.init(&small_buf, small_buf.len, test_env.getOps());
+    const heap1 = RocStr.init(&heap_buf, heap_buf.len, test_env.getOps());
+    const heap2 = RocStr.init(&heap_buf, heap_buf.len, test_env.getOps());
+
+    defer {
+        small1.decref(test_env.getOps());
+        small2.decref(test_env.getOps());
+        heap1.decref(test_env.getOps());
+        heap2.decref(test_env.getOps());
+    }
+
+    try std.testing.expect(small1.isSmallStr());
+    try std.testing.expect(!heap1.isSmallStr());
+    try std.testing.expect(small1.eql(small2));
+    try std.testing.expect(heap1.eql(heap2));
+    try std.testing.expect(!small1.eql(heap1));
+}
+
+test "RocStr.eq: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("012345678901234567890123456789abc", test_env.getOps());
+    const str1 = substringUnsafeC(source, source.len() - 3, 3, test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("abc", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const str3 = RocStr.fromSlice("abX", test_env.getOps());
+    defer str3.decref(test_env.getOps());
+
+    try std.testing.expect(str1.isSeamlessSlice());
+    try std.testing.expect(str1.eql(str2));
+    try std.testing.expect(!str1.eql(str3));
 }
 
 test "RocStr.eq: large, equal" {
@@ -3424,6 +4180,225 @@ test "caselessAsciiEquals: seamless slice" {
     try std.testing.expect(are_equal);
 }
 
+test "caselessAsciiEquals: short seamless slice at allocation end" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("012345678901234567890123456789aBc", test_env.getOps());
+    const str1 = substringUnsafeC(source, source.len() - 3, 3, test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    try std.testing.expect(str1.isSeamlessSlice());
+
+    const str2 = RocStr.fromSlice("AbC", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try std.testing.expect(are_equal);
+}
+
+test "caselessAsciiEquals: punctuation with ascii case bit is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("@[\\]^_", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("`{|}~\x7F", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try std.testing.expect(!are_equal);
+}
+
+test "caselessAsciiEquals: exact u64 chunk with alnum dash" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("AbCd-123", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("aBcD-123", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: masked tail with alnum dash" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("content-length", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 14), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: different lengths are not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("Content-Length", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("content-lengths", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: underscore exact byte still matches with ascii case folding" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("x_auth_token", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("X_AUTH_TOKEN", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: exact ineligible bytes do not block ascii case folding" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("A_\x7Fé-Z9", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("a_\x7Fé-z9", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: underscore with ascii case-bit pair is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("_abc", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("\x7FABC", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: trailing underscore with ascii case-bit pair is not equal" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("abc_", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("ABC\x7F", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: unicode fallback inside u64 chunk" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("café-AB", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("CAFé-ab", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(strCaselessAsciiEquals(str1, str2));
+}
+
+test "caselessAsciiEquals: unicode capitalization still differs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str1 = RocStr.fromSlice("café-AB", test_env.getOps());
+    defer str1.decref(test_env.getOps());
+
+    const str2 = RocStr.fromSlice("CAFÉ-ab", test_env.getOps());
+    defer str2.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 8), str1.len());
+    try std.testing.expect(!strCaselessAsciiEquals(str1, str2));
+}
+
+test "dropPrefixCaselessAscii: small string success does not allocate" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("Cache-Control: 0", test_env.getOps());
+    const prefix = RocStr.fromSlice("cache-control", test_env.getOps());
+
+    const result = strDropPrefixCaselessAscii(source, prefix, test_env.getOps());
+
+    try std.testing.expect(result.found);
+    try std.testing.expect(result.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: miss does not retain or allocate" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("Cache-Control: 0", test_env.getOps());
+    const prefix = RocStr.fromSlice("content-length", test_env.getOps());
+
+    const result = strDropPrefixCaselessAscii(source, prefix, test_env.getOps());
+
+    try std.testing.expect(!result.found);
+    try std.testing.expect(result.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: non-ascii bytes match exactly only" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("café: 0", test_env.getOps());
+    const same_accent = RocStr.fromSlice("CAFé", test_env.getOps());
+    const different_accent = RocStr.fromSlice("CAFÉ", test_env.getOps());
+
+    const found = strDropPrefixCaselessAscii(source, same_accent, test_env.getOps());
+    const not_found = strDropPrefixCaselessAscii(source, different_accent, test_env.getOps());
+
+    try std.testing.expect(found.found);
+    try std.testing.expect(found.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expect(!not_found.found);
+    try std.testing.expect(not_found.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "dropPrefixCaselessAscii: punctuation case-bit pairs do not match" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const source = RocStr.fromSlice("X_Auth: 0", test_env.getOps());
+    const exact_punctuation = RocStr.fromSlice("x_auth", test_env.getOps());
+    const case_bit_punctuation = RocStr.fromSlice("x\x7Fauth", test_env.getOps());
+
+    const found = strDropPrefixCaselessAscii(source, exact_punctuation, test_env.getOps());
+    const not_found = strDropPrefixCaselessAscii(source, case_bit_punctuation, test_env.getOps());
+
+    try std.testing.expect(found.found);
+    try std.testing.expect(found.after.eql(RocStr.fromSlice(": 0", test_env.getOps())));
+    try std.testing.expect(!not_found.found);
+    try std.testing.expect(not_found.after.eql(RocStr.empty()));
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
 test "strTrim: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -3530,6 +4505,7 @@ test "strTrim: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "strTrimStart: empty" {
@@ -3617,6 +4593,7 @@ test "strTrimStart: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "strTrimEnd: empty" {
@@ -3701,6 +4678,7 @@ test "strTrimEnd: small to small" {
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "ReverseUtf8View: hello world" {

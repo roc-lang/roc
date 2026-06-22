@@ -6,6 +6,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Roc's minimum supported macOS deployment target.
+///
+/// Keep this in one place because LLVM triples, Mach-O linker metadata, Mach-O
+/// object metadata, and Zig-built platform host archives must all agree. If
+/// these drift, `ld64.lld` warns when a host archive member advertises a newer
+/// minimum OS than the final executable.
+pub const macos_deployment = struct {
+    pub const semantic_version: std.SemanticVersion = .{ .major = 11, .minor = 0, .patch = 0 };
+    pub const linker_version = "11.0";
+    pub const llvm_version = "11.0.0";
+    pub const macho_encoded_version: u32 = 0x000b0000;
+    pub const query_os_version: std.Target.Query.OsVersion = .{ .semver = semantic_version };
+
+    pub fn query(arch: std.Target.Cpu.Arch) std.Target.Query {
+        return .{
+            .cpu_arch = arch,
+            .os_tag = .macos,
+            .os_version_min = query_os_version,
+            .abi = .none,
+        };
+    }
+};
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 pub const RocTarget = enum {

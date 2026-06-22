@@ -488,6 +488,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_builder,
+    /// Direct nominal record construction: Type.{ field: value }
+    /// * lhs - mapper/type expression
+    /// * rhs - backing record expression
+    nominal_record,
     /// A block of statements
     /// Main token is newline preceding the block
     /// * lhs - first statement node
@@ -498,6 +502,14 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     for_expr,
+    /// A break expression.
+    /// * lhs - ignored
+    /// * rhs - ignored
+    break_expr,
+    /// A return expression.
+    /// * lhs - node index for expr
+    /// * rhs - ignored
+    return_expr,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -529,7 +541,7 @@ pub const Tag = enum {
     // Target section nodes
 
     /// A targets section in a platform header
-    /// * main_token - inputs string token (or 0 if no inputs directive)
+    /// * main_token - inputs_dir string token (or 0 if no inputs_dir directive)
     /// * lhs - start of TargetEntry span
     /// * rhs - length of TargetEntry span
     targets_section,

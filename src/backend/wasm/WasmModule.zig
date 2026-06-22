@@ -1227,6 +1227,7 @@ pub const BuiltinSymbols = struct {
     str_release_excess_capacity: u32, // roc_builtins_str_release_excess_capacity
     str_with_capacity: u32, // roc_builtins_str_with_capacity
     str_drop_prefix: u32, // roc_builtins_str_drop_prefix
+    str_drop_prefix_caseless_ascii: u32, // roc_builtins_str_drop_prefix_caseless_ascii
     str_drop_suffix: u32, // roc_builtins_str_drop_suffix
     str_with_ascii_lowercased: u32, // roc_builtins_str_with_ascii_lowercased
     str_with_ascii_uppercased: u32, // roc_builtins_str_with_ascii_uppercased
@@ -1284,6 +1285,7 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_str_release_excess_capacity", "str_release_excess_capacity" },
         .{ "roc_builtins_str_with_capacity", "str_with_capacity" },
         .{ "roc_builtins_str_drop_prefix", "str_drop_prefix" },
+        .{ "roc_builtins_str_drop_prefix_caseless_ascii", "str_drop_prefix_caseless_ascii" },
         .{ "roc_builtins_str_drop_suffix", "str_drop_suffix" },
         .{ "roc_builtins_str_with_ascii_lowercased", "str_with_ascii_lowercased" },
         .{ "roc_builtins_str_with_ascii_uppercased", "str_with_ascii_uppercased" },
