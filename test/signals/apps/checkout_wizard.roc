@@ -143,7 +143,7 @@ main = |_| {
 																Html.paragraph("Cart editor"),
 																Html.button("Use team plan", lines.on_unit(|_| team_lines)),
 																Html.button("Use basic plan", lines.on_unit(|_| basic_lines)),
-																Ui.each(lines.signal(), |label| label, render_line),
+																Ui.each(lines.signal(), |label| label, Ui.str_key_hash, render_line),
 															],
 														)
 													delivery_panel =

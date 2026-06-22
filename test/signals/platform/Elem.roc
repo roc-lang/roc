@@ -10,8 +10,8 @@ import HostValue exposing [HostValue]
 ## - `When`: a conditional with two arm subtrees; the live arm is its own scope
 ##   (`Branch` step). Advances the scope ordinal (its site ordinal).
 ## - `Each`: a keyed list; each row is its own scope keyed by the typed key
-##   payload, with a boxed key `is_eq` thunk. The row thunk receives the host-owned
-##   key and item value. Advances the scope ordinal.
+##   payload, with boxed key hash and `is_eq` thunks. The row thunk receives the
+##   host-owned key and item value. Advances the scope ordinal.
 ## - `Component`: introduces a reusable local scope for helper-owned state.
 ##   Advances the parent scope ordinal and collects the child under a component
 ##   scope whose internal ordinals are local to the component instance.
@@ -31,6 +31,7 @@ Elem := [
 		{
 			items : Box(Node.SignalExpr),
 			items_to_values : Box((HostValue -> List(HostValue))),
+			key_hash : Box((HostValue -> U64)),
 			key_of : Box((HostValue -> HostValue)),
 			key_eq : Box((HostValue, HostValue -> Bool)),
 			key_drop : Box((HostValue -> {})),

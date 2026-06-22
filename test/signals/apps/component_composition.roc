@@ -85,7 +85,7 @@ main = |_| {
 									Html.button("Toggle Beta", show_beta.on_unit(|value| !value)),
 								],
 							),
-							Ui.each(visible, |label| label, render_component),
+							Ui.each(visible, |label| label, Ui.str_key_hash, render_component),
 						],
 					)
 				},

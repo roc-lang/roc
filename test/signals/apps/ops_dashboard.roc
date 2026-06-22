@@ -228,7 +228,7 @@ main = |_| {
 																		[],
 																		[
 																			Html.button("Clear alerts", alerts_cleared.on_unit(set_true)),
-																			Ui.each(alerts, |label| label, render_alert),
+																			Ui.each(alerts, |label| label, Ui.str_key_hash, render_alert),
 																		],
 																	),
 																],

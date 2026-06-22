@@ -121,7 +121,7 @@ main = |_| {
 										"Doing",
 										[],
 										[
-											Ui.each(visible_tasks, |label| label, render_task),
+											Ui.each(visible_tasks, |label| label, Ui.str_key_hash, render_task),
 										],
 									),
 								],

@@ -11,6 +11,15 @@ import Signal exposing [Signal]
 ## wherever it is mounted.
 Ui := [].{
 
+	str_key_hash : Str -> U64
+	str_key_hash = |value| {
+		List.fold_with_index(
+			Str.to_utf8(value),
+			Str.count_utf8_bytes(value),
+			|hash, byte, index| U64.bitwise_xor(U64.shift_left_by(hash, 5), U8.to_u64(byte) + index),
+		)
+	}
+
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -177,17 +186,17 @@ Ui := [].{
 		)
 	}
 
-	## Keyed list. `key_of` extracts a typed, stable key per item; `row` renders a
-	## row given that key and a typed signal for the item. Row identity is the key
-	## (compared by the key type's `is_eq`), so per-row local state survives
-	## reorder/insert/delete.
+	## Keyed list. `key_of` extracts a typed, stable key per item; `key_hash`
+	## produces the host's bucket key; `row` renders a row given that key and a
+	## typed signal for the item. Row identity is the key, so per-row local state
+	## survives reorder/insert/delete.
 	each :
-		Signal(List(item)), (item -> k), (k, Signal(item) -> Elem) -> Elem
+		Signal(List(item)), (item -> k), (k -> U64), (k, Signal(item) -> Elem) -> Elem
 			where [
 				item.is_eq : item, item -> Bool,
 				k.is_eq : k, k -> Bool,
 			]
-	each = |items, key_of, row| {
+	each = |items, key_of, key_hash, row| {
 		items_tag = items.tag
 		item_tag = HostValue.new_tag({})
 		key_tag = HostValue.new_tag({})
@@ -211,6 +220,12 @@ Ui := [].{
 			right_k : k
 			right_k = Box.unbox(HostValue.get_tagged(right_hv, key_tag))
 			left_k.is_eq(right_k)
+		}
+		key_hash_hv : HostValue -> U64
+		key_hash_hv = |key_hv| {
+			key : k
+			key = Box.unbox(HostValue.get_tagged(key_hv, key_tag))
+			key_hash(key)
 		}
 		key_drop_hv : HostValue -> {}
 		key_drop_hv = |key_hv| {
@@ -258,6 +273,7 @@ Ui := [].{
 			{
 				items: Signal.to_expr(items),
 				items_to_values: Box.box(items_to_values),
+				key_hash: Box.box(key_hash_hv),
 				key_of: Box.box(key_of_hv),
 				key_eq: Box.box(key_eq_hv),
 				key_drop: Box.box(key_drop_hv),

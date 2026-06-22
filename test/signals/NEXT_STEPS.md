@@ -42,6 +42,13 @@ history.
 - Non-structural dirty updates patch only matching text/value/checked/disabled
   sinks. Structural dirty updates patch DOM incrementally, reuse/move surviving
   keyed row DOM, and patch event bindings by changed slot.
+- `Ui.each` currently carries an explicit `key -> U64` hash thunk because Roc
+  user code does not expose a public `Hasher.finish`/builtin hash finalizer.
+  The host buckets incoming and existing row keys by that explicit hash, uses
+  typed `is_eq` only inside matching hash buckets, exposes `each_key_compares`,
+  and the current specs assert linear probe counts for keyed churn. The target
+  API remains a `key.hash`/`Hasher` constraint once Roc exposes the needed
+  finalizer.
 - Changed `Ui.when` and `Ui.each` outputs retain the host-owned data needed to
   collect only affected branch/row scopes. Dirty structural work splices those
   replacement descriptors into retained active descriptors without re-entering
@@ -91,16 +98,20 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 - **Counter + assertion:** add `stream_nodes_scanned`; assert it is bounded by
   the changed set on a single-row update in the large-N app.
 
-### G-F3 — Key-hash-indexed `Ui.each` diff (High)
+### G-F3 — Key-hash-indexed `Ui.each` diff (High, host/platform slice done)
 
-- **Problem:** keyed diff matches by linear `is_eq` scan (O(L²)), and the
-  duplicate-key check is a second O(L²) pass; the implemented `Ui.each` API does
-  not even carry the `key.hash` constraint `DESIGN.md` specifies.
-- **Fix:** add the `key.hash`/`Hasher` constraint to the `Ui.each` API (an API
-  addition, not a host workaround) and build a `HashMap(key → row scope id)` per
-  each site for both the diff and the duplicate check.
-- **Counter + assertion:** add `each_key_compares`; assert it tracks L (not L²)
-  under churn in the large-N app.
+- **Status:** keyed diff no longer scans linearly by `is_eq`. The platform now
+  passes an explicit `key -> U64` thunk, and the host builds hash buckets for
+  incoming keys and existing row scopes before running typed equality inside a
+  bucket.
+- **Counter + assertion:** `each_key_compares` is exposed in specs and the
+  benchmark CSV. Host coverage asserts exact `3 * L` probes for a 64-row
+  reorder with distinct hashes; `identity_stress` asserts the counter for
+  reorder/insert/filter churn.
+- **Remaining API cleanup:** replace the explicit hash argument with the target
+  `key.hash`/`Hasher` constraint after Roc exposes a public hash finalizer such
+  as `Hasher.finish : Hasher -> U64`. The generated large-N proof remains part
+  of G-F6.
 
 ### G-F4 — Moves-only reorder (High)
 

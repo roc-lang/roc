@@ -167,7 +167,7 @@ main = |_| {
 														"Rows active",
 														[],
 														[
-															Ui.each(rows, |label| label, render_row),
+															Ui.each(rows, |label| label, Ui.str_key_hash, render_row),
 														],
 													)
 												},
