@@ -1017,6 +1017,7 @@ pub fn enableTable(self: *Self) void {
 
 /// Add a function to the table and return its table index.
 pub fn addTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
+    self.has_table = true;
     const table_idx: u32 = @intCast(self.table_func_indices.items.len);
     try self.table_func_indices.append(self.allocator, func_idx);
     return table_idx;
@@ -1814,15 +1815,116 @@ fn findTableIndex(self: *const Self, func_idx: u32) ?u32 {
     return null;
 }
 
-fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLinking.RelocationEntry, patch_offset: u32) void {
+const RelocationTarget = enum {
+    code,
+    data,
+};
+
+fn functionCodeOffset(self: *const Self, sym: WasmLinking.SymInfo) u32 {
+    if (sym.kind != .function or sym.isUndefined()) unreachable;
+
+    const first_real_defined = self.importCount() + self.dead_import_dummy_count;
+    if (sym.index < first_real_defined) unreachable;
+
+    const offset_index = sym.index - first_real_defined;
+    if (offset_index >= self.function_offsets.items.len) unreachable;
+
+    return self.function_offsets.items[offset_index];
+}
+
+fn writeRawU32Relocation(target_bytes: []u8, patch_offset: u32, value: u32) void {
+    const o: usize = @intCast(patch_offset);
+    std.mem.writeInt(u32, target_bytes[o..][0..4], value, .little);
+}
+
+fn patchFunctionOffsetCodeRelocation(target_bytes: []u8, patch_offset: u32, value: u32) void {
+    const o: usize = @intCast(patch_offset);
+    if (o == 0) unreachable;
+
+    switch (target_bytes[o - 1]) {
+        Op.global_get => {
+            target_bytes[o - 1] = Op.i32_const;
+            overwritePaddedU32(target_bytes, patch_offset, value);
+        },
+        Op.i32_const => overwritePaddedU32(target_bytes, patch_offset, value),
+        else => unreachable,
+    }
+}
+
+fn patchFunctionIndexCodeRelocation(
+    self: *Self,
+    target_bytes: []u8,
+    patch_offset: u32,
+    sym: WasmLinking.SymInfo,
+) Allocator.Error!void {
+    if (sym.kind != .function) unreachable;
+
+    const o: usize = @intCast(patch_offset);
+    if (o == 0) unreachable;
+
+    switch (target_bytes[o - 1]) {
+        Op.call => overwritePaddedU32(target_bytes, patch_offset, sym.index),
+        Op.global_get => {
+            target_bytes[o - 1] = Op.i32_const;
+            const table_idx = try self.ensureTableElement(sym.index);
+            overwritePaddedU32(target_bytes, patch_offset, table_idx);
+        },
+        Op.i32_const => {
+            const table_idx = try self.ensureTableElement(sym.index);
+            overwritePaddedU32(target_bytes, patch_offset, table_idx);
+        },
+        else => unreachable,
+    }
+}
+
+fn patchGlobalIndexCodeRelocation(
+    self: *Self,
+    target_bytes: []u8,
+    patch_offset: u32,
+    sym: WasmLinking.SymInfo,
+) Allocator.Error!void {
+    switch (sym.kind) {
+        .global => overwritePaddedU32(target_bytes, patch_offset, sym.index),
+        .function => {
+            const o: usize = @intCast(patch_offset);
+            if (o == 0) unreachable;
+            if (target_bytes[o - 1] != Op.global_get) unreachable;
+
+            target_bytes[o - 1] = Op.i32_const;
+            const table_idx = try self.ensureTableElement(sym.index);
+            overwritePaddedU32(target_bytes, patch_offset, table_idx);
+        },
+        else => unreachable,
+    }
+}
+
+fn patchResolvedRelocation(
+    self: *Self,
+    target_bytes: []u8,
+    entry: WasmLinking.RelocationEntry,
+    patch_offset: u32,
+    target: RelocationTarget,
+) Allocator.Error!void {
     switch (entry) {
         .index => |idx| {
             switch (idx.type_id) {
                 .type_index_leb => {
                     overwritePaddedU32(target_bytes, patch_offset, idx.symbol_index);
                 },
-                .function_index_leb,
-                .global_index_leb,
+                .function_index_leb => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    switch (target) {
+                        .code => try self.patchFunctionIndexCodeRelocation(target_bytes, patch_offset, sym),
+                        .data => overwritePaddedU32(target_bytes, patch_offset, sym.index),
+                    }
+                },
+                .global_index_leb => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    switch (target) {
+                        .code => try self.patchGlobalIndexCodeRelocation(target_bytes, patch_offset, sym),
+                        .data => overwritePaddedU32(target_bytes, patch_offset, sym.index),
+                    }
+                },
                 .event_index_leb,
                 .table_number_leb,
                 => {
@@ -1841,22 +1943,24 @@ fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLin
                     const sym = self.linking.symbol_table.items[idx.symbol_index];
                     const value = sym.index;
                     const table_idx = self.findTableIndex(value) orelse value;
-                    const off: usize = @intCast(patch_offset);
-                    std.mem.writeInt(u32, target_bytes[off..][0..4], table_idx, .little);
+                    writeRawU32Relocation(target_bytes, patch_offset, table_idx);
                 },
                 .global_index_i32 => {
                     const sym = self.linking.symbol_table.items[idx.symbol_index];
                     const value = sym.index;
-                    const off: usize = @intCast(patch_offset);
-                    std.mem.writeInt(u32, target_bytes[off..][0..4], value, .little);
+                    writeRawU32Relocation(target_bytes, patch_offset, value);
                 },
             }
         },
         .offset => |off| {
             const sym = self.linking.symbol_table.items[off.symbol_index];
             // For data symbols, the resolved address is segment base + symbol offset.
+            // For function-offset relocations, the resolved value is the target
+            // function's byte offset in the merged code section body.
             // For others, use the symbol's index as the base address.
-            const base: i64 = if (sym.kind == .data) blk: {
+            const base: i64 = if (off.type_id == .function_offset_i32)
+                @intCast(self.functionCodeOffset(sym))
+            else if (sym.kind == .data) blk: {
                 std.debug.assert(sym.index < self.data_segments.items.len);
                 const segment = self.data_segments.items[sym.index];
                 break :blk @as(i64, @intCast(segment.offset)) + @as(i64, @intCast(sym.data_offset));
@@ -1876,11 +1980,13 @@ fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLin
                     @intCast(patched),
                 ),
                 .memory_addr_i32,
-                .function_offset_i32,
                 .section_offset_i32,
                 => {
-                    const o: usize = @intCast(patch_offset);
-                    std.mem.writeInt(u32, target_bytes[o..][0..4], @intCast(patched), .little);
+                    writeRawU32Relocation(target_bytes, patch_offset, @intCast(patched));
+                },
+                .function_offset_i32 => switch (target) {
+                    .code => patchFunctionOffsetCodeRelocation(target_bytes, patch_offset, @intCast(patched)),
+                    .data => writeRawU32Relocation(target_bytes, patch_offset, @intCast(patched)),
                 },
             }
         },
@@ -1892,9 +1998,9 @@ fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLin
 /// For each relocation entry in `reloc_code`, look up the symbol's resolved
 /// value (function index, global index, or memory address) and patch the
 /// corresponding site in `code_bytes`.
-pub fn resolveCodeRelocations(self: *Self) void {
+pub fn resolveCodeRelocations(self: *Self) Allocator.Error!void {
     for (self.reloc_code.entries.items) |entry| {
-        self.patchResolvedRelocation(self.code_bytes.items, entry, entry.getOffset());
+        try self.patchResolvedRelocation(self.code_bytes.items, entry, entry.getOffset(), .code);
     }
 }
 
@@ -1931,13 +2037,13 @@ pub fn resolveDataRelocations(self: *Self) Allocator.Error!void {
         std.debug.assert(segment_idx < self.data_segments.items.len);
 
         const segment = &self.data_segments.items[segment_idx];
-        self.patchResolvedRelocation(segment.data, entry, entry.getOffset());
+        try self.patchResolvedRelocation(segment.data, entry, entry.getOffset(), .data);
     }
 }
 
 /// Resolve both code and data relocations in place.
 pub fn resolveRelocations(self: *Self) Allocator.Error!void {
-    self.resolveCodeRelocations();
+    try self.resolveCodeRelocations();
     try self.resolveDataRelocations();
 }
 
@@ -5562,7 +5668,7 @@ test "resolveCodeRelocations — table_index_sleb resolves to table index not fu
         .symbol_index = 0,
     } });
 
-    module.resolveCodeRelocations();
+    try module.resolveCodeRelocations();
 
     // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
     var expected = [_]u8{0} ** 5;
@@ -5671,12 +5777,142 @@ test "resolveCodeRelocations — patches function call in code_bytes" {
     // Change roc_alloc's symbol to point to function index 42.
     module.linking.symbol_table.items[0].index = 42;
 
-    module.resolveCodeRelocations();
+    try module.resolveCodeRelocations();
 
     // Read the patched value at offset 3 (5-byte padded LEB128).
     var expected = [_]u8{0} ** 5;
     overwritePaddedU32(&expected, 0, 42);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
+}
+
+test "resolveCodeRelocations — function_index_leb rewrites function reference to table index" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const defined = try module.addDefinedFunction(type_idx);
+    try module.function_offsets.append(allocator, 0);
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = 0,
+        .name = "referenced_fn",
+        .index = defined.function.raw(),
+    });
+
+    try module.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &module.code_bytes, 999);
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 1,
+        .symbol_index = 0,
+    } });
+
+    try module.resolveCodeRelocations();
+
+    try std.testing.expectEqual(Op.i32_const, module.code_bytes.items[0]);
+    try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(module.code_bytes.items[1..6]));
+    try std.testing.expectEqual(@as(usize, 1), module.table_func_indices.items.len);
+    try std.testing.expectEqual(defined.function.raw(), module.table_func_indices.items[0]);
+}
+
+test "resolveCodeRelocations — global_index_leb function symbol rewrites function reference to table index" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const defined = try module.addDefinedFunction(type_idx);
+    try module.function_offsets.append(allocator, 0);
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = 0,
+        .name = "referenced_fn",
+        .index = defined.function.raw(),
+    });
+
+    try module.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &module.code_bytes, 999);
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .global_index_leb,
+        .offset = 1,
+        .symbol_index = 0,
+    } });
+
+    try module.resolveCodeRelocations();
+
+    try std.testing.expectEqual(Op.i32_const, module.code_bytes.items[0]);
+    try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(module.code_bytes.items[1..6]));
+    try std.testing.expectEqual(@as(usize, 1), module.table_func_indices.items.len);
+    try std.testing.expectEqual(defined.function.raw(), module.table_func_indices.items[0]);
+}
+
+test "resolveCodeRelocations — function_offset_i32 resolves to function body offset" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    _ = try module.addImport("env", "removed_host_import", type_idx);
+    module.import_fn_count = 1;
+    module.dead_import_dummy_count = 1;
+    try module.func_type_indices.append(allocator, type_idx);
+    const defined = try module.addDefinedFunction(type_idx);
+
+    try module.function_offsets.append(allocator, 0x4d2);
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = 0,
+        .name = "defined_fn",
+        .index = defined.function.raw(),
+    });
+
+    try module.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &module.code_bytes, 999);
+    try module.reloc_code.entries.append(allocator, .{ .offset = .{
+        .type_id = .function_offset_i32,
+        .offset = 1,
+        .symbol_index = 0,
+        .addend = 7,
+    } });
+
+    try module.resolveCodeRelocations();
+
+    try std.testing.expectEqual(Op.i32_const, module.code_bytes.items[0]);
+    try std.testing.expectEqual(@as(u32, 0x4d9), decodePaddedU32(module.code_bytes.items[1..6]));
+}
+
+test "resolveDataRelocations — function_offset_i32 writes raw function body offset" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const defined = try module.addDefinedFunction(type_idx);
+    try module.function_offsets.append(allocator, 0x1020);
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = 0,
+        .name = "defined_fn",
+        .index = defined.function.raw(),
+    });
+
+    const segment_data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 });
+    try module.data_segments.append(allocator, .{
+        .offset = 0,
+        .data = segment_data,
+    });
+    try module.reloc_data.entries.append(allocator, .{ .offset = .{
+        .type_id = .function_offset_i32,
+        .offset = 0,
+        .symbol_index = 0,
+        .addend = 3,
+        .data_segment_index = 0,
+    } });
+
+    try module.resolveDataRelocations();
+
+    try std.testing.expectEqual(@as(u32, 0x1023), std.mem.readInt(u32, module.data_segments.items[0].data[0..4], .little));
 }
 
 test "materializeFuncBodies — produces correct function bodies from code_bytes" {
@@ -5939,7 +6175,7 @@ test "mergeModule final link - resolves stack pointer import to global zero" {
     try std.testing.expectEqualStrings("__stack_pointer", stack.name.?);
     try std.testing.expectEqual(@as(u32, 0), stack.index);
 
-    app.resolveCodeRelocations();
+    try app.resolveCodeRelocations();
     try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(app.code_bytes.items[1..6]));
 }
 
