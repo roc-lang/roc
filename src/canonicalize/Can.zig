@@ -288,6 +288,13 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// `scratch_bound_vars` so it survives across the body canonicalization without
 /// being disturbed by the block's own capture/free-var bookkeeping.
 scratch_defining_bound_vars: base.Scratch(Pattern.Idx),
+/// Scratch recording, for the declaration pattern currently being canonicalized,
+/// the existing `var` patterns it reassigns (e.g. the `index` in `(word, index) =
+/// ...` when `index` is an existing mutable binder). These reuse a prior binder
+/// rather than introducing a fresh one, so a reference to them on the RHS reads
+/// their OLD value and is NOT self-referential; they are excluded from
+/// `defining_bound_vars`.
+scratch_reassign_targets: base.Scratch(Pattern.Idx),
 /// Local function declaration patterns that are visible as direct local
 /// procedures in the current canonicalization context.
 scratch_local_function_patterns: base.Scratch(Pattern.Idx),
@@ -620,6 +627,7 @@ pub fn deinit(
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
     self.scratch_defining_bound_vars.deinit();
+    self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
     self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
@@ -692,6 +700,7 @@ fn initInternal(
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_defining_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_reassign_targets = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_block_local_defs = try base.Scratch(BlockLocalDef).init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
@@ -4472,13 +4481,36 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 }
 
 /// Begin self-reference tracking for a declaration whose pattern is `pattern_idx`.
-/// Collects the pattern's bound binders onto `scratch_defining_bound_vars` and
-/// returns the span identifying them. The caller stores this in
+/// Collects the pattern's FRESHLY-bound binders onto `scratch_defining_bound_vars`
+/// and returns the span identifying them. The caller stores this in
 /// `defining_bound_vars` and passes the previous value to `endDefiningBoundVars`
 /// once the declaration body is canonicalized.
-fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!DataSpan {
+///
+/// `reassign_targets_start` is the `scratch_reassign_targets` snapshot taken just
+/// before this declaration's pattern was canonicalized. Any binder recorded there
+/// is an existing `var` being reassigned (e.g. `index` in `(word, index) = ...`),
+/// not a fresh binding; a reference to it on the RHS reads its OLD value and is
+/// therefore not self-referential, so it is excluded from the set.
+fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
     try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx);
+
+    const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
+    if (reassign_targets.len > 0) {
+        const collected = self.scratch_defining_bound_vars.sliceFromStart(start);
+        var write: usize = 0;
+        for (collected) |bound| {
+            const is_reassign_target = for (reassign_targets) |target| {
+                if (target == bound) break true;
+            } else false;
+            if (!is_reassign_target) {
+                collected[write] = bound;
+                write += 1;
+            }
+        }
+        self.scratch_defining_bound_vars.clearFrom(start + @as(u32, @intCast(write)));
+    }
+
     return self.scratch_defining_bound_vars.spanFrom(start);
 }
 
@@ -6259,6 +6291,7 @@ fn canonicalizeDeclWithAnnotation(
     // itself drains the matching `forward_references` entry and reuses the
     // pattern, so a single source-order walk converges on one pattern shared
     // by every reference to the name.
+    const reassign_targets_start = self.scratch_reassign_targets.top();
     const pattern_idx = try self.canonicalizePatternOrMalformed(decl.pattern);
     if (self.currentScopeIdx() == 0) {
         try self.markBoundPatternsGloballyResolvable(pattern_idx);
@@ -6268,8 +6301,9 @@ fn canonicalizeDeclWithAnnotation(
     // RHS is reported as a self-referential definition (issues #8831, #9043).
     const saved_defining_bound_vars = self.defining_bound_vars;
     if (!is_lambda) {
-        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx);
+        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
     }
+    self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
@@ -7687,6 +7721,10 @@ const DefiniteInitAnalyzer = struct {
                 if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
                 break :blk try self.analyzeExpr(eq.rhs, state, breaks);
             },
+            .e_structural_hash => |h| blk: {
+                if (!try self.analyzeExpr(h.value, state, breaks)) break :blk false;
+                break :blk try self.analyzeExpr(h.hasher, state, breaks);
+            },
             .e_method_eq => |eq| blk: {
                 if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
                 break :blk try self.analyzeExpr(eq.rhs, state, breaks);
@@ -7976,6 +8014,7 @@ fn scheduleBlockDeclContinuation(
     self.allow_pattern_var_reuse = true;
     self.pattern_reused_existing_var = false;
 
+    const reassign_targets_start = self.scratch_reassign_targets.top();
     const pattern_idx = try self.canonicalizePattern(d.pattern) orelse inner_blk: {
         const pattern = self.parse_ir.store.getPattern(d.pattern);
         break :inner_blk try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -8011,8 +8050,9 @@ fn scheduleBlockDeclContinuation(
 
     const saved_defining_bound_vars = self.defining_bound_vars;
     if (!is_lambda) {
-        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx);
+        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
     }
+    self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
     try stacks.pushFinishBlockDeclStmt(frame_allocator, .{
         .block = block,
@@ -8403,6 +8443,7 @@ fn canonicalizeStandaloneBlockDecl(
     defer self.allow_pattern_var_reuse = saved_allow_pattern_var_reuse;
     defer self.pattern_reused_existing_var = saved_pattern_reused_existing_var;
 
+    const reassign_targets_start = self.scratch_reassign_targets.top();
     const pattern_idx = try self.canonicalizePattern(decl.pattern) orelse inner_blk: {
         const pattern = self.parse_ir.store.getPattern(decl.pattern);
         break :inner_blk try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -8437,8 +8478,9 @@ fn canonicalizeStandaloneBlockDecl(
 
     const saved_defining_bound_vars = self.defining_bound_vars;
     if (!is_lambda) {
-        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx);
+        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
     }
+    self.scratch_reassign_targets.clearFrom(reassign_targets_start);
     defer self.endDefiningBoundVars(saved_defining_bound_vars);
 
     const expr = try self.canonicalizeExprOrMalformed(decl.body);
@@ -8793,6 +8835,10 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_structural_eq => |eq| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_structural_hash => |h| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = h.value, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = h.hasher, .loop_depth = expr_frame.loop_depth } });
                     },
                     .e_method_eq => |eq| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
@@ -15498,6 +15544,7 @@ pub fn canonicalizePattern(
                                 },
                                 .var_reassignment_ok => |existing_pattern_idx| {
                                     self.pattern_reused_existing_var = true;
+                                    try self.scratch_reassign_targets.append(existing_pattern_idx);
                                     // This is a var reassignment - return the existing pattern
                                     // so the interpreter's upsertBinding will update the existing binding
                                     last_pattern = existing_pattern_idx;
@@ -15549,6 +15596,7 @@ pub fn canonicalizePattern(
                             // Fresh mutable binder in a mixed declaration pattern; no-op.
                         } else if (result != pattern_idx) {
                             self.pattern_reused_existing_var = true;
+                            try self.scratch_reassign_targets.append(result);
                         }
                         last_pattern = result;
                     } else {

@@ -1560,6 +1560,7 @@ const Lowerer = struct {
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
+            .structural_hash => |h| try self.lowerStructuralHashInto(target, h.value, h.hasher, next),
             .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
@@ -2485,6 +2486,75 @@ const Lowerer = struct {
         var current = try self.lowerEqLocalsInto(target, lhs_local, rhs_local, lhs_ty, negated, next);
         current = try self.lowerExprInto(rhs_local, rhs, current);
         return try self.lowerExprInto(lhs_local, lhs, current);
+    }
+
+    fn lowerStructuralHashInto(self: *Lowerer, target: LIR.LocalId, value: Lifted.ExprId, hasher: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const value_ty = try self.lowerExprTy(value);
+        const value_local = try self.addTemp(value_ty);
+        const hasher_local = try self.addTemp(try self.lowerExprTy(hasher));
+        var current = try self.lowerHashLocalsInto(target, value_local, hasher_local, value_ty, next);
+        current = try self.lowerExprInto(hasher_local, hasher, current);
+        return try self.lowerExprInto(value_local, value, current);
+    }
+
+    /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
+    /// into `target`. Aggregate types are decomposed in Monotype lowering, so
+    /// this only ever sees a scalar/str/zst leaf or a transparent nominal wrapper.
+    fn lowerHashLocalsInto(self: *Lowerer, target: LIR.LocalId, value: LIR.LocalId, hasher: LIR.LocalId, value_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return switch (self.types.get(value_ty)) {
+            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
+            // Hashing a zero-sized value contributes nothing; thread the hasher through.
+            .zst => try self.assignLocal(target, hasher, next),
+            .named => |named| blk: {
+                const backing = named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing");
+                break :blk try self.lowerHashLocalsInto(target, value, hasher, backing.ty, next);
+            },
+            .record,
+            .tuple,
+            .tag_union,
+            .capture_record,
+            .list,
+            .box,
+            .callable,
+            .erased_fn,
+            .erased_capture_ptr,
+            => Common.invariant("aggregate/owned hash reached direct LIR structural hash lowering"),
+        };
+    }
+
+    fn lowerPrimitiveHashLocalsInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        primitive: MonoType.Primitive,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const op: LIR.LowLevel = switch (primitive) {
+            .bool => .hasher_write_bool,
+            .str => .hasher_write_str,
+            .u8 => .hasher_write_u8,
+            .i8 => .hasher_write_i8,
+            .u16 => .hasher_write_u16,
+            .i16 => .hasher_write_i16,
+            .u32 => .hasher_write_u32,
+            .i32 => .hasher_write_i32,
+            .u64 => .hasher_write_u64,
+            .i64 => .hasher_write_i64,
+            .u128 => .hasher_write_u128,
+            .i128 => .hasher_write_i128,
+            .f32 => .hasher_write_f32,
+            .f64 => .hasher_write_f64,
+            .dec => .hasher_write_dec,
+        };
+        const args = [_]LIR.LocalId{ hasher, value };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
     }
 
     fn lowerMatchInto(

@@ -390,6 +390,10 @@ const Lifter = struct {
                 try self.rewriteExpr(eq.lhs);
                 try self.rewriteExpr(eq.rhs);
             },
+            .structural_hash => |h| {
+                try self.rewriteExpr(h.value);
+                try self.rewriteExpr(h.hasher);
+            },
             .match_ => |match| {
                 try self.rewriteExpr(match.scrutinee);
                 for (self.output.branchSpan(match.branches)) |branch| {
@@ -767,6 +771,10 @@ const CaptureSet = struct {
             .structural_eq => |eq| {
                 try self.collectExpr(eq.lhs, bound);
                 try self.collectExpr(eq.rhs, bound);
+            },
+            .structural_hash => |h| {
+                try self.collectExpr(h.value, bound);
+                try self.collectExpr(h.hasher, bound);
             },
             .match_ => |match| {
                 try self.collectExpr(match.scrutinee, bound);

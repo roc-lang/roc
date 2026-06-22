@@ -436,6 +436,12 @@ pub const StaticDispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
+    /// A `to_hash : self, Hasher -> Hasher` dispatch whose receiver is an
+    /// anonymous structural type. When `structural_allowed` is set, lowering
+    /// decomposes the hash structurally instead of dispatching to a method.
+    hash: struct {
+        structural_allowed: bool,
+    },
 };
 
 /// Public `StaticDispatchDispatcher` declaration.
@@ -1039,6 +1045,12 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
+    if (method_name.eql(common.to_hash)) {
+        if (sourceCallableHasHashShape(module, constraint_fn_var)) {
+            return .{ .hash = .{ .structural_allowed = true } };
+        }
+        return .value;
+    }
     if (!method_name.eql(common.is_eq)) return .value;
 
     if (constraint_index.lookup(constraint_fn_var)) |constraint| {
@@ -1058,6 +1070,23 @@ fn staticDispatchResultModeForCheckedValueCall(
     }
 
     return .value;
+}
+
+/// True when `fn_var` has the `to_hash` shape `(self, Hasher) -> Hasher`: two
+/// arguments where the second (the Hasher) is threaded straight through to the
+/// return type.
+fn sourceCallableHasHashShape(
+    module: TypedCIR.Module,
+    fn_var: Var,
+) bool {
+    const store = module.typeStoreConst();
+    const resolved = store.resolveVar(fn_var);
+    const func = resolved.desc.content.unwrapFunc() orelse return false;
+    const args = store.sliceVars(func.args);
+    // `to_hash : self, Hasher -> Hasher` always has two arguments. The method
+    // name has already been matched, so arity is the distinguishing shape: the
+    // second argument and the return are both the threaded Hasher.
+    return args.len == 2;
 }
 
 fn sourceCallableHasEqualityShape(

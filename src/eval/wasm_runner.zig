@@ -123,6 +123,15 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_str_eq", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostStrEq, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_eq", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostListEq, null) catch return error.WasmExecFailed;
 
+        env_imports.addHostFunction("roc_dict_pseudo_seed", &[_]bytebox.ValType{}, &[_]bytebox.ValType{.I64}, hostDictPseudoSeed, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_finish", &[_]bytebox.ValType{.I64}, &[_]bytebox.ValType{.I64}, hostHasherFinish, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_u64", &[_]bytebox.ValType{ .I64, .I32, .I64, .I32 }, &[_]bytebox.ValType{.I64}, hostHasherWriteU64, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_u128", &[_]bytebox.ValType{ .I64, .I32, .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostHasherWriteU128, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_f32_bits", &[_]bytebox.ValType{ .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostHasherWriteF32Bits, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_f64_bits", &[_]bytebox.ValType{ .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostHasherWriteF64Bits, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_bytes", &[_]bytebox.ValType{ .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I64}, hostHasherWriteBytes, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_hasher_write_str", &[_]bytebox.ValType{ .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I64}, hostHasherWriteStr, null) catch return error.WasmExecFailed;
+
         // Compiler-rt intrinsics needed by merged builtins
         env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch return error.WasmExecFailed;
@@ -367,6 +376,67 @@ fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
         return;
     }
     results[0] = .{ .I32 = if (bytesEqual(buffer[a_data_ptr..][0..total_bytes], buffer[b_data_ptr..][0..total_bytes])) 1 else 0 };
+}
+
+// Hasher host functions. The Hasher is a u64 seed; each write threads a new
+// seed through. These delegate to the same `builtins.hash` routines used by the
+// native and dev backends so all backends agree on hash values.
+
+fn hostDictPseudoSeed(_: ?*anyopaque, _: *bytebox.ModuleInstance, _: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .I64 = @bitCast(builtins.utils.dictPseudoSeed()) };
+}
+
+fn hostHasherFinish(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const seed: u64 = @bitCast(params[0].I64);
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_finish(seed)) };
+}
+
+fn hostHasherWriteU64(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const seed: u64 = @bitCast(params[0].I64);
+    const domain: u8 = @intCast(@as(u32, @bitCast(params[1].I32)));
+    const value: u64 = @bitCast(params[2].I64);
+    const width: u8 = @intCast(@as(u32, @bitCast(params[3].I32)));
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_u64(seed, domain, value, width)) };
+}
+
+fn hostHasherWriteU128(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const seed: u64 = @bitCast(params[0].I64);
+    const domain: u8 = @intCast(@as(u32, @bitCast(params[1].I32)));
+    const low: u64 = @bitCast(params[2].I64);
+    const high: u64 = @bitCast(params[3].I64);
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_u128(seed, domain, low, high)) };
+}
+
+fn hostHasherWriteF32Bits(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const seed: u64 = @bitCast(params[0].I64);
+    const bits: u64 = @bitCast(params[1].I64);
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_f32_bits(seed, @truncate(bits))) };
+}
+
+fn hostHasherWriteF64Bits(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const seed: u64 = @bitCast(params[0].I64);
+    const bits: u64 = @bitCast(params[1].I64);
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_f64_bits(seed, bits)) };
+}
+
+fn hostHasherWriteBytes(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const seed: u64 = @bitCast(params[0].I64);
+    const domain: u8 = @intCast(@as(u32, @bitCast(params[1].I32)));
+    const ptr: usize = @intCast(params[2].I32);
+    const len: usize = @intCast(params[3].I32);
+    const bytes = if (len == 0) buffer[0..0] else buffer[ptr..][0..len];
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_bytes(seed, domain, bytes.ptr, bytes.len)) };
+}
+
+fn hostHasherWriteStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const seed: u64 = @bitCast(params[0].I64);
+    const ptr: usize = @intCast(params[1].I32);
+    const len: usize = @intCast(params[2].I32);
+    const bytes = if (len == 0) buffer[0..0] else buffer[ptr..][0..len];
+    const str_domain = @intFromEnum(builtins.hash.HasherDomain.str);
+    results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_bytes(seed, str_domain, bytes.ptr, bytes.len)) };
 }
 
 fn readI128FromMem(buffer: []u8, ptr: usize) i128 {

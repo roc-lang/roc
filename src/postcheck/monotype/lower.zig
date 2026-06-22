@@ -324,6 +324,23 @@ const EqualityDefEntry = union(enum) {
     }
 };
 
+const HashDefAddress = struct {
+    value_ty: u32,
+    hasher_ty: u32,
+};
+
+const HashDefEntry = union(enum) {
+    reserved: Ast.DefId,
+    ready: Ast.DefId,
+
+    fn id(self: HashDefEntry) Ast.DefId {
+        return switch (self) {
+            .reserved => |def_id| def_id,
+            .ready => |def_id| def_id,
+        };
+    }
+};
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
@@ -342,6 +359,7 @@ const Builder = struct {
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
     equality_defs: std.AutoHashMap(EqualityDefAddress, EqualityDefEntry),
+    hash_defs: std.AutoHashMap(HashDefAddress, HashDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -368,6 +386,7 @@ const Builder = struct {
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(EqualityDefAddress, EqualityDefEntry).init(allocator),
+            .hash_defs = std.AutoHashMap(HashDefAddress, HashDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -386,6 +405,7 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
+        self.hash_defs.deinit();
         self.equality_defs.deinit();
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
@@ -2808,6 +2828,15 @@ const Builder = struct {
         } });
     }
 
+    /// `(value, Hasher) -> Hasher`, the shape of a `to_hash` helper.
+    fn hashFnType(self: *Builder, value_ty: Type.TypeId, hasher_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const args = [_]Type.TypeId{ value_ty, hasher_ty };
+        return try self.program.types.add(.{ .func = .{
+            .args = try self.program.types.addSpan(&args),
+            .ret = hasher_ty,
+        } });
+    }
+
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
         const args = self.program.types.span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
@@ -2911,6 +2940,10 @@ const BodyContext = struct {
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated equality helper instead of recursively expanding AST.
     equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    /// Structural hash types currently being expanded in this context.
+    /// Seeing the same type again is a real recursive edge, which lowers to a
+    /// reserved generated hash helper instead of recursively expanding AST.
+    hash_expansion_stack: std.AutoHashMap(Type.TypeId, void),
     /// Source region to use while inlining a compile-time const eval template.
     /// The template body can be lowered from a lookup site, but diagnostics
     /// must point at the original const root.
@@ -2975,10 +3008,12 @@ const BodyContext = struct {
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
+            .hash_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -3604,6 +3639,7 @@ const BodyContext = struct {
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
+            .structural_hash => |h| return try self.lowerDirectStructuralHash(expr.ty, h),
             else => {},
         }
         return try self.lowerExprWithType(expr_id, expr_ty);
@@ -3783,6 +3819,7 @@ const BodyContext = struct {
             .method_eq,
             => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
             .structural_eq => Common.invariant("structural equality reached ordinary expression lowering after explicit equality lowering"),
+            .structural_hash => Common.invariant("structural hash reached ordinary expression lowering after explicit hash lowering"),
             .field_access => |field| field_access: {
                 const receiver_ty = try self.lowerExprType(field.receiver);
                 break :field_access .{ .field_access = .{
@@ -5184,6 +5221,14 @@ const BodyContext = struct {
                 }
                 return lowered;
             },
+            .structural_hash => |h| {
+                try self.constrainKnownType(expr.ty, ty);
+                const lowered = try self.lowerDirectStructuralHashAtType(h, ty);
+                if (!self.sameType(ty, self.builder.program.exprs.items[@intFromEnum(lowered)].ty)) {
+                    Common.invariant("checked structural hash lowered at a type different from its context type");
+                }
+                return lowered;
+            },
             .lambda,
             .closure,
             => {
@@ -5498,6 +5543,8 @@ const BodyContext = struct {
                 if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
                 break :blk try self.builder.lowLevelExpr(.bool_not, &.{expr}, expr_ty);
             } else expr,
+            // A resolved `to_hash` dispatch returns its Hasher result directly.
+            .hash => expr,
         };
     }
 
@@ -5868,15 +5915,25 @@ const BodyContext = struct {
         }
 
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
-            if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
+            if (planAllowsStructural(plan.result_mode)) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
-            if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
+            if (planAllowsStructural(plan.result_mode)) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
+    }
+
+    /// Whether a dispatch plan permits structural decomposition (equality or
+    /// hashing) instead of resolving to a concrete method target.
+    fn planAllowsStructural(mode: static_dispatch.StaticDispatchResultMode) bool {
+        return switch (mode) {
+            .equality => |eq| eq.structural_allowed,
+            .hash => |hash| hash.structural_allowed,
+            .value => false,
+        };
     }
 
     fn methodLookupForResolvedTarget(
@@ -6014,6 +6071,23 @@ const BodyContext = struct {
                 }
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
+            .hash => |hash| if (hash.structural_allowed) blk: {
+                const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+                if (plan_args.len != 2) Common.invariant("structural hash dispatch plan must have two operands");
+                const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural hash target had a non-function type");
+                const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+                defer self.allocator.free(arg_tys);
+                if (arg_tys.len != 2) Common.invariant("structural hash callable type must have two operands");
+                const value = if (pre_lowered != null and pre_lowered.?.index == 0)
+                    pre_lowered.?.expr
+                else
+                    try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+                const hasher = if (pre_lowered != null and pre_lowered.?.index == 1)
+                    pre_lowered.?.expr
+                else
+                    try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
+                break :blk try self.lowerHashExpr(arg_tys[0], value, hasher, ret_ty);
+            } else Common.invariant("structural hash dispatch plan did not permit structural hashing"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
         };
     }
@@ -6478,6 +6552,329 @@ const BodyContext = struct {
         const lhs = try self.builder.intLiteralExpr(0, u64_ty);
         const rhs = try self.builder.intLiteralExpr(if (value) 0 else 1, u64_ty);
         return try self.builder.lowLevelExpr(.num_is_eq, &.{ lhs, rhs }, bool_ty);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Structural hashing (mirror of structural equality above).
+    //
+    // `to_hash : self, Hasher -> Hasher` threads a Hasher through the value's
+    // components. Aggregates are decomposed here (records/tuples/tag unions),
+    // owned types dispatch to their real `to_hash` method (lists), nominals
+    // unwrap to their backing, and scalar/str leaves emit a `structural_hash`
+    // node that the LIR lowerer turns into the matching `hasher_write_*` op.
+    // Recursive types break the expansion via a memoized generated helper def.
+    // ─────────────────────────────────────────────────────────────────────
+
+    fn lowerDirectStructuralHash(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        h: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const ret_ty = try self.lowerType(checked_ret_ty);
+        return try self.lowerDirectStructuralHashAtType(h, ret_ty);
+    }
+
+    fn lowerDirectStructuralHashAtType(
+        self: *BodyContext,
+        h: anytype,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const value_ty = try self.lowerExprType(h.value);
+        const value = try self.lowerExprAtType(h.value, value_ty);
+        const hasher = try self.lowerExprAtType(h.hasher, hasher_ty);
+        return try self.lowerHashExpr(value_ty, value, hasher, hasher_ty);
+    }
+
+    /// Hash `value` (of `value_ty`) into `hasher`, producing a new Hasher of
+    /// `hasher_ty`. The threading is "innermost first": each component feeds the
+    /// hasher accumulated so far.
+    fn lowerHashExpr(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const shape = self.builder.program.types.get(value_ty);
+        const expands_structurally = switch (shape) {
+            .record, .tuple, .tag_union => true,
+            .named => |named| named.backing != null,
+            else => false,
+        };
+        var remove_active_expansion = false;
+        defer if (remove_active_expansion) {
+            _ = self.hash_expansion_stack.remove(value_ty);
+        };
+        if (expands_structurally) {
+            if (self.hash_expansion_stack.contains(value_ty)) {
+                return try self.hashCall(value_ty, value, hasher, hasher_ty);
+            }
+            try self.hash_expansion_stack.put(value_ty, {});
+            remove_active_expansion = true;
+        }
+
+        return switch (shape) {
+            .list => try self.lowerOwnedHashCall(value_ty, value, hasher, hasher_ty),
+            .record => |fields| try self.lowerRecordHashExpr(value_ty, self.builder.program.types.fieldSpan(fields), value, hasher, hasher_ty),
+            .tuple => |items| try self.lowerTupleHashExpr(value_ty, self.builder.program.types.span(items), value, hasher, hasher_ty),
+            .tag_union => |tags| try self.lowerTagUnionHashExpr(value_ty, tags, value, hasher, hasher_ty),
+            .named => |named| if (named.backing) |backing|
+                try self.lowerNamedHashExpr(value_ty, backing.ty, value, hasher, hasher_ty)
+            else
+                try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .structural_hash = .{
+                    .value = value,
+                    .hasher = hasher,
+                } } }),
+            .primitive,
+            .zst,
+            .func,
+            .erased,
+            .box,
+            => try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .structural_hash = .{
+                .value = value,
+                .hasher = hasher,
+            } } }),
+        };
+    }
+
+    /// Emit a call to the memoized recursive hash helper for `value_ty`.
+    fn hashCall(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const def_id = try self.hashDefForType(value_ty, hasher_ty);
+        const fn_ty = try self.builder.hashFnType(value_ty, hasher_ty);
+        const callee = try self.builder.program.addExpr(.{
+            .ty = fn_ty,
+            .data = .{ .def_ref = def_id },
+        });
+        const args = [_]Ast.ExprId{ value, hasher };
+        return try self.builder.program.addExpr(.{
+            .ty = hasher_ty,
+            .data = .{ .call_value = .{
+                .callee = callee,
+                .args = try self.builder.program.addExprSpan(&args),
+            } },
+        });
+    }
+
+    fn hashDefForType(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.DefId {
+        const address = HashDefAddress{
+            .value_ty = @intFromEnum(value_ty),
+            .hasher_ty = @intFromEnum(hasher_ty),
+        };
+        if (self.builder.hash_defs.get(address)) |entry| return entry.id();
+
+        const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.builder.program.defs.items.len)));
+        try self.builder.program.defs.append(self.allocator, undefined);
+        try self.builder.hash_defs.put(address, .{ .reserved = def_id });
+
+        const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const hasher_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), hasher_ty);
+        const value_expr = try self.builder.localExpr(value_local, value_ty);
+        const hasher_expr = try self.builder.localExpr(hasher_local, hasher_ty);
+
+        // Remove the caller's active mark so the helper body expands exactly one
+        // layer; only recursive edges inside that layer call back to the reserved
+        // helper.
+        if (!self.hash_expansion_stack.remove(value_ty)) {
+            Common.invariant("recursive structural hash helper requested outside an active hash expansion");
+        }
+        defer self.hash_expansion_stack.putAssumeCapacity(value_ty, {});
+
+        const body = try self.lowerHashExpr(value_ty, value_expr, hasher_expr, hasher_ty);
+        const args = try self.builder.program.addTypedLocalSpan(&.{
+            .{ .local = value_local, .ty = value_ty },
+            .{ .local = hasher_local, .ty = hasher_ty },
+        });
+        self.builder.program.defs.items[@intFromEnum(def_id)] = .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = null,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = hasher_ty,
+        };
+        try self.builder.hash_defs.put(address, .{ .ready = def_id });
+        return def_id;
+    }
+
+    fn lowerRecordHashExpr(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        fields: []const Type.Field,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        _ = value_ty;
+        // Copy because recursive lowerHashExpr may reallocate types.fields.
+        const fields_copy = try self.allocator.dupe(Type.Field, fields);
+        defer self.allocator.free(fields_copy);
+        var acc = hasher;
+        for (fields_copy) |field| {
+            const field_value = try self.builder.program.addExpr(.{ .ty = field.ty, .data = .{ .field_access = .{
+                .receiver = value,
+                .field = field.name,
+            } } });
+            acc = try self.lowerHashExpr(field.ty, field_value, acc, hasher_ty);
+        }
+        return acc;
+    }
+
+    fn lowerTupleHashExpr(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        items: []const Type.TypeId,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        _ = value_ty;
+        // Copy because recursive lowerHashExpr may reallocate types.spans.
+        const items_copy = try self.allocator.dupe(Type.TypeId, items);
+        defer self.allocator.free(items_copy);
+        var acc = hasher;
+        for (items_copy, 0..) |item_ty, index| {
+            const item_value = try self.builder.program.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
+                .tuple = value,
+                .elem_index = @intCast(index),
+            } } });
+            acc = try self.lowerHashExpr(item_ty, item_value, acc, hasher_ty);
+        }
+        return acc;
+    }
+
+    fn lowerNamedHashExpr(
+        self: *BodyContext,
+        named_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const hashed = try self.lowerHashExpr(
+            backing_ty,
+            try self.builder.localExpr(inner, backing_ty),
+            hasher,
+            hasher_ty,
+        );
+        const pat = try self.builder.program.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.builder.bindPat(inner, backing_ty) } });
+        return try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .let_ = .{
+            .bind = pat,
+            .value = value,
+            .rest = hashed,
+        } } });
+    }
+
+    /// Decompose a tag-union hash: write the discriminant index into the hasher,
+    /// then match on the value and thread the active variant's payloads through.
+    fn lowerTagUnionHashExpr(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        tags_span: Type.Span,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        // Bind the value to a local so it is matched exactly once.
+        const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+
+        // Copy the tag list because recursive lowerHashExpr may reallocate type spans.
+        const tags = try self.allocator.dupe(Type.Tag, self.builder.program.types.tagSpan(tags_span));
+        defer self.allocator.free(tags);
+
+        const branches = try self.allocator.alloc(Ast.Branch, tags.len);
+        defer self.allocator.free(branches);
+        for (tags, 0..) |tag, index| {
+            branches[index] = try self.lowerTagHashBranch(value_ty, tag, @intCast(index), hasher, hasher_ty);
+        }
+
+        const match_expr = try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.builder.localExpr(value_local, value_ty),
+            .branches = try self.builder.program.addBranchSpan(branches),
+        } } });
+
+        return try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .let_ = .{
+            .bind = try self.builder.bindPat(value_local, value_ty),
+            .value = value,
+            .rest = match_expr,
+        } } });
+    }
+
+    fn lowerTagHashBranch(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        tag: Type.Tag,
+        variant_index: u64,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Branch {
+        // Copy payload types because recursive lowerHashExpr may reallocate type spans.
+        const payloads = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(tag.payloads));
+        defer self.allocator.free(payloads);
+
+        const pats = try self.allocator.alloc(Ast.PatId, payloads.len);
+        defer self.allocator.free(pats);
+        const payload_exprs = try self.allocator.alloc(Ast.ExprId, payloads.len);
+        defer self.allocator.free(payload_exprs);
+        for (payloads, 0..) |payload_ty, i| {
+            const payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
+            pats[i] = try self.builder.bindPat(payload_local, payload_ty);
+            payload_exprs[i] = try self.builder.localExpr(payload_local, payload_ty);
+        }
+
+        // First write the discriminant index, then thread each payload's hash.
+        var acc = try self.hasherWriteU64(hasher, variant_index, hasher_ty);
+        for (payloads, 0..) |payload_ty, i| {
+            acc = try self.lowerHashExpr(payload_ty, payload_exprs[i], acc, hasher_ty);
+        }
+
+        const tag_pat = try self.builder.program.addPat(.{ .ty = value_ty, .data = .{ .tag = .{
+            .name = tag.name,
+            .payloads = try self.builder.program.addPatSpan(pats),
+        } } });
+        return .{ .pat = tag_pat, .body = acc };
+    }
+
+    fn lowerOwnedHashCall(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        value: Ast.ExprId,
+        hasher: Ast.ExprId,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const owner = methodOwnerFromType(&self.builder.program.types, value_ty) orelse
+            Common.invariant("owned hash call requested for a type without a method owner");
+        const lookup = self.builder.lookupMethodTargetByName(owner, "to_hash") orelse
+            Common.invariant("checked method registry is missing owned to_hash target");
+
+        const arg_tys = [_]Type.TypeId{ value_ty, hasher_ty };
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, hasher_ty);
+        const args = [_]Ast.ExprId{ value, hasher };
+        return try self.builder.program.addExpr(.{ .ty = hasher_ty, .data = .{ .call_proc = .{
+            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+            .args = try self.builder.program.addExprSpan(&args),
+        } } });
+    }
+
+    /// Emit `Hasher.write_u64(hasher, value)` as a low-level operation.
+    fn hasherWriteU64(
+        self: *BodyContext,
+        hasher: Ast.ExprId,
+        value: u64,
+        hasher_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const value_expr = try self.builder.intLiteralExpr(value, u64_ty);
+        return try self.builder.lowLevelExpr(.hasher_write_u64, &.{ hasher, value_expr }, hasher_ty);
     }
 
     const MatchOutput = union(enum) {
@@ -8705,6 +9102,10 @@ const BodyContext = struct {
             .structural_eq => |eq| {
                 try self.collectReassignedBindersInExpr(eq.lhs, out);
                 try self.collectReassignedBindersInExpr(eq.rhs, out);
+            },
+            .structural_hash => |h| {
+                try self.collectReassignedBindersInExpr(h.value, out);
+                try self.collectReassignedBindersInExpr(h.hasher, out);
             },
             .tuple_access => |access| try self.collectReassignedBindersInExpr(access.tuple, out),
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),

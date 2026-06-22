@@ -399,6 +399,15 @@ list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 list_replace_import: ?u32 = null,
 list_swap_import: ?u32 = null,
+/// Wasm function indices for the imported hasher host functions.
+dict_pseudo_seed_import: ?u32 = null,
+hasher_finish_import: ?u32 = null,
+hasher_write_u64_import: ?u32 = null,
+hasher_write_u128_import: ?u32 = null,
+hasher_write_f32_bits_import: ?u32 = null,
+hasher_write_f64_bits_import: ?u32 = null,
+hasher_write_bytes_import: ?u32 = null,
+hasher_write_str_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -732,11 +741,11 @@ fn emitHasherU128Parts(self: *Self, value: ProcLocalId) Allocator.Error!void {
 fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) Allocator.Error!void {
     switch (op) {
         .dict_pseudo_seed => {
-            try self.emitBuiltinCall(.dict_pseudo_seed, null);
+            try self.emitBuiltinCall(.dict_pseudo_seed, self.dict_pseudo_seed_import);
         },
         .hasher_finish => {
             try self.emitHasherState(args[0]);
-            try self.emitBuiltinCall(.hasher_finish, null);
+            try self.emitBuiltinCall(.hasher_finish, self.hasher_finish_import);
         },
         .hasher_write_bool,
         .hasher_write_u8,
@@ -752,19 +761,19 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitHasherScalarAsI64(args[1]);
             try self.emitI32Const(@intCast(hasherWidth(op)));
-            try self.emitBuiltinCall(.hasher_write_u64, null);
+            try self.emitBuiltinCall(.hasher_write_u64, self.hasher_write_u64_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_f32 => {
             try self.emitHasherState(args[0]);
             try self.emitHasherFloatBits(args[1], true);
-            try self.emitBuiltinCall(.hasher_write_f32_bits, null);
+            try self.emitBuiltinCall(.hasher_write_f32_bits, self.hasher_write_f32_bits_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_f64 => {
             try self.emitHasherState(args[0]);
             try self.emitHasherFloatBits(args[1], false);
-            try self.emitBuiltinCall(.hasher_write_f64_bits, null);
+            try self.emitBuiltinCall(.hasher_write_f64_bits, self.hasher_write_f64_bits_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_u128,
@@ -774,7 +783,7 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitHasherState(args[0]);
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitHasherU128Parts(args[1]);
-            try self.emitBuiltinCall(.hasher_write_u128, null);
+            try self.emitBuiltinCall(.hasher_write_u128, self.hasher_write_u128_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_bytes => {
@@ -787,7 +796,7 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitLocalGet(fields.bytes);
             try self.emitLocalGet(fields.len);
-            try self.emitBuiltinCall(.hasher_write_bytes, null);
+            try self.emitBuiltinCall(.hasher_write_bytes, self.hasher_write_bytes_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_str => {
@@ -798,7 +807,7 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
 
             try self.emitHasherState(args[0]);
             try self.emitRocStrFields(fields);
-            try self.emitBuiltinCall(.hasher_write_str, null);
+            try self.emitBuiltinCall(.hasher_write_str, self.hasher_write_str_import);
             try self.emitHasherRecordFromI64();
         },
         else => unreachable,
@@ -1178,6 +1187,35 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{.i32},
     );
     self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
+
+    // Hasher host functions. The Hasher is a u64 seed threaded through each
+    // write; these mirror the `roc_builtins_hasher_*` C ABI in builtins/hash.zig.
+    const dict_pseudo_seed_type = try self.module.addFuncType(&.{}, &.{.i64});
+    self.dict_pseudo_seed_import = try self.module.addImport("env", "roc_dict_pseudo_seed", dict_pseudo_seed_type);
+
+    const hasher_finish_type = try self.module.addFuncType(&.{.i64}, &.{.i64});
+    self.hasher_finish_import = try self.module.addImport("env", "roc_hasher_finish", hasher_finish_type);
+
+    // (seed i64, domain i32, value i64, width i32) -> i64
+    const hasher_write_u64_type = try self.module.addFuncType(&.{ .i64, .i32, .i64, .i32 }, &.{.i64});
+    self.hasher_write_u64_import = try self.module.addImport("env", "roc_hasher_write_u64", hasher_write_u64_type);
+
+    // (seed i64, domain i32, low i64, high i64) -> i64
+    const hasher_write_u128_type = try self.module.addFuncType(&.{ .i64, .i32, .i64, .i64 }, &.{.i64});
+    self.hasher_write_u128_import = try self.module.addImport("env", "roc_hasher_write_u128", hasher_write_u128_type);
+
+    // (seed i64, bits i64) -> i64
+    const hasher_write_bits_type = try self.module.addFuncType(&.{ .i64, .i64 }, &.{.i64});
+    self.hasher_write_f32_bits_import = try self.module.addImport("env", "roc_hasher_write_f32_bits", hasher_write_bits_type);
+    self.hasher_write_f64_bits_import = try self.module.addImport("env", "roc_hasher_write_f64_bits", hasher_write_bits_type);
+
+    // (seed i64, domain i32, ptr i32, len i32) -> i64
+    const hasher_write_bytes_type = try self.module.addFuncType(&.{ .i64, .i32, .i32, .i32 }, &.{.i64});
+    self.hasher_write_bytes_import = try self.module.addImport("env", "roc_hasher_write_bytes", hasher_write_bytes_type);
+
+    // (seed i64, ptr i32, len i32, cap i32) -> i64
+    const hasher_write_str_type = try self.module.addFuncType(&.{ .i64, .i32, .i32, .i32 }, &.{.i64});
+    self.hasher_write_str_import = try self.module.addImport("env", "roc_hasher_write_str", hasher_write_str_type);
 
     // RocOps function imports follow the platform C ABI: each takes a leading `*RocOps`
     // (the i32 pointer to the RocOps struct in linear memory) followed by its natural

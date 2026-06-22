@@ -13,22 +13,7 @@ main! = |_args| {
 # EXPECTED
 NIL
 # PROBLEMS
-**MISSING METHOD**
-This **to_hash** method is being called on a value whose type doesn't have that method:
-**repro_issue_9725_record_dict_key.md:2:9:2:21:**
-```roc
-    dbg Dict.empty().insert({a: 1, b: 2}, 3)
-```
-        ^^^^^^^^^^^^
-
-The value's type, which does not have a method named **to_hash**, is:
-
-    { a: c, b: d }
-      where [
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-      ]
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

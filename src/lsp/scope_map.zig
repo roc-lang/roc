@@ -288,6 +288,10 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
             },
+            .e_structural_hash => |h| {
+                try self.traverseExpr(module_env, h.value, scope_end, depth + 1);
+                try self.traverseExpr(module_env, h.hasher, scope_end, depth + 1);
+            },
             .e_method_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);

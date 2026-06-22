@@ -47,6 +47,7 @@ test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(@hasField(Mono.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Mono.ExprData, "call_value"));
     try std.testing.expect(@hasField(Mono.ExprData, "structural_eq"));
+    try std.testing.expect(@hasField(Mono.ExprData, "structural_hash"));
     try std.testing.expect(@hasField(Mono.ExprData, "loop_"));
 
     try std.testing.expect(!@hasField(Mono.ExprData, "dispatch_call"));

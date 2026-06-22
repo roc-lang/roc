@@ -235,6 +235,7 @@ const WrapperAnalyzer = struct {
             .field_access => |field| self.exprReadsOnlyArgs(field.receiver, args),
             .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
             .structural_eq => |eq| self.exprReadsOnlyArgs(eq.lhs, args) and self.exprReadsOnlyArgs(eq.rhs, args),
+            .structural_hash => |h| self.exprReadsOnlyArgs(h.value, args) and self.exprReadsOnlyArgs(h.hasher, args),
             .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args),
             .lambda,
             .fn_def,
@@ -321,6 +322,10 @@ const WrapperAnalyzer = struct {
             .structural_eq => |eq| {
                 try self.visitBodyCallees(eq.lhs);
                 try self.visitBodyCallees(eq.rhs);
+            },
+            .structural_hash => |h| {
+                try self.visitBodyCallees(h.value);
+                try self.visitBodyCallees(h.hasher);
             },
             .block => |block| try self.visitBodyCallees(block.final_expr),
             .lambda,

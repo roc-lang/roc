@@ -467,6 +467,13 @@ const Solver = struct {
                 const rhs = try self.inferExpr(eq.rhs);
                 try self.unify(lhs, rhs);
             },
+            .structural_hash => |h| {
+                _ = try self.inferExpr(h.value);
+                const hasher = try self.inferExpr(h.hasher);
+                // `to_hash` threads the Hasher through, so the result type equals
+                // the Hasher argument's type.
+                try self.unify(expected, hasher);
+            },
             .match_ => |match| {
                 const scrutinee_ty = try self.inferExpr(match.scrutinee);
                 for (self.program.lifted.branchSpan(match.branches)) |branch| {

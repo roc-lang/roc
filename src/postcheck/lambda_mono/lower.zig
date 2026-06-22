@@ -526,6 +526,10 @@ const Lowerer = struct {
                 .rhs = try self.lowerExpr(eq.rhs),
                 .negated = eq.negated,
             } },
+            .structural_hash => |h| .{ .structural_hash = .{
+                .value = try self.lowerExpr(h.value),
+                .hasher = try self.lowerExpr(h.hasher),
+            } },
             .match_ => |match| blk: {
                 if (self.folded_matches.get(match.scrutinee)) |folded_body| {
                     break :blk .{ .block = .{

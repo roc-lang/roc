@@ -262,4 +262,58 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "7099" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/9725
+        // An anonymous record must work as a Dict key. Dict.insert requires
+        // `k.to_hash`, which the checker derives structurally for records (as it
+        // already does for `is_eq`). Inserting under a record key then reading it
+        // back with an equal record key must round-trip: the structural hash makes
+        // both keys land in the same bucket and structural is_eq confirms the match.
+        .name = "issue 9725: record as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert({ a: 1, b: 2 }, 99).get({ a: 1, b: 2 })
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // The structural `to_hash` derivation generalizes beyond records: a tuple
+        // key must work the same way, hashing each element in order.
+        .name = "issue 9725: tuple as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert((1, 2), 99).get((1, 2))
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // A record key whose field is itself a structural type (a tuple). The
+        // derived `to_hash` must recurse into the nested tuple to hash all of it.
+        .name = "issue 9725: record with nested tuple as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert({ pair: (1, 2), tag: 3 }, 99).get({ pair: (1, 2), tag: 3 })
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // The structural `to_hash` derivation also covers tag unions: the
+        // discriminant is hashed first, then the active variant's payloads. Two
+        // tags with payloads exercise both the discriminant and the payload paths.
+        .name = "issue 9725: tag-union value as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\Key : [A(U64), B(U64)]
+        \\
+        \\main = {
+        \\    key_a : Key
+        \\    key_a = A(1)
+        \\    key_b : Key
+        \\    key_b = B(1)
+        \\    d = Dict.empty().insert(key_a, 11).insert(key_b, 22)
+        \\    d.get(B(1))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(22.0)" },
+    },
 };

@@ -184,6 +184,10 @@ pub const ExprData = union(enum) {
         rhs: ExprId,
         negated: bool,
     },
+    structural_hash: struct {
+        value: ExprId,
+        hasher: ExprId,
+    },
     match_: struct {
         scrutinee: ExprId,
         branches: Span(Branch),

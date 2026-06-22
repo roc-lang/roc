@@ -72,6 +72,7 @@ pub const Tag = enum {
     expr_dispatch_call,
     expr_interpolation,
     expr_structural_eq,
+    expr_structural_hash,
     expr_method_eq,
     expr_type_method_call,
     expr_type_dispatch_call,
@@ -323,6 +324,7 @@ pub const Payload = extern union {
     expr_dispatch_call: ExprDispatchCall,
     expr_interpolation: ExprInterpolation,
     expr_structural_eq: ExprStructuralEq,
+    expr_structural_hash: ExprStructuralHash,
     expr_method_eq: ExprMethodEq,
     expr_type_method_call: ExprTypeMethodCall,
     expr_type_dispatch_call: ExprTypeDispatchCall,
@@ -670,6 +672,11 @@ pub const Payload = extern union {
         rhs: u32,
         negated: u8,
         _padding: [3]u8 = .{ 0, 0, 0 },
+    };
+
+    pub const ExprStructuralHash = extern struct {
+        value: u32,
+        hasher: u32,
     };
 
     pub const ExprMethodEq = extern struct {

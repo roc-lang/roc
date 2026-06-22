@@ -225,6 +225,12 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, eq.rhs);
                     if (self.stopped) return;
                 },
+                .e_structural_hash => |h| {
+                    self.walkExpr(store, h.value);
+                    if (self.stopped) return;
+                    self.walkExpr(store, h.hasher);
+                    if (self.stopped) return;
+                },
                 .e_method_eq => |eq| {
                     self.walkExpr(store, eq.lhs);
                     if (self.stopped) return;

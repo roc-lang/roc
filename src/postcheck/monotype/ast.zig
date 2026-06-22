@@ -320,6 +320,13 @@ pub const ExprData = union(enum) {
         rhs: ExprId,
         negated: bool,
     },
+    /// Structural hashing of a scalar leaf: feed `value` into `hasher`,
+    /// producing a new Hasher. Aggregate types are decomposed before reaching
+    /// this node, so it only ever wraps a primitive/str/zst value.
+    structural_hash: struct {
+        value: ExprId,
+        hasher: ExprId,
+    },
     match_: MatchExpr,
     if_: IfExpr,
     block: BlockExpr,

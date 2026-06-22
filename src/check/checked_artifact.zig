@@ -1567,6 +1567,8 @@ fn exprDependsOnUnboundPlatformRequirement(
         .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
+        .structural_hash => |h| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.value, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.hasher, relation_blocked_exprs),
         .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
@@ -6504,6 +6506,10 @@ pub const CheckedExprData = union(enum) {
         rhs: CheckedExprId,
         negated: bool,
     },
+    structural_hash: struct {
+        value: CheckedExprId,
+        hasher: CheckedExprId,
+    },
     method_eq: ?StaticDispatchPlanId,
     type_dispatch_call: ?StaticDispatchPlanId,
     tuple_access: struct {
@@ -6691,6 +6697,10 @@ pub const StoredCheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+    },
+    structural_hash: struct {
+        value: CheckedExprId,
+        hasher: CheckedExprId,
     },
     method_eq: ?StaticDispatchPlanId,
     type_dispatch_call: ?StaticDispatchPlanId,
@@ -6925,6 +6935,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .step_fn_ty = i.step_fn_ty,
         } },
         .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+        .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
         .method_eq => |p| .{ .method_eq = p },
         .type_dispatch_call => |p| .{ .type_dispatch_call = p },
         .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
@@ -7492,6 +7503,10 @@ const CheckedSourceNodes = struct {
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
                 try self.markExpr(eq.rhs, work);
+            },
+            .e_structural_hash => |h| {
+                try self.markExpr(h.value, work);
+                try self.markExpr(h.hasher, work);
             },
             .e_method_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -8121,6 +8136,7 @@ pub const CheckedBodyStore = struct {
                 .step_fn_ty = i.step_fn_ty,
             } },
             .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+            .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
             .method_eq => |p| .{ .method_eq = p },
             .type_dispatch_call => |p| .{ .type_dispatch_call = p },
             .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
@@ -8862,6 +8878,8 @@ fn checkedExprDataDiverges(
         .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
         .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
             checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
+        .structural_hash => |h| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, h.value, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, h.hasher, expr_states, statement_states),
         .tuple_access => |access| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .hosted_lambda => false,
@@ -9264,6 +9282,10 @@ const CheckedBodyPayloadCopier = struct {
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
                 .negated = eq.negated,
+            } },
+            .e_structural_hash => |h| .{ .structural_hash = .{
+                .value = self.checkedExpr(h.value),
+                .hasher = self.checkedExpr(h.hasher),
             } },
             .e_method_eq => .{ .method_eq = null },
             .e_type_method_call => checkedArtifactInvariant(
@@ -10426,6 +10448,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .zero_argument_tag,
         .dispatch_call,
         .structural_eq,
+        .structural_hash,
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
@@ -11164,6 +11187,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .dispatch_call,
         .interpolation,
         .structural_eq,
+        .structural_hash,
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
@@ -11332,6 +11356,7 @@ fn categorizeValueRef(
         .e_dispatch_call,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_type_method_call,
         .e_type_dispatch_call,
@@ -12138,6 +12163,10 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectExpr(eq.lhs);
                 try self.collectExpr(eq.rhs);
             },
+            .structural_hash => |h| {
+                try self.collectExpr(h.value);
+                try self.collectExpr(h.hasher);
+            },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
             .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
@@ -12860,6 +12889,10 @@ const NestedProcSiteBuilder = struct {
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
+            },
+            .structural_hash => |h| {
+                try self.scanExpr(h.value, owner, false);
+                try self.scanExpr(h.hasher, owner, false);
             },
             .tuple_access => |access| try self.scanExpr(access.tuple, owner, false),
             .for_ => |for_| {
@@ -18786,6 +18819,8 @@ fn checkedExprContainsExpr(
         },
         .structural_eq => |eq| checkedExprContainsExpr(checked_bodies, eq.lhs, needle) or
             checkedExprContainsExpr(checked_bodies, eq.rhs, needle),
+        .structural_hash => |h| checkedExprContainsExpr(checked_bodies, h.value, needle) or
+            checkedExprContainsExpr(checked_bodies, h.hasher, needle),
         .expect_err => |expect_err| checkedExprContainsExpr(checked_bodies, expect_err.expr, needle),
         .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
         .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
@@ -18932,6 +18967,8 @@ fn checkedExprContainsPattern(
         },
         .structural_eq => |eq| checkedExprContainsPattern(checked_bodies, eq.lhs, needle) or
             checkedExprContainsPattern(checked_bodies, eq.rhs, needle),
+        .structural_hash => |h| checkedExprContainsPattern(checked_bodies, h.value, needle) or
+            checkedExprContainsPattern(checked_bodies, h.hasher, needle),
         .expect_err => |expect_err| checkedExprContainsPattern(checked_bodies, expect_err.expr, needle),
         .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
         .run_low_level => |run| checkedExprSpanContainsPattern(checked_bodies, run.args, needle),
@@ -26309,8 +26346,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3F, 0x4D, 0xF8, 0x30, 0xBD, 0x8D, 0x90, 0x2D, 0x38, 0x7C, 0xCC, 0xDA, 0x05, 0xF7, 0x6A, 0x89,
-        0x9F, 0xE8, 0x7E, 0xB9, 0x62, 0x79, 0xE8, 0x49, 0xD1, 0x02, 0x6A, 0x74, 0x94, 0x26, 0x43, 0x20,
+        0xD4, 0xDD, 0x14, 0x86, 0x0C, 0x8F, 0x75, 0x35, 0x61, 0xCF, 0xC8, 0x17, 0x8B, 0x83, 0x2B, 0x5C,
+        0xFD, 0xAB, 0xCD, 0x7B, 0x61, 0x6A, 0x8F, 0x9B, 0xEF, 0xE9, 0x29, 0xFF, 0xA4, 0xA4, 0xC8, 0x29,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

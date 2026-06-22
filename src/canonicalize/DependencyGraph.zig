@@ -203,6 +203,10 @@ fn collectExprDependencies(
                 try pending.append(stack_allocator, eq.rhs);
                 try pending.append(stack_allocator, eq.lhs);
             },
+            .e_structural_hash => |h| {
+                try pending.append(stack_allocator, h.hasher);
+                try pending.append(stack_allocator, h.value);
+            },
             .e_method_eq => |eq| {
                 try pending.append(stack_allocator, eq.rhs);
                 try pending.append(stack_allocator, eq.lhs);
