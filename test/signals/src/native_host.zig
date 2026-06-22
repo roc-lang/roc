@@ -1812,10 +1812,6 @@ const HostEnv = struct {
         self.dispatch_metrics.recompute_batches += 1;
     }
 
-    fn recordStreamNodesScanned(self: *HostEnv, count: usize) void {
-        self.engine.pending_roc_metrics.bump(.stream_nodes_scanned, @intCast(count));
-    }
-
     fn deinitPendingTask(self: *HostEnv, task: *HostPendingTask) void {
         const allocator = self.gpa.allocator();
         abi.decrefBox(@ptrCast(task.task_token), self.engine.roc_host.?);
@@ -1853,26 +1849,6 @@ const HostEnv = struct {
         };
     }
 
-    fn cleanupEventCount(self: *const HostEnv, name: []const u8) u64 {
-        var count: u64 = 0;
-        for (self.engine.cleanup_events.items) |event_name| {
-            if (std.mem.eql(u8, event_name, name)) count += 1;
-        }
-        return count;
-    }
-
-    fn activeTaskRecordByToken(self: *HostEnv, token: HostSignalToken) ?*HostSignalRecord {
-        for (self.engine.active_signal_graph.items) |node| {
-            switch (node.record.payload) {
-                .task_source => |payload| {
-                    if (payload.token == token) return node.record;
-                },
-                .ref, .const_value, .map, .map2, .combine, .interval_source => {},
-            }
-        }
-        return null;
-    }
-
     fn activeTaskRecordByName(self: *HostEnv, name: []const u8) ?*HostSignalRecord {
         var found: ?*HostSignalRecord = null;
         for (self.engine.active_signal_graph.items) |node| {
@@ -1886,19 +1862,6 @@ const HostEnv = struct {
             }
         }
         return found;
-    }
-
-    fn activeIntervalRecordCountByPeriod(self: *const HostEnv, period_ms: u64) u64 {
-        var count: u64 = 0;
-        for (self.engine.active_signal_graph.items) |node| {
-            switch (node.record.payload) {
-                .interval_source => |payload| {
-                    if (payload.period_ms == period_ms) count += 1;
-                },
-                .ref, .const_value, .map, .map2, .combine, .task_source => {},
-            }
-        }
-        return count;
     }
 
     fn activeIntervalRecordByPeriod(self: *HostEnv, period_ms: u64) ?*HostSignalRecord {
@@ -1925,14 +1888,6 @@ const HostEnv = struct {
             found = index;
         }
         return found;
-    }
-
-    fn pendingTaskCountByName(self: *const HostEnv, name: []const u8) u64 {
-        var count: u64 = 0;
-        for (self.engine.pending_tasks.items) |task| {
-            if (task.active and std.mem.eql(u8, task.task_name, name)) count += 1;
-        }
-        return count;
     }
 
     fn removePendingTaskAt(self: *HostEnv, index: usize) HostPendingTask {
@@ -1982,20 +1937,13 @@ const HostEnv = struct {
         self.engine.states.items.len = 0;
     }
 
-    fn stateIndexByNodeId(self: *HostEnv, node_id: u64) ?usize {
-        for (self.engine.states.items, 0..) |state, index| {
-            if (state.active and state.state_id == node_id) return index;
-        }
-        return null;
-    }
-
     fn stateValueByNodeId(self: *HostEnv, node_id: u64) HostValue {
-        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("signal referenced an unknown active state node");
+        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("signal referenced an unknown active state node");
         return self.cloneHostValue(self.engine.states.items[state_index].cell.value);
     }
 
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
-        if (self.stateIndexByNodeId(desc.node_id) != null) return;
+        if (self.engine.stateIndexByNodeId(desc.node_id) != null) return;
 
         const initial = callValueInitThunk(roc_host, desc.initial);
         var cell = HostValueCell.initRetained(initial, desc.eq, desc.drop, &self.engine.pending_roc_metrics);
@@ -2017,7 +1965,7 @@ const HostEnv = struct {
     }
 
     fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: HostValue) bool {
-        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
+        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
         const state = &self.engine.states.items[state_index];
         if (state.cell.valueEquals(roc_host, value)) {
             state.cell.dropIncoming(roc_host, value);
@@ -2030,19 +1978,19 @@ const HostEnv = struct {
     }
 
     fn deactivateState(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64) void {
-        const state_index = self.stateIndexByNodeId(node_id) orelse return;
+        const state_index = self.engine.stateIndexByNodeId(node_id) orelse return;
         const state = &self.engine.states.items[state_index];
         state.cell.deinit(roc_host, &self.engine.pending_roc_metrics);
         state.active = false;
     }
 
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
+        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("active state has no equality callable");
         return self.engine.states.items[state_index].cell.eq;
     }
 
     fn stateDropCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        const state_index = self.stateIndexByNodeId(node_id) orelse failHost("active state has no drop callable");
+        const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("active state has no drop callable");
         return self.engine.states.items[state_index].cell.drop;
     }
 
@@ -2056,7 +2004,7 @@ const HostEnv = struct {
         const result = scope_tree.internRoot(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.recordScopeCreated();
+        if (result.created) self.engine.recordScopeCreated();
         return result.scope_id;
     }
 
@@ -2064,7 +2012,7 @@ const HostEnv = struct {
         const result = scope_tree.internComponent(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes, parent_scope_id, site_ordinal) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.recordScopeCreated();
+        if (result.created) self.engine.recordScopeCreated();
         return result.scope_id;
     }
 
@@ -2072,14 +2020,8 @@ const HostEnv = struct {
         const result = scope_tree.internWhenBranch(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes, parent_scope_id, site_ordinal, branch) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.recordScopeCreated();
+        if (result.created) self.engine.recordScopeCreated();
         return result.scope_id;
-    }
-
-    fn recordScopeCreated(self: *HostEnv) void {
-        var metrics = self.engine.pending_roc_metrics;
-        metrics.bump(.scopes_created, 1);
-        self.engine.pending_roc_metrics = metrics;
     }
 
     fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
@@ -2094,7 +2036,7 @@ const HostEnv = struct {
         }) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        self.recordScopeCreated();
+        self.engine.recordScopeCreated();
         return result.scope_id;
     }
 
@@ -2172,7 +2114,7 @@ const HostEnv = struct {
     fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
         self.validateScopeId(scope_id);
         const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        self.recordEachKeyCompare();
+        self.engine.recordEachKeyCompare();
         return switch (scope.step) {
             .each_row => |*row| row.key.valueEquals(roc_host, key),
             .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
@@ -2188,19 +2130,13 @@ const HostEnv = struct {
         };
     }
 
-    fn recordEachKeyCompare(self: *HostEnv) void {
-        var metrics = self.engine.pending_roc_metrics;
-        metrics.bump(.each_key_compares, 1);
-        self.engine.pending_roc_metrics = metrics;
-    }
-
     fn hashEachKeyValue(self: *HostEnv, roc_host: *abi.RocHost, key_hash: abi.RocErasedCallable, key: HostValue) u64 {
-        self.recordEachKeyCompare();
+        self.engine.recordEachKeyCompare();
         return callErasedHostValueToU64(roc_host, key_hash, key);
     }
 
     fn eachKeysEqual(self: *HostEnv, roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, left: HostValue, right: HostValue) bool {
-        self.recordEachKeyCompare();
+        self.engine.recordEachKeyCompare();
         return callErasedHostValueHostValueToBool(roc_host, key_eq, left, right);
     }
 
@@ -2879,7 +2815,7 @@ const HostEnv = struct {
         var ids: std.ArrayListUnmanaged(u64) = .empty;
         errdefer ids.deinit(allocator);
 
-        self.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
         for (self.engine.active_stream.render_nodes.items) |node| {
             const scope_id = HostEnv.renderNodeScopeId(&self.engine.active_stream, node);
             const row_scope_id = self.eachSiteRowAncestorScopeId(scope_id, site) orelse continue;
@@ -3005,7 +2941,7 @@ const HostEnv = struct {
 
     fn lastRenderEndIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
         var end_index: ?usize = null;
-        self.recordStreamNodesScanned(stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         for (stream.render_nodes.items, 0..) |node, index| {
             if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) {
                 end_index = index + 1;
@@ -3077,7 +3013,7 @@ const HostEnv = struct {
     }
 
     fn streamNodeIdInScopeSubtree(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
-        self.recordStreamNodesScanned(previous.scope_sites.items.len);
+        self.engine.recordStreamNodesScanned(previous.scope_sites.items.len);
         for (previous.scope_sites.items) |site| {
             if (site.node_id == node_id and self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id)) return true;
         }
@@ -3087,12 +3023,12 @@ const HostEnv = struct {
     fn scopeSubtreeHasDirtyStructuralSource(self: *HostEnv, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
         if (dirty_source_node_ids.len == 0) return false;
 
-        self.recordStreamNodesScanned(previous.whens.items.len);
+        self.engine.recordStreamNodesScanned(previous.whens.items.len);
         for (previous.whens.items) |desc| {
             if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
             if (sourceNodeIdsIntersect(desc.condition.source_node_ids, dirty_source_node_ids)) return true;
         }
-        self.recordStreamNodesScanned(previous.eaches.items.len);
+        self.engine.recordStreamNodesScanned(previous.eaches.items.len);
         for (previous.eaches.items) |desc| {
             if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
             if (sourceNodeIdsIntersect(desc.items.source_node_ids, dirty_source_node_ids)) return true;
@@ -3117,27 +3053,6 @@ const HostEnv = struct {
     fn activeEventPayloadTagByIndex(self: *HostEnv, event_index: usize) HostValueTypeTag {
         if (event_index >= self.engine.active_events.items.len) failHost("active event table is missing a retained payload tag");
         return self.engine.active_events.items[event_index].payload_tag;
-    }
-
-    fn activeScopeSiteByNodeId(self: *HostEnv, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
-        for (self.engine.active_stream.scope_sites.items) |site| {
-            if (site.node_id == node_id and site.kind == kind) return site;
-        }
-        return null;
-    }
-
-    fn activeWhenIndexByNodeId(self: *HostEnv, node_id: u64) ?usize {
-        for (self.engine.active_stream.whens.items, 0..) |when, index| {
-            if (when.node_id == node_id) return index;
-        }
-        return null;
-    }
-
-    fn activeEachIndexByNodeId(self: *HostEnv, node_id: u64) ?usize {
-        for (self.engine.active_stream.eaches.items, 0..) |each, index| {
-            if (each.node_id == node_id) return index;
-        }
-        return null;
     }
 
     fn scopeIsEachSiteRowDescendantOrSelf(self: *HostEnv, scope_id: u64, site: HostEachSite) bool {
@@ -3173,7 +3088,7 @@ const HostEnv = struct {
 
     fn countRenderNodesInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) usize {
         var count: usize = 0;
-        self.recordStreamNodesScanned(stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         for (stream.render_nodes.items) |node| {
             if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) count += 1;
         }
@@ -3182,7 +3097,7 @@ const HostEnv = struct {
 
     fn countRenderNodesInReplacementTarget(self: *HostEnv, stream: *const HostNodeDescriptorStream, target: HostStructuralReplacementTarget) usize {
         var count: usize = 0;
-        self.recordStreamNodesScanned(stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         for (stream.render_nodes.items) |node| {
             if (self.renderNodeInReplacementTarget(stream, node, target)) count += 1;
         }
@@ -3190,7 +3105,7 @@ const HostEnv = struct {
     }
 
     fn firstRenderIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-        self.recordStreamNodesScanned(stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         for (stream.render_nodes.items, 0..) |node, index| {
             if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) return index;
         }
@@ -3198,7 +3113,7 @@ const HostEnv = struct {
     }
 
     fn streamNodeIdInReplacementTarget(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, target: HostStructuralReplacementTarget) bool {
-        self.recordStreamNodesScanned(previous.scope_sites.items.len);
+        self.engine.recordStreamNodesScanned(previous.scope_sites.items.len);
         for (previous.scope_sites.items) |site| {
             if (site.node_id == node_id and self.scopeIsInReplacementTarget(site.scope_id, target)) return true;
         }
@@ -3427,7 +3342,7 @@ const HostEnv = struct {
     fn removeActiveElementDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         const allocator = self.gpa.allocator();
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.elements.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.elements.items.len);
         for (self.engine.active_stream.elements.items, 0..) |desc, read_index| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 self.engine.active_stream.clearElementIndex(desc.elem_id, read_index);
@@ -3444,7 +3359,7 @@ const HostEnv = struct {
     fn removeActiveTextNodeDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         const allocator = self.gpa.allocator();
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.text_nodes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.text_nodes.items.len);
         for (self.engine.active_stream.text_nodes.items, 0..) |desc, read_index| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 self.engine.active_stream.clearTextNodeIndex(desc.elem_id, read_index);
@@ -3460,7 +3375,7 @@ const HostEnv = struct {
 
     fn removeActiveSignalTextNodeDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.signal_text_nodes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.signal_text_nodes.items.len);
         for (self.engine.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 var removed = desc;
@@ -3479,7 +3394,7 @@ const HostEnv = struct {
     fn removeActiveStaticTextAttrDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         const allocator = self.gpa.allocator();
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.static_text_attrs.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.static_text_attrs.items.len);
         for (self.engine.active_stream.static_text_attrs.items, 0..) |desc, read_index| {
             if (self.elemIdInReplacementTarget(&self.engine.active_stream, desc.elem_id, target)) {
                 self.engine.active_stream.clearStaticTextAttrIndex(desc.elem_id, desc.field, read_index);
@@ -3495,7 +3410,7 @@ const HostEnv = struct {
 
     fn removeActiveSignalTextAttrDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.signal_text_attrs.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.signal_text_attrs.items.len);
         for (self.engine.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
             if (self.elemIdInReplacementTarget(&self.engine.active_stream, desc.elem_id, target)) {
                 var removed = desc;
@@ -3513,7 +3428,7 @@ const HostEnv = struct {
 
     fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.static_bool_attrs.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.static_bool_attrs.items.len);
         for (self.engine.active_stream.static_bool_attrs.items, 0..) |desc, read_index| {
             if (self.elemIdInReplacementTarget(&self.engine.active_stream, desc.elem_id, target)) {
                 self.engine.active_stream.clearStaticBoolAttrIndex(desc.elem_id, desc.field, read_index);
@@ -3528,7 +3443,7 @@ const HostEnv = struct {
 
     fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.signal_bool_attrs.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.signal_bool_attrs.items.len);
         for (self.engine.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
             if (self.elemIdInReplacementTarget(&self.engine.active_stream, desc.elem_id, target)) {
                 var removed = desc;
@@ -3546,7 +3461,7 @@ const HostEnv = struct {
 
     fn removeActiveOnChangeDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.on_changes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.on_changes.items.len);
         for (self.engine.active_stream.on_changes.items) |desc| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 var removed = desc;
@@ -3563,7 +3478,7 @@ const HostEnv = struct {
     fn removeActiveCleanupDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         const allocator = self.gpa.allocator();
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.cleanups.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.cleanups.items.len);
         for (self.engine.active_stream.cleanups.items) |desc| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 allocator.free(desc.name);
@@ -3581,7 +3496,7 @@ const HostEnv = struct {
         }
 
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.events.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.events.items.len);
         for (self.engine.active_stream.events.items, 0..) |desc, event_index| {
             if (self.elemIdInReplacementTarget(&self.engine.active_stream, desc.elem_id, target)) {
                 if (desc.owns_payload_tag or desc.owns_payload_drop or desc.owns_transform) {
@@ -3608,7 +3523,7 @@ const HostEnv = struct {
     fn removeActiveScopeSiteDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
         const allocator = self.gpa.allocator();
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.scope_sites.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.scope_sites.items.len);
         for (self.engine.active_stream.scope_sites.items) |desc| {
             if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                 allocator.free(desc.binder_bindings);
@@ -3622,7 +3537,7 @@ const HostEnv = struct {
 
     fn removeActiveStateDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.states.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.states.items.len);
         for (self.engine.active_stream.states.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.engine.active_stream, desc.node_id, target)) {
                 self.engine.pending_roc_metrics.bump(.closure_releases, 3);
@@ -3639,7 +3554,7 @@ const HostEnv = struct {
 
     fn removeActiveWhenDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.whens.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.whens.items.len);
         for (self.engine.active_stream.whens.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.engine.active_stream, desc.node_id, target)) {
                 var removed = desc;
@@ -3660,7 +3575,7 @@ const HostEnv = struct {
 
     fn removeActiveEachDescriptorsInTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
         var write_index: usize = 0;
-        self.recordStreamNodesScanned(self.engine.active_stream.eaches.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.eaches.items.len);
         for (self.engine.active_stream.eaches.items) |desc| {
             if (self.streamNodeIdInReplacementTarget(&self.engine.active_stream, desc.node_id, target)) {
                 var removed = desc;
@@ -3885,7 +3800,7 @@ const HostEnv = struct {
         var removed_render_count: usize = 0;
         var target_range_closed = false;
 
-        self.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
         for (self.engine.active_stream.render_nodes.items, 0..) |node, index| {
             if (self.renderNodeInReplacementTarget(&self.engine.active_stream, node, target)) {
                 if (target_range_closed) failHost("structural replacement render target is not contiguous");
@@ -3897,7 +3812,7 @@ const HostEnv = struct {
             }
         }
 
-        self.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
+        self.engine.recordStreamNodesScanned(self.engine.active_stream.render_nodes.items.len);
         for (self.engine.active_stream.render_nodes.items) |node| {
             if (!self.renderNodeInReplacementTarget(&self.engine.active_stream, node, target)) continue;
             const parent_elem_id = renderNodeParentElemId(&self.engine.active_stream, node);
@@ -5496,7 +5411,7 @@ fn dispatchEffectSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *Ho
 }
 
 fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) CommandCounts {
-    const record = host.activeTaskRecordByToken(cmd.task_token) orelse failHost("StartTask referenced a task source that is not active");
+    const record = host.engine.activeTaskRecordByToken(cmd.task_token) orelse failHost("StartTask referenced a task source that is not active");
     const task_payload = switch (record.payload) {
         .task_source => |payload| payload,
         .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
@@ -5708,7 +5623,7 @@ fn applyStructuralEventBindings(host: *HostEnv, stream: *const HostNodeDescripto
     defer allocator.free(required);
     @memset(required, .{});
 
-    host.recordStreamNodesScanned(stream.events.items.len);
+    host.engine.recordStreamNodesScanned(stream.events.items.len);
     for (stream.events.items, 0..) |desc, index| {
         if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) {
             failHost("event descriptor referenced an element outside the structural render stream");
@@ -5886,7 +5801,7 @@ fn applyStructuralEventBindingsForSeen(host: *HostEnv, stream: *const HostNodeDe
     defer allocator.free(required);
     @memset(required, .{});
 
-    host.recordStreamNodesScanned(stream.events.items.len);
+    host.engine.recordStreamNodesScanned(stream.events.items.len);
     for (stream.events.items, 0..) |desc, index| {
         if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) continue;
         const event_id: u64 = @intCast(index + 1);
@@ -6032,7 +5947,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
 
     var counts: CommandCounts = .{};
 
-    host.recordStreamNodesScanned(stream.render_nodes.items.len);
+    host.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
     for (stream.render_nodes.items) |node| {
         if (!host.renderNodeInReplacementTarget(stream, node, targets.replacement)) continue;
         if (node.elem_id >= child_table_len) failHost("render node exceeded structural DOM patch table");
@@ -6045,7 +5960,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
         appendUniqueU64(allocator, &touched_parents, parent_elem_id);
     }
 
-    host.recordStreamNodesScanned(host.engine.active_stream.render_nodes.items.len);
+    host.engine.recordStreamNodesScanned(host.engine.active_stream.render_nodes.items.len);
     for (host.engine.active_stream.render_nodes.items) |node| {
         if (!host.renderNodeInReplacementTarget(&host.engine.active_stream, node, targets.removed)) continue;
         if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
@@ -6053,7 +5968,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
 
     for (touched_parents.items) |parent_elem_id| {
-        host.recordStreamNodesScanned(stream.render_nodes.items.len);
+        host.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
         const children = streamDirectChildren(allocator, stream, parent_elem_id);
         defer allocator.free(children);
         replaceDomChildrenForStructuralParent(host, parent_elem_id, children, &counts);
@@ -6076,43 +5991,43 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
 
-    host.recordStreamNodesScanned(stream.text_nodes.items.len);
+    host.engine.recordStreamNodesScanned(stream.text_nodes.items.len);
     for (stream.text_nodes.items) |desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
-    host.recordStreamNodesScanned(stream.signal_text_nodes.items.len);
+    host.engine.recordStreamNodesScanned(stream.signal_text_nodes.items.len);
     for (stream.signal_text_nodes.items) |*desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addTextField(.text);
         }
     }
-    host.recordStreamNodesScanned(stream.static_text_attrs.items.len);
+    host.engine.recordStreamNodesScanned(stream.static_text_attrs.items.len);
     for (stream.static_text_attrs.items) |desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
-    host.recordStreamNodesScanned(stream.signal_text_attrs.items.len);
+    host.engine.recordStreamNodesScanned(stream.signal_text_attrs.items.len);
     for (stream.signal_text_attrs.items) |*desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addTextField(desc.field);
         }
     }
-    host.recordStreamNodesScanned(stream.static_bool_attrs.items.len);
+    host.engine.recordStreamNodesScanned(stream.static_bool_attrs.items.len);
     for (stream.static_bool_attrs.items) |desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
-    host.recordStreamNodesScanned(stream.signal_bool_attrs.items.len);
+    host.engine.recordStreamNodesScanned(stream.signal_bool_attrs.items.len);
     for (stream.signal_bool_attrs.items) |*desc| {
         if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and evalSignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
             counts.addBoolField(desc.field);
         }
     }
-    host.recordStreamNodesScanned(stream.on_changes.items.len);
+    host.engine.recordStreamNodesScanned(stream.on_changes.items.len);
     for (stream.on_changes.items) |*desc| {
         if (host.scopeIsInReplacementTarget(desc.scope_id, targets.replacement)) {
             evalOnChangeInitial(host, roc_host, desc);
@@ -6220,7 +6135,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
 
     var counts: CommandCounts = .{};
 
-    host.recordStreamNodesScanned(splice.replacement_elem_ids.len);
+    host.engine.recordStreamNodesScanned(splice.replacement_elem_ids.len);
     for (splice.replacement_elem_ids) |elem_id| {
         if (elem_id >= child_table_len) failHost("render node exceeded structural DOM patch table");
 
@@ -6238,7 +6153,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
     }
 
     for (touched_parents.items) |parent_elem_id| {
-        host.recordStreamNodesScanned(host.engine.active_stream.render_nodes.items.len);
+        host.engine.recordStreamNodesScanned(host.engine.active_stream.render_nodes.items.len);
         const children = streamDirectChildren(allocator, &host.engine.active_stream, parent_elem_id);
         defer allocator.free(children);
         for (children) |child_id| {
@@ -6260,7 +6175,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         applyStructuralEventBindingsForElem(host, elem_id, &counts);
     }
 
-    host.recordStreamNodesScanned(splice.replacement_on_change_indices.len);
+    host.engine.recordStreamNodesScanned(splice.replacement_on_change_indices.len);
     for (splice.replacement_on_change_indices) |on_change_index| {
         if (on_change_index >= host.engine.active_stream.on_changes.items.len) failHost("structural splice on_change index exceeded active descriptor stream");
         const desc = &host.engine.active_stream.on_changes.items[on_change_index];
@@ -6507,11 +6422,11 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
         defer replacement_stream.deinit(host.gpa.allocator(), roc_host, &host.engine.pending_roc_metrics);
         const splice_and_targets: HostStructuralSpliceAndTargets = switch (change.kind) {
             .when => when_target: {
-                const site = host.activeScopeSiteByNodeId(change.node_id, .when) orelse {
+                const site = host.engine.activeScopeSiteByNodeId(change.node_id, .when) orelse {
                     if (applied_any) continue;
                     failHost("dirty when structural site is not active");
                 };
-                const when_index = host.activeWhenIndexByNodeId(change.node_id) orelse {
+                const when_index = host.engine.activeWhenIndexByNodeId(change.node_id) orelse {
                     if (applied_any) continue;
                     failHost("dirty when descriptor is not active");
                 };
@@ -6530,11 +6445,11 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
                 };
             },
             .each => each_target: {
-                const site = host.activeScopeSiteByNodeId(change.node_id, .each) orelse {
+                const site = host.engine.activeScopeSiteByNodeId(change.node_id, .each) orelse {
                     if (applied_any) continue;
                     failHost("dirty each structural site is not active");
                 };
-                const each_index = host.activeEachIndexByNodeId(change.node_id) orelse {
+                const each_index = host.engine.activeEachIndexByNodeId(change.node_id) orelse {
                     if (applied_any) continue;
                     failHost("dirty each descriptor is not active");
                 };
@@ -7216,7 +7131,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
             .expect_cleanup => {
                 const name = cmd.task_name orelse "";
                 const expected = cmd.expected_count orelse 0;
-                const actual = host_env.cleanupEventCount(name);
+                const actual = host_env.engine.cleanupEventCount(name);
                 if (actual != expected) {
                     var buf: [512]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected cleanup \"{s}\": {d}\n  Got cleanup count:       {d}\n", .{ cmd.line_num, name, expected, actual }) catch "TEST FAILED\n";
@@ -7228,7 +7143,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
             .expect_pending_task => {
                 const name = cmd.task_name orelse "";
                 const expected = cmd.expected_count orelse 0;
-                const actual = host_env.pendingTaskCountByName(name);
+                const actual = host_env.engine.pendingTaskCountByName(name);
                 if (actual != expected) {
                     var buf: [512]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected pending task \"{s}\": {d}\n  Got pending task count:       {d}\n", .{ cmd.line_num, name, expected, actual }) catch "TEST FAILED\n";
@@ -7240,7 +7155,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
             .expect_interval => {
                 const period_ms = cmd.interval_ms orelse 0;
                 const expected = cmd.expected_count orelse 0;
-                const actual = host_env.activeIntervalRecordCountByPeriod(period_ms);
+                const actual = host_env.engine.activeIntervalRecordCountByPeriod(period_ms);
                 if (actual != expected) {
                     var buf: [512]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected active interval {d}ms: {d}\n  Got active interval count:   {d}\n", .{ cmd.line_num, period_ms, expected, actual }) catch "TEST FAILED\n";
@@ -8186,7 +8101,7 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     try std.testing.expectEqualStrings("first", host.dom_elements.items[1].text.?);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueStr(&roc_host, "second");
     host.engine.states.items[state_index].version += 1;
@@ -8247,7 +8162,7 @@ test "signals host prunes dirty leaf sink when retained map equality is unchange
     try std.testing.expectEqualStrings("stable", host.dom_elements.items[1].text.?);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueI64(2);
     host.engine.states.items[state_index].version += 1;
@@ -8319,7 +8234,7 @@ test "signals host evaluates shared dirty record once per batch" {
     try std.testing.expectEqualSlices(u64, &expected_source_routes, host.engine.active_source_signal_routes.items[@intCast(state_id)].items);
     try std.testing.expectEqual(@as(usize, 2), host.engine.active_text_signal_routes.items[@intCast(shared_record_id)].items.len);
 
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueI64(2);
     host.engine.states.items[state_index].version += 1;
@@ -8368,7 +8283,7 @@ test "signals host skips parent transform when dirty child output is unchanged" 
     try std.testing.expectEqualStrings("stable", host.dom_elements.items[1].text.?);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueI64(2);
     host.engine.states.items[state_index].version += 1;
@@ -8448,7 +8363,7 @@ test "signals host marks dirty structural sources for structural patching" {
 
     try std.testing.expectEqual(@as(u64, 1), initial_counts.reset_dom);
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueBool(false);
     host.engine.states.items[state_index].version += 1;
@@ -8506,7 +8421,7 @@ test "signals host prunes structural render when retained condition equality is 
     try std.testing.expect(activeTextElementId(&host, "true branch") != null);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueI64(2);
     host.engine.states.items[state_index].version += 1;
@@ -8642,7 +8557,7 @@ test "signals host dirty each append patches only changed row" {
     try std.testing.expect(activeTextElementId(&host, "row-24-24") != null);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
 
     var next_items: [row_count + 1]HostValue = undefined;
     for (&next_items, 0..) |*item, index| {
@@ -8718,7 +8633,7 @@ test "signals host dirty each reorder moves rows without recollecting bodies" {
     try std.testing.expectEqualSlices(u64, &.{ row_1_id, row_2_id, row_3_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
 
     const reordered_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
@@ -8793,7 +8708,7 @@ test "signals host dirty each mixed churn splices changed rows and moves survivo
     try std.testing.expectEqualSlices(u64, &.{ row_1_id, row_2_id, row_3_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
 
     const mixed_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(4) };
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
@@ -8869,7 +8784,7 @@ test "signals host updates nested when without rebuilding unchanged row" {
     try std.testing.expect(activeTextElementId(&host, "row-1-1-false") == null);
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
     testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
     host.engine.states.items[state_index].cell.value = testHostValueBool(false);
     host.engine.states.items[state_index].version += 1;

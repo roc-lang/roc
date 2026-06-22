@@ -1542,6 +1542,91 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn init() Self {
             return .{};
         }
+
+        pub fn recordStreamNodesScanned(self: *Self, count: usize) void {
+            self.pending_roc_metrics.bump(.stream_nodes_scanned, @intCast(count));
+        }
+
+        pub fn recordScopeCreated(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.scopes_created, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachKeyCompare(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_key_compares, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn cleanupEventCount(self: *const Self, name: []const u8) u64 {
+            var count: u64 = 0;
+            for (self.cleanup_events.items) |event_name| {
+                if (std.mem.eql(u8, event_name, name)) count += 1;
+            }
+            return count;
+        }
+
+        pub fn activeTaskRecordByToken(self: *Self, token: HostSignalToken) ?*HostSignalRecord {
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .task_source => |payload| {
+                        if (payload.token == token) return node.record;
+                    },
+                    .ref, .const_value, .map, .map2, .combine, .interval_source => {},
+                }
+            }
+            return null;
+        }
+
+        pub fn activeIntervalRecordCountByPeriod(self: *const Self, period_ms: u64) u64 {
+            var count: u64 = 0;
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .interval_source => |payload| {
+                        if (payload.period_ms == period_ms) count += 1;
+                    },
+                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
+                }
+            }
+            return count;
+        }
+
+        pub fn pendingTaskCountByName(self: *const Self, name: []const u8) u64 {
+            var count: u64 = 0;
+            for (self.pending_tasks.items) |task| {
+                if (task.active and std.mem.eql(u8, task.task_name, name)) count += 1;
+            }
+            return count;
+        }
+
+        pub fn stateIndexByNodeId(self: *Self, node_id: u64) ?usize {
+            for (self.states.items, 0..) |state, index| {
+                if (state.active and state.state_id == node_id) return index;
+            }
+            return null;
+        }
+
+        pub fn activeScopeSiteByNodeId(self: *Self, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
+            for (self.active_stream.scope_sites.items) |site| {
+                if (site.node_id == node_id and site.kind == kind) return site;
+            }
+            return null;
+        }
+
+        pub fn activeWhenIndexByNodeId(self: *Self, node_id: u64) ?usize {
+            for (self.active_stream.whens.items, 0..) |when, index| {
+                if (when.node_id == node_id) return index;
+            }
+            return null;
+        }
+
+        pub fn activeEachIndexByNodeId(self: *Self, node_id: u64) ?usize {
+            for (self.active_stream.eaches.items, 0..) |each, index| {
+                if (each.node_id == node_id) return index;
+            }
+            return null;
+        }
     };
 }
 
