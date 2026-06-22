@@ -267,8 +267,8 @@ The open questions (O1–O9) referenced below are defined in
   `verifyCtx`/`verifyRegistryOps` contract checks landed in Slice 4b-ii (see the
   status entry below); the contract is extended incrementally as 4c/4d move the
   methods that need `allocator()`/`rocHost()`/`recordKind()`/`metrics()`/`sink()`.
-  The current wasm host still has a small non-structural
-  runtime path for the counter milestone; it is not the final G-B0 extraction.
+  The wasm host now uses the shared engine for the non-structural signal path;
+  structural wasm support remains gated for Slice 5b.
 
 - **Status (Slice 4a + 4b data layer done):** the entire descriptor data layer
   is now in `src/engine.zig` (host-agnostic: `anytype` metrics, explicit
@@ -331,17 +331,29 @@ The open questions (O1–O9) referenced below are defined in
   tests 19/19 with `--test-force-exit`. `engine.zig` ~2,778 lines;
   `native_host.zig` ~9,904; `render_sink.zig` 75.
 
-- **Remaining G-B0 work — 5a/5b.** The shared engine is now factored on the
-  native side and compiled for `WasmCtx`; the remaining behavior-changing work
-  is to point wasm at the shared engine:
+- **Status (Slice 5a done — wasm non-structural engine path):** the wasm host
+  now has a real `SharedEngine = Engine(WasmCtx)` instance (`wasm_host.zig:29`,
+  `:166`) and a command-buffer `WasmSink` behind checked `sink()`
+  (`wasm_host.zig:73`, `:82`). The old private
+  `BoundSignal`/`evalBoundSignal` tree was removed; wasm binds retained
+  `HostSignalRecord`/`HostSignalBinding` values through the shared descriptor
+  stream (`wasm_host.zig:416`, `:570`), seeds engine signal/render caches during
+  the unchanged first render, and routes event updates through
+  `evalDirtyHostSignalBinding`/`updateDirtySignalCache`
+  (`wasm_host.zig:797`, `:889`). Browser guards were rebaselined in separate
+  commits: `counter_app.test.mjs` now asserts the exact initial render op stream
+  (`counter_app.test.mjs:64`, `:107`) and the retained engine-cache budget of 3
+  while mounted (`counter_app.test.mjs:45`), and
+  `stable_text_app.test.mjs` proves an equal derived text update emits zero
+  commands (`stable_text_app.test.mjs:44`) using `apps/stable_text.roc`
+  (`stable_text.roc:13`). Verified: native 53/53,
+  `build-test-hosts -Dplatform=signals -Doptimize=ReleaseSmall`,
+  `run-test-signals --summary failures`, and browser tests 20/20 with
+  `--test-force-exit`.
 
-  - **5a — non-structural wasm path:** replace wasm's
-    `BoundSignal`/`evalBoundSignal`/`updateSignalSinks` path with
-    `Engine(WasmCtx)` plus a command-buffer sink for scalar text/value/bool
-    updates. Wasm gains the same `is_eq` memoization as native. Rebaseline JS
-    executor/counter assertions deliberately in two commits: first prove the
-    initial render op stream is structurally identical, then reduce redundant
-    update-count assertions for pruned patches.
+- **Remaining G-B0 work — 5b.** The shared engine is now factored on the native
+  side and drives wasm's non-structural path; the remaining behavior-changing
+  work is structural wasm support:
   - **5b — structural wasm path:** gate structural support behind a comptime
     `wasm_structural_enabled` kill switch until the path is green; then enable
     `Ui.each`, `Ui.when`, `remove_node`, `move_before`, and async in the wasm
@@ -451,20 +463,19 @@ The open questions (O1–O9) referenced below are defined in
   real Roc-compiled `counter.wasm` (building it via `serve.py --no-server` when
   absent and the toolchain is present; skipping loudly otherwise) and drives it
   through the real executor against `browser/dom_double.mjs`. It asserts the
-  mount tree and 17-command mount budget (one `reset_dom`, two `bind_click`, one
-  `create_text`), that clicking `Increment`/`Decrement` changes the count with
-  exactly one `set_text` per click, and that `roc_ui_unmount` drops every
-  retained host value — `wasm_host.zig` now exports `roc_ui_live_host_values()`
-  (backed by `host_value_registry.liveCount()`) which returns 1 while mounted and
-  0 after unmount, and a clean re-mount succeeds.
+  mount tree and exact 17-command initial render stream, that clicking
+  `Increment`/`Decrement` changes the count with exactly one `set_text` per
+  click, and that `roc_ui_unmount` drops every retained host value —
+  `wasm_host.zig` exports `roc_ui_live_host_values()` (backed by
+  `host_value_registry.liveCount()`) which returns 3 while mounted after Slice
+  5a (state value + signal-record cache + sink cache) and 0 after unmount, and a
+  clean re-mount succeeds.
 - **Remaining:** run the same flow in a *real* browser (the `counter.html` page
   is still the manual QA surface; the automated guard uses a DOM double, not a
-  real browser/IME). The single-sink counter proves a `set_text == 1` budget, but
-  the wasm host still updates all active sinks after a changed state, so the
-  general multi-sink `nodes_recomputed == 1` pruning is unproven and belongs with
-  the G-B0 shared-engine extraction (or a multi-sink browser fixture), not more
-  bespoke wasm-host pruning. Out of scope here: `Ui.each`/`Ui.when`, async,
-  intervals, IME — those are G-B6/G-B7.
+  real browser/IME). Slice 5a added a wasm pruning fixture for equal derived
+  text updates; the counter remains the smallest non-structural browser smoke
+  test. Out of scope here: `Ui.each`/`Ui.when`, async, intervals, IME — those are
+  G-B6/G-B7.
 
 ### G-B5 — Event payload accessor path (High)
 
