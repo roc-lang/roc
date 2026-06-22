@@ -61,10 +61,20 @@ pub const windows = if (is_windows) struct {
     pub extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
     pub extern "kernel32" fn GetLastError() DWORD;
     pub extern "kernel32" fn GetSystemInfo(lpSystemInfo: *SYSTEM_INFO) void;
+    pub extern "kernel32" fn VirtualProtect(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flNewProtect: DWORD,
+        lpflOldProtect: *DWORD,
+    ) callconv(.winapi) BOOL;
 
     pub const PAGE_READWRITE = 0x04;
+    pub const PAGE_READONLY = 0x02;
+    pub const PAGE_EXECUTE_READ = 0x20;
+    pub const PAGE_EXECUTE_READWRITE = 0x40;
     pub const FILE_MAP_READ = 0x0004;
     pub const FILE_MAP_WRITE = 0x0002;
+    pub const FILE_MAP_EXECUTE = 0x0020;
     pub const FILE_MAP_ALL_ACCESS = 0x001f;
     pub const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     pub const FALSE = 0;
@@ -198,7 +208,7 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
             const handle = windows.CreateFileMappingW(
                 windows.INVALID_HANDLE_VALUE,
                 null, // default security
-                windows.PAGE_READWRITE | windows.SEC_RESERVE,
+                windows.PAGE_EXECUTE_READWRITE | windows.SEC_RESERVE,
                 size_high, // high 32 bits
                 size_low, // low 32 bits
                 null, // anonymous mapping
@@ -272,7 +282,7 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             defer allocator.free(wide_name);
 
             const handle = windows.OpenFileMappingW(
-                windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                 windows.FALSE,
                 wide_name,
             );
@@ -326,7 +336,7 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
             const ptr = if (base_addr) |addr|
                 windows.MapViewOfFileEx(
                     handle,
-                    windows.FILE_MAP_ALL_ACCESS,
+                    windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                     0, // offset high
                     0, // offset low
                     size,
@@ -335,7 +345,7 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
             else
                 windows.MapViewOfFile(
                     handle,
-                    windows.FILE_MAP_ALL_ACCESS,
+                    windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                     0, // offset high
                     0, // offset low
                     size,
@@ -369,6 +379,52 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
                 return error.MmapFailed;
             }
             return ptr;
+        },
+        else => return error.UnsupportedPlatform,
+    }
+}
+
+/// Page protection mode for already mapped shared memory.
+pub const MemoryProtection = enum {
+    read_write,
+    read_only,
+    read_execute,
+};
+
+/// Errors raised while changing protection on mapped shared memory.
+pub const MemoryProtectError = error{
+    MprotectFailed,
+    VirtualProtectFailed,
+    UnsupportedPlatform,
+};
+
+/// Change page permissions for an already mapped shared-memory range.
+pub fn protectMappedMemory(
+    ptr: [*]align(1) u8,
+    len: usize,
+    protection: MemoryProtection,
+) MemoryProtectError!void {
+    if (len == 0) return;
+
+    switch (builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+            const prot: std.posix.PROT = switch (protection) {
+                .read_write => .{ .READ = true, .WRITE = true },
+                .read_only => .{ .READ = true },
+                .read_execute => .{ .READ = true, .EXEC = true },
+            };
+            if (std.c.mprotect(@ptrCast(@alignCast(ptr)), len, prot) != 0) return error.MprotectFailed;
+        },
+        .windows => {
+            const protect: windows.DWORD = switch (protection) {
+                .read_write => windows.PAGE_READWRITE,
+                .read_only => windows.PAGE_READONLY,
+                .read_execute => windows.PAGE_EXECUTE_READ,
+            };
+            var old_protect: windows.DWORD = undefined;
+            if (windows.VirtualProtect(ptr, len, protect, &old_protect) == windows.FALSE) {
+                return error.VirtualProtectFailed;
+            }
         },
         else => return error.UnsupportedPlatform,
     }

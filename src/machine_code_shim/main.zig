@@ -1,9 +1,9 @@
 //! Shim for dev backend machine-code run images.
 //!
 //! The compiler parent process publishes a dev backend `RunImage` into shared
-//! memory. This shim maps that image, copies its code and readonly data into an
-//! executable allocation, applies its explicit relocations, and calls the
-//! requested Roc ABI entrypoint wrapper directly.
+//! memory. This shim maps that image, applies its explicit relocations in place,
+//! marks the generated code pages executable, and calls the requested Roc ABI
+//! entrypoint wrapper directly from the shared mapping.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -29,29 +29,32 @@ const RocOps = builtins.host_abi.RocOps;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
-const ExecutableMemory = backend.ExecutableMemory;
 const dev_wrappers = builtins.dev_wrappers;
 
 const DevProgram = struct {
-    entrypoints: []RunImage.Entrypoint,
-    executable: ExecutableMemory,
+    entrypoints: []const RunImage.Entrypoint,
+    code: []const u8,
+    executable: []const u8,
+    data: []const u8,
     generation: u64,
-    refs: std.atomic.Value(usize),
+    control: ?*hot_reload.Control,
+    slot_index: ?u32,
+    local_refs: std.atomic.Value(usize),
 
-    fn deinit(self: *DevProgram, gpa: Allocator) void {
-        gpa.free(self.entrypoints);
+    fn deinit(self: *DevProgram) void {
         self.entrypoints = &.{};
-        self.executable.deinit();
+        self.code = &.{};
+        self.executable = &.{};
+        self.data = &.{};
     }
 };
 
 const RuntimeState = struct {
     shm: SharedMemoryAllocator,
     program: *DevProgram,
-    /// Process-local executable copies that are no longer the active entrypoint
-    /// target. Shared-memory image slots are leased only while being copied and
-    /// reclaimed by the compiler parent; the shim destroys only executable
-    /// mappings it allocated in this process.
+    /// Loaded generations that are no longer the active entrypoint target. The
+    /// compiler parent reclaims shared-memory bytes after the slot refcount
+    /// reaches zero; the shim only frees these small process-local descriptors.
     retired_programs: std.ArrayList(*DevProgram),
     control: ?*hot_reload.Control,
 };
@@ -67,12 +70,10 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     EmptyCode,
     InvalidOffset,
     MisalignedBranchTarget,
-    MmapFailed,
     MprotectFailed,
     UnsupportedPlatform,
     UnsupportedRelocationEncoding,
     UnresolvedSymbol,
-    VirtualAllocFailed,
     VirtualProtectFailed,
 };
 
@@ -118,16 +119,24 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
     const control = hot_reload.controlFromBase(shm.base_ptr);
     const has_hot_reload = hot_reload.initialized(control);
-    const published_image = if (has_hot_reload)
-        hot_reload.publishedImage(control) orelse return error.InvalidDevRunImage
+    const retained_image = if (has_hot_reload)
+        hot_reload.acquirePublishedImage(control) orelse return error.InvalidDevRunImage
     else
         null;
-    const generation = if (published_image) |image| image.generation else 0;
-    const image_offset = if (published_image) |image| image.image_offset else header_offset;
-    const image_bound = if (published_image) |image| image.image_size else shm.total_size;
+    errdefer if (retained_image) |image| hot_reload.releaseSlot(control, image.slot_index);
+
+    const generation = if (retained_image) |image| image.generation else 0;
+    const image_offset = if (retained_image) |image| image.image_offset else header_offset;
+    const image_bound = if (retained_image) |image| image.image_size else shm.total_size;
 
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
-    const program = try createDevProgram(gpa, &view, generation);
+    const program = try createDevProgram(
+        gpa,
+        &view,
+        generation,
+        if (retained_image) |image| image.slot_index else null,
+        if (has_hot_reload) control else null,
+    );
     errdefer destroyDevProgram(gpa, program);
 
     return .{
@@ -163,22 +172,23 @@ const FunctionStub = struct {
 const RelocationContext = struct {
     view: *const RunImage.ProgramView,
     function_stubs: []const FunctionStub,
-    executable_base: usize,
-    data_offset: usize,
+    code_base: usize,
 
     fn resolve(ctx: *const anyopaque, name: []const u8) ?usize {
         const self: *const RelocationContext = @ptrCast(@alignCast(ctx));
 
         for (self.function_stubs) |stub| {
             if (std.mem.eql(u8, stub.name, name)) {
-                return self.executable_base + stub.offset;
+                return self.code_base + stub.offset;
             }
         }
 
         for (self.view.data_symbols) |symbol| {
             const symbol_name = self.view.dataSymbolName(symbol) catch return null;
             if (std.mem.eql(u8, symbol_name, name)) {
-                return self.executable_base + self.data_offset + @as(usize, @intCast(symbol.data_offset)) + @as(usize, @intCast(symbol.symbol_offset));
+                return @intFromPtr(self.view.data.ptr) +
+                    @as(usize, @intCast(symbol.data_offset)) +
+                    @as(usize, @intCast(symbol.symbol_offset));
             }
         }
 
@@ -186,8 +196,16 @@ const RelocationContext = struct {
     }
 };
 
-fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProgramError!DevProgram {
+fn loadDevProgram(
+    gpa: Allocator,
+    view: *const RunImage.ProgramView,
+    generation: u64,
+    slot_index: ?u32,
+    control: ?*hot_reload.Control,
+) LoadDevProgramError!DevProgram {
     if (view.code.len == 0) return error.EmptyCode;
+    try validateDirectImageLayout(view);
+    try prepareDirectImageForRelocation(view);
 
     var function_stubs = std.ArrayList(FunctionStub).empty;
     defer function_stubs.deinit(gpa);
@@ -251,68 +269,113 @@ fn loadDevProgram(gpa: Allocator, view: *const RunImage.ProgramView) LoadDevProg
     }
 
     const stub_size = try jumpStubSize();
-    const stub_section_offset = std.mem.alignForward(usize, view.code.len, 16);
+    if (function_stubs.items.len > view.function_stubs.len / stub_size) {
+        return error.InvalidDevRunImage;
+    }
     for (function_stubs.items, 0..) |*stub, i| {
-        stub.offset = stub_section_offset + i * stub_size;
+        stub.offset = (@intFromPtr(view.function_stubs.ptr) - @intFromPtr(view.code.ptr)) + i * stub_size;
     }
 
-    const max_data_alignment = try maxDevDataAlignment(view);
-    const data_offset = std.mem.alignForward(usize, stub_section_offset + function_stubs.items.len * stub_size, max_data_alignment);
-    const total_size = data_offset + view.data.len;
-
-    var executable = try ExecutableMemory.initWritable(total_size, view.code.len, 0);
-    errdefer executable.deinit();
-
-    @memset(executable.memory[0..total_size], 0);
-    @memcpy(executable.memory[0..view.code.len], view.code);
-
+    @memset(view.function_stubs, 0);
     for (function_stubs.items) |stub| {
-        try writeJumpStub(executable.memory[stub.offset..][0..stub_size], stub.target_addr);
-    }
-
-    if (view.data.len > 0) {
-        @memcpy(executable.memory[data_offset..][0..view.data.len], view.data);
+        const stub_offset = stub.offset - (@intFromPtr(view.function_stubs.ptr) - @intFromPtr(view.code.ptr));
+        try writeJumpStub(view.function_stubs[stub_offset..][0..stub_size], stub.target_addr);
     }
 
     const relocation_context = RelocationContext{
         .view = view,
         .function_stubs = function_stubs.items,
-        .executable_base = @intFromPtr(executable.memory.ptr),
-        .data_offset = data_offset,
+        .code_base = @intFromPtr(view.code.ptr),
     };
     try backend.applyRelocationsWithContext(
-        executable.memory[0..view.code.len],
-        @intFromPtr(executable.memory.ptr),
+        view.code,
+        @intFromPtr(view.code.ptr),
         relocation_records,
         &relocation_context,
         RelocationContext.resolve,
     );
-    try executable.finishWrite();
-
-    const entrypoints = try gpa.alloc(RunImage.Entrypoint, view.entrypoints.len);
-    errdefer gpa.free(entrypoints);
-    @memcpy(entrypoints, view.entrypoints);
+    try finishDirectImageRelocation(view);
 
     return .{
-        .entrypoints = entrypoints,
-        .executable = executable,
-        .generation = 0,
-        .refs = std.atomic.Value(usize).init(1),
+        .entrypoints = view.entrypoints,
+        .code = view.code,
+        .executable = view.executable,
+        .data = view.data,
+        .generation = generation,
+        .control = control,
+        .slot_index = slot_index,
+        .local_refs = std.atomic.Value(usize).init(1),
     };
 }
 
-fn createDevProgram(gpa: Allocator, view: *const RunImage.ProgramView, generation: u64) LoadDevProgramError!*DevProgram {
+fn createDevProgram(
+    gpa: Allocator,
+    view: *const RunImage.ProgramView,
+    generation: u64,
+    slot_index: ?u32,
+    control: ?*hot_reload.Control,
+) LoadDevProgramError!*DevProgram {
     const program = try gpa.create(DevProgram);
     errdefer gpa.destroy(program);
 
-    program.* = try loadDevProgram(gpa, view);
-    program.generation = generation;
+    program.* = try loadDevProgram(gpa, view, generation, slot_index, control);
     return program;
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
-    program.deinit(gpa);
+    program.deinit();
     gpa.destroy(program);
+}
+
+fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageError!void {
+    if (view.page_size == 0 or !std.math.isPowerOfTwo(view.page_size)) return error.InvalidDevRunImage;
+    if (@intFromPtr(view.executable.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    if (view.executable.len == 0 or view.executable.len % view.page_size != 0) return error.InvalidDevRunImage;
+    if (!rangeContains(view.executable, view.code)) return error.InvalidDevRunImage;
+    if (!rangeContains(view.executable, view.function_stubs)) return error.InvalidDevRunImage;
+    if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    _ = try maxDevDataAlignment(view);
+}
+
+fn rangeContains(outer: []const u8, inner: []const u8) bool {
+    if (inner.len == 0) return true;
+    const outer_start = @intFromPtr(outer.ptr);
+    const inner_start = @intFromPtr(inner.ptr);
+    if (inner_start < outer_start) return false;
+    const inner_offset = inner_start - outer_start;
+    return inner_offset <= outer.len and inner.len <= outer.len - inner_offset;
+}
+
+fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
+    try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_write);
+    try protectDataPages(view, .read_write);
+}
+
+fn finishDirectImageRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
+    flushInstructionCache(view.executable);
+    try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_execute);
+    try protectDataPages(view, .read_only);
+}
+
+fn protectDataPages(
+    view: *const RunImage.ProgramView,
+    protection: ipc.platform.MemoryProtection,
+) ipc.platform.MemoryProtectError!void {
+    if (view.data.len == 0) return;
+    const protected_len = std.mem.alignForward(usize, view.data.len, view.page_size);
+    try ipc.platform.protectMappedMemory(view.data.ptr, protected_len, protection);
+}
+
+fn flushInstructionCache(memory: []const u8) void {
+    switch (builtin.cpu.arch) {
+        .x86, .x86_64 => {},
+        else => {
+            const clearCache = struct {
+                extern fn __clear_cache(start: *const anyopaque, end: *const anyopaque) void;
+            }.__clear_cache;
+            clearCache(memory.ptr, memory.ptr + memory.len);
+        },
+    }
 }
 
 fn findFunctionStub(stubs: []const FunctionStub, name: []const u8) ?usize {
@@ -424,7 +487,7 @@ fn executeDevEntrypoint(
         return error.InvalidEntrypoint;
     }
     const entry_offset: usize = @intCast(entrypoint.code_offset);
-    if (entry_offset >= program.executable.code_size) {
+    if (entry_offset >= program.code.len) {
         ops.crash("Machine-code shim received a dev entrypoint outside the code image");
         return error.InvalidEntrypoint;
     }
@@ -432,12 +495,14 @@ fn executeDevEntrypoint(
         ops.crash("Machine-code shim received no result buffer for dev execution");
         return error.InvalidEntrypoint;
     };
-    program.executable.callRocABIAt(entry_offset, @ptrCast(ops), ret, arg_ptr);
+    const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
+        @ptrCast(@alignCast(program.code.ptr + entry_offset));
+    func(@ptrCast(ops), ret, arg_ptr);
 }
 
 fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
-    const base = @intFromPtr(program.executable.memory.ptr);
-    return address >= base and address - base < program.executable.code_size;
+    const base = @intFromPtr(program.code.ptr);
+    return address >= base and address - base < program.code.len;
 }
 
 fn findDevProgramByCodeAddressLocked(state: *RuntimeState, address: usize) ?*DevProgram {
@@ -451,31 +516,56 @@ fn findDevProgramByCodeAddressLocked(state: *RuntimeState, address: usize) ?*Dev
 }
 
 fn acquireDevProgramRef(program: *DevProgram) void {
-    const previous = program.refs.fetchAdd(1, .acquire);
+    if (program.control) |control| {
+        hot_reload.retainSlot(control, program.slot_index orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
+            }
+            unreachable;
+        });
+        return;
+    }
+
+    const previous = program.local_refs.fetchAdd(1, .acquire);
     if (builtin.mode == .Debug and previous == 0) {
         std.debug.panic("machine-code shim invariant violated: acquired unreferenced dev program", .{});
     }
 }
 
 fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
-    const previous = program.refs.fetchSub(1, .acq_rel);
-    if (builtin.mode == .Debug and previous == 0) {
-        std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+    if (program.control) |control| {
+        hot_reload.releaseSlot(control, program.slot_index orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
+            }
+            unreachable;
+        });
+    } else {
+        const previous = program.local_refs.fetchSub(1, .acq_rel);
+        if (builtin.mode == .Debug and previous == 0) {
+            std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+        }
     }
-    if (previous == 1) {
-        reclaimRetiredProgramsLocked(state);
-    }
+    reclaimRetiredProgramsLocked(state);
 }
 
 fn releaseDevProgramRef(program: *DevProgram) void {
-    const previous = program.refs.fetchSub(1, .acq_rel);
-    if (builtin.mode == .Debug and previous == 0) {
-        std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
-    }
-    if (previous != 1) return;
-
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
+
+    if (program.control) |control| {
+        hot_reload.releaseSlot(control, program.slot_index orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
+            }
+            unreachable;
+        });
+    } else {
+        const previous = program.local_refs.fetchSub(1, .acq_rel);
+        if (builtin.mode == .Debug and previous == 0) {
+            std.debug.panic("machine-code shim invariant violated: released unreferenced dev program", .{});
+        }
+    }
 
     if (runtime_state_initialized.load(.acquire)) {
         reclaimRetiredProgramsLocked(&runtime_state);
@@ -486,7 +576,7 @@ fn reclaimRetiredProgramsLocked(state: *RuntimeState) void {
     var i: usize = 0;
     while (i < state.retired_programs.items.len) {
         const program = state.retired_programs.items[i];
-        if (program.refs.load(.acquire) == 0) {
+        if (devProgramRefCount(program) == 0) {
             _ = state.retired_programs.swapRemove(i);
             destroyDevProgram(allocator(), program);
         } else {
@@ -495,42 +585,77 @@ fn reclaimRetiredProgramsLocked(state: *RuntimeState) void {
     }
 }
 
+fn devProgramRefCount(program: *const DevProgram) usize {
+    if (program.control) |control| {
+        const slot_index = program.slot_index orelse return 0;
+        const snapshot = hot_reload.slotSnapshot(control, slot_index) orelse return 0;
+        return snapshot.refs;
+    }
+    return program.local_refs.load(.acquire);
+}
+
 fn refreshRuntimeProgramIfNeeded(
     state: *RuntimeState,
 ) void {
     const control = state.control orelse return;
-    const published_image = hot_reload.publishedImage(control) orelse return;
-    if (published_image.generation <= state.program.generation) return;
-    const leased_image = hot_reload.acquirePublishedImage(control) orelse return;
-    defer hot_reload.releaseImage(control, leased_image.slot_index);
-    if (leased_image.generation <= state.program.generation) return;
 
-    const view = viewRuntimeImage(
-        &state.shm,
-        leased_image.image_offset,
-        leased_image.image_size,
-    ) catch {
-        hot_reload.acknowledge(control, leased_image.generation, .rejected);
+    while (true) {
+        const published_image = hot_reload.publishedImage(control) orelse return;
+        if (published_image.generation <= state.program.generation) return;
+
+        const retained_image = hot_reload.acquirePublishedImage(control) orelse return;
+        if (retained_image.generation <= state.program.generation) {
+            hot_reload.releaseSlot(control, retained_image.slot_index);
+            return;
+        }
+
+        const view = viewRuntimeImage(
+            &state.shm,
+            retained_image.image_offset,
+            retained_image.image_size,
+        ) catch {
+            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.acknowledge(control, retained_image.generation, .rejected);
+            return;
+        };
+
+        const gpa = allocator();
+        const next_program = createDevProgram(
+            gpa,
+            &view,
+            retained_image.generation,
+            retained_image.slot_index,
+            control,
+        ) catch {
+            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.acknowledge(control, retained_image.generation, .rejected);
+            return;
+        };
+
+        const current = hot_reload.publishedImage(control);
+        if (current != null and
+            current.?.generation > retained_image.generation and
+            (current.?.slot_index != retained_image.slot_index or current.?.image_offset != retained_image.image_offset))
+        {
+            destroyDevProgram(gpa, next_program);
+            hot_reload.releaseSlot(control, retained_image.slot_index);
+            continue;
+        }
+
+        state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
+            destroyDevProgram(gpa, next_program);
+            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.acknowledge(control, retained_image.generation, .rejected);
+            return;
+        };
+
+        const old_program = state.program;
+        state.program = next_program;
+        state.retired_programs.appendAssumeCapacity(old_program);
+        releaseDevProgramRefLocked(state, old_program);
+        hot_reload.acknowledge(control, retained_image.generation, .accepted);
         return;
-    };
-
-    const gpa = allocator();
-    const next_program = createDevProgram(gpa, &view, leased_image.generation) catch {
-        hot_reload.acknowledge(control, leased_image.generation, .rejected);
-        return;
-    };
-
-    state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
-        destroyDevProgram(gpa, next_program);
-        hot_reload.acknowledge(control, leased_image.generation, .rejected);
-        return;
-    };
-
-    const old_program = state.program;
-    state.program = next_program;
-    state.retired_programs.appendAssumeCapacity(old_program);
-    releaseDevProgramRefLocked(state, old_program);
-    hot_reload.acknowledge(control, leased_image.generation, .accepted);
+    }
 }
 
 fn evaluateEntrypoint(
@@ -613,33 +738,38 @@ export fn roc_shim_default_main(argc: usize, argv: [*][*:0]const u8) callconv(.c
     return result;
 }
 
-test "loaded dev program owns entrypoint metadata" {
+test "loaded dev program borrows direct shared image metadata" {
     const code: []const u8 = switch (builtin.cpu.arch) {
         .x86_64 => &[_]u8{0xC3},
         .aarch64, .aarch64_be => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
         else => return error.SkipZigTest,
     };
-    var source_entrypoints = [_]RunImage.Entrypoint{
+
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const entrypoints = [_]RunImage.EntrypointInput{
         .{ .ordinal = 0, .code_offset = 0 },
     };
 
-    const view = RunImage.ProgramView{
-        .code = code,
-        .entrypoints = &source_entrypoints,
-        .relocations = &.{},
-        .symbol_names = &.{},
-        .data = &.{},
-        .data_symbols = &.{},
-    };
+    const header = try RunImage.writeToSharedMemory(
+        std.testing.allocator,
+        shm.allocator(),
+        shm.base_ptr,
+        page_size,
+        code,
+        &entrypoints,
+        &.{},
+        &.{},
+    );
+    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 
-    var program = try loadDevProgram(std.testing.allocator, &view);
-    defer program.deinit(std.testing.allocator);
+    var program = try loadDevProgram(std.testing.allocator, &view, 0, null, null);
+    defer program.deinit();
 
-    try std.testing.expect(program.entrypoints.ptr != source_entrypoints[0..].ptr);
-    try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
-    try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
-
-    source_entrypoints[0] = .{ .ordinal = 99, .code_offset = 999 };
+    try std.testing.expect(program.entrypoints.ptr == view.entrypoints.ptr);
+    try std.testing.expect(program.code.ptr == view.code.ptr);
     try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
     try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
 }

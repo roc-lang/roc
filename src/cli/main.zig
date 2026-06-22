@@ -3823,7 +3823,6 @@ fn hotReloadSweepImageSlots(
     control: *ipc.hot_reload.Control,
     shm_handle: SharedMemoryHandle,
     reusable_boundary: usize,
-    acknowledged_generation: u64,
 ) error{InvalidSharedMemory}!void {
     const current = ipc.hot_reload.publishedImage(control);
 
@@ -3835,14 +3834,12 @@ fn hotReloadSweepImageSlots(
                 const is_current = current != null and
                     current.?.slot_index == i and
                     current.?.generation == snapshot.generation;
-                if (!is_current or
-                    (acknowledged_generation >= snapshot.generation and snapshot.generation != 0))
-                {
+                if (!is_current) {
                     ipc.hot_reload.markSlotRetired(control, i);
                 }
             },
             .writing => {
-                if (snapshot.readers == 0) ipc.hot_reload.markSlotFree(control, i);
+                if (snapshot.refs == 0) ipc.hot_reload.markSlotFree(control, i);
             },
             .retired, .free => {},
         }
@@ -3852,7 +3849,7 @@ fn hotReloadSweepImageSlots(
     i = 0;
     while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
         const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
-        if (snapshot.state == .retired and snapshot.readers == 0) {
+        if (snapshot.state == .retired and snapshot.refs == 0) {
             ipc.hot_reload.markSlotFree(control, i);
             continue;
         }
@@ -3872,9 +3869,8 @@ fn hotReloadChooseImageSlot(
     control: *ipc.hot_reload.Control,
     shm_handle: SharedMemoryHandle,
     reusable_boundary: usize,
-    acknowledged_generation: u64,
 ) CliMainError!HotReloadSlotChoice {
-    try hotReloadSweepImageSlots(control, shm_handle, reusable_boundary, acknowledged_generation);
+    try hotReloadSweepImageSlots(control, shm_handle, reusable_boundary);
 
     const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
         @ptrCast(@alignCast(shm_handle.ptr)),
@@ -3887,7 +3883,7 @@ fn hotReloadChooseImageSlot(
     var i: u32 = 1;
     while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
         const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
-        if (snapshot.state != .free or snapshot.readers != 0) continue;
+        if (snapshot.state != .free or snapshot.refs != 0) continue;
         if (first_free_index == null) first_free_index = i;
 
         if (snapshot.image_offset >= reusable_boundary and snapshot.slot_end > snapshot.image_offset) {
@@ -3975,7 +3971,6 @@ fn runHotReloadDevShim(
                     hot_reload_control,
                     shm_handle,
                     hot_reload_reclaim_boundary,
-                    last_reported_ack,
                 );
             }
         }
@@ -3989,7 +3984,6 @@ fn runHotReloadDevShim(
                     hot_reload_control,
                     shm_handle,
                     hot_reload_reclaim_boundary,
-                    last_reported_ack,
                 );
             }
         }
@@ -4008,7 +4002,6 @@ fn runHotReloadDevShim(
                 hot_reload_control,
                 shm_handle,
                 hot_reload_reclaim_boundary,
-                last_reported_ack,
             );
             active_rebuild = try spawnHotReloadRebuild(
                 ctx,
@@ -4140,7 +4133,7 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-test "hot reload slot choice reuses retired unleased slot without waiting for latest acknowledgement" {
+test "hot reload slot choice reuses retired unretained slot without waiting for latest acknowledgement" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
@@ -4155,7 +4148,7 @@ test "hot reload slot choice reuses retired unleased slot without waiting for la
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
     const handle = testingSharedMemoryHandle(&shm);
-    const choice = try hotReloadChooseImageSlot(control, handle, 2048, 0);
+    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
 
     try std.testing.expectEqual(@as(u32, 1), choice.slot_index);
     try std.testing.expectEqual(@as(usize, 2048), choice.slot_start);
@@ -4166,7 +4159,7 @@ test "hot reload slot choice reuses retired unleased slot without waiting for la
     try std.testing.expectEqual(@as(usize, 8192), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 }
 
-test "hot reload sweep can reclaim acknowledged current slot for latest wins reuse" {
+test "hot reload sweep keeps acknowledged current slot live" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
@@ -4180,14 +4173,43 @@ test "hot reload sweep can reclaim acknowledged current slot for latest wins reu
     ipc.hot_reload.acknowledge(control, 2, .accepted);
 
     const handle = testingSharedMemoryHandle(&shm);
-    const choice = try hotReloadChooseImageSlot(control, handle, 2048, 2);
+    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
 
-    try std.testing.expectEqual(@as(u32, 1), choice.slot_index);
-    try std.testing.expectEqual(@as(usize, 2048), choice.slot_start);
-    try std.testing.expectEqual(@as(usize, 4096), choice.slot_end);
-    try std.testing.expectEqual(@as(usize, 2048), choice.append_offset);
-    try std.testing.expectEqual(ipc.hot_reload.SlotState.free, ipc.hot_reload.slotSnapshot(control, 1).?.state);
-    try std.testing.expectEqual(@as(usize, 2048), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+    try std.testing.expectEqual(@as(u32, 2), choice.slot_index);
+    try std.testing.expectEqual(@as(usize, 0), choice.slot_start);
+    try std.testing.expectEqual(@as(usize, 0), choice.slot_end);
+    try std.testing.expectEqual(@as(usize, 4096), choice.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.SlotState.published, ipc.hot_reload.slotSnapshot(control, 1).?.state);
+    try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload slot choice skips retired retained slot" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    ipc.hot_reload.init(control, 512, 2048);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
+    ipc.hot_reload.retainSlot(control, 1);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    ipc.hot_reload.publishSlot(control, 3, 2, 4096, 8192, 8192);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
+
+    try std.testing.expectEqual(@as(u32, 3), choice.slot_index);
+    try std.testing.expectEqual(@as(usize, 0), choice.slot_start);
+    try std.testing.expectEqual(@as(usize, 0), choice.slot_end);
+    try std.testing.expectEqual(@as(usize, 8192), choice.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.SlotState.retired, ipc.hot_reload.slotSnapshot(control, 1).?.state);
+    try std.testing.expectEqual(@as(u32, 1), ipc.hot_reload.slotSnapshot(control, 1).?.refs);
+
+    ipc.hot_reload.releaseSlot(control, 1);
 }
 
 /// Result of setting up shared memory with type checking information.
@@ -4634,6 +4656,7 @@ fn writeDevRunImageToSharedMemory(
             else
                 0;
             const required_capacity = try backend.RunImage.requiredCapacity(
+                shm.page_size,
                 generated_code,
                 entrypoints,
                 relocations,
@@ -4654,6 +4677,7 @@ fn writeDevRunImageToSharedMemory(
             ctx.gpa,
             image_allocator,
             shm.base_ptr,
+            shm.page_size,
             generated_code,
             entrypoints,
             relocations,
@@ -4662,6 +4686,9 @@ fn writeDevRunImageToSharedMemory(
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
         if (slot_end == 0) slot_end = image_bound;
+        if (hot_reload_slot) |slot| {
+            try shm.resetToUsedSize(@max(slot.append_offset, slot_end));
+        }
         return .{
             .header = header,
             .image_offset = image_offset,

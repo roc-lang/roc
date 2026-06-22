@@ -29,10 +29,10 @@ pub const SlotState = enum(u32) {
     retired = 3,
 };
 
-/// Metadata for one shared-memory image region and its active shim readers.
+/// Metadata for one shared-memory image region and its active shim references.
 pub const ImageSlot = extern struct {
     state: u32 = @intFromEnum(SlotState.free),
-    readers: u32 = 0,
+    refs: u32 = 0,
     generation: u64 = 0,
     image_offset: u64 = 0,
     image_size: u64 = 0,
@@ -250,7 +250,7 @@ pub fn imageSize(control: *const Control) usize {
 /// Coherent snapshot of one image slot's reclamation metadata.
 pub const ImageSlotSnapshot = struct {
     state: SlotState,
-    readers: u32,
+    refs: u32,
     generation: u64,
     image_offset: usize,
     image_size: usize,
@@ -263,7 +263,7 @@ pub fn slotSnapshot(control: *const Control, slot_index: u32) ?ImageSlotSnapshot
     const slot = &control.image_slots[slot_index];
     return .{
         .state = slotStateFromRaw(loadU32(&slot.state, .acquire)),
-        .readers = loadU32(&slot.readers, .acquire),
+        .refs = loadU32(&slot.refs, .acquire),
         .generation = loadU64(&slot.generation, .acquire),
         .image_offset = @intCast(loadU64(&slot.image_offset, .acquire)),
         .image_size = @intCast(loadU64(&slot.image_size, .acquire)),
@@ -283,17 +283,14 @@ pub fn markSlotFree(control: *Control, slot_index: u32) void {
     storeU32(&control.image_slots[slot_index].state, @intFromEnum(SlotState.free), .release);
 }
 
-/// Lease the latest published image while the shim copies it into executable memory.
+/// Retain the latest published image while the shim installs it for direct execution.
 pub fn acquirePublishedImage(control: *Control) ?PublishedImage {
     for (0..16) |_| {
         const image = publishedImage(control) orelse return null;
         if (!validSlotIndex(image.slot_index)) return null;
 
         const slot = &control.image_slots[image.slot_index];
-        const previous_readers = @atomicRmw(u32, &slot.readers, .Add, 1, .acquire);
-        if (builtinModeDebug() and previous_readers == std.math.maxInt(u32)) {
-            std.debug.panic("hot reload invariant violated: image slot reader count overflowed", .{});
-        }
+        retainSlot(control, image.slot_index);
 
         const slot_state = slotStateFromRaw(loadU32(&slot.state, .acquire));
         const slot_generation = loadU64(&slot.generation, .acquire);
@@ -314,19 +311,33 @@ pub fn acquirePublishedImage(control: *Control) ?PublishedImage {
             return image;
         }
 
-        releaseImage(control, image.slot_index);
+        releaseSlot(control, image.slot_index);
     }
 
     return null;
 }
 
-/// Release a lease returned by `acquirePublishedImage`.
-pub fn releaseImage(control: *Control, slot_index: u32) void {
+/// Retain a slot already known to contain a live installed image.
+pub fn retainSlot(control: *Control, slot_index: u32) void {
     if (!validSlotIndex(slot_index)) return;
-    const previous = @atomicRmw(u32, &control.image_slots[slot_index].readers, .Sub, 1, .release);
+    const previous_refs = @atomicRmw(u32, &control.image_slots[slot_index].refs, .Add, 1, .acquire);
+    if (builtinModeDebug() and previous_refs == std.math.maxInt(u32)) {
+        std.debug.panic("hot reload invariant violated: image slot refcount overflowed", .{});
+    }
+}
+
+/// Release a retained direct-execution image slot.
+pub fn releaseSlot(control: *Control, slot_index: u32) void {
+    if (!validSlotIndex(slot_index)) return;
+    const previous = @atomicRmw(u32, &control.image_slots[slot_index].refs, .Sub, 1, .acq_rel);
     if (builtinModeDebug() and previous == 0) {
         std.debug.panic("hot reload invariant violated: released an unreferenced image slot", .{});
     }
+}
+
+/// Release a ref returned by `acquirePublishedImage`.
+pub fn releaseImage(control: *Control, slot_index: u32) void {
+    releaseSlot(control, slot_index);
 }
 
 /// Publish the host shim's acknowledgement for a generation.
@@ -454,20 +465,20 @@ test "hot reload control block fits in shared memory reserved header bytes" {
     try std.testing.expect(@sizeOf(Control) <= @sizeOf(@FieldType(SharedMemoryAllocator.Header, "reserved")));
 }
 
-test "hot reload image slots can be leased and released" {
+test "hot reload image slots can be retained and released" {
     var control = std.mem.zeroes(Control);
     init(&control, 512, 4096);
 
-    const leased = acquirePublishedImage(&control).?;
-    try std.testing.expectEqual(@as(u64, 1), leased.generation);
-    try std.testing.expectEqual(@as(u32, 0), leased.slot_index);
-    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 0).?.readers);
+    const retained = acquirePublishedImage(&control).?;
+    try std.testing.expectEqual(@as(u64, 1), retained.generation);
+    try std.testing.expectEqual(@as(u32, 0), retained.slot_index);
+    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 0).?.refs);
 
-    releaseImage(&control, leased.slot_index);
-    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.readers);
+    releaseImage(&control, retained.slot_index);
+    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.refs);
 }
 
-test "hot reload image lease rejects slots that stopped being current" {
+test "hot reload image retain rejects slots that stopped being current" {
     var control = std.mem.zeroes(Control);
     init(&control, 512, 4096);
 
@@ -475,10 +486,10 @@ test "hot reload image lease rejects slots that stopped being current" {
     publishSlot(&control, 2, 1, 4096, 8192, 8192);
     markSlotRetired(&control, 0);
 
-    const leased = acquirePublishedImage(&control).?;
-    try std.testing.expectEqual(@as(u64, 2), leased.generation);
-    try std.testing.expectEqual(@as(u32, 1), leased.slot_index);
-    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.readers);
-    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 1).?.readers);
-    releaseImage(&control, leased.slot_index);
+    const retained = acquirePublishedImage(&control).?;
+    try std.testing.expectEqual(@as(u64, 2), retained.generation);
+    try std.testing.expectEqual(@as(u32, 1), retained.slot_index);
+    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.refs);
+    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 1).?.refs);
+    releaseImage(&control, retained.slot_index);
 }
