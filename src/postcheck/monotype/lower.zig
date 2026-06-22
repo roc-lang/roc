@@ -5465,6 +5465,22 @@ const BodyContext = struct {
                 .type_only => {},
             }
         }
+        // A `where`-clause method dispatched on a receiver that never grounded to
+        // a concrete owner is only reachable inside a bare polymorphic function
+        // value that is never called at a concrete type — e.g. evaluating `run`
+        // itself for `run : a -> a where [a.go : a -> a]`. The dispatch can never
+        // execute (the function is never invoked), so lower it to a crash rather
+        // than failing the postcheck invariant. A genuinely reachable ownerless
+        // dispatch is rejected earlier, at check time. Structural-equality
+        // dispatches keep their dedicated lowering below.
+        if (owner_is_null and plan.resolution == .unresolved_checked_plan and
+            !(plan.result_mode == .equality and plan.result_mode.equality.structural_allowed))
+        {
+            const crash_ty = expected_ret_ty orelse plan_ret_ty;
+            try self.constrainTypeToMono(checked_ret_ty, crash_ty);
+            const msg = try self.builder.program.addStringLiteral("unresolved `where`-clause method dispatch on a polymorphic value");
+            return try self.builder.program.addExpr(.{ .ty = crash_ty, .data = .{ .crash = msg } });
+        }
         const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);

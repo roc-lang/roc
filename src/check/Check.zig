@@ -5648,6 +5648,35 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         if (constraints_range.len() == 0) continue;
         if (reported.contains(resolved.var_)) continue;
 
+        // A GENERALIZED dispatcher whose constraints are ALL `where`-clause
+        // contracts is a valid polymorphic obligation, not a dead end: it is a
+        // type parameter of an exposed generic function (e.g. `a` in
+        // `wrap : a -> a where [a.go : a -> a]`), and any caller that pins the
+        // receiver to a concrete type is responsible for — and separately
+        // checked for — satisfying the contract when the receiver grounds to a
+        // non-generalized concrete var. Reporting it here wrongly rejects a
+        // helper that is merely dispatched through nested generalized let-defs
+        // (the recorded receiver is a stale scheme var promoted by an enclosing
+        // generalization; its real call-site uses are recorded separately).
+        //
+        // We still report a generalized dispatcher that ALSO carries a
+        // concrete-use dispatch (a non-`where`-clause origin such as `plus` from
+        // `n + 1`): that use forces the receiver toward a grounding the contract
+        // cannot satisfy (issue 9657 — `plus` forces a numeric type that lacks
+        // `decode`). And a NON-generalized dispatcher is a concrete per-call hole
+        // whose instantiation never supplied the owner (issue 9644), so it is not
+        // skipped here either.
+        if (resolved.desc.rank == .generalized) {
+            var all_where_clause = true;
+            for (self.types.sliceStaticDispatchConstraints(constraints_range)) |c| {
+                if (c.origin != .where_clause) {
+                    all_where_clause = false;
+                    break;
+                }
+            }
+            if (all_where_clause) continue;
+        }
+
         // Pick the constraint to report. Instantiated where-clause contracts get
         // priority because they are explicit obligations copied from a signature:
         // once the signature has been instantiated, the current call must either
