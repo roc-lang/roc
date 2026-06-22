@@ -72,20 +72,38 @@ pub fn init(control: *Control, image_offset: usize, image_size: usize) void {
     publish(control, 1, image_offset, image_size);
 }
 
+/// 64-bit atomic load that also compiles on targets without lock-free 64-bit atomics.
+/// Hot reload only runs on 64-bit hosts — the dev backend is unavailable on 32-bit, so
+/// `HostLirCodeGen` is `void` there and this control block is never driven concurrently.
+/// The 32-bit branch is therefore never executed; a plain load keeps the code compiling.
+inline fn loadU64(ptr: *const u64, comptime order: std.builtin.AtomicOrder) u64 {
+    if (comptime @sizeOf(usize) >= 8) return @atomicLoad(u64, ptr, order);
+    return ptr.*;
+}
+
+/// 64-bit atomic store companion to `loadU64`; see its doc comment for the 32-bit rationale.
+inline fn storeU64(ptr: *u64, value: u64, comptime order: std.builtin.AtomicOrder) void {
+    if (comptime @sizeOf(usize) >= 8) {
+        @atomicStore(u64, ptr, value, order);
+    } else {
+        ptr.* = value;
+    }
+}
+
 /// Mark publication as in progress before overwriting shared executable bytes.
 pub fn beginPublish(control: *Control) void {
-    const start = nextOddSequence(@atomicLoad(u64, &control.publish_sequence, .acquire));
-    @atomicStore(u64, &control.publish_sequence, start, .release);
+    const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
+    storeU64(&control.publish_sequence, start, .release);
 }
 
 /// Publish a replacement image for the host shim to load at the next safe point.
 pub fn publish(control: *Control, generation: u64, image_offset: usize, image_size: usize) void {
-    const start = nextOddSequence(@atomicLoad(u64, &control.publish_sequence, .acquire));
-    @atomicStore(u64, &control.publish_sequence, start, .release);
-    @atomicStore(u64, &control.image_offset, @intCast(image_offset), .release);
-    @atomicStore(u64, &control.image_size, @intCast(image_size), .release);
-    @atomicStore(u64, &control.published_generation, generation, .release);
-    @atomicStore(u64, &control.publish_sequence, start +% 1, .release);
+    const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
+    storeU64(&control.publish_sequence, start, .release);
+    storeU64(&control.image_offset, @intCast(image_offset), .release);
+    storeU64(&control.image_size, @intCast(image_size), .release);
+    storeU64(&control.published_generation, generation, .release);
+    storeU64(&control.publish_sequence, start +% 1, .release);
 }
 
 fn nextOddSequence(sequence: u64) u64 {
@@ -108,14 +126,14 @@ pub fn publishedImage(control: *const Control) ?PublishedImage {
     if (!initialized(control)) return null;
 
     for (0..16) |_| {
-        const start = @atomicLoad(u64, &control.publish_sequence, .acquire);
+        const start = loadU64(&control.publish_sequence, .acquire);
         if (!stableSequence(start)) continue;
 
-        const generation = @atomicLoad(u64, &control.published_generation, .acquire);
-        const image_offset = @atomicLoad(u64, &control.image_offset, .acquire);
-        const image_size = @atomicLoad(u64, &control.image_size, .acquire);
+        const generation = loadU64(&control.published_generation, .acquire);
+        const image_offset = loadU64(&control.image_offset, .acquire);
+        const image_size = loadU64(&control.image_size, .acquire);
 
-        const end = @atomicLoad(u64, &control.publish_sequence, .acquire);
+        const end = loadU64(&control.publish_sequence, .acquire);
         if (start == end and stableSequence(end)) {
             return .{
                 .generation = generation,
@@ -135,21 +153,21 @@ pub fn publishedGeneration(control: *const Control) u64 {
 
 /// Return the shared-memory byte offset of the currently published image.
 pub fn imageOffset(control: *const Control) usize {
-    return @intCast(@atomicLoad(u64, &control.image_offset, .acquire));
+    return @intCast(loadU64(&control.image_offset, .acquire));
 }
 
 /// Return the byte length of the currently published image.
 pub fn imageSize(control: *const Control) usize {
-    return @intCast(@atomicLoad(u64, &control.image_size, .acquire));
+    return @intCast(loadU64(&control.image_size, .acquire));
 }
 
 /// Publish the host shim's acknowledgement for a generation.
 pub fn acknowledge(control: *Control, generation: u64, status: Status) void {
-    const start = nextOddSequence(@atomicLoad(u64, &control.ack_sequence, .acquire));
-    @atomicStore(u64, &control.ack_sequence, start, .release);
+    const start = nextOddSequence(loadU64(&control.ack_sequence, .acquire));
+    storeU64(&control.ack_sequence, start, .release);
     @atomicStore(u32, &control.status, @intFromEnum(status), .release);
-    @atomicStore(u64, &control.acknowledged_generation, generation, .release);
-    @atomicStore(u64, &control.ack_sequence, start +% 1, .release);
+    storeU64(&control.acknowledged_generation, generation, .release);
+    storeU64(&control.ack_sequence, start +% 1, .release);
 }
 
 /// Coherent snapshot of the host shim acknowledgement.
@@ -163,13 +181,13 @@ pub fn acknowledgement(control: *const Control) ?Acknowledgement {
     if (!initialized(control)) return null;
 
     for (0..16) |_| {
-        const start = @atomicLoad(u64, &control.ack_sequence, .acquire);
+        const start = loadU64(&control.ack_sequence, .acquire);
         if (!stableSequence(start)) continue;
 
-        const generation = @atomicLoad(u64, &control.acknowledged_generation, .acquire);
+        const generation = loadU64(&control.acknowledged_generation, .acquire);
         const status_raw = @atomicLoad(u32, &control.status, .acquire);
 
-        const end = @atomicLoad(u64, &control.ack_sequence, .acquire);
+        const end = loadU64(&control.ack_sequence, .acquire);
         if (start == end and stableSequence(end)) {
             return .{
                 .generation = generation,
@@ -226,12 +244,12 @@ test "hot reload publication snapshots reject in-progress writes" {
     init(&control, 512, 4096);
 
     beginPublish(&control);
-    @atomicStore(u64, &control.image_offset, 8192, .release);
-    @atomicStore(u64, &control.image_size, 16384, .release);
-    @atomicStore(u64, &control.published_generation, 2, .release);
+    storeU64(&control.image_offset, 8192, .release);
+    storeU64(&control.image_size, 16384, .release);
+    storeU64(&control.published_generation, 2, .release);
     try std.testing.expect(publishedImage(&control) == null);
 
-    @atomicStore(u64, &control.publish_sequence, 4, .release);
+    storeU64(&control.publish_sequence, 4, .release);
     const image = publishedImage(&control).?;
     try std.testing.expectEqual(@as(u64, 2), image.generation);
     try std.testing.expectEqual(@as(usize, 8192), image.image_offset);
@@ -242,12 +260,12 @@ test "hot reload acknowledgement snapshots reject in-progress writes" {
     var control = std.mem.zeroes(Control);
     init(&control, 512, 4096);
 
-    @atomicStore(u64, &control.ack_sequence, 5, .release);
+    storeU64(&control.ack_sequence, 5, .release);
     @atomicStore(u32, &control.status, @intFromEnum(Status.accepted), .release);
-    @atomicStore(u64, &control.acknowledged_generation, 2, .release);
+    storeU64(&control.acknowledged_generation, 2, .release);
     try std.testing.expect(acknowledgement(&control) == null);
 
-    @atomicStore(u64, &control.ack_sequence, 6, .release);
+    storeU64(&control.ack_sequence, 6, .release);
     const ack = acknowledgement(&control).?;
     try std.testing.expectEqual(@as(u64, 2), ack.generation);
     try std.testing.expectEqual(Status.accepted, ack.status);

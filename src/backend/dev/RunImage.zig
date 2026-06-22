@@ -392,7 +392,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(FORMAT_VERSION, header.format_version);
     try std.testing.expect(header.image_size <= image_bytes.len);
 
-    const view = try viewMappedImage(header, &image_bytes, header.image_size);
+    const view = try viewMappedImage(header, &image_bytes, @intCast(header.image_size));
 
     try std.testing.expectEqualSlices(u8, &code, view.code);
     try std.testing.expectEqual(@as(usize, entrypoint_inputs.len), view.entrypoints.len);
