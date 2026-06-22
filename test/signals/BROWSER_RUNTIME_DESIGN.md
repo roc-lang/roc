@@ -22,20 +22,42 @@ host-independent patch command set (`ResetDom`, `CreateElement`, `AppendChild`,
 those patches to a *simulated* DOM; `DESIGN.md` states explicitly that "a
 browser host implements the same commands against the real DOM."
 
-So the browser runtime is **not** a fresh architecture. It is:
+So the browser runtime is **not** a fresh reactive architecture. It is:
 
-1. The same Zig reactive host, recompiled to `wasm32` (this is `wasm_host.zig`,
-   today carrying only allocation + `HostValue` cells; it must grow the engine
-   that `native_host.zig` already has).
+1. A **dedicated browser host** (`wasm_host.zig`, today carrying only allocation
+   + `HostValue` cells) that **reuses the reactive engine logic where that makes
+   sense** and provides its own browser/DOM boundary. The engine logic
+   (node table, scheduler, dirty set, scopes, keyed `Ui.each` diff, propagation,
+   refcount discipline) is *not* native-host-specific and should be shared rather
+   than reimplemented; the *boundary* (how patches reach the renderer, how events
+   arrive, timers/`fetch`) is host-specific and is written fresh for the browser.
+   The native and browser hosts are two distinct hosts behind one
+   render-command/engine contract — not one host recompiled.
 2. A **thin JavaScript DOM executor** that does nothing but apply the host's
    already-computed patch commands to real DOM nodes and forward real DOM events
    back as integer event ids.
 
-This reframing is what keeps the design compatible with `AGENTS.md`: the engine
-that owns identity, ownership, dirtiness, and scaling stays in one place (the
-host), JS never reconstructs meaning, and "where you built it is your identity"
-is preserved end-to-end. **Every alternative that moves reactive logic into JS
-violates the existing design and is rejected on that basis, not merely on
+**Sharing boundary (what is reused vs. host-specific):**
+
+- *Shared, host-agnostic (reuse, do not duplicate):* the ABI primitives and
+  refcount helpers already factored into `roc_platform_abi.zig`
+  (`RocErasedCallable`, `incref/decrefErasedCallable`, `RocStr`/`RocList`, the
+  descriptor structs), plus the reactive engine logic that `native_host.zig`
+  currently holds inline — ingestion, node table, rank scheduler, dirty
+  propagation with `is_eq` pruning, scope forest, keyed-row diff. Factoring this
+  engine into a shared module (consumed by both hosts) is the preferred path; see
+  Open Question O9.
+- *Browser-host-specific (written fresh in `wasm_host.zig`):* the patch-op
+  serialization into the JS command buffer, the `roc_ui_*` control exports, the
+  browser timer/`fetch` bridge, `roc_dbg`/`roc_crashed` routing to `console`, and
+  `memory.grow` coordination. The native host's *simulated DOM* and spec runner
+  are equally native-specific and are **not** part of the browser host.
+
+This framing keeps the design compatible with `AGENTS.md`: the engine that owns
+identity, ownership, dirtiness, and scaling stays in one place (a shared engine
+the host drives), JS never reconstructs meaning, and "where you built it is your
+identity" is preserved end-to-end. **Every alternative that moves reactive logic
+into JS violates the existing design and is rejected on that basis, not merely on
 performance.**
 
 The research notes (vdom platform) describe a *different* architecture — JS owns
@@ -84,10 +106,11 @@ crossing.
 
 It is the *only* option that satisfies all of: no reactive logic in JS, JS never
 inspects Roc memory for meaning, ownership stays host-owned, identity stays
-host-owned, and it reuses the existing, tested `native_host.zig` engine and
-patch set verbatim. The browser host and the simulated host become two backends
-behind one render-command interface — which is precisely the contract
-`DESIGN.md` already promised.
+host-owned, and it reuses the engine logic and patch set the native host already
+proved out (sharing the code where it is host-agnostic, see O9) rather than
+re-deriving the reactive model. The browser host and the simulated host become
+two distinct hosts implementing one render-command/engine contract — which is
+precisely the contract `DESIGN.md` already promised.
 
 ---
 
@@ -169,11 +192,11 @@ for commonly-used strings"), adopted from day one for tag/attr/event names
 because the cost is trivial and it removes the dominant per-crossing transcode.
 Free-form strings (text content, input values) still cross as (ptr,len) UTF-8.
 
-> Note: the native host's patch set has no `RemoveNode`/`MoveBefore` because its
-> simulated DOM rebuilds structural scopes. The browser host needs real
-> detach/move ops to honor the `DESIGN.md` reorder budget ("reorder moves, it
-> does not rebuild") against a live DOM. These are **new render commands the
-> host emits**, not JS-side reconstruction — see Open Question O1.
+> Note: G-B3 made `RemoveNode` and `MoveBefore` first-class native-host render
+> counters so the simulated host can assert the same detach/move budget a live
+> DOM needs. The browser host still needs the command-buffer serialization and JS
+> executor cases for these ops. They remain **host-emitted render commands**, not
+> JS-side reconstruction — see Open Question O1.
 
 The G-B1 controlled-input spike (`browser/controlled_input_policy.mjs`) rejects
 blind `input.value = next` as the executor rule. `SetValue` is a guarded op:
@@ -421,11 +444,13 @@ adopted; it loses only because this platform already removed the per-event FFI
 crossing and already has the engine in the host. Alt B is included only to be
 explicit about why "just write it in JS" is wrong here.
 
-A genuine cost of the recommendation: it requires the WASM build of the host to
-contain the full reactive engine (today `wasm_host.zig` has only alloc +
-`HostValue`), and it requires two *new* render commands (`RemoveNode`,
-`MoveBefore`) plus a command-buffer wire format the native host doesn't yet use.
-That is real work, but it is *additive* and keeps both hosts behind one contract.
+A genuine cost of the recommendation: the dedicated browser host
+(`wasm_host.zig`, today only alloc + `HostValue`) must gain the reactive engine —
+ideally by consuming a shared engine module factored out of `native_host.zig`
+(O9) rather than copy-pasting it — and it requires command-buffer serialization
+for the shared render command set, including `RemoveNode` and `MoveBefore`.
+That is real work, but it is *additive* and keeps both hosts behind one
+engine/command contract.
 
 ---
 
@@ -438,9 +463,9 @@ the `counter` app from `DESIGN.md` (button + text + button):
    `abort`, timer/`fetch` stubs that throw if used).
 2. **Grow `wasm_host.zig`** to contain the minimal engine path: ingest
    `roc_ui_init`, build the node table for *non-structural* signals only
-   (`source`, `map`, `map2`), and the `event_id -> source` table — i.e. port the
-   subset of `native_host.zig` that the counter exercises. No `Ui.each`, no
-   async yet.
+   (`source`, `map`, `map2`), and the `event_id -> source` table — reusing the
+   shared engine logic for the subset the counter exercises rather than
+   reimplementing it (O9). No `Ui.each`, no async yet.
 3. **Define the command-buffer wire format** and emit the initial patch stream:
    `CreateElement`, `CreateText`, `AppendChild`, `SetText`, `BindClick`.
 4. **JS executor**: drain the buffer, build DOM under `root`, attach one
@@ -474,12 +499,11 @@ line up with the `DESIGN.md` "Definition of Done" being *simulated-host* scoped
 These require inspecting compiler behavior, generated ABI, layout rules, or
 browser constraints, and should be settled before milestone 2.
 
-- **O1 — New render commands.** The native host has no `RemoveNode`/`MoveBefore`
-  because the simulated DOM rebuilds structural scopes. A real DOM must
-  *detach/move* to honor the reorder budget ("reorder moves, it does not
-  rebuild"). These must be added as host-emitted commands. Question: do they
-  belong in the shared command set both hosts use, or only the browser host?
-  (Recommend shared, so the native host's metrics can assert move-only reorder.)
+- **O1 — New render commands.** Settled for the native command set: `RemoveNode`
+  and `MoveBefore` are shared host-emitted render commands, and the native host's
+  metrics can assert move-only reorder plus explicit detach. Remaining browser
+  work: serialize these commands through the WASM command buffer and implement
+  the JS executor cases against the real DOM.
 
 - **O2 — Command-buffer wire format vs. the simulated host's direct apply.** The
   native host applies patches by direct Zig calls into its `DomElement` array.
@@ -533,3 +557,16 @@ browser constraints, and should be settled before milestone 2.
   module-global (`host_values`, etc.). Two mounts on one page need either two
   WASM instances or an explicit per-mount handle. Recommend one WASM instance per
   `mount()` for milestone simplicity; revisit for shared-module efficiency.
+
+- **O9 — Factoring the shared engine.** The reactive engine logic
+  (ingestion, node table, rank scheduler, dirty propagation with `is_eq`
+  pruning, scope forest, keyed-row diff) currently lives inline in
+  `native_host.zig`, interleaved with simulated-DOM and spec-runner code. To let
+  the dedicated `wasm_host.zig` reuse it without copy-paste, this logic should be
+  factored into a shared, host-agnostic engine module (alongside the primitives
+  already in `roc_platform_abi.zig`) that both hosts drive, with the
+  patch-emission and renderer boundary kept behind an interface each host
+  implements. Question: how much can be extracted cleanly given the native
+  host's `DomElement`-array coupling, and is the seam a render-command sink the
+  engine writes to (preferred) or a set of callbacks? This is the first
+  structural decision before G-B4, so neither host diverges into its own engine.

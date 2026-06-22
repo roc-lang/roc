@@ -33,10 +33,12 @@ const RuntimeMetrics = struct {
     derived_calls_into_roc: u64,
     each_key_compares: u64,
     events_processed: u64,
+    move_before: u64,
     nodes_recomputed: u64,
     patches_emitted: u64,
     propagation_prunes: u64,
     recompute_batches: u64,
+    remove_node: u64,
     retained_alloc_delta: i64,
     reset_dom: u64,
     rows_created: u64,
@@ -1425,6 +1427,8 @@ const HostRenderMetrics = struct {
     reset_dom: u64 = 0,
     create_element: u64 = 0,
     append_child: u64 = 0,
+    remove_node: u64 = 0,
+    move_before: u64 = 0,
     set_text: u64 = 0,
     set_value: u64 = 0,
     set_checked: u64 = 0,
@@ -1437,6 +1441,8 @@ const HostRenderMetrics = struct {
         self.reset_dom += counts.reset_dom;
         self.create_element += counts.create_element;
         self.append_child += counts.append_child;
+        self.remove_node += counts.remove_node;
+        self.move_before += counts.move_before;
         self.set_text += counts.set_text;
         self.set_value += counts.set_value;
         self.set_checked += counts.set_checked;
@@ -5980,10 +5986,12 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .derived_calls_into_roc = 0,
         .each_key_compares = 0,
         .events_processed = 0,
+        .move_before = 0,
         .nodes_recomputed = 0,
         .patches_emitted = 0,
         .propagation_prunes = 0,
         .recompute_batches = 0,
+        .remove_node = 0,
         .retained_alloc_delta = 0,
         .reset_dom = 0,
         .rows_created = 0,
@@ -6234,11 +6242,27 @@ fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: 
     return true;
 }
 
+const RenderCommandKind = enum {
+    reset_dom,
+    create_element,
+    append_child,
+    remove_node,
+    move_before,
+    set_text,
+    set_value,
+    set_checked,
+    set_disabled,
+    set_metadata,
+    bind_event,
+};
+
 const CommandCounts = struct {
     total: u64 = 0,
     reset_dom: u64 = 0,
     create_element: u64 = 0,
     append_child: u64 = 0,
+    remove_node: u64 = 0,
+    move_before: u64 = 0,
     set_text: u64 = 0,
     set_value: u64 = 0,
     set_checked: u64 = 0,
@@ -6246,41 +6270,60 @@ const CommandCounts = struct {
     set_metadata: u64 = 0,
     bind_event: u64 = 0,
 
-    fn addHostReset(self: *CommandCounts) void {
+    fn addCommand(self: *CommandCounts, kind: RenderCommandKind) void {
         self.total += 1;
-        self.reset_dom += 1;
+        switch (kind) {
+            .reset_dom => self.reset_dom += 1,
+            .create_element => self.create_element += 1,
+            .append_child => self.append_child += 1,
+            .remove_node => self.remove_node += 1,
+            .move_before => self.move_before += 1,
+            .set_text => self.set_text += 1,
+            .set_value => self.set_value += 1,
+            .set_checked => self.set_checked += 1,
+            .set_disabled => self.set_disabled += 1,
+            .set_metadata => self.set_metadata += 1,
+            .bind_event => self.bind_event += 1,
+        }
+    }
+
+    fn addHostReset(self: *CommandCounts) void {
+        self.addCommand(.reset_dom);
     }
 
     fn addCreateElement(self: *CommandCounts) void {
-        self.total += 1;
-        self.create_element += 1;
+        self.addCommand(.create_element);
     }
 
     fn addAppendChild(self: *CommandCounts) void {
-        self.total += 1;
-        self.append_child += 1;
+        self.addCommand(.append_child);
+    }
+
+    fn addRemoveNode(self: *CommandCounts) void {
+        self.addCommand(.remove_node);
+    }
+
+    fn addMoveBefore(self: *CommandCounts) void {
+        self.addCommand(.move_before);
     }
 
     fn addTextField(self: *CommandCounts, field: RenderTextField) void {
-        self.total += 1;
         switch (field) {
-            .text => self.set_text += 1,
-            .value => self.set_value += 1,
-            .role, .label, .test_id => self.set_metadata += 1,
+            .text => self.addCommand(.set_text),
+            .value => self.addCommand(.set_value),
+            .role, .label, .test_id => self.addCommand(.set_metadata),
         }
     }
 
     fn addBoolField(self: *CommandCounts, field: RenderBoolField) void {
-        self.total += 1;
         switch (field) {
-            .checked => self.set_checked += 1,
-            .disabled => self.set_disabled += 1,
+            .checked => self.addCommand(.set_checked),
+            .disabled => self.addCommand(.set_disabled),
         }
     }
 
     fn addEventBinding(self: *CommandCounts) void {
-        self.total += 1;
-        self.bind_event += 1;
+        self.addCommand(.bind_event);
     }
 
     fn addAll(self: *CommandCounts, other: CommandCounts) void {
@@ -6288,6 +6331,8 @@ const CommandCounts = struct {
         self.reset_dom += other.reset_dom;
         self.create_element += other.create_element;
         self.append_child += other.append_child;
+        self.remove_node += other.remove_node;
+        self.move_before += other.move_before;
         self.set_text += other.set_text;
         self.set_value += other.set_value;
         self.set_checked += other.set_checked;
@@ -6323,10 +6368,12 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
         .each_key_compares = left.each_key_compares + right.each_key_compares,
         .events_processed = left.events_processed + right.events_processed,
+        .move_before = left.move_before + right.move_before,
         .nodes_recomputed = left.nodes_recomputed + right.nodes_recomputed,
         .patches_emitted = left.patches_emitted + right.patches_emitted,
         .propagation_prunes = left.propagation_prunes + right.propagation_prunes,
         .recompute_batches = left.recompute_batches + right.recompute_batches,
+        .remove_node = left.remove_node + right.remove_node,
         .retained_alloc_delta = left.retained_alloc_delta + right.retained_alloc_delta,
         .reset_dom = left.reset_dom + right.reset_dom,
         .rows_created = left.rows_created + right.rows_created,
@@ -6352,6 +6399,8 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "reset_dom")) return u64MetricAsI64(metrics.reset_dom);
     if (std.mem.eql(u8, name, "create_element")) return u64MetricAsI64(metrics.create_element);
     if (std.mem.eql(u8, name, "append_child")) return u64MetricAsI64(metrics.append_child);
+    if (std.mem.eql(u8, name, "remove_node")) return u64MetricAsI64(metrics.remove_node);
+    if (std.mem.eql(u8, name, "move_before")) return u64MetricAsI64(metrics.move_before);
     if (std.mem.eql(u8, name, "set_text")) return u64MetricAsI64(metrics.set_text);
     if (std.mem.eql(u8, name, "set_value")) return u64MetricAsI64(metrics.set_value);
     if (std.mem.eql(u8, name, "set_checked")) return u64MetricAsI64(metrics.set_checked);
@@ -7399,7 +7448,7 @@ fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u6
     const displaced_count = next_child_ids.len - stable_len;
     var displaced_index: usize = 0;
     while (displaced_index < displaced_count) : (displaced_index += 1) {
-        counts.addAppendChild();
+        counts.addMoveBefore();
     }
 
     for (next_child_ids) |child_id| {
@@ -7408,6 +7457,26 @@ fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u6
     parent.children.deinit(allocator);
     parent.children = .empty;
     parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
+}
+
+fn removeDomNode(host: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
+    if (elem_id == 0) failHost("structural patch attempted to remove host DOM root");
+    if (elem_id >= host.dom_elements.items.len) failHost("structural patch removed an element missing from DOM state");
+
+    counts.addRemoveNode();
+    const elem = &host.dom_elements.items[@intCast(elem_id)];
+    if (elem.parent_id) |parent_id| {
+        if (parent_id >= host.dom_elements.items.len) failHost("structural patch removed an element with missing parent");
+        const parent = &host.dom_elements.items[@intCast(parent_id)];
+        if (findDomChildIndex(parent, elem_id)) |child_index| {
+            _ = parent.children.orderedRemove(child_index);
+        }
+    }
+    elem.active = false;
+    elem.parent_id = null;
+    elem.bound_click_event = null;
+    elem.bound_input_event = null;
+    elem.bound_check_event = null;
 }
 
 fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
@@ -7420,7 +7489,6 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
         failHost(rendered);
     }
 
-    var child_list_patch_counted = false;
     for (next_child_ids, 0..) |child_id, new_index| {
         if (child_id >= host.dom_elements.items.len) failHost("structural child replacement referenced missing child");
         const child = &host.dom_elements.items[@intCast(child_id)];
@@ -7437,15 +7505,12 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
             break :blk findDomChildIndex(old_parent, child_id);
         } else null;
 
-        if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null or old_child_index.? != new_index) {
+        if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
             counts.addAppendChild();
-            child_list_patch_counted = true;
+        } else if (old_child_index.? != new_index) {
+            counts.addMoveBefore();
         }
         child.parent_id = parent_elem_id;
-    }
-
-    if (!child_list_patch_counted and parent.children.items.len != next_child_ids.len) {
-        counts.addAppendChild();
     }
 
     parent.children.deinit(allocator);
@@ -7622,15 +7687,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     for (host.active_stream.render_nodes.items) |node| {
         if (!host.renderNodeInReplacementTarget(&host.active_stream, node, targets.removed)) continue;
         if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
-        if (node.elem_id >= host.dom_elements.items.len) continue;
-
-        const elem = &host.dom_elements.items[@intCast(node.elem_id)];
-        if (!elem.active) continue;
-        elem.active = false;
-        elem.parent_id = null;
-        elem.bound_click_event = null;
-        elem.bound_input_event = null;
-        elem.bound_check_event = null;
+        removeDomNode(host, node.elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
@@ -7815,15 +7872,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
 
     for (splice.removed_elem_ids) |elem_id| {
         if (elem_id < seen.len and seen[@intCast(elem_id)]) continue;
-        if (elem_id >= host.dom_elements.items.len) continue;
-
-        const elem = &host.dom_elements.items[@intCast(elem_id)];
-        if (!elem.active) continue;
-        elem.active = false;
-        elem.parent_id = null;
-        elem.bound_click_event = null;
-        elem.bound_input_event = null;
-        elem.bound_check_event = null;
+        removeDomNode(host, elem_id, &counts);
     }
 
     for (touched_parents.items) |parent_elem_id| {
@@ -7911,8 +7960,10 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         const new_child_index = next_children[@intCast(parent_elem_id)].items.len;
         next_children[@intCast(parent_elem_id)].append(allocator, node.elem_id) catch std.process.exit(1);
 
-        if (!was_active or old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null or old_child_index.? != new_child_index) {
+        if (!was_active or old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
             counts.addAppendChild();
+        } else if (old_child_index.? != new_child_index) {
+            counts.addMoveBefore();
         }
 
         const elem = domElementById(host, node.elem_id);
@@ -7923,11 +7974,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         if (index == 0) continue;
         const still_rendered = index < seen.len and seen[index];
         if (!still_rendered and elem.active) {
-            elem.active = false;
-            elem.parent_id = null;
-            elem.bound_click_event = null;
-            elem.bound_input_event = null;
-            elem.bound_check_event = null;
+            removeDomNode(host, @intCast(index), &counts);
         }
     }
 
@@ -8234,6 +8281,8 @@ fn finishHostMetrics(host: *HostEnv) void {
     metrics.reset_dom = host.render_metrics.reset_dom;
     metrics.create_element = host.render_metrics.create_element;
     metrics.append_child = host.render_metrics.append_child;
+    metrics.remove_node = host.render_metrics.remove_node;
+    metrics.move_before = host.render_metrics.move_before;
     metrics.set_text = host.render_metrics.set_text;
     metrics.set_value = host.render_metrics.set_value;
     metrics.set_checked = host.render_metrics.set_checked;
@@ -8570,7 +8619,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,each_key_compares,allocs_this_event,deallocs_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,each_key_compares,allocs_this_event,deallocs_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -8593,12 +8642,14 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
         .{
             stats.commands.total,
             stats.commands.reset_dom,
             stats.commands.create_element,
             stats.commands.append_child,
+            stats.commands.remove_node,
+            stats.commands.move_before,
             stats.commands.set_text,
             stats.commands.set_value,
             stats.commands.set_checked,
@@ -9181,6 +9232,8 @@ test "signals metrics accumulate propagation pruning counters" {
     left.patches_emitted = 7;
     left.create_element = 2;
     left.append_child = 3;
+    left.remove_node = 4;
+    left.move_before = 5;
     left.set_text = 1;
     left.bind_event = 1;
     left.stream_nodes_scanned = 12;
@@ -9198,6 +9251,8 @@ test "signals metrics accumulate propagation pruning counters" {
     right.patches_emitted = 13;
     right.create_element = 5;
     right.append_child = 8;
+    right.remove_node = 10;
+    right.move_before = 12;
     right.set_text = 2;
     right.bind_event = 4;
     right.stream_nodes_scanned = 5;
@@ -9216,6 +9271,8 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
     try std.testing.expectEqual(@as(u64, 7), total.create_element);
     try std.testing.expectEqual(@as(u64, 11), total.append_child);
+    try std.testing.expectEqual(@as(u64, 14), total.remove_node);
+    try std.testing.expectEqual(@as(u64, 17), total.move_before);
     try std.testing.expectEqual(@as(u64, 3), total.set_text);
     try std.testing.expectEqual(@as(u64, 5), total.bind_event);
     try std.testing.expectEqual(@as(u64, 17), total.stream_nodes_scanned);
@@ -10322,7 +10379,9 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     try std.testing.expectEqual(@as(u64, 3), test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
-    try std.testing.expect(patch_counts.append_child >= 2);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.remove_node);
+    try std.testing.expect(patch_counts.move_before >= 2);
     try std.testing.expectEqual(@as(usize, 5), host.dom_elements.items.len);
     try std.testing.expectEqual(row_1_id, activeTextElementId(&host, "row-1-1") orelse unreachable);
     try std.testing.expectEqual(row_2_id, activeTextElementId(&host, "row-2-2") orelse unreachable);
@@ -10494,7 +10553,9 @@ test "signals host dirty each reorder moves rows without recollecting bodies" {
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
     try std.testing.expectEqual(row_call_start, test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
-    try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.remove_node);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.move_before);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.set_text);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.total);
     try std.testing.expectEqual(patch_start + 1, host.render_metrics.patches_emitted);
@@ -10567,10 +10628,12 @@ test "signals host dirty each mixed churn splices changed rows and moves survivo
     try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
     try std.testing.expectEqual(row_call_start + 1, test_row_elem_call_count);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.create_element);
-    try std.testing.expectEqual(@as(u64, 2), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.remove_node);
+    try std.testing.expectEqual(@as(u64, 2), patch_counts.move_before);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
-    try std.testing.expectEqual(@as(u64, 4), patch_counts.total);
-    try std.testing.expectEqual(patch_start + 4, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(@as(u64, 6), patch_counts.total);
+    try std.testing.expectEqual(patch_start + 6, host.render_metrics.patches_emitted);
     const row_4_id = activeTextElementId(&host, "row-4-4") orelse unreachable;
     try std.testing.expectEqual(row_1_id, activeTextElementId(&host, "row-1-1") orelse unreachable);
     try std.testing.expectEqual(row_3_id, activeTextElementId(&host, "row-3-3") orelse unreachable);

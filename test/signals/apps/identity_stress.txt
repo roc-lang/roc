@@ -69,7 +69,10 @@ expect_text text:"Delta detail count: 1" "Delta detail count: 1"
 expect_text text:"Gamma detail count: 1" "Gamma detail count: 1"
 expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
 expect_metric_delta nodes_recomputed 1
-expect_metric_delta patches_emitted 1
+expect_metric_delta patches_emitted 3
+expect_metric_delta remove_node 3
+expect_metric_delta move_before 0
+expect_metric_delta append_child 0
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 1

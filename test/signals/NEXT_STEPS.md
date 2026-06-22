@@ -179,11 +179,14 @@ answer the open questions that the simulated host is structurally blind to.
 
 The recommended architecture is **host owns logical identity and emits a
 patch-op stream; JS is a thin executor that owns DOM identity**. The browser
-host is the existing `native_host.zig` reactive engine recompiled to `wasm32`
-(today `wasm_host.zig` carries only alloc + `HostValue` cells), plus a JS
-executor. The reactive engine, scopes, scheduler, refcount discipline, and the
-patch command set are not redesigned — they are reused behind one render-command
-contract.
+host is a **dedicated `wasm_host.zig`** (today carrying only alloc + `HostValue`
+cells) that **reuses the reactive engine logic where that makes sense** and has
+its own browser/DOM boundary — it is *not* `native_host.zig` recompiled. The
+reactive engine (node table, scheduler, scopes, keyed diff, refcount discipline)
+should be shared rather than reimplemented; the boundary (patch emission, event
+arrival, timers/`fetch`) is written fresh for the browser. The native host's
+simulated DOM and spec runner are native-specific and not part of the browser
+host.
 
 **Ordering principle: validate the highest-risk unknowns first, with the
 smallest spike that can refute the architecture.** The risks below are ordered so
@@ -194,8 +197,26 @@ finding or a regression guard is not done. The `DESIGN.md` Definition of Done is
 simulated-host scoped; these gaps are the explicitly-deferred next stage, not a
 regression of it.
 
-The open questions (O1–O8) referenced below are defined in
+The open questions (O1–O9) referenced below are defined in
 `BROWSER_RUNTIME_DESIGN.md` §11.
+
+### G-B0 — Factor the shared reactive engine (Structural prerequisite to G-B4)
+
+- **Why:** the reactive engine (ingestion, node table, rank scheduler, dirty
+  propagation with `is_eq` pruning, scope forest, keyed-row diff) lives inline in
+  `native_host.zig`, interleaved with the simulated DOM and spec runner. The
+  dedicated `wasm_host.zig` must *reuse* this logic, not copy-paste or
+  reimplement it (design O9). Settle the seam before G-B4 so the two hosts never
+  diverge into separate engines.
+- **Work:** extract the host-agnostic engine into a shared module (alongside the
+  primitives already in `roc_platform_abi.zig`) that both hosts drive, with the
+  patch-emission/renderer boundary kept behind an interface each host implements
+  (preferred seam: a render-command sink the engine writes to). Decide how much
+  extracts cleanly given the native host's `DomElement`-array coupling.
+- **Guard:** `zig test test/signals/src/native_host.zig` stays green after the
+  extraction (native host now drives the shared engine); the engine module
+  builds for the `wasm32` target. This is a refactor with no behavior change —
+  the existing native specs are the regression guard.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
@@ -241,31 +262,34 @@ The open questions (O1–O8) referenced below are defined in
 - **Remaining:** wire the helper into the eventual browser executor. G-B3 is the
   next implementation slice.
 
-### G-B3 — Command-buffer wire format + executor contract (Critical, unblocks all rendering)
+### G-B3 — Command-buffer wire format + executor contract (Critical, native guard landed)
 
-- **Why here:** this is the boundary itself. It decides O1 (new `RemoveNode` /
-  `MoveBefore` commands the simulated host lacks) and O2 (shared command set vs.
-  two emit paths). Settling it shared lets the native host's metrics assert
-  move-only reorder and keeps both hosts behind one contract.
-- **Work:** define the fixed-width command record format (op-code + integer
-  operands + optional `(ptr,len)` for free-form strings; integer enum refs for
-  tag/attr/event names), the single `env.host_flush` drain protocol, and the
-  op-code table. Add `RemoveNode`/`MoveBefore` to the shared render-command enum
-  and make the native host emit them (so reorder budget is asserted on both
-  hosts).
-- **Finding + guard:** the op-code table is documented; a native-host test
-  asserts reorder emits only `MoveBefore` for displaced rows (extends G-F4 to the
-  shared command set).
+- **Why here:** this is the boundary itself. It decides O1 (`RemoveNode` /
+  `MoveBefore`) and O2 (shared command set vs. two emit paths). Settling it
+  shared lets the native host's metrics assert move-only reorder and keeps both
+  hosts behind one contract.
+- **Status:** `RemoveNode`/`MoveBefore` are now first-class native render-command
+  counters. Structural removals emit `remove_node`; pure keyed reorders emit
+  `move_before` rather than `append_child`.
+- **Finding + guard:** the op-code table is documented; native-host tests assert
+  reorder emits only `MoveBefore` for displaced rows, and the kanban/identity
+  specs assert the new command counters for reorder and removal cases.
+- **Remaining:** define the fixed-width WASM command record format (op-code +
+  integer operands + optional `(ptr,len)` for free-form strings; integer enum
+  refs for tag/attr/event names), the single `env.host_flush` drain protocol,
+  and the JS executor cases for `RemoveNode`/`MoveBefore`.
 
 ### G-B4 — Minimal end-to-end counter in a real browser (High, the milestone)
 
 - **Why:** the `BROWSER_RUNTIME_DESIGN.md` §10 milestone — the smallest proof the
-  whole boundary works on a real DOM. Depends on G-B1..G-B3 findings.
-- **Work:** grow `wasm_host.zig` to ingest `roc_ui_init` and run the
-  non-structural engine subset (`source`, `map`, `map2`) plus the
-  `event_id -> source` route; export `roc_ui_mount` / `roc_ui_event` /
-  `roc_ui_unmount`; emit the initial patch stream; ship `roc-ui-runtime.js` (drain
-  buffer, build DOM, one delegated `click` listener, packed-flag handling).
+  whole boundary works on a real DOM. Depends on G-B0 (shared engine) and
+  G-B1..G-B3 findings.
+- **Work:** drive the shared reactive engine (from G-B0) inside `wasm_host.zig`
+  for the non-structural subset (`source`, `map`, `map2`) plus the
+  `event_id -> source` route — reusing the engine, not reimplementing it; export
+  `roc_ui_mount` / `roc_ui_event` / `roc_ui_unmount`; emit the initial patch
+  stream; ship `roc-ui-runtime.js` (drain buffer, build DOM, one delegated
+  `click` listener, packed-flag handling).
 - **Counter + assertion:** clicking `+`/`-` in a real browser changes the count;
   exactly one `nodes_recomputed` and one `SetText` patch per click;
   `roc_ui_unmount` drops all retained closures with `closure_retains ==

@@ -21,7 +21,9 @@ click role:button name:"Reorder cards"
 expect_visible role:region name:"Tune keyed diff"
 expect_text text:"Design signal graph progress: 1 / notes: 0" "Design signal graph progress: 1 / notes: 0"
 expect_metric_delta create_element 0
-expect_metric_delta append_child 1
+expect_metric_delta append_child 0
+expect_metric_delta move_before 1
+expect_metric_delta remove_node 0
 expect_metric_delta bind_event 0
 expect_metric_delta active_graph_records_rebuilt 0
 expect_metric_delta rows_reused 3
@@ -35,7 +37,9 @@ expect_text text:"Focus filter on" "Focus filter on"
 expect_visible role:region name:"Tune keyed diff"
 expect_text text:"Tune keyed diff progress: 0 / notes: 0" "Tune keyed diff progress: 0 / notes: 0"
 expect_metric_delta create_element 0
-expect_metric_delta append_child 1
+expect_metric_delta append_child 0
+expect_metric_delta move_before 0
+expect_metric_delta remove_node 10
 expect_metric_delta set_text 1
 expect_metric_delta active_graph_records_rebuilt 0
 expect_metric_delta rows_reused 1

@@ -702,9 +702,10 @@ apply them to a real DOM, and dispatches spec actions (`click`, `fill`, `check`)
 by firing the bound event id into the source node's retained reducer thunk.
 
 The patch command set is the typed, host-independent set already present:
-`ResetDom`, `CreateElement`, `AppendChild`, `SetText`, `SetValue`, `SetChecked`,
-`SetDisabled`, `SetRole`, `SetLabel`, `SetTestId`, `BindClick`, `BindInput`,
-`BindCheck`. A browser host implements the same commands against the real DOM.
+`ResetDom`, `CreateElement`, `AppendChild`, `RemoveNode`, `MoveBefore`,
+`SetText`, `SetValue`, `SetChecked`, `SetDisabled`, `SetRole`, `SetLabel`,
+`SetTestId`, `BindClick`, `BindInput`, `BindCheck`. A browser host implements
+the same commands against the real DOM.
 
 ### Metrics
 
@@ -713,9 +714,10 @@ are: `events_processed`, `nodes_recomputed` (should track changed nodes, not
 graph size), `propagation_prunes` (`is_eq` short-circuits), `derived_calls_into_roc`
 (direct retained-thunk invocations per event), `recompute_batches`,
 `patches_emitted`, render command counters (`reset_dom`, `create_element`,
-`append_child`, `set_text`, `set_value`, `set_checked`, `set_disabled`,
-`set_metadata`, `bind_event`), `scopes_created`, `scopes_disposed`,
-`rows_reused`, `rows_created`, `rows_removed`, `closure_retains`,
+`append_child`, `remove_node`, `move_before`, `set_text`, `set_value`,
+`set_checked`, `set_disabled`, `set_metadata`, `bind_event`),
+`scopes_created`, `scopes_disposed`, `rows_reused`, `rows_created`,
+`rows_removed`, `closure_retains`,
 `closure_releases`, and `retained_alloc_delta`. `rows_reused` must count actual
 subtree reuse — a row is only counted as reused when its scope (and local state)
 is preserved across the update. These counters are what the simulated host buys
