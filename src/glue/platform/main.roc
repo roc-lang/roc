@@ -22,7 +22,7 @@ platform ""
     packages {}
     provides { "roc_make_glue": make_glue_for_host }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
         arm64mac: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },

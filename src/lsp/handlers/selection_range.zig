@@ -458,12 +458,19 @@ fn collectContainingRegionsFromExpr(
                 }
             }
         },
+        .nominal_record => |nr| {
+            try collectContainingRegionsFromExpr(allocator, ast, nr.mapper, target_offset, regions);
+            try collectContainingRegionsFromExpr(allocator, ast, nr.backing, target_offset, regions);
+        },
         .for_expr => |f| {
             try collectContainingRegionsFromExpr(allocator, ast, f.expr, target_offset, regions);
             try collectContainingRegionsFromExpr(allocator, ast, f.body, target_offset, regions);
         },
+        .@"return" => |r| {
+            try collectContainingRegionsFromExpr(allocator, ast, r.expr, target_offset, regions);
+        },
         // Leaf expressions - no children to recurse into
-        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .ident, .record_updater, .ellipsis, .malformed => {},
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .ident, .record_updater, .ellipsis, .@"break", .malformed => {},
     }
 }
 

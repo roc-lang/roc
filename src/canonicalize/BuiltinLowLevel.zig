@@ -21,8 +21,26 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
 pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
     if (ident.eql(env.idents.builtin_str_inspect)) return true;
 
-    const utf8_problem_eq = env.common.findIdent("Builtin.Str.Utf8Problem.is_eq") orelse return false;
-    return ident.eql(utf8_problem_eq);
+    if (env.common.findIdent("Builtin.Str.Utf8Problem.is_eq")) |utf8_problem_eq| {
+        if (ident.eql(utf8_problem_eq)) return true;
+    }
+
+    const parse_intrinsics = [_][]const u8{
+        "Builtin.ParseTagUnionSpec.parse",
+        "Builtin.Str.FieldName.FieldNames.rename_fields",
+        "Builtin.Str.FieldName.FieldNames.shortest_name",
+        "Builtin.Str.FieldName.FieldNames.longest_name",
+        "Builtin.Str.FieldName.FieldNames.iter",
+        "Builtin.Str.FieldName.FieldNames.for_size",
+        "Builtin.Str.FieldName.name",
+    };
+    for (parse_intrinsics) |name| {
+        if (env.common.findIdent(name)) |intrinsic| {
+            if (ident.eql(intrinsic)) return true;
+        }
+    }
+
+    return false;
 }
 
 /// Replaces Builtin.roc annotation-only primitive declarations with low-level operation lambdas.
@@ -167,8 +185,14 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
         try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
     }
+    if (env.common.findIdent("str_drop_prefix_caseless_ascii_raw")) |str_drop_prefix_caseless_ascii_ident| {
+        try low_level_map.put(str_drop_prefix_caseless_ascii_ident, .str_drop_prefix_caseless_ascii);
+    }
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
+    }
+    if (env.common.findIdent("str_find_first_raw")) |str_find_first_ident| {
+        try low_level_map.put(str_find_first_ident, .str_find_first);
     }
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);

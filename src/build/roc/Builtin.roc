@@ -1,5 +1,27 @@
 Builtin :: [].{
+	ParseTagUnionSpec(_shape) :: {}.{
+		parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try({ value : _shape, rest : _state }, _err)
+	}
+
 	Str :: [ProvidedByCompiler].{
+		# Compiler-generated structural record field-name metadata used by derived
+		# parsers. The phantom _shape ties a FieldName handle to the exact
+		# FieldNames value that produced it, so generated parsers can dispatch
+		# without user-visible slots. Users can only observe a FieldName through
+		# FieldName.name. Compiler-generated code supplies a hidden backing value
+		# with the record-slot index and metadata.
+		FieldName(_shape) :: { index : U64, name : Str, name_len : U64 }.{
+			FieldNames(_shape) :: {}.{
+				rename_fields : FieldNames(_shape), (Str -> Str) -> FieldNames(_shape)
+				shortest_name : FieldNames(_shape) -> U64
+				longest_name : FieldNames(_shape) -> U64
+				iter : FieldNames(_shape) -> Iter(FieldName(_shape))
+				for_size : FieldNames(_shape), U64 -> Iter(FieldName(_shape))
+			}
+
+			name : FieldName(_shape) -> Str
+		}
+
 		Utf8Problem := [
 			InvalidStartByte,
 			UnexpectedEndOfSequence,
@@ -174,6 +196,28 @@ Builtin :: [].{
 		## ```
 		drop_prefix : Str, Str -> Str
 
+		## Drops the given prefix from the start of a [Str], comparing ASCII
+		## letters without regard to capitalization. Non-ASCII bytes must match
+		## exactly.
+		##
+		## The returned [Str] is a slice of the original string. If the prefix is
+		## not found, returns `Err(NotFound)`.
+		##
+		## ```roc
+		## expect "Cache-Control: max-age=0".drop_prefix_caseless_ascii("cache-control") == Ok(": max-age=0")
+		## expect "X-Api-Key".drop_prefix_caseless_ascii("x_api_key") == Err(NotFound)
+		## ```
+		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound])
+		drop_prefix_caseless_ascii = |source, prefix| {
+			split = str_drop_prefix_caseless_ascii_raw(source, prefix)
+
+			if split.found {
+				Ok(split.after)
+			} else {
+				Err(NotFound)
+			}
+		}
+
 		## Drops the given suffix [Str] from the end of a [Str]
 		## If the suffix is not found, returns the original string.
 		##
@@ -182,6 +226,25 @@ Builtin :: [].{
 		## expect "barfoo".drop_suffix("foo") == "bar"
 		## ```
 		drop_suffix : Str, Str -> Str
+
+		## Finds the first occurrence of a delimiter in a string.
+		##
+		## The returned strings are slices of the original string.
+		##
+		## ```roc
+		## expect "foo: bar".find_first(":") == Ok({ before: "foo", after: " bar" })
+		## expect "foo".find_first(":") == Err(NotFound)
+		## ```
+		find_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		find_first = |source, delimiter| {
+			split = str_find_first_raw(source, delimiter)
+
+			if split.found {
+				Ok({ before: split.before, after: split.after })
+			} else {
+				Err(NotFound)
+			}
+		}
 
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
@@ -13991,6 +14054,13 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 
 # Implemented by the compiler, does not perform bounds checks
 list_swap_unsafe : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Returns string slices into the source string.
+str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+
+# Implemented by the compiler. Returns a string slice after the prefix when the
+# source starts with the prefix using ASCII-caseless comparison.
+str_drop_prefix_caseless_ascii_raw : Str, Str -> { after : Str, found : Bool }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

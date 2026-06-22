@@ -576,6 +576,32 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "False" },
     },
     .{
+        .name = "low_level - Str.drop_prefix_caseless_ascii removes matching prefix",
+        .source =
+        \\{
+        \\x = match Str.drop_prefix_caseless_ascii("Cache-Control: 0", "cache-control") {
+        \\    Ok(rest) => rest
+        \\    Err(_) => "missing"
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\": 0\"" },
+    },
+    .{
+        .name = "low_level - Str.drop_prefix_caseless_ascii rejects punctuation case-bit pairs",
+        .source =
+        \\{
+        \\x = match Str.drop_prefix_caseless_ascii("X_Auth: 0", "x\u(007F)auth") {
+        \\    Ok(_) => False
+        \\    Err(NotFound) => True
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.with_ascii_lowercased with mixed case",
         .source =
         \\{
@@ -2085,6 +2111,19 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"hi\"" },
+    },
+    .{
+        .name = "low_level - Str.find_first returns seamless before and after slices",
+        .source =
+        \\{
+        \\x = match Str.find_first("alpha:beta", ":") {
+        \\    Ok(parts) => Str.count_utf8_bytes(parts.before) * 100 + Str.count_utf8_bytes(parts.after)
+        \\    Err(_) => 0
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "504" },
     },
     .{
         .name = "low_level - U8.to_i16 safe widening",
