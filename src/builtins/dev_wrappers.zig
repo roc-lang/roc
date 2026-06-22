@@ -24,6 +24,19 @@ const FromUtf8Try = str.FromUtf8Try;
 // which has a tracy dependency. The actual struct layout is handled by utils.zig.
 const RocOps = utils.RocOps;
 
+/// Field offsets for the dev backend's `Str.find_first` result copy.
+pub const StrFindFirstLayout = extern struct {
+    after_offset: u32,
+    before_offset: u32,
+    found_offset: u32,
+};
+
+/// Field offsets for the dev backend's `Str.drop_prefix_caseless_ascii` result copy.
+pub const StrDropPrefixCaselessAsciiLayout = extern struct {
+    after_offset: u32,
+    found_offset: u32,
+};
+
 // Re-export commonly used functions
 pub const rcNone = utils.rcNone;
 pub const copy_fallback = list.copy_fallback;
@@ -115,7 +128,7 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
-const RcIncFn = *const fn (?[*]u8, u64, *RocOps) callconv(.c) void;
+const RcIncFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -164,10 +177,51 @@ pub fn roc_builtins_str_equal(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_byt
     return strEqual(a, b);
 }
 
+/// Wrapper: strEqualStaticSmall(RocStr, u64, u64, u64, u64) -> bool
+pub fn roc_builtins_str_equal_static_small(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strEqualStaticSmall(a, static_len, word0, word1, word2);
+}
+
+/// Wrapper: strStaticSmallWordEq(RocStr, u64, u64, u64) -> bool
+pub fn roc_builtins_str_static_small_word_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strStaticSmallWordEq(a, offset, active_len, word);
+}
+
+/// Wrapper: strStaticSmallWordCaselessEq(RocStr, u64, u64, u64) -> bool
+pub fn roc_builtins_str_static_small_word_caseless_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strStaticSmallWordCaselessEq(a, offset, active_len, word);
+}
+
 /// Wrapper: countUtf8Bytes(RocStr) -> u64
 pub fn roc_builtins_str_count_utf8_bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     return countUtf8Bytes(s);
+}
+
+/// Wrapper: findFirst(RocStr, RocStr, *RocOps) -> { before, found, after }
+pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrFindFirstLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = str.findFirst(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.before_offset))).* = result.before;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
+}
+
+/// Wrapper: strDropPrefixCaselessAscii(RocStr, RocStr, *RocOps) -> { after, found }
+pub fn roc_builtins_str_drop_prefix_caseless_ascii(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrDropPrefixCaselessAsciiLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = str.strDropPrefixCaselessAscii(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool

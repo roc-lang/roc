@@ -48,7 +48,7 @@ platform ""
     packages {}
     provides { "roc_main": main_for_host }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64glibc: { inputs: [app] },
     }
 

@@ -10,7 +10,7 @@ platform ""
         "roc_host_unused_niche_feature": Host.unused_niche_feature!,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app], output: Archive },
         arm64mac: { inputs: ["libhost.a", app], output: Archive },
         x64glibc: { inputs: ["libhost.a", app], output: Archive },

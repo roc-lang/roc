@@ -409,7 +409,7 @@ pub const Writer = struct {
         if (layout_value.tag == .zst) {
             for (slots, 0..) |slot, index| {
                 captures[index] = .{
-                    .binder = slot.binder,
+                    .id = slot.id,
                     .value = try self.storeValue(slot.plan, .zst, Value.zst),
                 };
             }
@@ -418,13 +418,13 @@ pub const Writer = struct {
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 captures[index] = .{
-                    .binder = slot.binder,
+                    .id = slot.id,
                     .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
-                .binder = slots[0].binder,
+                .id = slots[0].id,
                 .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
             };
         } else {
