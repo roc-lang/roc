@@ -3455,6 +3455,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_list_builtin_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.step);
 
+        const build_wasm_single_variant_hosted_app = b.addRunArtifact(roc_exe);
+        build_wasm_single_variant_hosted_app.addArgs(&.{
+            "build",
+            "test/wasm/single_variant_hosted_static_lib_app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/wasm/single_variant_hosted_static_lib_app.wasm",
+        });
+        build_wasm_single_variant_hosted_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.step);
+
         const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
         build_wasm_str_concat_join_app.addArgs(&.{
             "build",
@@ -3540,6 +3551,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_list_builtin_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
+
+            const run_wasm_single_variant_hosted_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_single_variant_hosted_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/single_variant_hosted_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
 
             const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_str_concat_join_test.addArgs(&.{
