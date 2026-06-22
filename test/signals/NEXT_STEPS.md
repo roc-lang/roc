@@ -80,6 +80,12 @@ history.
 - `run-signals-bench` includes all six representative signal apps:
   `ops_dashboard`, `checkout_wizard`, `kanban_board`, `identity_stress`,
   `component_composition`, and `async_effects`.
+- The browser path now has a dedicated `src/wasm_host.zig` that links Signals
+  apps as wasm reactors, ingests the non-structural descriptor subset, owns
+  state/event routing, evaluates source/const/map/map2/combine signals, and
+  serializes render commands for `browser/runtime.mjs`. `browser/counter.html`
+  loads the runtime, and `serve.py` builds the ReleaseSmall host plus a wasm32
+  app and serves only `test/signals/browser`.
 
 ## Foundation Gaps (the current frontier)
 
@@ -179,14 +185,15 @@ answer the open questions that the simulated host is structurally blind to.
 
 The recommended architecture is **host owns logical identity and emits a
 patch-op stream; JS is a thin executor that owns DOM identity**. The browser
-host is a **dedicated `wasm_host.zig`** (today carrying only alloc + `HostValue`
-cells) that **reuses the reactive engine logic where that makes sense** and has
-its own browser/DOM boundary — it is *not* `native_host.zig` recompiled. The
-reactive engine (node table, scheduler, scopes, keyed diff, refcount discipline)
-should be shared rather than reimplemented; the boundary (patch emission, event
-arrival, timers/`fetch`) is written fresh for the browser. The native host's
-simulated DOM and spec runner are native-specific and not part of the browser
-host.
+host is a **dedicated `wasm_host.zig`** that now carries the first
+non-structural browser runtime and **reuses shared primitives where available**,
+but it still needs the full shared-engine extraction before structural browser
+work should grow. It has its own browser/DOM boundary — it is *not*
+`native_host.zig` recompiled. The reactive engine (node table, scheduler,
+scopes, keyed diff, refcount discipline) should be shared rather than
+reimplemented; the boundary (patch emission, event arrival, timers/`fetch`) is
+written fresh for the browser. The native host's simulated DOM and spec runner
+are native-specific and not part of the browser host.
 
 **Ordering principle: validate the highest-risk unknowns first, with the
 smallest spike that can refute the architecture.** The risks below are ordered so
@@ -200,14 +207,15 @@ regression of it.
 The open questions (O1–O9) referenced below are defined in
 `BROWSER_RUNTIME_DESIGN.md` §11.
 
-### G-B0 — Factor the shared reactive engine (Structural prerequisite to G-B4)
+### G-B0 — Factor the shared reactive engine (Structural prerequisite before G-B6)
 
 - **Why:** the reactive engine (ingestion, node table, rank scheduler, dirty
   propagation with `is_eq` pruning, scope forest, keyed-row diff) lives inline in
   `native_host.zig`, interleaved with the simulated DOM and spec runner. The
   dedicated `wasm_host.zig` must *reuse* this logic, not copy-paste or
-  reimplement it (design O9). Settle the seam before G-B4 so the two hosts never
-  diverge into separate engines.
+  reimplement it (design O9). The minimal counter path now exists, but this seam
+  must be settled before browser structural work so the two hosts never diverge
+  into separate engines.
 - **Work:** extract the host-agnostic engine into a shared module (alongside the
   primitives already in `roc_platform_abi.zig`) that both hosts drive, with the
   patch-emission/renderer boundary kept behind an interface each host implements
@@ -220,9 +228,9 @@ The open questions (O1–O9) referenced below are defined in
 - **Status:** first boundary extraction landed: `src/render_commands.zig` owns
   the host-independent render ops, command counts, metrics accumulator, and
   fixed-width command-buffer record. `native_host.zig` consumes those shared
-  types, and `wasm_host.zig` exposes an empty command-buffer surface for the
-  future browser sink. Second extraction: `src/signal_graph.zig` owns active
-  signal graph node shape, dependent-edge mutation, reachable-dependent
+  types, and `wasm_host.zig` now serializes browser commands into the shared
+  fixed-width record shape. Second extraction: `src/signal_graph.zig` owns
+  active signal graph node shape, dependent-edge mutation, reachable-dependent
   traversal, and rank sorting; `native_host.zig` consumes it and `wasm_host.zig`
   instantiates it during build so wasm32 breakage is caught. Third extraction:
   `src/scope_tree.zig` owns scope branch identity, root/component/when/row scope
@@ -236,9 +244,10 @@ The open questions (O1–O9) referenced below are defined in
   grows row scopes. Sixth extraction: `src/host_value_registry.zig` owns the
   shared HostValue handle table used by the `roc_host_value_*` ABI in both
   hosts: one-based handles, vacant-slot reuse, clone/get/take, and debug type
-  tags. Remaining G-B0 work is moving the retained HostValue/thunk/scope adapter
-  boundary into the shared engine so both hosts drive the same engine with
-  different render sinks.
+  tags. The current wasm host has a small non-structural runtime path for the
+  counter milestone; it is not the final G-B0 extraction. Remaining G-B0 work is
+  moving the retained HostValue/thunk/scope adapter boundary into the shared
+  engine so both hosts drive the same engine with different render sinks.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
@@ -261,9 +270,8 @@ The open questions (O1–O9) referenced below are defined in
   masking/validation needs an explicit future input-reconciliation design.
 - **Remaining:** run the harness in the target browser/IME matrix and record the
   observed behavior before declaring text-input-heavy browser apps complete.
-  G-B2 is the next implementation slice.
 
-### G-B2 — `memory.grow` view invalidation + marshalling spike (Critical, guard landed)
+### G-B2 — `memory.grow` view invalidation + marshalling spike (Critical, runtime wired)
 
 - **Why early:** any `roc_alloc` during a host call can grow linear memory and
   detach JS typed-array views (design O4). Getting this wrong is silent memory
@@ -281,10 +289,12 @@ The open questions (O1–O9) referenced below are defined in
   every host export that may allocate and before reading command buffers or
   string/payload bytes. No host-bumped memory generation export is needed for
   G-B4.
-- **Remaining:** wire the helper into the eventual browser executor. G-B3 is the
-  next implementation slice.
+- **Status update:** `browser/runtime.mjs` now uses the helper for host calls,
+  event-payload writes, command-buffer reads, and string-buffer reads.
+- **Remaining:** keep the `memory.grow` guard in the browser gate and add a
+  runtime-level stress case once the executor has an automated DOM smoke test.
 
-### G-B3 — Command-buffer wire format + executor contract (Critical, native guard landed)
+### G-B3 — Command-buffer wire format + executor contract (Critical, browser path landed)
 
 - **Why here:** this is the boundary itself. It decides O1 (`RemoveNode` /
   `MoveBefore`) and O2 (shared command set vs. two emit paths). Settling it
@@ -293,31 +303,44 @@ The open questions (O1–O9) referenced below are defined in
 - **Status:** `RemoveNode`/`MoveBefore` are now first-class native render-command
   counters. Structural removals emit `remove_node`; pure keyed reorders emit
   `move_before` rather than `append_child`. The shared command module also
-  defines the fixed-width WASM record shape, and `wasm_host.zig` exposes the
-  command-buffer pointer/length/record-width/clear exports.
+  defines the fixed-width WASM record shape. `wasm_host.zig` writes render
+  records and string payloads into linear-memory buffers and exports the
+  pointer/length/record-width/clear surface. `browser/runtime.mjs` drains the
+  buffer after `roc_ui_mount` / `roc_ui_event` and implements the current command
+  set, including `RemoveNode` and `MoveBefore`.
 - **Finding + guard:** the op-code table is documented; native-host tests assert
   reorder emits only `MoveBefore` for displaced rows, and the kanban/identity
   specs assert the new command counters for reorder and removal cases.
-- **Remaining:** wire the shared engine's browser render sink to the command
-  buffer, define the single `env.host_flush` drain protocol, and implement the
-  JS executor cases for the command set including `RemoveNode`/`MoveBefore`.
+- **Finding:** the first runtime does not use an imported `env.host_flush`;
+  JS calls a host export, refreshes memory views, then drains the command buffer
+  synchronously. That keeps the boundary smaller for the counter milestone.
+- **Remaining:** add an automated JS/browser executor smoke test that asserts
+  command records become the expected DOM, and decide whether the native spec
+  runner should migrate to the same command-buffer consumer to reduce divergent
+  render surfaces.
 
-### G-B4 — Minimal end-to-end counter in a real browser (High, the milestone)
+### G-B4 — Minimal end-to-end counter in a real browser (High, manual path landed)
 
 - **Why:** the `BROWSER_RUNTIME_DESIGN.md` §10 milestone — the smallest proof the
-  whole boundary works on a real DOM. Depends on G-B0 (shared engine) and
-  G-B1..G-B3 findings.
-- **Work:** drive the shared reactive engine (from G-B0) inside `wasm_host.zig`
-  for the non-structural subset (`source`, `map`, `map2`) plus the
-  `event_id -> source` route — reusing the engine, not reimplementing it; export
-  `roc_ui_mount` / `roc_ui_event` / `roc_ui_unmount`; emit the initial patch
-  stream; ship `roc-ui-runtime.js` (drain buffer, build DOM, one delegated
-  `click` listener, packed-flag handling).
-- **Counter + assertion:** clicking `+`/`-` in a real browser changes the count;
-  exactly one `nodes_recomputed` and one `SetText` patch per click;
-  `roc_ui_unmount` drops all retained closures with `closure_retains ==
-  closure_releases` (no leak). Out of scope here: `Ui.each`/`Ui.when`, async,
-  intervals, IME — those are G-B6/G-B7.
+  whole boundary works on a real DOM. It uses the G-B1..G-B3 findings; the full
+  G-B0 shared-engine extraction still needs to happen before structural browser
+  work grows.
+- **Status:** first manual counter path landed. `src/wasm_host.zig` exports
+  `roc_ui_mount` / `roc_ui_event` / `roc_ui_unmount`, ingests
+  `Element`/`Text`/`TextSignal`/`State`, handles static and signal text/bool
+  attributes plus `OnEvent`, routes unit/string/bool payloads, evaluates
+  `Ref`/`ConstValue`/`Map`/`Map2`/`Combine`, and emits initial/update command
+  buffers. `browser/runtime.mjs` instantiates wasm, drains records into DOM
+  nodes, binds click/input/check events, and forwards payloads. `apps/counter.roc`
+  lives with the other examples, `browser/counter.html` loads it, and
+  `serve.py` builds and serves the manual QA page.
+- **Remaining:** convert the manual counter path into a guard: clicking `+`/`-`
+  in a real browser changes the count; the update emits the expected `SetText`
+  patch budget; `roc_ui_unmount` drops all retained closures/host values without
+  leaking. The current wasm host updates all active sinks after a changed state,
+  so the exact native-style `nodes_recomputed == 1` budget is not proven yet.
+  Out of scope here: `Ui.each`/`Ui.when`, async, intervals, IME — those are
+  G-B6/G-B7.
 
 ### G-B5 — Event payload accessor path (High)
 
@@ -326,11 +349,16 @@ The open questions (O1–O9) referenced below are defined in
   must be carried in the descriptor tree (extend `OnEvent` / `__AnonStruct56` if
   needed), never reconstructed in JS, and must map to the host's typed
   `EventPayloadKind` (unit/str/bool).
-- **Work + guard:** JS walks the accessor path against the live `Event`,
-  serialises only requested leaves into a `roc_alloc`'d buffer, transfers
-  ownership on `roc_ui_event`. Prove `on_input` delivers `target.value` with no
-  whole-event copy; a test asserts the payload byte length tracks only the
-  requested leaves.
+- **Status:** the initial runtime covers the current typed payload path:
+  `BindClick` sends unit, `BindInput` serializes `event.currentTarget.value` as
+  UTF-8 into `roc_alloc` memory, and `BindCheck` sends a bool. The host validates
+  the payload kind against the descriptor-owned event route before running the
+  retained reducer thunk.
+- **Remaining work + guard:** generalize from the hard-coded click/input/check
+  payload fields to the explicit accessor descriptor path. JS walks the accessor
+  path against the live `Event`, serializes only requested leaves into a
+  `roc_alloc`'d buffer, transfers ownership on `roc_ui_event`, and a test asserts
+  the payload byte length tracks only the requested leaves.
 
 ### G-B6 — Structural splicing against a live DOM (High)
 
@@ -383,13 +411,16 @@ regression is not done.
 Browser-runtime slices (G-B*) additionally gate on:
 
 - Wasm host build links and exports the control surface:
-  `zig build build-test-hosts -Dplatform=signals` (wasm32 target)
+  `zig build build-test-hosts -Dplatform=signals -Doptimize=ReleaseSmall`
+- Browser host + counter app build, both backends:
+  `test/signals/serve.py --no-server --app-opt dev`
+  `test/signals/serve.py --no-server --app-opt size`
 - Controlled-input spike policy:
   `node --test test/signals/browser/controlled_input_policy.test.mjs`
 - `memory.grow` view invalidation policy:
   `node --test test/signals/browser/wasm_memory_views.test.mjs`
 - The browser executor + spike findings: each G-B slice records its finding in
-  `BROWSER_RUNTIME_DESIGN.md` (O1–O8) and lands a JS/host test or assertion that
+  `BROWSER_RUNTIME_DESIGN.md` (O1–O9) and lands a JS/host test or assertion that
   would catch a regression. A browser spike with no recorded finding or guard is
   not done.
 
