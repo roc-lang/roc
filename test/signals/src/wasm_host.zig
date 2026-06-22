@@ -14,9 +14,11 @@ const keyed_rows = @import("keyed_rows.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const erased_calls = @import("erased_calls.zig");
 const hv = @import("host_values.zig");
+const engine = @import("engine.zig");
 
 const HostValue = u64;
-const HostValueTypeTag = *u64;
+const WasmHostValueTypeTag = *u64;
+const HostValueTypeTag = WasmHostValueTypeTag;
 const HostValueRegistry = host_value_registry.Registry(HostValueTypeTag, false);
 const HostValueList = abi.RocListWith(HostValue, false);
 const RocStr = abi.RocStr;
@@ -24,6 +26,17 @@ const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
+
+const WasmCtx = struct {
+    pub const HostValueTypeTag = WasmHostValueTypeTag;
+    pub const host_value_type_tags_enabled = false;
+    pub const RegistryOps = hv.RegistryOps;
+    pub const Metrics = engine.NoMetrics;
+
+    pub fn zeroMetrics() Metrics {
+        return .{};
+    }
+};
 
 comptime {
     const BuildRecord = struct { id: u64 };
@@ -34,6 +47,7 @@ comptime {
     _ = identity_table.NodeIdentity;
     _ = identity_table.DomIdentity;
     _ = keyed_rows.RowPlan.create;
+    _ = engine.Engine(WasmCtx);
 }
 
 var host_values: HostValueRegistry = .{};

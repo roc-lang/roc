@@ -12,16 +12,147 @@
 //! delegated to a `ctx` the host supplies (`ctx.cloneHostValue`).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const abi = @import("roc_platform_abi.zig");
 const scope_tree = @import("scope_tree.zig");
 const erased_calls = @import("erased_calls.zig");
 const render = @import("render_commands.zig");
+const signal_graph = @import("signal_graph.zig");
+const identity_table = @import("identity_table.zig");
+const host_value_registry = @import("host_value_registry.zig");
+const hv = @import("host_values.zig");
 
 pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
 pub const RenderEventKind = render.EventKind;
 
 pub const HostValue = u64;
+
+pub const RuntimeMetrics = struct {
+    active_graph_records_rebuilt: u64,
+    append_child: u64,
+    allocs_this_event: u64,
+    bind_event: u64,
+    closure_releases: u64,
+    closure_retains: u64,
+    create_element: u64,
+    deallocs_this_event: u64,
+    derived_calls_into_roc: u64,
+    each_key_compares: u64,
+    events_processed: u64,
+    move_before: u64,
+    nodes_recomputed: u64,
+    patches_emitted: u64,
+    propagation_prunes: u64,
+    recompute_batches: u64,
+    remove_node: u64,
+    retained_alloc_delta: i64,
+    reset_dom: u64,
+    rows_created: u64,
+    rows_removed: u64,
+    rows_reused: u64,
+    scopes_created: u64,
+    scopes_disposed: u64,
+    set_checked: u64,
+    set_disabled: u64,
+    set_metadata: u64,
+    set_text: u64,
+    set_value: u64,
+    stream_nodes_scanned: u64,
+
+    pub const Field = std.meta.FieldEnum(@This());
+
+    pub inline fn bump(self: *RuntimeMetrics, comptime field: Field, n: u64) void {
+        @field(self, @tagName(field)) += n;
+    }
+};
+
+pub fn zeroRuntimeMetrics() RuntimeMetrics {
+    return .{
+        .active_graph_records_rebuilt = 0,
+        .append_child = 0,
+        .allocs_this_event = 0,
+        .bind_event = 0,
+        .closure_releases = 0,
+        .closure_retains = 0,
+        .create_element = 0,
+        .deallocs_this_event = 0,
+        .derived_calls_into_roc = 0,
+        .each_key_compares = 0,
+        .events_processed = 0,
+        .move_before = 0,
+        .nodes_recomputed = 0,
+        .patches_emitted = 0,
+        .propagation_prunes = 0,
+        .recompute_batches = 0,
+        .remove_node = 0,
+        .retained_alloc_delta = 0,
+        .reset_dom = 0,
+        .rows_created = 0,
+        .rows_removed = 0,
+        .rows_reused = 0,
+        .scopes_created = 0,
+        .scopes_disposed = 0,
+        .set_checked = 0,
+        .set_disabled = 0,
+        .set_metadata = 0,
+        .set_text = 0,
+        .set_value = 0,
+        .stream_nodes_scanned = 0,
+    };
+}
+
+/// Zero-size stand-in for `RuntimeMetrics`: every `bump` is a comptime no-op.
+pub const NoMetrics = struct {
+    pub const Field = RuntimeMetrics.Field;
+
+    pub inline fn bump(_: *NoMetrics, comptime _: Field, _: u64) void {}
+};
+
+pub const native_host_value_type_tags_enabled = switch (builtin.mode) {
+    .Debug, .ReleaseSafe => true,
+    .ReleaseFast, .ReleaseSmall => false,
+};
+
+pub fn verifyRegistryOps(comptime Ops: type) void {
+    inline for (.{
+        "retainBox",
+        "releaseBox",
+        "retainTag",
+        "releaseTag",
+        "tagId",
+    }) |decl_name| {
+        if (!@hasDecl(Ops, decl_name)) {
+            @compileError("engine RegistryOps is missing " ++ decl_name);
+        }
+    }
+}
+
+pub fn verifyCtx(comptime Ctx: type) void {
+    inline for (.{
+        "HostValueTypeTag",
+        "host_value_type_tags_enabled",
+        "RegistryOps",
+        "Metrics",
+        "zeroMetrics",
+    }) |decl_name| {
+        if (!@hasDecl(Ctx, decl_name)) {
+            @compileError("engine Ctx is missing " ++ decl_name);
+        }
+    }
+    verifyRegistryOps(Ctx.RegistryOps);
+}
+
+pub const NativeCtx = struct {
+    pub const HostValueTypeTag = *anyopaque;
+    pub const host_value_type_tags_enabled = native_host_value_type_tags_enabled;
+    pub const RegistryOps = hv.RegistryOps;
+    pub const Metrics = RuntimeMetrics;
+
+    pub fn zeroMetrics() Metrics {
+        return zeroRuntimeMetrics();
+    }
+};
 
 /// A retained Roc value plus the equality and drop thunks that own it. Holds
 /// exactly one refcount on each thunk while live.
@@ -364,6 +495,173 @@ pub const EventPayloadKind = enum(u64) {
     unit = 1,
     str = 2,
     bool = 3,
+};
+
+pub const SignalKind = enum(u64) {
+    source = 1,
+    map = 2,
+    map2 = 3,
+};
+
+pub const HostEventDescriptor = struct {
+    event_id: u64,
+    payload_kind: EventPayloadKind,
+};
+
+pub fn HostActiveEventDesc(comptime TypeTag: type) type {
+    return struct {
+        target_node_id: u64,
+        payload_kind: EventPayloadKind,
+        payload_tag: TypeTag,
+        payload_drop: abi.RocErasedCallable,
+        transform: abi.RocErasedCallable,
+    };
+}
+
+pub const HostPendingTask = struct {
+    request_id: u64,
+    owner_scope_id: u64,
+    task_token: HostSignalToken,
+    task_name: []const u8,
+    request: []const u8,
+    active: bool,
+};
+
+pub const HostSignalEventRoute = struct {
+    event_id: u64,
+    signal_ids: []u64,
+};
+
+pub const HostState = struct {
+    state_id: u64,
+    cell: HostValueCell,
+    version: u64,
+    active: bool,
+};
+
+pub const HostSignalDescriptor = struct {
+    signal_id: u64,
+    kind: SignalKind,
+    source_state_ids: []u64,
+    source_event_ids: []u64,
+    input_signal_ids: []u64,
+    rank: u64,
+};
+
+pub const HostSignalRoute = struct {
+    state_id: u64,
+    signal_ids: []u64,
+};
+
+pub const HostSignalDependentsRoute = struct {
+    signal_id: u64,
+    signal_ids: []u64,
+};
+
+pub const HostActiveSignalGraphNode = signal_graph.Node(HostSignalRecord);
+pub const HostNodeIdentity = identity_table.NodeIdentity;
+pub const HostDomIdentity = identity_table.DomIdentity;
+pub const HostScopeBranch = scope_tree.Branch;
+
+pub const HostActiveTextSignalSinkKind = enum {
+    text_node,
+    text_attr,
+};
+
+pub const HostActiveTextSignalSink = struct {
+    kind: HostActiveTextSignalSinkKind,
+    index: usize,
+};
+
+pub const HostActiveBoolSignalSink = struct {
+    index: usize,
+};
+
+pub const HostActiveChangeSignalSink = struct {
+    index: usize,
+};
+
+pub const HostActiveStructuralSignalKind = enum {
+    when,
+    each,
+};
+
+pub const HostActiveStructuralSignal = struct {
+    kind: HostActiveStructuralSignalKind,
+    index: usize,
+};
+
+pub const HostDirtyStructuralSignal = struct {
+    kind: HostActiveStructuralSignalKind,
+    node_id: u64,
+    branch: ?HostScopeBranch = null,
+};
+
+pub const HostEachSite = struct {
+    parent_scope_id: u64,
+    site_ordinal: u64,
+};
+
+pub const HostStructuralReplacementTarget = union(enum) {
+    scope: u64,
+    each_site: HostEachSite,
+};
+
+pub const HostStructuralPatchTargets = struct {
+    removed: HostStructuralReplacementTarget,
+    replacement: HostStructuralReplacementTarget,
+};
+
+pub const HostStructuralSplice = struct {
+    removed_elem_ids: []u64,
+    touched_parent_ids: []u64,
+    replacement_elem_ids: []u64,
+    replacement_on_change_indices: []usize,
+
+    pub fn deinit(self: HostStructuralSplice, allocator: std.mem.Allocator) void {
+        allocator.free(self.removed_elem_ids);
+        allocator.free(self.touched_parent_ids);
+        allocator.free(self.replacement_elem_ids);
+        allocator.free(self.replacement_on_change_indices);
+    }
+};
+
+pub const HostStructuralSpliceAndTargets = struct {
+    splice: HostStructuralSplice,
+    targets: HostStructuralPatchTargets,
+};
+
+pub const RecomputeApplyOutcome = struct {
+    structural_render_required: bool,
+};
+
+pub const HostKeyedRowDiffResult = struct {
+    scope_ids: []u64,
+    row_items_changed: []bool,
+    removed_scope_ids: []u64,
+    rows_reused: u64,
+    rows_created: u64,
+    rows_removed: u64,
+    row_items_unchanged: u64,
+    row_items_updated: u64,
+
+    pub fn deinit(self: HostKeyedRowDiffResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.scope_ids);
+        allocator.free(self.row_items_changed);
+        allocator.free(self.removed_scope_ids);
+    }
+};
+
+pub const HostEachRowRenderSegment = struct {
+    scope_id: u64,
+    start: usize,
+    len: usize,
+};
+
+pub const HostEachRowRenderMove = struct {
+    old_start: usize,
+    new_start: usize,
+    len: usize,
 };
 
 /// Identity token interned per `Ui.state` binder.
@@ -1198,3 +1496,57 @@ pub const HostNodeDescriptorStream = struct {
         };
     }
 };
+
+pub fn Engine(comptime Ctx: type) type {
+    verifyCtx(Ctx);
+
+    return struct {
+        const Self = @This();
+
+        pub const Context = Ctx;
+        pub const HostValueTypeTagForCtx = Ctx.HostValueTypeTag;
+        pub const Metrics = Ctx.Metrics;
+        pub const RegistryOps = Ctx.RegistryOps;
+        pub const HostValueRegistry = host_value_registry.Registry(Ctx.HostValueTypeTag, Ctx.host_value_type_tags_enabled);
+        pub const ActiveEventDesc = HostActiveEventDesc(Ctx.HostValueTypeTag);
+
+        host_values: HostValueRegistry = .{},
+        active_events: std.ArrayListUnmanaged(ActiveEventDesc) = .empty,
+        event_descriptors: std.ArrayListUnmanaged(HostEventDescriptor) = .empty,
+        signal_event_routes: std.ArrayListUnmanaged(HostSignalEventRoute) = .empty,
+        signal_descriptors: std.ArrayListUnmanaged(HostSignalDescriptor) = .empty,
+        signal_routes: std.ArrayListUnmanaged(HostSignalRoute) = .empty,
+        signal_dependents: std.ArrayListUnmanaged(HostSignalDependentsRoute) = .empty,
+        signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
+        states: std.ArrayListUnmanaged(HostState) = .empty,
+        scopes: std.ArrayListUnmanaged(HostScope) = .empty,
+        node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
+        dom_identities: std.ArrayListUnmanaged(HostDomIdentity) = .empty,
+        active_stream: HostNodeDescriptorStream = .{},
+        active_signal_graph: std.ArrayListUnmanaged(HostActiveSignalGraphNode) = .empty,
+        active_source_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u64)) = .empty,
+        active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
+        active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
+        active_change_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveChangeSignalSink)) = .empty,
+        active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
+        pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
+        cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
+        next_task_request_id: u64 = 1,
+        next_elem_id: u64 = 0,
+        roc_host: ?*abi.RocHost = null,
+        root_elem: ?abi.Elem = null,
+        last_runtime_metrics: Metrics = Ctx.zeroMetrics(),
+        pending_roc_metrics: Metrics = Ctx.zeroMetrics(),
+        dirty_signal_generation: u64 = 0,
+
+        pub fn init() Self {
+            return .{};
+        }
+    };
+}
+
+comptime {
+    verifyCtx(NativeCtx);
+    std.debug.assert(@sizeOf(NoMetrics) == 0);
+    _ = Engine(NativeCtx);
+}
