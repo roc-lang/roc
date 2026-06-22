@@ -1,41 +1,44 @@
-# Bug repro + ideal-fix plan (8 issues since #9635)
+# Bug repro + ideal-fix plan (open bug issues since #9635)
 
-Issues in scope: open, opened since #9635, Type **Bug** (or `bug` label), no "panic" in title.
+Issues considered: open, opened since #9635, Type **Bug** (or `bug` label), no "panic" in title.
 
-Each item below has: the regression **test** (RED now, GREEN once fixed, no edits), the **root cause**
-(file:line + mechanism), and an **ideal-fix checklist** of the concrete changes required — optimizing
-for perfect correctness first, then maximum performance, with no fallbacks/heuristics
-(per `AGENTS.md` / `.rules`).
+Each item below has: the regression **test** (RED before the fix, GREEN after, no edits), the
+**root cause** (file:line + mechanism), and an **ideal-fix checklist** of the concrete changes
+required — optimizing for perfect correctness first, then maximum performance, with no
+fallbacks/heuristics (per `AGENTS.md` / `.rules`).
 
 | Issue | Test | Status |
 |---|---|---|
-| [#9635](#9635--assigned-to-itself-false-positive) | `test/snapshots/repro_issue_9635_self_assignment.md` | RED |
-| [#9670](#9670--a-type-mismatches-itself) | `test/snapshots/repro_issue_9670_equivalent_type_mismatch.md` | RED |
-| [#9740](#9740--numeric-literal-0-inferred-dec-not-u64) | `test/snapshots/repro_issue_9740_numeric_literal_dec.md` | RED |
-| [#9725](#9725--record-cannot-be-a-dict-key) | `test/snapshots/repro_issue_9725_record_dict_key.md` | RED |
-| [#9712](#9712--1--10--100-crashes) | `test/snapshots/repro_issue_9712_mod_floordiv_precedence.md` | RED |
-| [#9686](#9686--sort-differs-in-imported-type-module) | `src/eval/test/eval_issue_tests.zig` (`issue 9686`) | RED |
-| [#9733](#9733--nested-expect-is-ignored) | `src/compile/test/hoisted_constants_test.zig` (`issue 9733`) | RED |
-| [#9645](#9645--zigglue-stale-abi--bad-size-checks) | — | already fixed |
+| [#9712](#9712--1--10--100-crashes) | `test/snapshots/repro_issue_9712_mod_floordiv_precedence.md` | **DONE** (fix landed, repro GREEN) |
+| [#9733](#9733--nested-expect-is-ignored) | `src/compile/test/hoisted_constants_test.zig` (`issue 9733`) | **DONE** (fix landed, test GREEN) |
+| [#9686](#9686--sort-differs-in-imported-type-module) | `src/eval/test/eval_issue_tests.zig` (`issue 9686`) | **DONE** (fix landed, test GREEN) |
+| [#9635](#9635--assigned-to-itself-false-positive) | `test/snapshots/repro_issue_9635_self_assignment.md` | **DONE** (fix landed, repro GREEN) |
+| [#9740](#9740--numeric-literal-0-inferred-dec-not-u64) | `test/snapshots/repro_issue_9740_numeric_literal_dec.md` | **DONE** (fix landed, repro GREEN) |
+| [#9725](#9725--record-cannot-be-a-dict-key) | `test/snapshots/repro_issue_9725_record_dict_key.md` | **TODO** (repro RED; fix in progress) |
+| #9645 | — | **already fixed** (host-ABI migration; verified end-to-end) |
+| #9670 | — | **out of scope** — fixed separately by PR #9688; intentionally not implemented or tested here |
 
 ## Running the tests
 
 ```bash
-# Snapshots (RED = "Failed to process 1 snapshots.")
-./zig-out/bin/snapshot test/snapshots/repro_issue_9635_self_assignment.md          --check-expected
-./zig-out/bin/snapshot test/snapshots/repro_issue_9670_equivalent_type_mismatch.md --check-expected
-./zig-out/bin/snapshot test/snapshots/repro_issue_9740_numeric_literal_dec.md      --check-expected
-./zig-out/bin/snapshot test/snapshots/repro_issue_9725_record_dict_key.md          --check-expected
-./zig-out/bin/snapshot test/snapshots/repro_issue_9712_mod_floordiv_precedence.md  --check-output
+# Snapshots — DONE ones now pass; #9725 is still RED until its fix lands.
+./zig-out/bin/snapshot test/snapshots/repro_issue_9635_self_assignment.md          --check-expected  # GREEN
+./zig-out/bin/snapshot test/snapshots/repro_issue_9740_numeric_literal_dec.md      --check-expected  # GREEN
+./zig-out/bin/snapshot test/snapshots/repro_issue_9712_mod_floordiv_precedence.md  --check-output    # GREEN
+./zig-out/bin/snapshot test/snapshots/repro_issue_9725_record_dict_key.md          --check-expected  # RED (TODO)
 # whole suite also enforces these via the `snapshot validation` zig test
 
-zig build run-test-eval -- --filter "issue 9686"       # RED: cross-module dispatch fails to lower
-zig build run-test-zig  -- --test-filter "issue 9733"  # RED: expected 2, found 1
+zig build run-test-eval -- --filter "issue 9686"       # GREEN (cross-module alias dispatch)
+zig build run-test-zig  -- --test-filter "issue 9733"  # GREEN (2 expect roots collected)
 ```
 
 Snapshot mechanism: false-positive-diagnostic repros set `# EXPECTED` = `NIL` (the correct outcome is
 "no diagnostic"); the checker regenerates the diagnostics fresh and compares to `NIL`. The repl repro
 sets `# OUTPUT` to the correct value. No `skip=true`/xfail anywhere.
+
+> **#9670 is out of scope for this branch.** It is fixed by a separate PR (#9688) whose root cause is a
+> generalization-rank bug (a generalized var lifted to the outermost rank while checking nominal/alias
+> arguments). This branch contains no #9670 repro or fix, to stay fully decoupled from that PR.
 
 ---
 
@@ -67,34 +70,13 @@ correctly spared (which is why only the 2nd/3rd fire).
 
 ---
 
-## #9670 — a type mismatches itself
+## #9670 — out of scope (fixed by PR #9688)
 
-**Test:** `test/snapshots/repro_issue_9670_equivalent_type_mismatch.md` (`--check-expected`).
-RED: `TYPE MISMATCH` whose two displayed types are byte-identical (`Parser(input, List(a))`); expected `NIL`.
-
-**Root cause.** A *genuine* rigid-vs-rigid unification failure (confirmed: replacing the annotation's
-rigids with `_` flex vars makes it vanish), not a display defect. `sep_by1`'s body uses static dispatch
-(`.apply`/`.run`); those constraints are deferred and drained in a **global post-pass at
-`src/check/Check.zig:4170` — after** per-def generalization. That late drain links the body's result var to
-one of `sep_by1`'s rigid params at a rank below the body, so `src/types/generalize.zig:185-195` treats the
-rigid as "escaped" and never marks it `.generalized`. At the call site `instantiate.zig:116-118` only
-freshens `.generalized` vars, so the un-generalized rigid leaks into the result and clashes with the
-annotation's own rigids in `unify.zig:450`. This is the most delicate fix (generalization scheduling).
-
-**Ideal fix — checklist** (resolve deferred dispatch at the def's rank, before generalizing it):
-- [ ] In `src/check/Check.zig`, locate the deferred static-dispatch constraints drained globally at line
-  `4170` and the per-def generalization step in the `should_generalize` block (`~10569-10622`).
-- [ ] Drain/unify a def's deferred static-dispatch constraints **whose receiver is resolvable** at the def's
-  own rank, inside that per-def step **before** `generalizer.generalize` runs — i.e. fold the relevant
-  resolution into the per-def `checkStaticDispatchConstraints`/`checkConstraints` rather than deferring to
-  the top-level post-pass.
-- [ ] Ensure the body's result var and the def's rigid params end up at rank `>= rank_to_generalize` so
-  `generalize.zig:185-195` promotes **every** rigid parameter to `.generalized`.
-- [ ] Confirm `instantiate.zig:116-118` then freshens all params at each call site (no rigid leak).
-- [ ] Do **not** weaken the rigid-vs-rigid rule in `unify.zig:450` (it is sound); do **not** patch the
-  report/display side (`report.zig:798-805`).
-- [ ] `--check-expected` repro → GREEN; run the full type-checker + snapshot suites (highest regression risk;
-  watch other static-dispatch / generalization snapshots).
+Intentionally not implemented or tested on this branch. PR #9688 fixes it; its root cause is a
+generalization-rank bug — when checking the arguments of a nominal or alias, an already-generalized
+variable was lifted to the outermost rank, effectively un-generalizing it and causing the rigid to leak
+into a call-site result (the spurious self-mismatch). This branch carries no #9670 repro or fix so it
+stays fully decoupled from that PR.
 
 ---
 
