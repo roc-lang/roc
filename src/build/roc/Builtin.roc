@@ -1,8 +1,4 @@
 Builtin :: [].{
-	ParseTagUnionSpec(_shape) :: {}.{
-		parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try({ value : _shape, rest : _state }, _err)
-	}
-
 	Str :: [ProvidedByCompiler].{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact
@@ -20,6 +16,10 @@ Builtin :: [].{
 			}
 
 			name : FieldName(_shape) -> Str
+		}
+
+		ParseTagUnionSpec(_shape) :: {}.{
+			parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try({ value : _shape, rest : _state }, _err)
 		}
 
 		Utf8Problem := [
@@ -2231,24 +2231,23 @@ Builtin :: [].{
 		}
 	}
 
-	DictBucket : { dist_and_fingerprint : U32, entry_index : U32 }
-
-	DictData(k, v) : {
-		entries : List((k, v)),
-		buckets : List(DictBucket),
-		max_entries_before_grow : U64,
-		shifts : U8,
-	}
-
-	DictMetadata : {
-		buckets : List(DictBucket),
-		max_entries_before_grow : U64,
-		shifts : U8,
-	}
-
 	Dict(k, v) :: [
-		HashMap(DictData(k, v)),
+		HashMap({ entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }),
 	].{
+		DictBucket : { dist_and_fingerprint : U32, entry_index : U32 }
+
+		DictData(k, v) : {
+			entries : List((k, v)),
+			buckets : List(DictBucket),
+			max_entries_before_grow : U64,
+			shifts : U8,
+		}
+
+		DictMetadata : {
+			buckets : List(DictBucket),
+			max_entries_before_grow : U64,
+			shifts : U8,
+		}
 
 		## Returns `Bool.True` if the two dictionaries contain the same key-value
 		## pairs, and `Bool.False` otherwise.
@@ -9074,375 +9073,387 @@ Builtin :: [].{
 		}
 	}
 
-	hasher_start : U64 -> Hasher
-	hasher_start = |seed| { state: seed }
+}
 
-	hasher_finish : Hasher -> U64
+hasher_start : U64 -> Hasher
+hasher_start = |seed| { state: seed }
 
-	dict_pseudo_seed : () -> U64
+hasher_finish : Hasher -> U64
 
-	dict_seed : () -> U64
-	dict_seed = || dict_pseudo_seed()
+dict_pseudo_seed : () -> U64
 
-	dict_combine_entry_hashes : U64, U64 -> U64
-	dict_combine_entry_hashes = |a, b| U64.bitwise_xor(a, b)
+dict_seed : () -> U64
+dict_seed = || dict_pseudo_seed()
 
-	dict_empty_bucket : DictBucket
-	dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
+dict_combine_entry_hashes : U64, U64 -> U64
+dict_combine_entry_hashes = |a, b| U64.bitwise_xor(a, b)
 
-	dict_dist_inc : U32
-	dict_dist_inc = U32.shift_left_by(1, 8)
+dict_empty_bucket : Dict.DictBucket
+dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
 
-	dict_fingerprint_mask : U32
-	dict_fingerprint_mask = dict_dist_inc - 1
+dict_dist_inc : U32
+dict_dist_inc = U32.shift_left_by(1, 8)
 
-	dict_initial_shifts : U8
-	dict_initial_shifts = 61
+dict_fingerprint_mask : U32
+dict_fingerprint_mask = dict_dist_inc - 1
 
-	dict_min_shifts : U8
-	dict_min_shifts = 32
+dict_initial_shifts : U8
+dict_initial_shifts = 61
 
-	dict_max_bucket_count : U64
-	dict_max_bucket_count = 4294967296
+dict_min_shifts : U8
+dict_min_shifts = 32
 
-	dict_max_entry_count : U64
-	dict_max_entry_count = 4294967296
+dict_max_bucket_count : U64
+dict_max_bucket_count = 4294967296
 
-	dict_bucket_count_for_shifts : U8 -> U64
-	dict_bucket_count_for_shifts = |shifts| U64.shift_left_by(1, 64 - shifts)
+dict_max_entry_count : U64
+dict_max_entry_count = 4294967296
 
-	dict_max_entries_for_bucket_count : U64 -> U64
-	dict_max_entries_for_bucket_count = |bucket_count|
-		if bucket_count == 0 {
-			0
-		} else if bucket_count == dict_max_bucket_count {
-			dict_max_entry_count
-		} else {
-			(bucket_count * 4) / 5
-		}
+dict_bucket_count_for_shifts : U8 -> U64
+dict_bucket_count_for_shifts = |shifts| U64.shift_left_by(1, 64 - shifts)
 
-	dict_shifts_for_capacity : U64 -> U8
-	dict_shifts_for_capacity = |requested| {
-		if requested > dict_max_entry_count {
-			crash "Dict capacity overflow"
-		}
-
-		var $shifts = dict_initial_shifts
-		while $shifts > dict_min_shifts and dict_max_entries_for_bucket_count(dict_bucket_count_for_shifts($shifts)) < requested {
-			$shifts = $shifts - 1
-		}
-
-		$shifts
+dict_max_entries_for_bucket_count : U64 -> U64
+dict_max_entries_for_bucket_count = |bucket_count|
+	if bucket_count == 0 {
+		0
+	} else if bucket_count == dict_max_bucket_count {
+		dict_max_entry_count
+	} else {
+		(bucket_count * 4) / 5
 	}
 
-	dict_allocate_buckets_for_capacity : U64 -> DictMetadata
-	dict_allocate_buckets_for_capacity = |requested| {
-		if requested == 0 {
-			{ buckets: [], max_entries_before_grow: 0, shifts: dict_initial_shifts }
-		} else {
-			shifts = dict_shifts_for_capacity(requested)
-			bucket_count = dict_bucket_count_for_shifts(shifts)
-			{
-				buckets: List.repeat(dict_empty_bucket, bucket_count),
-				max_entries_before_grow: dict_max_entries_for_bucket_count(bucket_count),
-				shifts,
-			}
-		}
+dict_shifts_for_capacity : U64 -> U8
+dict_shifts_for_capacity = |requested| {
+	if requested > dict_max_entry_count {
+		crash "Dict capacity overflow"
 	}
 
-	dict_add_capacity : U64, U64 -> U64
-	dict_add_capacity = |a, b|
-		if b > U64.highest - a {
-			crash "Dict capacity overflow"
-		} else {
-			a + b
-		}
-
-	dict_hash_key : k -> U64
-		where [k.to_hash : k, Hasher -> Hasher]
-	dict_hash_key = |key| hasher_finish(key.to_hash(hasher_start(dict_seed())))
-
-	dict_entry_index_from_u64 : U64 -> U32
-	dict_entry_index_from_u64 = |index|
-		if index > U32.to_u64(U32.highest) {
-			crash "Dict entry index overflow"
-		} else {
-			U64.to_u32_wrap(index)
-		}
-
-	dict_bucket_index_from_hash : U64, U8 -> U64
-	dict_bucket_index_from_hash = |hash, shifts| U64.shift_right_zf_by(hash, shifts)
-
-	dict_dist_and_fingerprint_from_hash : U64 -> U32
-	dict_dist_and_fingerprint_from_hash = |hash| {
-		fingerprint = U32.bitwise_and(U64.to_u32_wrap(hash), dict_fingerprint_mask)
-		U32.bitwise_or(fingerprint, dict_dist_inc)
+	var $shifts = dict_initial_shifts
+	while $shifts > dict_min_shifts and dict_max_entries_for_bucket_count(dict_bucket_count_for_shifts($shifts)) < requested {
+		$shifts = $shifts - 1
 	}
 
-	dict_increment_dist : U32 -> U32
-	dict_increment_dist = |dist_and_fingerprint| dist_and_fingerprint + dict_dist_inc
+	$shifts
+}
 
-	dict_decrement_dist : U32 -> U32
-	dict_decrement_dist = |dist_and_fingerprint| dist_and_fingerprint - dict_dist_inc
-
-	dict_next_bucket_index : U64, U64 -> U64
-	dict_next_bucket_index = |bucket_index, bucket_count|
-		if bucket_index + 1 == bucket_count {
-			0
-		} else {
-			bucket_index + 1
-		}
-
-	dict_ensure_capacity : DictData(k, v), U64 -> DictData(k, v)
-		where [k.to_hash : k, Hasher -> Hasher]
-	dict_ensure_capacity = |data, desired| {
-		if desired <= data.max_entries_before_grow {
-			data
-		} else {
-			metadata = dict_allocate_buckets_for_capacity(desired)
-			entries = List.reserve(data.entries, desired - List.len(data.entries))
-			buckets = dict_fill_buckets_from_entries(metadata.buckets, entries, metadata.shifts)
-			{ entries, buckets, max_entries_before_grow: metadata.max_entries_before_grow, shifts: metadata.shifts }
+dict_allocate_buckets_for_capacity : U64 -> Dict.DictMetadata
+dict_allocate_buckets_for_capacity = |requested| {
+	if requested == 0 {
+		{ buckets: [], max_entries_before_grow: 0, shifts: dict_initial_shifts }
+	} else {
+		shifts = dict_shifts_for_capacity(requested)
+		bucket_count = dict_bucket_count_for_shifts(shifts)
+		{
+			buckets: List.repeat(dict_empty_bucket, bucket_count),
+			max_entries_before_grow: dict_max_entries_for_bucket_count(bucket_count),
+			shifts,
 		}
 	}
+}
 
-	dict_find : DictData(k, v), k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
-		where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
-	dict_find = |data, key| {
-		if List.is_empty(data.entries) {
-			if List.is_empty(data.buckets) {
-				Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
-			} else {
-				hash = dict_hash_key(key)
-				Missing(
-					{
-						bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
-						dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
-					},
-				)
-			}
-		} else if List.is_empty(data.buckets) {
-			crash "Dict invariant violated: entries without buckets"
+dict_add_capacity : U64, U64 -> U64
+dict_add_capacity = |a, b|
+	if b > U64.highest - a {
+		crash "Dict capacity overflow"
+	} else {
+		a + b
+	}
+
+dict_hash_key : k -> U64
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_hash_key = |key| hasher_finish(key.to_hash(hasher_start(dict_seed())))
+
+dict_entry_index_from_u64 : U64 -> U32
+dict_entry_index_from_u64 = |index|
+	if index > U32.to_u64(U32.highest) {
+		crash "Dict entry index overflow"
+	} else {
+		U64.to_u32_wrap(index)
+	}
+
+dict_bucket_index_from_hash : U64, U8 -> U64
+dict_bucket_index_from_hash = |hash, shifts| U64.shift_right_zf_by(hash, shifts)
+
+dict_dist_and_fingerprint_from_hash : U64 -> U32
+dict_dist_and_fingerprint_from_hash = |hash| {
+	fingerprint = U32.bitwise_and(U64.to_u32_wrap(hash), dict_fingerprint_mask)
+	U32.bitwise_or(fingerprint, dict_dist_inc)
+}
+
+dict_increment_dist : U32 -> U32
+dict_increment_dist = |dist_and_fingerprint| dist_and_fingerprint + dict_dist_inc
+
+dict_decrement_dist : U32 -> U32
+dict_decrement_dist = |dist_and_fingerprint| dist_and_fingerprint - dict_dist_inc
+
+dict_next_bucket_index : U64, U64 -> U64
+dict_next_bucket_index = |bucket_index, bucket_count|
+	if bucket_index + 1 == bucket_count {
+		0
+	} else {
+		bucket_index + 1
+	}
+
+dict_ensure_capacity : Dict.DictData(k, v), U64 -> Dict.DictData(k, v)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_ensure_capacity = |data, desired| {
+	if desired <= data.max_entries_before_grow {
+		data
+	} else {
+		metadata = dict_allocate_buckets_for_capacity(desired)
+		entries = List.reserve(data.entries, desired - List.len(data.entries))
+		buckets = dict_fill_buckets_from_entries(metadata.buckets, entries, metadata.shifts)
+		{ entries, buckets, max_entries_before_grow: metadata.max_entries_before_grow, shifts: metadata.shifts }
+	}
+}
+
+dict_find : Dict.DictData(k, v), k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+dict_find = |data, key| {
+	if List.is_empty(data.entries) {
+		if List.is_empty(data.buckets) {
+			Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
 		} else {
 			hash = dict_hash_key(key)
-			dict_find_from(
-				data.buckets,
-				data.entries,
-				dict_bucket_index_from_hash(hash, data.shifts),
-				dict_dist_and_fingerprint_from_hash(hash),
-				key,
+			Missing(
+				{
+					bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+					dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+				},
 			)
 		}
+	} else if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: entries without buckets"
+	} else {
+		hash = dict_hash_key(key)
+		dict_find_from(
+			data.buckets,
+			data.entries,
+			dict_bucket_index_from_hash(hash, data.shifts),
+			dict_dist_and_fingerprint_from_hash(hash),
+			key,
+		)
 	}
+}
 
-	dict_find_from : List(DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
-		where [k.is_eq : k, k -> Bool]
-	dict_find_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
-		bucket = list_get_unsafe(buckets, bucket_index)
-		if dist_and_fingerprint == bucket.dist_and_fingerprint {
-			entry_index = U32.to_u64(bucket.entry_index)
-			(found_key, found_value) = list_get_unsafe(entries, entry_index)
-			if found_key == key {
-				Found({ bucket_index, entry_index, value: found_value })
-			} else {
-				dict_find_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
-			}
-		} else if dist_and_fingerprint > bucket.dist_and_fingerprint {
-			Missing({ bucket_index, dist_and_fingerprint })
+dict_find_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool]
+dict_find_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint == bucket.dist_and_fingerprint {
+		entry_index = U32.to_u64(bucket.entry_index)
+		(found_key, found_value) = list_get_unsafe(entries, entry_index)
+		if found_key == key {
+			Found({ bucket_index, entry_index, value: found_value })
 		} else {
 			dict_find_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
 		}
+	} else if dist_and_fingerprint > bucket.dist_and_fingerprint {
+		Missing({ bucket_index, dist_and_fingerprint })
+	} else {
+		dict_find_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
 	}
-
-	dict_insert_new_data : DictData(k, v), U64, U32, k, v -> DictData(k, v)
-	dict_insert_new_data = |data, bucket_index, dist_and_fingerprint, key, value| {
-		if List.is_empty(data.buckets) {
-			crash "Dict invariant violated: insert into empty bucket table"
-		}
-
-		entry_index = List.len(data.entries)
-		entry_index_u32 = dict_entry_index_from_u64(entry_index)
-		entries = List.append(data.entries, (key, value))
-		buckets = dict_place_and_shift_up(data.buckets, { dist_and_fingerprint, entry_index: entry_index_u32 }, bucket_index)
-		{ entries, buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts }
-	}
-
-	dict_remove_bucket_data : DictData(k, v), U64 -> DictData(k, v)
-		where [k.to_hash : k, Hasher -> Hasher]
-	dict_remove_bucket_data = |data, bucket_index| {
-		removed_bucket = list_get_unsafe(data.buckets, bucket_index)
-		removed_entry_index = removed_bucket.entry_index
-		removed_entry_index_u64 = U32.to_u64(removed_entry_index)
-
-		removed = dict_remove_bucket_from_probe(data.buckets, bucket_index)
-		buckets_without_removed = list_set_unsafe(removed.buckets, removed.empty_bucket_index, dict_empty_bucket)
-
-		last_entry_index = List.len(data.entries) - 1
-		if removed_entry_index_u64 == last_entry_index {
-			{
-				entries: List.drop_last(data.entries, 1),
-				buckets: buckets_without_removed,
-				max_entries_before_grow: data.max_entries_before_grow,
-				shifts: data.shifts,
-			}
-		} else {
-			entries_swapped = list_swap_unsafe(data.entries, removed_entry_index_u64, last_entry_index)
-			(moved_key, _) = list_get_unsafe(entries_swapped, removed_entry_index_u64)
-			moved_hash = dict_hash_key(moved_key)
-			moved_base_bucket_index = dict_bucket_index_from_hash(moved_hash, data.shifts)
-			moved_entry_index = dict_entry_index_from_u64(last_entry_index)
-			moved_bucket_index = dict_scan_for_entry_index(buckets_without_removed, moved_base_bucket_index, moved_entry_index)
-			moved_bucket = list_get_unsafe(buckets_without_removed, moved_bucket_index)
-			buckets = list_set_unsafe(
-				buckets_without_removed,
-				moved_bucket_index,
-				{ dist_and_fingerprint: moved_bucket.dist_and_fingerprint, entry_index: removed_entry_index },
-			)
-
-			{
-				entries: List.drop_last(entries_swapped, 1),
-				buckets,
-				max_entries_before_grow: data.max_entries_before_grow,
-				shifts: data.shifts,
-			}
-		}
-	}
-
-	dict_remove_bucket_from_probe : List(DictBucket), U64 -> { buckets : List(DictBucket), empty_bucket_index : U64 }
-	dict_remove_bucket_from_probe = |buckets, bucket_index| {
-		next_index = dict_next_bucket_index(bucket_index, List.len(buckets))
-		next_bucket = list_get_unsafe(buckets, next_index)
-		if next_bucket.dist_and_fingerprint >= dict_dist_inc + dict_dist_inc {
-			shifted = {
-				dist_and_fingerprint: dict_decrement_dist(next_bucket.dist_and_fingerprint),
-				entry_index: next_bucket.entry_index,
-			}
-			dict_remove_bucket_from_probe(list_set_unsafe(buckets, bucket_index, shifted), next_index)
-		} else {
-			{ buckets, empty_bucket_index: bucket_index }
-		}
-	}
-
-	dict_scan_for_entry_index : List(DictBucket), U64, U32 -> U64
-	dict_scan_for_entry_index = |buckets, bucket_index, entry_index| {
-		bucket = list_get_unsafe(buckets, bucket_index)
-		if bucket.dist_and_fingerprint == 0 {
-			crash "Dict invariant violated: moved entry bucket not found"
-		} else if bucket.entry_index == entry_index {
-			bucket_index
-		} else {
-			dict_scan_for_entry_index(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), entry_index)
-		}
-	}
-
-	dict_fill_buckets_from_entries : List(DictBucket), List((k, v)), U8 -> List(DictBucket)
-		where [k.to_hash : k, Hasher -> Hasher]
-	dict_fill_buckets_from_entries = |buckets, entries, shifts| {
-		var $buckets = buckets
-		var $index = 0
-		while $index < List.len(entries) {
-			(key, _) = list_get_unsafe(entries, $index)
-			(bucket_index, dist_and_fingerprint) = dict_next_while_less($buckets, key, shifts)
-			$buckets = dict_place_and_shift_up($buckets, { dist_and_fingerprint, entry_index: dict_entry_index_from_u64($index) }, bucket_index)
-			$index = $index + 1
-		}
-		$buckets
-	}
-
-	dict_next_while_less : List(DictBucket), k, U8 -> (U64, U32)
-		where [k.to_hash : k, Hasher -> Hasher]
-	dict_next_while_less = |buckets, key, shifts| {
-		hash = dict_hash_key(key)
-		dict_next_while_less_from(buckets, dict_bucket_index_from_hash(hash, shifts), dict_dist_and_fingerprint_from_hash(hash))
-	}
-
-	dict_next_while_less_from : List(DictBucket), U64, U32 -> (U64, U32)
-	dict_next_while_less_from = |buckets, bucket_index, dist_and_fingerprint| {
-		loaded = list_get_unsafe(buckets, bucket_index)
-		if dist_and_fingerprint < loaded.dist_and_fingerprint {
-			dict_next_while_less_from(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint))
-		} else {
-			(bucket_index, dist_and_fingerprint)
-		}
-	}
-
-	dict_place_and_shift_up : List(DictBucket), DictBucket, U64 -> List(DictBucket)
-	dict_place_and_shift_up = |buckets, bucket, bucket_index| {
-		loaded = list_get_unsafe(buckets, bucket_index)
-		if loaded.dist_and_fingerprint == 0 {
-			list_set_unsafe(buckets, bucket_index, bucket)
-		} else {
-			next_bucket = {
-				dist_and_fingerprint: dict_increment_dist(loaded.dist_and_fingerprint),
-				entry_index: loaded.entry_index,
-			}
-			dict_place_and_shift_up(list_set_unsafe(buckets, bucket_index, bucket), next_bucket, dict_next_bucket_index(bucket_index, List.len(buckets)))
-		}
-	}
-
-	u8_from_str : Str -> Try(U8, [BadNumStr])
-	i8_from_str : Str -> Try(I8, [BadNumStr])
-	u16_from_str : Str -> Try(U16, [BadNumStr])
-	i16_from_str : Str -> Try(I16, [BadNumStr])
-	u32_from_str : Str -> Try(U32, [BadNumStr])
-	i32_from_str : Str -> Try(I32, [BadNumStr])
-	u64_from_str : Str -> Try(U64, [BadNumStr])
-	i64_from_str : Str -> Try(I64, [BadNumStr])
-	u128_from_str : Str -> Try(U128, [BadNumStr])
-	i128_from_str : Str -> Try(I128, [BadNumStr])
-	dec_from_str : Str -> Try(Dec, [BadNumStr])
-	f32_from_str : Str -> Try(F32, [BadNumStr])
-	f64_from_str : Str -> Try(F64, [BadNumStr])
-
 }
 
+dict_insert_new_data : Dict.DictData(k, v), U64, U32, k, v -> Dict.DictData(k, v)
+dict_insert_new_data = |data, bucket_index, dist_and_fingerprint, key, value| {
+	if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: insert into empty bucket table"
+	}
+
+	entry_index = List.len(data.entries)
+	entry_index_u32 = dict_entry_index_from_u64(entry_index)
+	entries = List.append(data.entries, (key, value))
+	buckets = dict_place_and_shift_up(data.buckets, { dist_and_fingerprint, entry_index: entry_index_u32 }, bucket_index)
+	{ entries, buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts }
+}
+
+dict_remove_bucket_data : Dict.DictData(k, v), U64 -> Dict.DictData(k, v)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_remove_bucket_data = |data, bucket_index| {
+	removed_bucket = list_get_unsafe(data.buckets, bucket_index)
+	removed_entry_index = removed_bucket.entry_index
+	removed_entry_index_u64 = U32.to_u64(removed_entry_index)
+
+	removed = dict_remove_bucket_from_probe(data.buckets, bucket_index)
+	buckets_without_removed = list_set_unsafe(removed.buckets, removed.empty_bucket_index, dict_empty_bucket)
+
+	last_entry_index = List.len(data.entries) - 1
+	if removed_entry_index_u64 == last_entry_index {
+		{
+			entries: List.drop_last(data.entries, 1),
+			buckets: buckets_without_removed,
+			max_entries_before_grow: data.max_entries_before_grow,
+			shifts: data.shifts,
+		}
+	} else {
+		entries_swapped = list_swap_unsafe(data.entries, removed_entry_index_u64, last_entry_index)
+		(moved_key, _) = list_get_unsafe(entries_swapped, removed_entry_index_u64)
+		moved_hash = dict_hash_key(moved_key)
+		moved_base_bucket_index = dict_bucket_index_from_hash(moved_hash, data.shifts)
+		moved_entry_index = dict_entry_index_from_u64(last_entry_index)
+		moved_bucket_index = dict_scan_for_entry_index(buckets_without_removed, moved_base_bucket_index, moved_entry_index)
+		moved_bucket = list_get_unsafe(buckets_without_removed, moved_bucket_index)
+		buckets = list_set_unsafe(
+			buckets_without_removed,
+			moved_bucket_index,
+			{ dist_and_fingerprint: moved_bucket.dist_and_fingerprint, entry_index: removed_entry_index },
+		)
+
+		{
+			entries: List.drop_last(entries_swapped, 1),
+			buckets,
+			max_entries_before_grow: data.max_entries_before_grow,
+			shifts: data.shifts,
+		}
+	}
+}
+
+dict_remove_bucket_from_probe : List(Dict.DictBucket), U64 -> { buckets : List(Dict.DictBucket), empty_bucket_index : U64 }
+dict_remove_bucket_from_probe = |buckets, bucket_index| {
+	next_index = dict_next_bucket_index(bucket_index, List.len(buckets))
+	next_bucket = list_get_unsafe(buckets, next_index)
+	if next_bucket.dist_and_fingerprint >= dict_dist_inc + dict_dist_inc {
+		shifted = {
+			dist_and_fingerprint: dict_decrement_dist(next_bucket.dist_and_fingerprint),
+			entry_index: next_bucket.entry_index,
+		}
+		dict_remove_bucket_from_probe(list_set_unsafe(buckets, bucket_index, shifted), next_index)
+	} else {
+		{ buckets, empty_bucket_index: bucket_index }
+	}
+}
+
+dict_scan_for_entry_index : List(Dict.DictBucket), U64, U32 -> U64
+dict_scan_for_entry_index = |buckets, bucket_index, entry_index| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if bucket.dist_and_fingerprint == 0 {
+		crash "Dict invariant violated: moved entry bucket not found"
+	} else if bucket.entry_index == entry_index {
+		bucket_index
+	} else {
+		dict_scan_for_entry_index(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), entry_index)
+	}
+}
+
+dict_fill_buckets_from_entries : List(Dict.DictBucket), List((k, v)), U8 -> List(Dict.DictBucket)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_fill_buckets_from_entries = |buckets, entries, shifts| {
+	var $buckets = buckets
+	var $index = 0
+	while $index < List.len(entries) {
+		(key, _) = list_get_unsafe(entries, $index)
+		(bucket_index, dist_and_fingerprint) = dict_next_while_less($buckets, key, shifts)
+		$buckets = dict_place_and_shift_up($buckets, { dist_and_fingerprint, entry_index: dict_entry_index_from_u64($index) }, bucket_index)
+		$index = $index + 1
+	}
+	$buckets
+}
+
+dict_next_while_less : List(Dict.DictBucket), k, U8 -> (U64, U32)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_next_while_less = |buckets, key, shifts| {
+	hash = dict_hash_key(key)
+	dict_next_while_less_from(buckets, dict_bucket_index_from_hash(hash, shifts), dict_dist_and_fingerprint_from_hash(hash))
+}
+
+dict_next_while_less_from : List(Dict.DictBucket), U64, U32 -> (U64, U32)
+dict_next_while_less_from = |buckets, bucket_index, dist_and_fingerprint| {
+	loaded = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint < loaded.dist_and_fingerprint {
+		dict_next_while_less_from(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint))
+	} else {
+		(bucket_index, dist_and_fingerprint)
+	}
+}
+
+dict_place_and_shift_up : List(Dict.DictBucket), Dict.DictBucket, U64 -> List(Dict.DictBucket)
+dict_place_and_shift_up = |buckets, bucket, bucket_index| {
+	loaded = list_get_unsafe(buckets, bucket_index)
+	if loaded.dist_and_fingerprint == 0 {
+		list_set_unsafe(buckets, bucket_index, bucket)
+	} else {
+		next_bucket = {
+			dist_and_fingerprint: dict_increment_dist(loaded.dist_and_fingerprint),
+			entry_index: loaded.entry_index,
+		}
+		dict_place_and_shift_up(list_set_unsafe(buckets, bucket_index, bucket), next_bucket, dict_next_bucket_index(bucket_index, List.len(buckets)))
+	}
+}
+
+u8_from_str : Str -> Try(U8, [BadNumStr])
+
+i8_from_str : Str -> Try(I8, [BadNumStr])
+
+u16_from_str : Str -> Try(U16, [BadNumStr])
+
+i16_from_str : Str -> Try(I16, [BadNumStr])
+
+u32_from_str : Str -> Try(U32, [BadNumStr])
+
+i32_from_str : Str -> Try(I32, [BadNumStr])
+
+u64_from_str : Str -> Try(U64, [BadNumStr])
+
+i64_from_str : Str -> Try(I64, [BadNumStr])
+
+u128_from_str : Str -> Try(U128, [BadNumStr])
+
+i128_from_str : Str -> Try(I128, [BadNumStr])
+
+dec_from_str : Str -> Try(Dec, [BadNumStr])
+
+f32_from_str : Str -> Try(F32, [BadNumStr])
+
+f64_from_str : Str -> Try(F64, [BadNumStr])
+
 u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
-u8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u8_from_str(str))
+u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))
 
 i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange])
-i8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i8_from_str(str))
+i8_from_int_digits = |digits| int_from_digits(digits, |str| i8_from_str(str))
 
 u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange])
-u16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u16_from_str(str))
+u16_from_int_digits = |digits| int_from_digits(digits, |str| u16_from_str(str))
 
 i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange])
-i16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i16_from_str(str))
+i16_from_int_digits = |digits| int_from_digits(digits, |str| i16_from_str(str))
 
 u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange])
-u32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u32_from_str(str))
+u32_from_int_digits = |digits| int_from_digits(digits, |str| u32_from_str(str))
 
 i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange])
-i32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i32_from_str(str))
+i32_from_int_digits = |digits| int_from_digits(digits, |str| i32_from_str(str))
 
 u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange])
-u64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u64_from_str(str))
+u64_from_int_digits = |digits| int_from_digits(digits, |str| u64_from_str(str))
 
 i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange])
-i64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i64_from_str(str))
+i64_from_int_digits = |digits| int_from_digits(digits, |str| i64_from_str(str))
 
 u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange])
-u128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u128_from_str(str))
+u128_from_int_digits = |digits| int_from_digits(digits, |str| u128_from_str(str))
 
 i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange])
-i128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i128_from_str(str))
+i128_from_int_digits = |digits| int_from_digits(digits, |str| i128_from_str(str))
 
 dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
-dec_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.dec_from_str(str))
+dec_from_int_digits = |digits| int_from_digits(digits, |str| dec_from_str(str))
 
 dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
-dec_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.dec_from_str(str))
+dec_from_dec_digits = |digits| dec_from_digits(digits, |str| dec_from_str(str))
 
 f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange])
-f32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f32_from_str(str))
+f32_from_int_digits = |digits| int_from_digits(digits, |str| f32_from_str(str))
 
 f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
-f32_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f32_from_str(str))
+f32_from_dec_digits = |digits| dec_from_digits(digits, |str| f32_from_str(str))
 
 f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange])
-f64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f64_from_str(str))
+f64_from_int_digits = |digits| int_from_digits(digits, |str| f64_from_str(str))
 
 f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
-f64_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f64_from_str(str))
+f64_from_dec_digits = |digits| dec_from_digits(digits, |str| f64_from_str(str))
 
 out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
 out_of_range_try = |answer|

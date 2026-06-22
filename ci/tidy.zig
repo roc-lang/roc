@@ -266,6 +266,17 @@ const Errors = struct {
         );
     }
 
+    pub fn addDisallowedBuiltinType(errors: *Errors, file: SourceFile, offset: usize, name: []const u8) void {
+        errors.emit(
+            "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
+                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num. " ++
+                "Make '{s}' private by moving it below the exposed Builtin block (to the module's top level), " ++
+                "unless a user-facing method needs it and would break without it — in which case nest it under a " ++
+                "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Str).\n",
+            .{ file.path, file.lineNumber(offset), name, name },
+        );
+    }
+
     fn emit(errors: *Errors, comptime fmt: []const u8, args: anytype) void {
         comptime assert(fmt[fmt.len - 1] == '\n');
         errors.count += 1;
@@ -317,6 +328,63 @@ fn tidyFile(
     }
     if (file.hasExtension(".zon")) {
         tidyBannedGitDependency(file, errors);
+    }
+    tidyBuiltinExposedTypes(file, errors);
+}
+
+/// The only types allowed to be exposed directly under `Builtin` (i.e. declared at
+/// one level of indentation inside the `Builtin :: [].{ ... }` block). Every other
+/// type must either be private (declared below the exposed block, at the module's
+/// top level) or nested under one of these.
+const allowed_builtin_types = [_][]const u8{
+    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num",
+};
+
+fn isAllowedBuiltinType(name: []const u8) bool {
+    for (allowed_builtin_types) |allowed| {
+        if (std.mem.eql(u8, name, allowed)) return true;
+    }
+    return false;
+}
+
+/// Enforce that `Builtin.roc` exposes only the sanctioned set of top-level types.
+/// A top-level type declaration is one at exactly one tab of indentation inside the
+/// `Builtin :: [].{ ... }` block. Anything else is assumed to be a mistake: the rule
+/// is that such a type should be private (moved below the exposed block, to the
+/// module's top level) unless it is needed for a user-facing method that would break
+/// without it, in which case it should be nested under a logical Builtin type.
+fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
+    if (!std.mem.endsWith(u8, file.path, "src/build/roc/Builtin.roc")) return;
+
+    var in_block = false;
+    var line_start: usize = 0;
+    while (line_start <= file.text.len) {
+        const line_end = std.mem.findScalarPos(u8, file.text, line_start, '\n') orelse file.text.len;
+        const line = file.text[line_start..line_end];
+
+        if (!in_block) {
+            if (std.mem.startsWith(u8, line, "Builtin :: [].{")) in_block = true;
+        } else if (line.len > 0 and line[0] == '}') {
+            // A column-0 closing brace ends the exposed block; private declarations follow.
+            break;
+        } else if (line.len >= 2 and line[0] == '\t' and line[1] != '\t' and std.ascii.isUpper(line[1])) {
+            // Candidate top-level type declaration at one tab of indentation.
+            const rest = line[1..];
+            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                // Header is everything before the `::` / `:=` / `:` operator; strip any
+                // `(type, params)` suffix to get the bare type name.
+                var header = std.mem.trimEnd(u8, rest[0..colon], " ");
+                if (std.mem.indexOfScalar(u8, header, '(')) |paren| {
+                    header = header[0..paren];
+                }
+                if (header.len > 0 and !isAllowedBuiltinType(header)) {
+                    errors.addDisallowedBuiltinType(file, line_start, header);
+                }
+            }
+        }
+
+        if (line_end == file.text.len) break;
+        line_start = line_end + 1;
     }
 }
 

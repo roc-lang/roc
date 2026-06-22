@@ -26,7 +26,7 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
     }
 
     const parse_intrinsics = [_][]const u8{
-        "Builtin.ParseTagUnionSpec.parse",
+        "Builtin.Str.ParseTagUnionSpec.parse",
         "Builtin.Str.FieldName.FieldNames.rename_fields",
         "Builtin.Str.FieldName.FieldNames.shortest_name",
         "Builtin.Str.FieldName.FieldNames.longest_name",
@@ -278,10 +278,10 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_map_write_unsafe")) |list_map_write_unsafe_ident| {
         try low_level_map.put(list_map_write_unsafe_ident, .list_map_write_unsafe);
     }
-    if (env.common.findIdent("Builtin.dict_pseudo_seed")) |ident| {
+    if (env.common.findIdent("dict_pseudo_seed")) |ident| {
         try low_level_map.put(ident, .dict_pseudo_seed);
     }
-    if (env.common.findIdent("Builtin.hasher_finish")) |ident| {
+    if (env.common.findIdent("hasher_finish")) |ident| {
         try low_level_map.put(ident, .hasher_finish);
     }
     const hasher_primitives = [_]struct {
@@ -383,19 +383,19 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         name: []const u8,
         op: CIR.Expr.LowLevel,
     }{
-        .{ .name = "Builtin.u8_from_str", .op = .u8_from_str },
-        .{ .name = "Builtin.i8_from_str", .op = .i8_from_str },
-        .{ .name = "Builtin.u16_from_str", .op = .u16_from_str },
-        .{ .name = "Builtin.i16_from_str", .op = .i16_from_str },
-        .{ .name = "Builtin.u32_from_str", .op = .u32_from_str },
-        .{ .name = "Builtin.i32_from_str", .op = .i32_from_str },
-        .{ .name = "Builtin.u64_from_str", .op = .u64_from_str },
-        .{ .name = "Builtin.i64_from_str", .op = .i64_from_str },
-        .{ .name = "Builtin.u128_from_str", .op = .u128_from_str },
-        .{ .name = "Builtin.i128_from_str", .op = .i128_from_str },
-        .{ .name = "Builtin.dec_from_str", .op = .dec_from_str },
-        .{ .name = "Builtin.f32_from_str", .op = .f32_from_str },
-        .{ .name = "Builtin.f64_from_str", .op = .f64_from_str },
+        .{ .name = "u8_from_str", .op = .u8_from_str },
+        .{ .name = "i8_from_str", .op = .i8_from_str },
+        .{ .name = "u16_from_str", .op = .u16_from_str },
+        .{ .name = "i16_from_str", .op = .i16_from_str },
+        .{ .name = "u32_from_str", .op = .u32_from_str },
+        .{ .name = "i32_from_str", .op = .i32_from_str },
+        .{ .name = "u64_from_str", .op = .u64_from_str },
+        .{ .name = "i64_from_str", .op = .i64_from_str },
+        .{ .name = "u128_from_str", .op = .u128_from_str },
+        .{ .name = "i128_from_str", .op = .i128_from_str },
+        .{ .name = "dec_from_str", .op = .dec_from_str },
+        .{ .name = "f32_from_str", .op = .f32_from_str },
+        .{ .name = "f64_from_str", .op = .f64_from_str },
     };
     for (internal_from_str_primitives) |primitive| {
         if (env.common.findIdent(primitive.name)) |ident| {

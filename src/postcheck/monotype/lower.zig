@@ -4463,7 +4463,7 @@ const BodyContext = struct {
             else => return null,
         };
         const text = view.module_env.getIdentText(ident);
-        if (Ident.textEql(text, "Builtin.ParseTagUnionSpec.parse")) return .tag_union_parse;
+        if (Ident.textEql(text, "Builtin.Str.ParseTagUnionSpec.parse")) return .tag_union_parse;
         if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.rename_fields")) return .fields_rename_fields;
         if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.shortest_name")) return .fields_shortest_name;
         if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.longest_name")) return .fields_longest_name;
