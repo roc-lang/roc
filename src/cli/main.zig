@@ -3665,6 +3665,7 @@ const HotReloadSourceRewrite = struct {
 const HotReloadFreeRegion = struct {
     start: usize,
     end: usize,
+    preserve_descriptor_refs: bool,
 
     fn len(self: HotReloadFreeRegion) usize {
         return self.end - self.start;
@@ -3676,6 +3677,7 @@ const HotReloadImageAllocation = struct {
     region_start: usize,
     region_end: usize,
     append_offset: usize,
+    preserve_descriptor_refs: bool = false,
 };
 
 const HotReloadDescriptorTracker = struct {
@@ -3718,6 +3720,7 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-start={}", .{allocation.region_start});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-end={}", .{allocation.region_end});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{allocation.append_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--preserve-descriptor-refs={}", .{if (allocation.preserve_descriptor_refs) @as(u8, 1) else @as(u8, 0)});
     if (comptime is_windows) {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
     } else {
@@ -3876,14 +3879,14 @@ fn hotReloadFreeRegionLessThan(_: void, a: HotReloadFreeRegion, b: HotReloadFree
     return a.start < b.start or (a.start == b.start and a.end < b.end);
 }
 
-fn hotReloadCoalesceFreeRegions(tracker: *HotReloadDescriptorTracker) void {
+fn hotReloadNormalizeFreeRegions(tracker: *HotReloadDescriptorTracker) void {
     std.mem.sort(HotReloadFreeRegion, tracker.free_regions.items, {}, hotReloadFreeRegionLessThan);
 
     var write_index: usize = 0;
     for (tracker.free_regions.items) |region| {
         if (region.end <= region.start) continue;
-        if (write_index > 0 and region.start <= tracker.free_regions.items[write_index - 1].end) {
-            tracker.free_regions.items[write_index - 1].end = @max(tracker.free_regions.items[write_index - 1].end, region.end);
+        if (write_index > 0 and region.start == tracker.free_regions.items[write_index - 1].start and region.end == tracker.free_regions.items[write_index - 1].end) {
+            tracker.free_regions.items[write_index - 1].preserve_descriptor_refs = tracker.free_regions.items[write_index - 1].preserve_descriptor_refs or region.preserve_descriptor_refs;
         } else {
             tracker.free_regions.items[write_index] = region;
             write_index += 1;
@@ -3899,10 +3902,15 @@ fn hotReloadAddFreeRegion(
     reusable_boundary: usize,
     start: usize,
     end: usize,
+    preserve_descriptor_refs: bool,
 ) CliMainError!void {
     if (start < reusable_boundary or end <= start or end > shm_handle.mapped_size) return error.InvalidSharedMemory;
-    try tracker.free_regions.append(gpa, .{ .start = start, .end = end });
-    hotReloadCoalesceFreeRegions(tracker);
+    try tracker.free_regions.append(gpa, .{
+        .start = start,
+        .end = end,
+        .preserve_descriptor_refs = preserve_descriptor_refs,
+    });
+    hotReloadNormalizeFreeRegions(tracker);
 }
 
 fn hotReloadSubtractFreeRegion(
@@ -3926,35 +3934,33 @@ fn hotReloadSubtractFreeRegion(
 
         if (has_left and has_right) {
             tracker.free_regions.items[i].end = start;
-            try tracker.free_regions.append(gpa, .{ .start = end, .end = region.end });
+            try tracker.free_regions.append(gpa, .{
+                .start = end,
+                .end = region.end,
+                .preserve_descriptor_refs = false,
+            });
             i += 1;
         } else if (has_left) {
             tracker.free_regions.items[i].end = start;
             i += 1;
         } else if (has_right) {
             tracker.free_regions.items[i].start = end;
+            tracker.free_regions.items[i].preserve_descriptor_refs = false;
             i += 1;
         } else {
             _ = tracker.free_regions.swapRemove(i);
         }
     }
 
-    hotReloadCoalesceFreeRegions(tracker);
+    hotReloadNormalizeFreeRegions(tracker);
 }
 
-fn hotReloadDropFreeRegionsAboveUsedSize(tracker: *HotReloadDescriptorTracker, used_size: usize) void {
-    var i: usize = 0;
-    while (i < tracker.free_regions.items.len) {
-        if (tracker.free_regions.items[i].start >= used_size) {
-            _ = tracker.free_regions.swapRemove(i);
-        } else {
-            if (tracker.free_regions.items[i].end > used_size) {
-                tracker.free_regions.items[i].end = used_size;
-            }
-            i += 1;
-        }
+fn hotReloadUsedSizeIncludingFreeRegions(tracker: *const HotReloadDescriptorTracker, used_size: usize) usize {
+    var high_water = used_size;
+    for (tracker.free_regions.items) |region| {
+        high_water = @max(high_water, region.end);
     }
-    hotReloadCoalesceFreeRegions(tracker);
+    return high_water;
 }
 
 fn hotReloadSweepImageDescriptors(
@@ -3976,6 +3982,7 @@ fn hotReloadSweepImageDescriptors(
         if (!hotReloadValidAllocation(shm_handle, reusable_boundary, snapshot)) {
             return error.InvalidSharedMemory;
         }
+        if (snapshot.allocation_start != descriptor_offset) return error.InvalidSharedMemory;
 
         const is_current = current != null and
             current.?.descriptor_offset == descriptor_offset and
@@ -4000,6 +4007,7 @@ fn hotReloadSweepImageDescriptors(
                 reusable_boundary,
                 snapshot.allocation_start,
                 snapshot.allocation_end,
+                true,
             );
             _ = tracker.descriptors.swapRemove(i);
         } else {
@@ -4010,7 +4018,7 @@ fn hotReloadSweepImageDescriptors(
         }
     }
 
-    hotReloadDropFreeRegionsAboveUsedSize(tracker, used_size);
+    used_size = hotReloadUsedSizeIncludingFreeRegions(tracker, used_size);
     try SharedMemoryAllocator.rewindMappedHeader(
         hotReloadBasePtr(shm_handle),
         shm_handle.mapped_size,
@@ -4046,6 +4054,7 @@ fn hotReloadChooseImageAllocation(
             .region_start = region.start,
             .region_end = region.end,
             .append_offset = append_offset,
+            .preserve_descriptor_refs = region.preserve_descriptor_refs,
         };
     }
 
@@ -4054,6 +4063,7 @@ fn hotReloadChooseImageAllocation(
         .region_start = 0,
         .region_end = 0,
         .append_offset = append_offset,
+        .preserve_descriptor_refs = false,
     };
 }
 
@@ -4251,6 +4261,7 @@ test "hot reload worker args require append offset" {
         "--region-start=1024",
         "--region-end=3072",
         "--append-offset=4096",
+        "--preserve-descriptor-refs=1",
         "--shm-handle=3",
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
@@ -4261,6 +4272,20 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(@as(usize, 1024), parsed.region_start);
     try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
+    try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
+    try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=false",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    }));
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -4307,7 +4332,7 @@ fn testingPrepareHotReloadDescriptor(
     return descriptor;
 }
 
-test "hot reload allocation reuses retired unretained descriptor without waiting for latest acknowledgement" {
+test "hot reload allocation reuses retired unretained descriptor without merging adjacent descriptor slots" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
@@ -4335,9 +4360,10 @@ test "hot reload allocation reuses retired unretained descriptor without waiting
     const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
 
     try std.testing.expectEqual(@as(u64, 4), allocation.generation);
-    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 2048), allocation.region_start);
     try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
     try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
     try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
     try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc2).state);
     try std.testing.expectEqual(@as(usize, 8192), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
@@ -4369,7 +4395,39 @@ test "hot reload sweep keeps acknowledged current descriptor live" {
     try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
     try std.testing.expectEqual(@as(usize, 2048), allocation.region_end);
     try std.testing.expectEqual(@as(usize, 4096), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
     try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload sweep keeps top reclaimed descriptor region addressable" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, 512, 1024, 2048, 512, 2048);
+    ipc.hot_reload.init(control, 512, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, 2048, 2560, 4096, 2048, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+    ipc.hot_reload.publishDescriptor(control, 3, 512, desc0);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 512);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 2048);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
+
+    try std.testing.expectEqual(@as(usize, 2048), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc0).state);
     try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 }
 
@@ -4405,6 +4463,7 @@ test "hot reload allocation skips retired retained descriptors" {
     try std.testing.expectEqual(@as(usize, 0), allocation.region_start);
     try std.testing.expectEqual(@as(usize, 0), allocation.region_end);
     try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(false, allocation.preserve_descriptor_refs);
     try std.testing.expectEqual(ipc.hot_reload.DescriptorState.retired, ipc.hot_reload.descriptorSnapshot(desc1).state);
     try std.testing.expectEqual(@as(u32, 1), ipc.hot_reload.descriptorSnapshot(desc1).refs);
 
@@ -4580,6 +4639,7 @@ const HotReloadDevWorkerArgs = struct {
     region_start: usize,
     region_end: usize,
     append_offset: usize,
+    preserve_descriptor_refs: bool,
     shm_handle: []const u8,
     shm_size: usize,
     expected_host_identity: [32]u8,
@@ -4609,6 +4669,12 @@ fn hotReloadFlagValue(arg: []const u8, flag: []const u8) ?[]const u8 {
     return arg[flag.len + 1 ..];
 }
 
+fn parseHotReloadBool(value: []const u8) error{InvalidArguments}!bool {
+    if (std.mem.eql(u8, value, "0")) return false;
+    if (std.mem.eql(u8, value, "1")) return true;
+    return error.InvalidArguments;
+}
+
 fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}!HotReloadDevWorkerArgs {
     var path: ?[]const u8 = null;
     var target: ?[]const u8 = null;
@@ -4616,6 +4682,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var region_start: ?usize = null;
     var region_end: ?usize = null;
     var append_offset: ?usize = null;
+    var preserve_descriptor_refs: ?bool = null;
     var shm_handle: ?[]const u8 = null;
     var shm_size: ?usize = null;
     var expected_host_identity: ?[32]u8 = null;
@@ -4639,6 +4706,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             region_end = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--append-offset")) |value| {
             append_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--preserve-descriptor-refs")) |value| {
+            preserve_descriptor_refs = try parseHotReloadBool(value);
         } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
             shm_handle = value;
         } else if (hotReloadFlagValue(arg, "--shm-size")) |value| {
@@ -4671,6 +4740,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .region_start = region_start orelse return error.InvalidArguments,
         .region_end = region_end orelse return error.InvalidArguments,
         .append_offset = append_offset orelse return error.InvalidArguments,
+        .preserve_descriptor_refs = preserve_descriptor_refs orelse return error.InvalidArguments,
         .shm_handle = shm_handle orelse return error.InvalidArguments,
         .shm_size = shm_size orelse return error.InvalidArguments,
         .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
@@ -4760,6 +4830,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
             .region_start = args.region_start,
             .region_end = args.region_end,
             .append_offset = args.append_offset,
+            .preserve_descriptor_refs = args.preserve_descriptor_refs,
         },
     );
     shm.updateHeader();
@@ -4872,7 +4943,7 @@ fn writeDevRunImageToSharedMemory(
                 fixed_region_buffer = std.heap.FixedBufferAllocator.init(region_bytes);
                 image_allocator = fixed_region_buffer.allocator();
                 allocation_start = allocation.region_start;
-                reset_descriptor_refs = false;
+                reset_descriptor_refs = !allocation.preserve_descriptor_refs;
             } else {
                 try shm.resetToUsedSize(allocation.append_offset);
                 allocation_start = allocation.append_offset;
@@ -9545,6 +9616,58 @@ fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []cons
     return captureWatchInputSet(ctx, paths);
 }
 
+fn watchPathSeparator(byte: u8) bool {
+    return byte == '/' or byte == '\\';
+}
+
+fn watchPathIsInsideDirectory(path: []const u8, dir: []const u8) bool {
+    if (dir.len == 0) return false;
+    if (std.mem.eql(u8, path, dir)) return true;
+    if (!std.mem.startsWith(u8, path, dir)) return false;
+    if (watchPathSeparator(dir[dir.len - 1])) return true;
+    return path.len > dir.len and watchPathSeparator(path[dir.len]);
+}
+
+fn collectSyntheticBuildWatchInputSet(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    synthetic_root_path: []const u8,
+) WatchCollectInputSetError!WatchInputSet {
+    const inputs = try build_env.collectWatchInputStates();
+    defer build_env.freeWatchInputStates(inputs);
+
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    const synthetic_root_dir = std.fs.path.dirname(synthetic_root_path) orelse ".";
+    const synthetic_root_dir_abs = try absolutePathFromCwd(ctx, synthetic_root_dir);
+    defer ctx.gpa.free(synthetic_root_dir_abs);
+
+    for (inputs) |input| {
+        const input_abs = try absolutePathFromCwd(ctx, input.path);
+        defer ctx.gpa.free(input_abs);
+        if (watchPathIsInsideDirectory(input_abs, synthetic_root_dir_abs)) continue;
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
 fn collectHotReloadWatchInputSet(
     ctx: *CliCtx,
     inputs_in: []const compile.watch_inputs.Input,
@@ -9687,17 +9810,15 @@ fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildE
 
 /// For `roc build --watch`, the build child records its discovered source inputs so the
 /// parent watch loop knows which files to watch. The root path is always included for
-/// ordinary builds. Synthetic-default-platform builds compile through temporary files, so
-/// the parent supplies the real root path separately instead of reading it from this file.
+/// ordinary builds. Synthetic-default-platform builds compile through temporary files; the
+/// child filters those generated temp files out, and the parent supplies the real root path
+/// separately while preserving real discovered inputs such as file imports.
 fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) WatchWriteInputsError!void {
     const file_path = args.watch_inputs_file orelse return;
-    // Synthetic default-platform builds compile through throwaway temp files that are
-    // deleted as soon as the build finishes. Recording those as watch inputs would make
-    // them perpetually "changed" (their hash becomes "missing"), so the parent watch loop
-    // would rebuild forever. The parent already watches the real root path it was given,
-    // so write an empty discovered-input set in that case.
     if (args.synthetic_default_platform) {
-        try writeWatchInputsFile(ctx, file_path, null, &.{});
+        var input_set = try collectSyntheticBuildWatchInputSet(ctx, build_env, args.path);
+        defer input_set.deinit(ctx);
+        try writeWatchInputSetFile(ctx, file_path, &input_set);
         return;
     }
     try writeWatchInputsFile(ctx, file_path, build_env, &[_][]const u8{args.path});
@@ -11708,6 +11829,17 @@ test "readWatchInputsFile parses path states and explicit extras" {
     try testing.expectEqualStrings(main_path, input_set.inputs[1]);
     try testing.expect(input_set.snapshot[0].state.eql(.missing));
     try testing.expect(input_set.snapshot[1].state.eql(.missing));
+}
+
+test "watchPathIsInsideDirectory respects path boundaries" {
+    const testing = std.testing;
+
+    try testing.expect(watchPathIsInsideDirectory("/tmp/roc-watch/app.roc", "/tmp/roc-watch"));
+    try testing.expect(watchPathIsInsideDirectory("/tmp/roc-watch", "/tmp/roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("/tmp/roc-watch-other/app.roc", "/tmp/roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("/tmp/roc-watch", "/tmp/roc"));
+    try testing.expect(watchPathIsInsideDirectory("C:\\tmp\\roc-watch\\app.roc", "C:\\tmp\\roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("C:\\tmp\\roc-watch-other\\app.roc", "C:\\tmp\\roc-watch"));
 }
 
 test "refreshWatchState reports stale snapshot for newly discovered input" {

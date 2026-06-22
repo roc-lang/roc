@@ -145,6 +145,8 @@ const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
+    /// Optional source directory used to resolve imports from this module.
+    source_dir_override: ?[]const u8 = null,
     /// Raw source file state observed before line-ending normalization.
     source_file_state: ?watch_inputs.State = null,
     semantic: ?OwnedSemanticState = null,
@@ -183,6 +185,10 @@ const ModuleState = struct {
             .env = env,
             .checked_artifact = self.checkedArtifact(),
         };
+    }
+
+    pub fn canonicalSourceDir(self: *const ModuleState, fallback_root_dir: []const u8) []const u8 {
+        return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse fallback_root_dir);
     }
 
     fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
@@ -285,6 +291,9 @@ const ModuleState = struct {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing path\n", .{self.name});
         }
         gpa.free(self.path);
+        if (self.source_dir_override) |source_dir| {
+            gpa.free(source_dir);
+        }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: done\n", .{self.name});
         }
@@ -1237,7 +1246,7 @@ pub const PackageEnv = struct {
         // canonicalize using the AST
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        const module_dir = st.canonicalSourceDir(self.root_dir);
         try canonicalizeModuleWithSiblings(
             self.roc_ctx,
             env,

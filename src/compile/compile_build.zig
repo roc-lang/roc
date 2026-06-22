@@ -862,6 +862,14 @@ pub const BuildEnv = struct {
                 // Transfer depth from coordinator to scheduler
                 try sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth);
                 sched_mod.source_file_state = coord_mod.source_file_state;
+                const source_dir_override = if (coord_mod.source_dir_override) |source_dir|
+                    try self.gpa.dupe(u8, source_dir)
+                else
+                    null;
+                if (sched_mod.source_dir_override) |source_dir| {
+                    self.gpa.free(source_dir);
+                }
+                sched_mod.source_dir_override = source_dir_override;
                 if (comptime trace_build) {
                     std.debug.print("[TRANSFER]   Transferred depth {} for {s}\n", .{ coord_mod.depth, coord_mod.name });
                 }
@@ -2216,10 +2224,9 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         paths: *std.ArrayList([]const u8),
         seen: *std.StringHashMapUnmanaged(void),
-        module_path: []const u8,
+        source_dir: []const u8,
         env: *const ModuleEnv,
     ) Allocator.Error!void {
-        const source_dir = std.fs.path.dirname(module_path) orelse ".";
         for (env.file_dependencies.items.items) |dep| {
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
@@ -2241,10 +2248,9 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         inputs: *std.ArrayList(watch_inputs.Input),
         seen: *std.StringHashMapUnmanaged(void),
-        module_path: []const u8,
+        source_dir: []const u8,
         env: *const ModuleEnv,
     ) Allocator.Error!void {
-        const source_dir = std.fs.path.dirname(module_path) orelse ".";
         for (env.file_dependencies.items.items) |dep| {
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
@@ -2280,9 +2286,9 @@ pub const BuildEnv = struct {
 
                     if (sched_mod.semantic) |*semantic| {
                         if (semantic.checked_artifact) |*artifact| {
-                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.path, artifact.moduleEnv());
+                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.canonicalSourceDir("."), artifact.moduleEnv());
                         } else if (semantic.module_env) |env| {
-                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.path, env);
+                            try self.appendFileDependencyWatchInputs(&paths, &seen, sched_mod.canonicalSourceDir("."), env);
                         }
                     }
                 }
@@ -2326,7 +2332,7 @@ pub const BuildEnv = struct {
                         try self.appendWatchInputState(&inputs, &seen, sched_mod.path, state);
                     }
                     const module_env = env orelse continue;
-                    try self.appendFileDependencyWatchInputStates(&inputs, &seen, sched_mod.path, module_env);
+                    try self.appendFileDependencyWatchInputStates(&inputs, &seen, sched_mod.canonicalSourceDir("."), module_env);
                 }
             }
         }
@@ -2842,6 +2848,115 @@ test "BuildEnv collectWatchInputStates includes package root state" {
         .hash => |hash| try testing.expectEqualSlices(u8, &root_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
     }
+}
+
+test "BuildEnv collectWatchInputStates resolves file dependencies from module source dir override" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    try tmp.dir.createDir(testing.io, "real-src", .default_dir);
+    try tmp.dir.createDir(testing.io, "generated", .default_dir);
+
+    const real_src_dir = try std.fs.path.join(allocator, &.{ tmp_root, "real-src" });
+    defer allocator.free(real_src_dir);
+    const generated_dir = try std.fs.path.join(allocator, &.{ tmp_root, "generated" });
+    defer allocator.free(generated_dir);
+    const generated_app_path = try std.fs.path.join(allocator, &.{ generated_dir, "app.roc" });
+    defer allocator.free(generated_app_path);
+    const expected_file_dep_path = try std.fs.path.resolve(allocator, &.{ real_src_dir, "data.txt" });
+    defer allocator.free(expected_file_dep_path);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        tmp_root,
+        testing.io,
+    );
+    defer env.deinit();
+
+    const package_key = try allocator.dupe(u8, "pkg");
+    try env.packages.put(allocator, package_key, .{
+        .name = try allocator.dupe(u8, "pkg"),
+        .kind = .package,
+        .root_file = try allocator.dupe(u8, generated_app_path),
+        .root_file_state = .{ .hash = [_]u8{1} ** 32 },
+        .root_dir = try allocator.dupe(u8, generated_dir),
+    });
+
+    const NoopSink = struct {
+        fn emit(_: ?*anyopaque, _: []const u8, _: Report) Allocator.Error!void {}
+    };
+
+    const sched = try allocator.create(PackageEnv);
+    sched.* = PackageEnv.init(
+        allocator,
+        package_key,
+        generated_dir,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        .{ .ctx = null, .emitFn = NoopSink.emit },
+        ScheduleHook.noOp(),
+        build_options.compiler_version,
+        env.builtin_modules,
+        env.filesystem,
+    );
+    const scheduler_key = try allocator.dupe(u8, "pkg");
+    try env.schedulers.put(allocator, scheduler_key, sched);
+
+    const module_id = try sched.ensureModule("App", generated_app_path);
+    const sched_mod = &sched.modules.items[module_id];
+
+    const coord = try allocator.create(Coordinator);
+    coord.* = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        env.builtin_modules,
+        build_options.compiler_version,
+        null,
+        env.filesystem,
+    );
+    env.coordinator = coord;
+
+    const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
+    const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
+    coord_pkg.modules.items[coord_module_id].source_dir_override = try allocator.dupe(u8, real_src_dir);
+    coord_pkg.modules.items[coord_module_id].source_file_state = .{ .hash = [_]u8{2} ** 32 };
+    try env.transferCoordinatorResults();
+    try testing.expectEqualStrings(real_src_dir, sched_mod.source_dir_override.?);
+
+    const source = try allocator.dupe(u8, "module [main]\n");
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, source);
+    try module_env.initCIRFields("App");
+    const dep_idx = try module_env.recordFileDependency("data.txt");
+    const dep_hash = [_]u8{3} ** 32;
+    module_env.setFileDependencyContentHash(dep_idx, dep_hash);
+    sched_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };
+
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+
+    var found_file_dep = false;
+    for (inputs) |input| {
+        if (!std.mem.eql(u8, input.path, expected_file_dep_path)) continue;
+        found_file_dep = true;
+        switch (input.state) {
+            .hash => |hash| try testing.expectEqualSlices(u8, &dep_hash, &hash),
+            .missing, .unreadable => try testing.expect(false),
+        }
+    }
+    try testing.expect(found_file_dep);
 }
 
 test "BuildEnv header watch state hashes raw CRLF source bytes" {
