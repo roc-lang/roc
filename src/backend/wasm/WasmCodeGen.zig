@@ -635,6 +635,55 @@ fn emitRocStrFields(self: *Self, fields: RocStrFields) Allocator.Error!void {
     try self.emitLocalGet(fields.cap);
 }
 
+fn emitAddressOffsetToLocal(self: *Self, base_local: u32, offset: u32) Allocator.Error!u32 {
+    const result = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalGet(base_local);
+    if (offset > 0) {
+        try self.emitI32Const(@intCast(offset));
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    }
+    try self.emitLocalSet(result);
+    return result;
+}
+
+fn emitStrEqCall(self: *Self, lhs_str_ptr: u32, rhs_str_ptr: u32) Allocator.Error!void {
+    if (self.externalCallsUseRelocs()) {
+        const lhs = try self.loadRocStrFields(lhs_str_ptr);
+        const rhs = try self.loadRocStrFields(rhs_str_ptr);
+        try self.emitRocStrFields(lhs);
+        try self.emitRocStrFields(rhs);
+        try self.emitBuiltinCall(.str_equal, self.str_eq_import);
+    } else {
+        try self.emitLocalGet(lhs_str_ptr);
+        try self.emitLocalGet(rhs_str_ptr);
+        try self.emitBuiltinCall(.str_equal, self.str_eq_import);
+    }
+}
+
+fn emitListEqCall(
+    self: *Self,
+    lhs_list_ptr: u32,
+    rhs_list_ptr: u32,
+    kind: BuiltinKind,
+    host_import: ?u32,
+    elem_size: ?u32,
+) Allocator.Error!void {
+    if (self.externalCallsUseRelocs()) {
+        const lhs = try self.loadRocListFields(lhs_list_ptr);
+        const rhs = try self.loadRocListFields(rhs_list_ptr);
+        try self.emitRocListFields(lhs);
+        try self.emitRocListFields(rhs);
+    } else {
+        try self.emitLocalGet(lhs_list_ptr);
+        try self.emitLocalGet(rhs_list_ptr);
+    }
+
+    if (elem_size) |size| {
+        try self.emitI32Const(@intCast(size));
+    }
+    try self.emitBuiltinCall(kind, host_import);
+}
+
 fn hasherDomain(op: lir.LowLevel) u8 {
     return @intFromEnum(switch (op) {
         .hasher_write_bool => builtins.hash.HasherDomain.bool,
@@ -3765,21 +3814,9 @@ fn expandField(
     field_layout_idx: layout.Idx,
 ) Allocator.Error!void {
     if (field_layout_idx == .str) {
-        // String: call roc_str_eq(lhs_ptr + offset, rhs_ptr + offset)
-        const import_idx = self.str_eq_import orelse unreachable;
-        try self.emitLocalGet(lhs_local);
-        if (field_offset > 0) {
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        }
-        try self.emitLocalGet(rhs_local);
-        if (field_offset > 0) {
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        }
-        try self.emitCall(import_idx);
+        const lhs_field_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
+        const rhs_field_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
+        try self.emitStrEqCall(lhs_field_local, rhs_field_local);
         return;
     }
 
@@ -3788,66 +3825,20 @@ fn expandField(
     const field_layout = ls.getLayout(field_layout_idx);
     switch (field_layout.tag) {
         .list => {
-            // List: call roc_list_eq or roc_list_str_eq
             const elem_layout = field_layout.getIdx();
+            const lhs_list_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
+            const rhs_list_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
+
             if (elem_layout == .str) {
-                const import_idx = self.list_str_eq_import orelse unreachable;
-                try self.emitLocalGet(lhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalGet(rhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitCall(import_idx);
+                try self.emitListEqCall(lhs_list_local, rhs_list_local, .list_str_eq, self.list_str_eq_import, null);
             } else if (ls.getLayout(elem_layout).tag == .list) {
-                // List of lists - use specialized host function with inner element size
                 const inner_elem_layout = ls.getLayout(elem_layout).getIdx();
                 const inner_elem_size = try self.layoutByteSize(inner_elem_layout);
-                const import_idx = self.list_list_eq_import orelse unreachable;
-                try self.emitLocalGet(lhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalGet(rhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(inner_elem_size)) catch return error.OutOfMemory;
-                try self.emitCall(import_idx);
+                try self.emitListEqCall(lhs_list_local, rhs_list_local, .list_list_eq, self.list_list_eq_import, inner_elem_size);
             } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.compareFieldByLayout.builtin_elem_rc", elem_layout)) {
                 // Composite elements (records/tuples/tag-unions with refcounted fields):
                 // inline element-by-element structural comparison loop.
                 const elem_size = try self.layoutByteSize(elem_layout);
-                const lhs_list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                const rhs_list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-                try self.emitLocalGet(lhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalSet(lhs_list_local);
-
-                try self.emitLocalGet(rhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalSet(rhs_list_local);
-
                 try work.append(wa, .{ .list_loop = .{
                     .lhs = lhs_list_local,
                     .rhs = rhs_list_local,
@@ -3855,46 +3846,14 @@ fn expandField(
                     .elem_size = elem_size,
                 } });
             } else {
-                // Simple scalar elements: bytewise comparison via host function
-                const import_idx = self.list_eq_import orelse unreachable;
                 const elem_size = try self.layoutByteSize(elem_layout);
-                try self.emitLocalGet(lhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalGet(rhs_local);
-                if (field_offset > 0) {
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-                try self.emitCall(import_idx);
+                try self.emitListEqCall(lhs_list_local, rhs_list_local, .list_eq, self.list_eq_import, elem_size);
             }
         },
         .struct_, .tag_union => {
             // Nested composite: create offset locals and recurse
-            const lhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const rhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(lhs_local);
-            if (field_offset > 0) {
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            }
-            try self.emitLocalSet(lhs_field_local);
-
-            try self.emitLocalGet(rhs_local);
-            if (field_offset > 0) {
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(field_offset)) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            }
-            try self.emitLocalSet(rhs_field_local);
+            const lhs_field_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
+            const rhs_field_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
 
             if (field_layout.tag == .tag_union) {
                 const tu_info = ls.getTagUnionInfo(field_layout);
@@ -10185,18 +10144,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .str_is_eq => {
-            // String equality via host function (handles both SSO and heap strings)
-            const import_idx = self.str_eq_import orelse unreachable;
             try self.emitProcLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
             try self.emitProcLocal(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b);
-            // Push both pointers and call host function
-            try self.emitLocalGet(a);
-            try self.emitLocalGet(b);
-            try self.emitCall(import_idx);
+            try self.emitStrEqCall(a, b);
         },
         .str_concat => {
             // LowLevel str_concat: concatenate 2 strings
@@ -12849,11 +12803,9 @@ fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_
     }
 }
 
-/// Generate string equality comparison using roc_str_eq host function.
+/// Generate string equality comparison.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocStr values.
 fn emitStrEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: bool) Allocator.Error!void {
-    const import_idx = self.str_eq_import orelse unreachable;
-
     // Generate both string expressions, store to locals
     try self.emitProcLocal(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -12863,10 +12815,7 @@ fn emitStrEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: bool) Allo
     const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_local);
 
-    // Call roc_str_eq(lhs_ptr, rhs_ptr) -> i32
-    try self.emitLocalGet(lhs_local);
-    try self.emitLocalGet(rhs_local);
-    try self.emitCall(import_idx);
+    try self.emitStrEqCall(lhs_local, rhs_local);
 
     // If negate, flip the result
     if (negate) {
@@ -12898,37 +12847,21 @@ fn emitListEqWithElemLayout(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, ele
 
     // Determine which comparison to use based on element type
     if (elem_layout == .str) {
-        // List of strings - use specialized host function
-        const import_idx = self.list_str_eq_import orelse unreachable;
-        try self.emitLocalGet(lhs_local);
-        try self.emitLocalGet(rhs_local);
-        try self.emitCall(import_idx);
+        try self.emitListEqCall(lhs_local, rhs_local, .list_str_eq, self.list_str_eq_import, null);
     } else {
         const ls = self.getLayoutStore();
         const elem_l = ls.getLayout(elem_layout);
         if (elem_l.tag == .list) {
-            // List of lists - use specialized host function with inner element size
             const inner_elem_layout = elem_l.getIdx();
             const inner_elem_size = try self.layoutByteSize(inner_elem_layout);
-            const import_idx = self.list_list_eq_import orelse unreachable;
-            try self.emitLocalGet(lhs_local);
-            try self.emitLocalGet(rhs_local);
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(inner_elem_size)) catch return error.OutOfMemory;
-            try self.emitCall(import_idx);
+            try self.emitListEqCall(lhs_local, rhs_local, .list_list_eq, self.list_list_eq_import, inner_elem_size);
         } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.emitListEqWithElemLayout.builtin_elem_rc", elem_layout)) {
             // Composite elements with refcounted fields: inline structural loop
             const elem_size = try self.layoutByteSize(elem_layout);
             try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
         } else {
-            // Simple scalar elements - byte-wise comparison
-            const import_idx = self.list_eq_import orelse unreachable;
             const elem_size = try self.layoutByteSize(elem_layout);
-            try self.emitLocalGet(lhs_local);
-            try self.emitLocalGet(rhs_local);
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-            try self.emitCall(import_idx);
+            try self.emitListEqCall(lhs_local, rhs_local, .list_eq, self.list_eq_import, elem_size);
         }
     }
 

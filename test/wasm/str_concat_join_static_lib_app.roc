@@ -22,4 +22,4 @@ short_line = |flag| {
     Str.concat(Str.concat(left, ":"), right)
 }
 
-main! = || Str.concat(short_line(True), short_line(False))
+main! = |_seed| Str.concat(short_line(True), short_line(False))
