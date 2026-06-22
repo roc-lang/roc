@@ -160,10 +160,11 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   plus the allocation-flatness part of the success metrics.
 - **`kanban_board`** reorder and filter steps now carry `mark_metrics` /
   `expect_metric_delta` blocks bounding work.
-- **`async_effects`** gains a `retained_alloc_delta` / closure-balance assertion
-  after the open/close cancel cycle to prove no lifecycle leak.
-- **`ops_dashboard`** gains a real-event fanout assertion (not just the synthetic
-  no-op) bounding `nodes_recomputed` / `derived_calls_into_roc`.
+- **`async_effects`** now asserts the pending-task cancel/close cycle drops the
+  retained allocation gauge.
+- **`ops_dashboard`** now has a real-event fanout assertion (not just the
+  synthetic no-op) bounding `nodes_recomputed`, `derived_calls_into_roc`, text
+  patches, and active-graph rebuilds.
 - **Long-session leak experiment:** reuse one `HostEnv` across many replayed
   events and assert the live `allocs − deallocs` gauge is flat after warmup
   (`retained_alloc_delta` as currently computed cannot prove this — it resets per

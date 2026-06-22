@@ -1688,6 +1688,7 @@ const SpecCommand = struct {
     interval_ms: ?u64 = null,
     expected_text: ?[]const u8,
     expected_count: ?u64,
+    expected_metric_delta: ?i64 = null,
     expected_bool: ?bool,
     line_num: usize,
 };
@@ -1827,6 +1828,7 @@ fn appendSpecCommand(
         .locator = locator,
         .expected_text = expected_text,
         .expected_count = expected_count,
+        .expected_metric_delta = null,
         .expected_bool = expected_bool,
         .line_num = line_num,
     }) catch return ParseError.OutOfMemory;
@@ -1930,8 +1932,9 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
         } else if (std.mem.startsWith(u8, trimmed, "expect_metric_delta ")) {
             const split = try splitTrailingToken(trimmed[20..]);
             const metric_name = allocator.dupe(u8, split.head) catch return ParseError.OutOfMemory;
-            const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
-            try appendSpecCommand(&commands, allocator, .expect_metric_delta, emptyLocator(), metric_name, expected_count, null, line_num);
+            const expected_delta = std.fmt.parseInt(i64, split.token, 10) catch return ParseError.InvalidFormat;
+            try appendSpecCommand(&commands, allocator, .expect_metric_delta, emptyLocator(), metric_name, null, null, line_num);
+            commands.items[commands.items.len - 1].expected_metric_delta = expected_delta;
         } else {
             return ParseError.InvalidFormat;
         }
@@ -8227,6 +8230,7 @@ fn finishHostMetrics(host: *HostEnv) void {
     metrics.set_disabled = host.render_metrics.set_disabled;
     metrics.set_metadata = host.render_metrics.set_metadata;
     metrics.bind_event = host.render_metrics.bind_event;
+    metrics.retained_alloc_delta = @as(i64, @intCast(host.alloc_count)) - @as(i64, @intCast(host.dealloc_count));
     metrics.events_processed = host.dispatch_metrics.events_processed;
     metrics.recompute_batches = host.dispatch_metrics.recompute_batches;
     host.last_runtime_metrics = metrics;
@@ -8977,7 +8981,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 
             .expect_metric_delta => {
                 const metric_name = cmd.expected_text orelse "";
-                const expected = u64MetricAsI64(cmd.expected_count orelse 0);
+                const expected = cmd.expected_metric_delta orelse 0;
                 const marked = host_env.test_state.metrics_mark orelse {
                     writeMetricFailure(cmd.line_num, "mark_metrics must run before expect_metric_delta");
                     return 1;

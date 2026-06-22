@@ -33,12 +33,14 @@ expect_text text:"Ticks: 2" "Ticks: 2"
 fill label:"Search" "cancel me"
 expect_pending_task "lookup" 1
 
+mark_metrics
 click role:button name:"Toggle panel"
 expect_absent role:region name:"Async panel"
 expect_visible role:region name:"Panel closed"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 1
 expect_interval 1000 0
+expect_metric_delta retained_alloc_delta -4
 
 click role:button name:"Toggle panel"
 expect_visible role:region name:"Async panel"

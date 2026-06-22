@@ -23,9 +23,16 @@ expect_metric_delta derived_calls_into_roc 1
 expect_metric_delta recompute_batches 1
 expect_metric_delta patches_emitted 0
 
+mark_metrics
 click role:button name:"Add traffic sample"
 expect_text text:"Requests: 1275" "Requests: 1275"
 expect_text text:"Health score: 1235 / queue: 17" "Health score: 1235 / queue: 17"
+expect_metric_delta nodes_recomputed 1
+expect_metric_delta derived_calls_into_roc 4
+expect_metric_delta recompute_batches 1
+expect_metric_delta set_text 2
+expect_metric_delta patches_emitted 2
+expect_metric_delta active_graph_records_rebuilt 0
 
 fill label:"Runbook search" "latency"
 expect_value label:"Runbook search" "latency"
