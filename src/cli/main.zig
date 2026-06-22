@@ -3606,8 +3606,8 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (counts.errors > 0) {
+    if (coord.hasUserErrors()) {
+        const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,

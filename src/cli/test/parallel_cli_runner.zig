@@ -117,6 +117,12 @@ const OutputNeedle = struct {
     text: []const u8,
 };
 
+const OutputOccurrence = struct {
+    stream: Stream,
+    text: []const u8,
+    count: usize,
+};
+
 const OutputNeedleSet = struct {
     needles: []const OutputNeedle,
 };
@@ -146,6 +152,7 @@ const CommandCase = struct {
     stderr_min_len: ?usize = null,
     contains: []const OutputNeedle = &.{},
     not_contains: []const OutputNeedle = &.{},
+    occurrences: []const OutputOccurrence = &.{},
     contains_any: []const OutputNeedleSet = &.{},
 };
 
@@ -541,6 +548,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "UNUSED VARIABLE", .count = 1 }, .{ .stream = .stderr, .text = "Found 0 error(s) and 1 warning(s)", .count = 1 } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed --debug emits valid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--debug", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     // repro for https://github.com/roc-lang/roc/issues/9690: a self-recursive
@@ -1410,6 +1418,17 @@ fn checkCommandExpectation(
     for (command.not_contains) |needle| {
         if (std.mem.find(u8, streamBytes(result, needle.stream), needle.text) != null) {
             return std.fmt.allocPrint(allocator, "{s} contained forbidden text: {s}", .{ streamLabel(needle.stream), needle.text }) catch "forbidden output";
+        }
+    }
+    for (command.occurrences) |expected| {
+        const actual = std.mem.count(u8, streamBytes(result, expected.stream), expected.text);
+        if (actual != expected.count) {
+            return std.fmt.allocPrint(allocator, "{s} contained text {s} {d} time(s), expected {d}", .{
+                streamLabel(expected.stream),
+                expected.text,
+                actual,
+                expected.count,
+            }) catch "unexpected output count";
         }
     }
     for (command.contains_any) |set| {
