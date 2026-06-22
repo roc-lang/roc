@@ -4630,9 +4630,12 @@ fn snapshotReplExpressionStep(
                 errdefer allocator.free(module_problems);
 
                 if (use_expr_fallback) {
+                    // These titles are matched against markdown output, which
+                    // preserves the authored title case (the box/snapshot output
+                    // shouts them to ALL CAPS, but this is the markdown render).
                     const is_top_level_wrapper_problem =
-                        std.mem.find(u8, module_problems, "EFFECTFUL TOP-LEVEL VALUE") != null or
-                        std.mem.find(u8, module_problems, "POLYMORPHIC VALUE") != null;
+                        std.mem.find(u8, module_problems, "Effectful Top-level Value") != null or
+                        std.mem.find(u8, module_problems, "Polymorphic Value") != null;
                     if (is_top_level_wrapper_problem) {
                         allocator.free(module_problems);
                         return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
