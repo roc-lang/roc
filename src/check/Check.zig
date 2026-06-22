@@ -294,6 +294,13 @@ has_can_diagnostics: bool,
 /// non-literal/non-`is_eq` dispatch constraint, and does not resolve into the
 /// pinnable set can never be pinned, so its dispatch is reported as ambiguous.
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
+/// The expression currently being checked (`checkExpr` sets this on entry and
+/// restores it on exit). When `instantiateVarHelp` records an
+/// `InstantiationDispatcher`, it stamps this expression onto it, so the
+/// end-of-check ambiguity sweep can point a body-forced where-clause error at
+/// the exact expression whose instantiation created the unsatisfiable
+/// obligation — without scanning the module to rediscover it.
+instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -354,6 +361,11 @@ const InstantiationDispatcher = struct {
     dispatcher_var: Var,
     /// The static-dispatch constraints copied from the generalized scheme.
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// The expression whose checking instantiated this dispatcher (the lookup of
+    /// the constrained scheme). A body-required where-clause whose receiver is
+    /// left unpinnable is reported and marked a runtime error at exactly this
+    /// expression. Null only if the dispatcher was created outside `checkExpr`.
+    instantiation_expr: ?CIR.Expr.Idx,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -2845,6 +2857,7 @@ fn instantiateVarHelp(
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
+                            .instantiation_expr = self.instantiation_source_expr,
                         });
                     }
                 }
@@ -5685,13 +5698,18 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         };
         if (has_literal_constraint) continue;
         const is_instantiated_where_clause = constraint.origin == .where_clause;
+        // A body-forced where-clause (the originating scheme's body provably
+        // dispatches this method) is reportable even with no in-module dispatch
+        // use: an unpinnable instantiated receiver can never gain the owner the
+        // contract requires, so its dispatch is a genuine dead end. A phantom
+        // where-clause (the body never dispatches it) still needs an in-module
+        // dispatch use to be a dead end, so it stays valid here exactly as before.
+        const body_forced = is_instantiated_where_clause and constraint.origin.where_clause.body_required;
         const where_dispatch_use = if (is_instantiated_where_clause)
             try self.findStaticDispatchUseForConstraint(constraint.fn_name, constraint.fn_var)
         else
             null;
-        if (is_instantiated_where_clause) {
-            if (where_dispatch_use == null) continue;
-        }
+        if (is_instantiated_where_clause and where_dispatch_use == null and !body_forced) continue;
 
         // If the receiver resolves INTO the pinnable set, some caller — at this
         // call's level or an enclosing one — can pin it, so it is not a dead end.
@@ -5723,7 +5741,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
-        if (is_instantiated_where_clause) {
+        if (is_instantiated_where_clause and where_dispatch_use != null) {
             const dispatch_use = where_dispatch_use.?;
             primary = dispatch_use.region;
 
@@ -5732,6 +5750,24 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     .region = dispatch_use.region,
                 } });
                 self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+            }
+        } else if (body_forced) {
+            // A body-forced where-clause with no in-module dispatch use (the
+            // unpinned receiver lives only in the instantiating call's result
+            // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
+            // dispatcher recorded the exact expression whose instantiation created
+            // the obligation, so report there and mark it a runtime error — codegen
+            // then emits a crash instead of reaching the ownerless dispatch.
+            if (dispatcher.instantiation_expr) |inst_expr| {
+                primary = self.cir.store.getExprRegion(inst_expr);
+                if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
+                    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                        .region = primary.?,
+                    } });
+                    self.cir.store.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
+                }
+            } else {
+                primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
             var raw_node_idx: u32 = 0;
@@ -5769,23 +5805,10 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             }
         }
 
-        // No call passes the receiver in the relevant position. For ordinary
-        // hidden dispatch this means it is a polymorphic function value's own
-        // parameter (or otherwise not a real dispatch dead end). For a copied
-        // where-clause contract, report at the instantiation region because the
-        // unresolved obligation itself is the error.
-        if (primary == null) {
-            if (!is_instantiated_where_clause) continue;
-            const dispatch_use = where_dispatch_use.?;
-            primary = dispatch_use.region;
-
-            if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
-                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                    .region = dispatch_use.region,
-                } });
-                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
-            }
-        }
+        // No expression passes the receiver in the relevant position: an ordinary
+        // hidden dispatch whose receiver is a polymorphic function value's own
+        // parameter, which a future call can still pin — not a dead end.
+        if (primary == null) continue;
 
         try reported.put(resolved.var_, {});
 
@@ -7209,7 +7232,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 .constraint = StaticDispatchConstraint{
                     .fn_name = method.method_name,
                     .fn_var = func_var,
-                    .origin = .where_clause,
+                    .origin = .{ .where_clause = .{} },
                 },
             });
         },
@@ -8806,6 +8829,13 @@ fn unifyMatchAltPatternBindings(
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // Attribute any dispatcher instantiated while checking this expression to it,
+    // so the ambiguity sweep can pinpoint the source of an unsatisfiable
+    // body-forced where-clause. Restored on exit to track the innermost expr.
+    const prev_instantiation_source = self.instantiation_source_expr;
+    self.instantiation_source_expr = expr_idx;
+    defer self.instantiation_source_expr = prev_instantiation_source;
 
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
@@ -15075,6 +15105,24 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         } else {
                             try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
                             try self.reportEffectfulDispatchInExpect(constraint);
+
+                            // The body provably forces this where-clause method: a
+                            // body dispatch matched it and unified successfully. Mark
+                            // the rigid scheme's matching where-clause `body_required`
+                            // so a later unpinnable instantiation of this scheme is
+                            // reported as ambiguous rather than silently lowering to an
+                            // ownerless dispatch. Re-fetch the backing slice: the unify
+                            // above may have appended to (and reallocated) the
+                            // constraint store, but it only grows it, so the rigid
+                            // range indices stay valid.
+                            const rc_start: usize = @intFromEnum(rigid.constraints.start);
+                            const rc_len: usize = rigid.constraints.len();
+                            const backing = self.types.static_dispatch_constraints.items.items;
+                            for (rc_start..rc_start + rc_len) |i| {
+                                if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
+                                    backing[i].origin.where_clause.body_required = true;
+                                }
+                            }
                         }
                     } else {
                         try self.reportConstraintError(

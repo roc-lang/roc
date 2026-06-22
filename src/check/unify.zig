@@ -2237,6 +2237,17 @@ const Unifier = struct {
                     constraint.origin = .{ .from_literal = .{ .numeral = merged } };
                 }
             }
+            // Preserve a body-forced where-clause across unification: if either side
+            // was marked `body_required`, the merged constraint keeps it, so a
+            // body-forced obligation is not downgraded when it unifies with a phantom
+            // copy of the same method.
+            if (constraint.origin == .where_clause) {
+                const a_forced = two_constraints.a.origin == .where_clause and two_constraints.a.origin.where_clause.body_required;
+                const b_forced = two_constraints.b.origin == .where_clause and two_constraints.b.origin.where_clause.body_required;
+                if (a_forced or b_forced) {
+                    constraint.origin.where_clause.body_required = true;
+                }
+            }
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {

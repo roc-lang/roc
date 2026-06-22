@@ -115,12 +115,37 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
         try tidyFile(gpa, &counter, source_file, &errors);
     }
 
+    try checkNoMdtodoFiles(gpa, io, &errors);
+
     if (errors.count > 0) {
         std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
         std.process.exit(1);
     }
 
     std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
+}
+
+/// `.mdtodo` files are working scratch — aspirational snapshots or planning
+/// notes kept on a branch — and must never be committed. Fail the build if any
+/// tracked file anywhere in the repo uses that extension. The pathspec matches
+/// across directories, so it is not limited to tidy's normal file set.
+fn checkNoMdtodoFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
+    const run_result = try std.process.run(gpa, io, .{
+        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo" },
+    });
+    defer gpa.free(run_result.stdout);
+    defer gpa.free(run_result.stderr);
+
+    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
+
+    var lines = std.mem.splitScalar(u8, run_result.stdout, 0);
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        errors.emit(
+            "{s}: error: .mdtodo files must not be committed (working/planning scratch); delete it\n",
+            .{line},
+        );
+    }
 }
 
 fn runGitLints(gpa: Allocator, io: std.Io) !void {
