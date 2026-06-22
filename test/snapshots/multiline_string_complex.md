@@ -69,7 +69,8 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 
         Str
 
-    Hint: For this to work, the type would need to have a method named not associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named not
+    associated with it in the type's declaration.
                                                                ┌───────────────┐
 ┌─ The minus method on Dec has an incompatible type: ──────────┤ TYPE MISMATCH │
 │                                                              └──────────────┬┘

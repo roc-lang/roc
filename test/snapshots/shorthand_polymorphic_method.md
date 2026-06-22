@@ -31,9 +31,11 @@ MODULE HEADER DEPRECATED - shorthand_polymorphic_method.md:1:1:1:14
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
 └──────────────────────────────────────── shorthand_polymorphic_method.md:1:1 ┘
 
-    Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
-    Remove the module header and ensure your file defines a type that matches the filename.
+    Remove the module header and ensure your file defines a type that matches
+    the filename.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,LowerIdent,CloseSquare,

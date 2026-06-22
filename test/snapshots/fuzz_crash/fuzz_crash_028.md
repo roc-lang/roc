@@ -305,7 +305,8 @@ Numbers cannot have leading zeros.
 │             ‾‾                                                              │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:12:12 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -325,7 +326,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾‾                                                                     │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:13:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -345,7 +347,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾                                                                        │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:15:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -419,7 +422,8 @@ Numbers cannot have leading zeros.
 │                     ‾                                                       │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:15:20 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -458,8 +462,10 @@ Numbers cannot have leading zeros.
 └──────────────────────────────────────────────────── fuzz_crash_028.md:15:25 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘
@@ -487,8 +493,10 @@ Numbers cannot have leading zeros.
 └──────────────────────────────────────────────────── fuzz_crash_028.md:15:31 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -497,7 +505,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾                                                                      │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:16:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -580,7 +589,8 @@ Numbers cannot have leading zeros.
 │     ‾                                                                       │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:22:4 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -619,8 +629,10 @@ Numbers cannot have leading zeros.
 └───────────────────────────────────────────────────── fuzz_crash_028.md:23:6 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘
@@ -648,8 +660,10 @@ Numbers cannot have leading zeros.
 └──────────────────────────────────────────────────── fuzz_crash_028.md:23:12 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -658,7 +672,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾                                                                        │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:26:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -696,7 +711,8 @@ Numbers cannot have leading zeros.
 │            ‾                                                                │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:26:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -716,7 +732,8 @@ Numbers cannot have leading zeros.
 │                 ‾                                                           │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:26:16 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -736,7 +753,8 @@ Numbers cannot have leading zeros.
 │      ‾                                                                      │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:40:5 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -829,7 +847,8 @@ Numbers cannot have leading zeros.
 │                                 ‾                                           │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:32:32 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                              ┌─────────────────┐
@@ -905,15 +924,15 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -922,17 +941,18 @@ Numbers cannot have leading zeros.
 │        ‾‾‾‾‾                                                                │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:72:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -941,7 +961,8 @@ Numbers cannot have leading zeros.
 │        ‾‾‾‾‾                                                                │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:77:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                           ┌────────────────────┐
 ┌─ Nothing is named add in this scope. ───────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -952,15 +973,15 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                      ‾‾‾‾‾‾                                                 │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:78:21 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -969,17 +990,18 @@ Numbers cannot have leading zeros.
 │                   ‾‾‾‾‾                                                     │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:85:18 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   b,                                                                        │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:62:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named blah in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -1088,7 +1110,9 @@ Numbers cannot have leading zeros.
 │                                               ‾‾‾‾‾                         │
 └─────────────────────────────────────────────────── fuzz_crash_028.md:124:46 ┘
 
-    Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+    Only functions can reference themselves (for recursion). For non-function
+    values, the right-hand side must be fully computable without referring to
+    the value being assigned.
                                                           ┌────────────────────┐
 ┌─ Nothing is named ag1 in this scope. ───────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -1135,75 +1159,75 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable tag_ is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable tag_ is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   tag_ = Ok(number)                                                         │
 │   ‾‾‾‾                                                                      │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:112:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _tag_ to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _tag_ to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable i is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable i is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   i= "H, ${world}"                                                          │
 │   ‾                                                                         │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:113:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _i to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _i to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable t is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable t is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  t = [                                                                      │
 │  ‾                                                                          │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:114:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _t to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _t to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rd is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable rd is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │   ‾‾                                                                        │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:123:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rd to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rd to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable mle is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable mle is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   mle = (                                                                   │
 │   ‾‾‾                                                                       │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:125:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _mle to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _mle to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
 │   ‾                                                                         │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:132:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable le is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable le is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  le =(arg1)?.od()?.ned()?.recd?                                             │
 │  ‾‾                                                                         │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:133:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _le to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _le to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ The type V is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘
@@ -1232,15 +1256,15 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable f is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable f is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   f= 1                                                                      │
 │   ‾                                                                         │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:147:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _f to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _f to
+    suppress this warning.
                                                      ┌─────────────────────────┐
 ┌─ The module header says that main! is exposed, ────┤ EXPOSED BUT NOT DEFINED │
 │  but it is not defined anywhere in this module.    └────────────────────────┬┘
@@ -1249,7 +1273,8 @@ Numbers cannot have leading zeros.
 │       ‾‾‾‾‾                                                                 │
 └────────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
 
-    You can fix this by either defining main! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining main! in this module, or by removing it
+    from the list of exposed values.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1260,7 +1285,8 @@ Numbers cannot have leading zeros.
 │  ) # Co                                                                     │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:28:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1269,7 +1295,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:47:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                ┌───────────────┐
 ┌─ The lue binding in the second pattern of the first branch ──┤ TYPE MISMATCH │
 │  of this match does not match the same binding in the first  └──────────────┬┘
@@ -1312,7 +1339,8 @@ Numbers cannot have leading zeros.
 
         [Red, ..]
 
-    A name shared across | patterns in the same match branch must have one compatible type.
+    A name shared across | patterns in the same match branch must have one
+    compatible type.
                                                               ┌────────────────┐
 ┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘
@@ -1389,7 +1417,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
 └───────────────────────────────────────────────────── fuzz_crash_028.md:95:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                ┌───────────────┐
 ┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
 │                                                              └──────────────┬┘
@@ -1450,7 +1479,8 @@ Numbers cannot have leading zeros.
 
         [Blue, ..]
 
-    Hint: The error types from all ? operators and the function body must be compatible since any of them could be the actual return value.
+    Hint: The error types from all ? operators and the function body must be
+    compatible since any of them could be the actual return value.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1459,7 +1489,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾‾                                                                     │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:141:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1468,7 +1499,8 @@ Numbers cannot have leading zeros.
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:144:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This is trying to dispatch a method named od on an ────────┤ MISSING METHOD │
 │  unresolved type variable, but unresolved type variables    └───────────────┬┘
@@ -1478,7 +1510,10 @@ Numbers cannot have leading zeros.
 │      ‾‾‾‾‾‾‾                                                                │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
                                                               ┌────────────────┐
 ┌─ This is trying to dispatch a method named ned on an ───────┤ MISSING METHOD │
 │  unresolved type variable, but unresolved type variables    └───────────────┬┘
@@ -1488,7 +1523,10 @@ Numbers cannot have leading zeros.
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
 └──────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

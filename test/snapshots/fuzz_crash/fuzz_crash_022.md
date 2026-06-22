@@ -144,15 +144,15 @@ The condition in this if expression could not be processed.
 
 The condition must be a valid expression that evaluates to a Bool value (Bool.true or Bool.false).
                                                              ┌─────────────────┐
-┌─ Variable id is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable id is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  getUser = |id| if (id > 1!) "big" else "l"                                 │
 │             ‾‾                                                              │
 └───────────────────────────────────────────────────── fuzz_crash_022.md:6:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _id to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _id to
+    suppress this warning.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -161,7 +161,8 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 │                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
 └───────────────────────────────────────────────────── fuzz_crash_022.md:1:16 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -170,7 +171,8 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
 └────────────────────────────────────────────────────── fuzz_crash_022.md:5:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

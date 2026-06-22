@@ -22,7 +22,8 @@ UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 │          ‾‾‾‾‾‾‾‾                                                           │
 └───────────────────────────────────────────────────── where_clauses_4.md:4:9 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
+    This syntax was used for abilities, which have been removed from Roc. Use
+    method constraints like where [a.methodName(args) -> ret] instead.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

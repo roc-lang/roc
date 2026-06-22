@@ -37,7 +37,8 @@ TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
     Hint: This pattern doesn't bind these fields:
      - y
      - z
-    Match them explicitly with y: _, or add .. to match all the remaining fields.
+    Match them explicitly with y: _, or add .. to match all the remaining
+    fields.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

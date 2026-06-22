@@ -26,7 +26,8 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 │         ‾                                                                   │
 └──────────────────────────────── method_call_literal_boundary_default.md:4:8 ┘
 
-    Hint: To use a different numeric type here, add a suffix or a type annotation.
+    Hint: To use a different numeric type here, add a suffix or a type
+    annotation.
                                                            ┌───────────────────┐
 ┌─ Nothing in this definition's type determines the type ──┤ LITERAL DEFAULTED │
 │  of this number literal, so it was given the default     └──────────────────┬┘
@@ -36,7 +37,8 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 │                       ‾                                                     │
 └─────────────────────────────── method_call_literal_boundary_default.md:4:22 ┘
 
-    Hint: To use a different numeric type here, add a suffix or a type annotation.
+    Hint: To use a different numeric type here, add a suffix or a type
+    annotation.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,

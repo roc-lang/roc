@@ -53,15 +53,15 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 
     This type is referenced here:
                                                              ┌─────────────────┐
-┌─ Variable maybeList is not used anywhere in your code. ────┤ UNUSED VARIABLE │
+┌─ Variable maybeList is defined here and then never used: ──┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │          Ok(maybeList) => []                                                │
 │             ‾‾‾‾‾‾‾‾‾                                                       │
 └──────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _maybeList to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _maybeList to suppress this warning.
                                                              ┌─────────────────┐
 ┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘

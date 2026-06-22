@@ -49,8 +49,10 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 └───────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘
@@ -61,15 +63,15 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 
     This is an unexpected parsing error. Please check your syntax.
                                                              ┌─────────────────┐
-┌─ Variable list is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable list is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  process = |list| "processed"                                               │
 │             ‾‾‾‾                                                            │
 └────────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _list to
+    suppress this warning.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

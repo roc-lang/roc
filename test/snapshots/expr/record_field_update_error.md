@@ -38,7 +38,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 │             ‾‾‾‾‾‾‾                                                         │
 └────────────────────────────────────────── record_field_update_error.md:1:12 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

@@ -31,7 +31,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_1.md:2:3:2:12
 │    ‾‾‾‾‾‾‾‾‾                                                                │
 └───────────────────────────────── package_header_nonempty_multiline_1.md:2:3 ┘
 
-    You can fix this by either defining something in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining something in this module, or by
+    removing it from the list of exposed values.
 # TOKENS
 ~~~zig
 KwPackage,

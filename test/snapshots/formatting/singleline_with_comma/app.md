@@ -19,7 +19,8 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 │            ‾‾‾                                                              │
 └──────────────────────────────────────────────────────────────── app.md:1:11 ┘
 
-    You can fix this by either defining a2! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining a2! in this module, or by removing it
+    from the list of exposed values.
                                                      ┌─────────────────────────┐
 ┌─ The module header says that a1! is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
 │  it is not defined anywhere in this module.        └────────────────────────┬┘
@@ -28,7 +29,8 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 │       ‾‾‾                                                                   │
 └───────────────────────────────────────────────────────────────── app.md:1:6 ┘
 
-    You can fix this by either defining a1! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining a1! in this module, or by removing it
+    from the list of exposed values.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,Comma,LowerIdent,Comma,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,CloseCurly,

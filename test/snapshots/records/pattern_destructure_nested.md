@@ -24,15 +24,15 @@ UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable zipCode is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable zipCode is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"│
 │                                       ‾‾‾‾‾‾‾                               │
 └───────────────────────────────────────── pattern_destructure_nested.md:2:38 ┘
 
-    If you don't need this variable, prefix it with an underscore like _zipCode to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _zipCode
+    to suppress this warning.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

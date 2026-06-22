@@ -23,12 +23,14 @@ PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_later_priva
 │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
 └─── type_module_nominal_field_depends_on_later_private_toplevel_type.md:2:13 ┘
 
-    Other modules can see this field because ModuleType is exposed and not opaque, but they cannot name this private type.
+    Other modules can see this field because ModuleType is exposed and not
+    opaque, but they cannot name this private type.
 
     It's referenced here:
 
 
-    Hint: Expose the referenced type, make ModuleType opaque with ::, or move the type into ModuleType's associated block.
+    Hint: Expose the referenced type, make ModuleType opaque with ::, or move
+    the type into ModuleType's associated block.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,

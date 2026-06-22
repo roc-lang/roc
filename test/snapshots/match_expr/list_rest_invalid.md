@@ -62,75 +62,75 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable first is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable first is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │       ‾‾‾‾‾                                                                 │
 └─────────────────────────────────────────────────── list_rest_invalid.md:2:6 ┘
 
-    If you don't need this variable, prefix it with an underscore like _first to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _first
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │                ‾                                                            │
 └────────────────────────────────────────────────── list_rest_invalid.md:2:15 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [..rest, last] => 1 # invalid rest pattern should error                │
 │         ‾                                                                   │
 └─────────────────────────────────────────────────── list_rest_invalid.md:3:8 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable last is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable last is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [..rest, last] => 1 # invalid rest pattern should error                │
 │               ‾‾‾‾                                                          │
 └────────────────────────────────────────────────── list_rest_invalid.md:3:14 ┘
 
-    If you don't need this variable, prefix it with an underscore like _last to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _last to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [x, ..rest, y] => 2 # invalid rest pattern should error                │
 │       ‾                                                                     │
 └─────────────────────────────────────────────────── list_rest_invalid.md:4:6 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [x, ..rest, y] => 2 # invalid rest pattern should error                │
 │            ‾                                                                │
 └────────────────────────────────────────────────── list_rest_invalid.md:4:11 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable y is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable y is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [x, ..rest, y] => 2 # invalid rest pattern should error                │
 │                  ‾                                                          │
 └────────────────────────────────────────────────── list_rest_invalid.md:4:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _y to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

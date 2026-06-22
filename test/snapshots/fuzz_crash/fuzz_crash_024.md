@@ -65,7 +65,8 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
     The redeclaration is here:
 
     But t was already defined here:
-      ┌─────────────────────────────────────────────────────── fuzz_crash_024.md:2:5
+      ┌───────────────────────────────────────────────────────
+      fuzz_crash_024.md:2:5
       │
     2 │ var t= ]
       │     ^

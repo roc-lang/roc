@@ -28,7 +28,8 @@ DECLARATION HAS NO VALUE - hosted.md:8:1:8:16
 │   ‾‾                                                                        │
 └────────────────────────────────────────────────────────────── hosted.md:2:2 ┘
 
-    You can fix this by either defining a! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining a! in this module, or by removing it
+    from the list of exposed values.
                                                      ┌─────────────────────────┐
 ┌─ The module header says that b! is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
 │  it is not defined anywhere in this module.        └────────────────────────┬┘
@@ -37,7 +38,8 @@ DECLARATION HAS NO VALUE - hosted.md:8:1:8:16
 │   ‾‾                                                                        │
 └────────────────────────────────────────────────────────────── hosted.md:3:2 ┘
 
-    You can fix this by either defining b! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining b! in this module, or by removing it
+    from the list of exposed values.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -46,7 +48,8 @@ DECLARATION HAS NO VALUE - hosted.md:8:1:8:16
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
 └────────────────────────────────────────────────────────────── hosted.md:6:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -55,7 +58,8 @@ DECLARATION HAS NO VALUE - hosted.md:8:1:8:16
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
 └────────────────────────────────────────────────────────────── hosted.md:8:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwHosted,OpenSquare,

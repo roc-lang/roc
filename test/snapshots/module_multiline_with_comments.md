@@ -52,7 +52,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 │            ‾                                                                │
 └───────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8

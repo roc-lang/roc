@@ -866,7 +866,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                  ‾                                                          │
 └───────────────────────────── associated_items_complete_all_patterns.md:2:17 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -940,7 +941,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                ‾                                                            │
 └───────────────────────────── associated_items_complete_all_patterns.md:8:15 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1014,7 +1016,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                      ‾                                                      │
 └──────────────────────────── associated_items_complete_all_patterns.md:13:21 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1106,7 +1109,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └──────────────────────────── associated_items_complete_all_patterns.md:23:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1198,7 +1202,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └──────────────────────────── associated_items_complete_all_patterns.md:32:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1290,7 +1295,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                          ‾                                                  │
 └──────────────────────────── associated_items_complete_all_patterns.md:41:25 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1364,7 +1370,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                   ‾                                                         │
 └──────────────────────────── associated_items_complete_all_patterns.md:49:18 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1475,7 +1482,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                          ‾                                                  │
 └──────────────────────────── associated_items_complete_all_patterns.md:60:25 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1594,7 +1602,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                          ‾                                                  │
 └──────────────────────────── associated_items_complete_all_patterns.md:75:25 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1713,7 +1722,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                             ‾                                               │
 └──────────────────────────── associated_items_complete_all_patterns.md:90:28 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1787,7 +1797,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                             ‾                                               │
 └─────────────────────────── associated_items_complete_all_patterns.md:100:28 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1861,7 +1872,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                            ‾                                                │
 └─────────────────────────── associated_items_complete_all_patterns.md:110:27 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1980,7 +1992,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                               ‾                                             │
 └─────────────────────────── associated_items_complete_all_patterns.md:125:30 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2090,7 +2103,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                               ‾                                             │
 └─────────────────────────── associated_items_complete_all_patterns.md:142:30 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2200,7 +2214,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                         ‾                                                   │
 └─────────────────────────── associated_items_complete_all_patterns.md:159:24 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2310,7 +2325,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                       ‾                                                     │
 └─────────────────────────── associated_items_complete_all_patterns.md:176:22 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2420,7 +2436,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:193:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2530,7 +2547,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:205:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2640,7 +2658,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:220:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2750,7 +2769,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:237:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2824,7 +2844,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:249:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2898,7 +2919,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:261:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -2972,7 +2994,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                               ‾                                             │
 └─────────────────────────── associated_items_complete_all_patterns.md:273:30 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3091,7 +3114,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                               ‾                                             │
 └─────────────────────────── associated_items_complete_all_patterns.md:294:30 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3210,7 +3234,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:315:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3329,7 +3354,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:336:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3448,7 +3474,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                           ‾                                                 │
 └─────────────────────────── associated_items_complete_all_patterns.md:351:26 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3567,7 +3594,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                       ‾                                                     │
 └─────────────────────────── associated_items_complete_all_patterns.md:368:22 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3767,7 +3795,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:393:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3841,7 +3870,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:407:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -3915,7 +3945,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                              ‾                                              │
 └─────────────────────────── associated_items_complete_all_patterns.md:421:29 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -4002,7 +4033,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But Inner was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:14:5
        │
     14 │     Inner := [D].{
     15 │         inner_val = outer_val
@@ -4018,7 +4050,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But outer_val was already defined here:
-       ┌──────────────────────────── associated_items_complete_all_patterns.md:15:21
+       ┌────────────────────────────
+       associated_items_complete_all_patterns.md:15:21
        │
     15 │         inner_val = outer_val
        │                     ^^^^^^^^^
@@ -4042,7 +4075,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But outer_val was already defined here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:28:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:28:5
        │
     28 │     outer_val = 500
        │     ^^^^^^^^^
@@ -4067,7 +4101,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But Inner was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:14:5
        │
     14 │     Inner := [D].{
     15 │         inner_val = outer_val
@@ -4093,7 +4128,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But Inner was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:14:5
        │
     14 │     Inner := [D].{
     15 │         inner_val = outer_val
@@ -4163,7 +4199,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-       ┌──────────────────────────── associated_items_complete_all_patterns.md:63:20
+       ┌────────────────────────────
+       associated_items_complete_all_patterns.md:63:20
        │
     63 │             val3 = val1 + val2
        │                    ^^^^
@@ -4183,7 +4220,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4232,7 +4270,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4265,7 +4304,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4289,7 +4329,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4308,7 +4349,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:76:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:76:5
        │
     76 │     val1 = 30
        │     ^^^^
@@ -4359,7 +4401,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4378,7 +4421,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:119:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:119:5
         │
     119 │     val1 = 5
         │     ^^^^
@@ -4402,7 +4446,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:138:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:138:5
         │
     138 │     val1 = 1
         │     ^^^^
@@ -4426,7 +4471,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4463,7 +4509,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4482,7 +4529,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:143:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:143:5
         │
     143 │     val1 = 10
         │     ^^^^
@@ -4506,7 +4554,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:172:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:172:5
         │
     172 │     val1 = 7
         │     ^^^^
@@ -4530,7 +4579,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4564,7 +4614,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4601,7 +4652,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4638,7 +4690,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4657,7 +4710,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:177:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:177:5
         │
     177 │     val1 = 15
         │     ^^^^
@@ -4686,7 +4740,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4721,7 +4776,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4747,7 +4803,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4779,7 +4836,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4798,7 +4856,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:233:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:233:5
         │
     233 │     val1 = 3
         │     ^^^^
@@ -4822,7 +4881,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:290:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:290:5
         │
     290 │     val1 = 1
         │     ^^^^
@@ -4850,7 +4910,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4878,7 +4939,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:295:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:295:5
         │
     295 │     val1 = 100
         │     ^^^^
@@ -4906,7 +4968,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4943,7 +5006,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -4982,7 +5046,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -5023,7 +5088,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -5042,7 +5108,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But val1 was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:316:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:316:5
         │
     316 │     val1 = 2
         │     ^^^^
@@ -5109,7 +5176,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -5128,7 +5196,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But bad was already defined here:
-        ┌─────────────────────────── associated_items_complete_all_patterns.md:246:5
+        ┌───────────────────────────
+        associated_items_complete_all_patterns.md:246:5
         │
     246 │     bad = l4_val
         │     ^^^
@@ -5161,7 +5230,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -5189,7 +5259,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     The redeclaration is here:
 
     But L2 was already declared here:
-       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       ┌─────────────────────────────
+       associated_items_complete_all_patterns.md:61:5
        │
     61 │     L2 := [Q].{
     62 │         L3 := [R].{
@@ -5635,7 +5706,8 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │  }                                                                          │
 └────────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
 
-    This file is named Test.roc, but no top-level nominal type named Test was found.
+    This file is named Test.roc, but no top-level nominal type named Test was
+    found.
 
     Add a nominal type like:
     Test := ...

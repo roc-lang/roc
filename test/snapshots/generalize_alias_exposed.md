@@ -25,9 +25,11 @@ MODULE HEADER DEPRECATED - generalize_alias_exposed.md:1:1:1:19
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
 └──────────────────────────────────────────── generalize_alias_exposed.md:1:1 ┘
 
-    Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
-    Remove the module header and ensure your file defines a type that matches the filename.
+    Remove the module header and ensure your file defines a type that matches
+    the filename.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,LowerIdent,CloseSquare,

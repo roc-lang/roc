@@ -46,25 +46,25 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable first is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable first is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │       ‾‾‾‾‾                                                                 │
 └─────────────────────────────────────────────────────── list_patterns.md:3:6 ┘
 
-    If you don't need this variable, prefix it with an underscore like _first to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _first
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │                ‾                                                            │
 └────────────────────────────────────────────────────── list_patterns.md:3:15 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

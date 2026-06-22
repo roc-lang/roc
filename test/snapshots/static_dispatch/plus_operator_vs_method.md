@@ -43,7 +43,8 @@ MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 
         MyType
 
-    Hint: The + operator calls a method named plus on the value preceding it, passing the value after the operator as the one argument.
+    Hint: The + operator calls a method named plus on the value preceding it,
+    passing the value after the operator as the one argument.
                                                               ┌────────────────┐
 ┌─ This plus method is being called on a value whose type ────┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
@@ -56,7 +57,8 @@ MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 
         MyType
 
-    Hint: For this to work, the type would need to have a method named plus associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named plus
+    associated with it in the type's declaration.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,CloseCurly,

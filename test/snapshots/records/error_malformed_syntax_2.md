@@ -38,7 +38,8 @@ DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 │    ‾‾‾‾‾‾‾                                                                  │
 └──────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,CloseCurly,

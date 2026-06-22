@@ -38,7 +38,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 │           ‾                                                                 │
 └────────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
 
-    Method constraints require a colon to separate the method name from its type.
+    Method constraints require a colon to separate the method name from its
+    type.
     For example:     a.method : a -> b
                                                           ┌────────────────────┐
 ┌─ Expected a closing bracket ] after the where clause ───┤ WHERE CLAUSE ERROR │
@@ -113,7 +114,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 │    where [a.method -> b]                                                    │
 └─────────────────────────────────────────── where_clauses_error_cases.md:2:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -122,7 +124,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 │    where []                                                                 │
 └─────────────────────────────────────────── where_clauses_error_cases.md:6:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -131,7 +134,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 │    where [c.method : c -> d]                                                │
 └────────────────────────────────────────── where_clauses_error_cases.md:10:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,

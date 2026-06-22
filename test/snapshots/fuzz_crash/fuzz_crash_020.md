@@ -314,7 +314,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │                    ‾‾                                                       │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:13:19 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                     ┌──────────────────────────┐
@@ -325,7 +326,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │     ‾‾                                                                      │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:19:4 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                     ┌──────────────────────────┐
@@ -336,7 +338,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │             ‾                                                               │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:20:12 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                              ┌─────────────────┐
@@ -356,7 +359,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │                         ‾                                                   │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:24:24 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                              ┌─────────────────┐
@@ -414,15 +418,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable lue is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable lue is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   match a {lue  {                                                           │
 │            ‾‾‾                                                              │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:52:11 ┘
 
-    If you don't need this variable, prefix it with an underscore like _lue to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _lue to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named x in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -433,15 +437,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable er is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable er is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   er #ent                                                                   │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:57:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _er to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _er to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named ment in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -452,15 +456,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable est is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable est is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │    [1, 2, 3,est]123                                                         │
 │             ‾‾‾                                                             │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:60:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _est to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _est to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named nt in this scope. ────────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -580,7 +584,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     The redeclaration is here:
 
     But t was already defined here:
-       ┌───────────────────────────────────────────────────── fuzz_crash_020.md:88:1
+       ┌─────────────────────────────────────────────────────
+       fuzz_crash_020.md:88:1
        │
     88 │ t = [
        │ ^
@@ -610,7 +615,9 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │                                   ‾                                         │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:97:34 ┘
 
-    Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+    Only functions can reference themselves (for recursion). For non-function
+    values, the right-hand side must be fully computable without referring to
+    the value being assigned.
                                                           ┌────────────────────┐
 ┌─ Nothing is named m in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -693,45 +700,45 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable w is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable w is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   w = "d"                                                                   │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:76:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _w to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _w to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable i is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable i is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   i= "H, ${d}"                                                              │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:87:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _i to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _i to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rd is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable rd is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:96:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rd to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rd to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable t is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable t is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:97:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _t to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _t to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ The type V is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘
@@ -776,7 +783,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │       ‾‾‾‾‾                                                                 │
 └────────────────────────────────────────────────────── fuzz_crash_020.md:2:6 ┘
 
-    You can fix this by either defining main! in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining main! in this module, or by removing it
+    from the list of exposed values.
                                                                 ┌──────────────┐
 ┌─ The type List expects 1 argument, but got 0 instead. ────────┤ TOO FEW ARGS │
 │                                                               └─────────────┬┘
@@ -793,7 +801,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │  ) # Co                                                                     │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:22:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -802,7 +811,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │  ‾‾‾‾‾‾‾‾                                                                   │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:37:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This from_numeral method is being called on a value whose ─┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘
@@ -870,7 +880,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
 └───────────────────────────────────────────────────── fuzz_crash_020.md:74:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘
@@ -943,7 +954,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │  ‾‾‾‾‾‾                                                                     │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -952,7 +964,8 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
 └──────────────────────────────────────────────────── fuzz_crash_020.md:116:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                ┌───────────────┐
 ┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
 │                                                              └──────────────┬┘
@@ -976,7 +989,10 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │                                                        ‾‾‾‾‾‾‾‾‾‾‾          │
 └─────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
                                                               ┌────────────────┐
 ┌─ This is trying to dispatch a method named ned on an ───────┤ MISSING METHOD │
 │  unresolved type variable, but unresolved type variables    └───────────────┬┘
@@ -986,7 +1002,10 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾    │
 └─────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

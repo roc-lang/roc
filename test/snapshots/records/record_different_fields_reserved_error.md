@@ -114,7 +114,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │      ‾‾‾‾‾‾                                                                 │
 └────────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
 
-    Move this import to the top of the file, after the module header but before any definitions.
+    Move this import to the top of the file, after the module header but before
+    any definitions.
                                               ┌────────────────────────────────┐
 ┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
 │  expression.                                └───────────────────────────────┬┘
@@ -177,7 +178,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │      ‾‾‾‾‾‾‾                                                                │
 └────────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘

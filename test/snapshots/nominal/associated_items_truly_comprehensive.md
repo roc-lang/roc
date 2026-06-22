@@ -513,7 +513,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │              ‾‾‾‾                                                           │
 └───────────────────────────── associated_items_truly_comprehensive.md:167:13 ┘
 
-    Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+    Only functions can be recursive. Non-function top-level values must be
+    fully computable without depending on themselves through other values.
                                                    ┌───────────────────────────┐
 ┌─ The value ──────────────────────────────────────┤ CIRCULAR VALUE DEFINITION │
 │  associated_items_truly_comprehensive.D3_Pattern └──────────────────────────┬┘
@@ -524,7 +525,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                     ‾‾‾‾                                                    │
 └───────────────────────────── associated_items_truly_comprehensive.md:167:20 ┘
 
-    Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+    Only functions can be recursive. Non-function top-level values must be
+    fully computable without depending on themselves through other values.
                                                    ┌───────────────────────────┐
 ┌─ The value ──────────────────────────────────────┤ CIRCULAR VALUE DEFINITION │
 │  associated_items_truly_comprehensive.D3_Pattern └──────────────────────────┬┘
@@ -535,7 +537,8 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 │                            ‾‾‾‾                                             │
 └───────────────────────────── associated_items_truly_comprehensive.md:167:27 ┘
 
-    Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+    Only functions can be recursive. Non-function top-level values must be
+    fully computable without depending on themselves through other values.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

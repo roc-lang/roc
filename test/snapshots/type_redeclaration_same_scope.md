@@ -23,7 +23,8 @@ TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
     The redeclaration is here:
 
     But Maybe was already declared here:
-      ┌──────────────────────────────────────── type_redeclaration_same_scope.md:1:1
+      ┌────────────────────────────────────────
+      type_redeclaration_same_scope.md:1:1
       │
     1 │ Maybe(a) : [Some(a), None]
       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^

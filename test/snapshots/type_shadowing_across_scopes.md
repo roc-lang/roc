@@ -72,20 +72,21 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
     The redeclaration is here:
 
     But Try was already defined here:
-      ┌───────────────────────────────────────── type_shadowing_across_scopes.md:1:1
+      ┌─────────────────────────────────────────
+      type_shadowing_across_scopes.md:1:1
       │
     1 │ Try(a, b) : [Ok(a), Err(b)]
       │ ^
                                                              ┌─────────────────┐
-┌─ Variable data is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable data is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  processData = |data|                                                       │
 │                 ‾‾‾‾                                                        │
 └─────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
 
-    If you don't need this variable, prefix it with an underscore like _data to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _data to
+    suppress this warning.
                                                               ┌────────────────┐
 ┌─ This type annotation is malformed or contains invalid ─────┤ MALFORMED TYPE │
 │  syntax.                                                    └───────────────┬┘

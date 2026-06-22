@@ -107,19 +107,21 @@ MISSING METHOD - Color.md:57:32:57:38
 │  ]                                                                          │
 └─────────────────────────────────────────────────────────────── Color.md:1:1 ┘
 
-    Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
-    Remove the module header and ensure your file defines a type that matches the filename.
+    Remove the module header and ensure your file defines a type that matches
+    the filename.
                                                              ┌─────────────────┐
-┌─ Variable is_char_in_hex_range is not used anywhere in ────┤ UNUSED VARIABLE │
-│  your code.                                                └────────────────┬┘
+┌─ Variable is_char_in_hex_range is defined here and then ───┤ UNUSED VARIABLE │
+│  never used:                                               └────────────────┬┘
 │                                                                             │
 │      is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')│
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
 └────────────────────────────────────────────────────────────── Color.md:30:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _is_char_in_hex_range to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _is_char_in_hex_range to suppress this warning.
                                                               ┌────────────────┐
 ┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
 │                                                             └───────────────┬┘
@@ -188,7 +190,8 @@ MISSING METHOD - Color.md:57:32:57:38
 
         U8
 
-    Hint: For this to work, the type would need to have a method named to_frac associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named to_frac
+    associated with it in the type's declaration.
                                                               ┌────────────────┐
 ┌─ This is_char_in_hex_range method is being called on a ─────┤ MISSING METHOD │
 │  value whose type doesn't have that method:                 └───────────────┬┘
@@ -197,11 +200,13 @@ MISSING METHOD - Color.md:57:32:57:38
 │                    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
 └───────────────────────────────────────────────────────────── Color.md:35:19 ┘
 
-    The value's type, which does not have a method named is_char_in_hex_range, is:
+    The value's type, which does not have a method named is_char_in_hex_range,
+    is:
 
         U8
 
-    Hint: For this to work, the type would need to have a method named is_char_in_hex_range associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named
+    is_char_in_hex_range associated with it in the type's declaration.
                                                               ┌────────────────┐
 ┌─ This is_named_color method is being called on a value ─────┤ MISSING METHOD │
 │  whose type doesn't have that method:                       └───────────────┬┘
@@ -214,7 +219,8 @@ MISSING METHOD - Color.md:57:32:57:38
 
         Str
 
-    Hint: For this to work, the type would need to have a method named is_named_color associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named
+    is_named_color associated with it in the type's declaration.
                                                               ┌────────────────┐
 ┌─ This to_str method is being called on a value whose type ──┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
@@ -227,7 +233,8 @@ MISSING METHOD - Color.md:57:32:57:38
 
         Color
 
-    Hint: For this to work, the type would need to have a method named to_str associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named to_str
+    associated with it in the type's declaration.
                                                               ┌────────────────┐
 ┌─ This to_str method is being called on a value whose type ──┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
@@ -240,7 +247,8 @@ MISSING METHOD - Color.md:57:32:57:38
 
         Color
 
-    Hint: For this to work, the type would need to have a method named to_str associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named to_str
+    associated with it in the type's declaration.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,

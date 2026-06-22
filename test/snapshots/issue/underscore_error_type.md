@@ -51,7 +51,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │  ‾                                                                          │
 └─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -60,7 +62,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │                  ‾                                                          │
 └────────────────────────────────────────────── underscore_error_type.md:6:17 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -69,7 +73,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │             ‾‾‾‾                                                            │
 └────────────────────────────────────────────── underscore_error_type.md:6:12 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -78,7 +84,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │  ‾                                                                          │
 └─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -87,7 +95,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │  ‾                                                                          │
 └─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -96,7 +106,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │  ‾                                                                          │
 └─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                     ┌──────────────────────────┐
 ┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
 │  declarations.                                    └─────────────────────────┬┘
@@ -105,7 +117,9 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 │               ‾                                                             │
 └───────────────────────────────────────────── underscore_error_type.md:21:14 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                                ┌───────────────┐
 ┌─ This number is being used where a non-number type is ───────┤ TYPE MISMATCH │
 │  needed:                                                     └──────────────┬┘
@@ -127,7 +141,8 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 
     It has the type:
 
-        List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        List(a) where [a.from_numeral : Numeral -> Try(a,
+        [InvalidNumeral(Str)])]
 
     But the annotation says it should be:
 

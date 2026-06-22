@@ -39,7 +39,8 @@ ASCII control characters are not allowed in Roc source code.
 │   ‾                                                                         │
 └────────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8

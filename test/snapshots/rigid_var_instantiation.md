@@ -31,35 +31,35 @@ UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable num is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable num is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      num = identity(42)                                                     │
 │      ‾‾‾                                                                    │
 └──────────────────────────────────────────── rigid_var_instantiation.md:10:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _num to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _num to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable str is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable str is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      str = identity("hello")                                                │
 │      ‾‾‾                                                                    │
 └──────────────────────────────────────────── rigid_var_instantiation.md:13:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _str to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _str to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable lst is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable lst is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      lst = identity([1, 2, 3])                                              │
 │      ‾‾‾                                                                    │
 └──────────────────────────────────────────── rigid_var_instantiation.md:16:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _lst to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _lst to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

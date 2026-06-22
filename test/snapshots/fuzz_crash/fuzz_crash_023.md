@@ -343,7 +343,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │    ] # Comment after exposing close                                         │
 └────────────────────────────────────────────────────── fuzz_crash_023.md:6:1 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                             ┌──────────────────┐
 ┌─ The module BadName was not found in this Roc project. ───┤ MODULE NOT FOUND │
 │                                                           └─────────────────┬┘
@@ -464,25 +465,25 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable lower is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable lower is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │    lower # After pattern comment                                            │
 │    ‾‾‾‾‾                                                                    │
 └───────────────────────────────────────────────────── fuzz_crash_023.md:97:3 ┘
 
-    If you don't need this variable, prefix it with an underscore like _lower to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _lower
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -491,17 +492,18 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │        ‾‾‾‾‾                                                                │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:108:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -510,17 +512,18 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │     ‾‾‾‾‾                                                                   │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:111:4 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -529,7 +532,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │        ‾‾‾‾‾                                                                │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:120:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                           ┌────────────────────┐
 ┌─ Nothing is named add in this scope. ───────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -540,25 +544,25 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                      ‾‾‾‾‾‾                                                 │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:121:21 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │     .. # After spread operator                                              │
 │      rest, # After last field                                               │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:127:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -567,7 +571,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                   ‾‾‾‾‾                                                     │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:130:18 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -576,17 +581,18 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │          ‾‾‾‾‾                                                              │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:133:9 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   b,                                                                        │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_023.md:82:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named blah in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -685,7 +691,9 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                                                   ‾‾‾‾‾                     │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:179:50 ┘
 
-    Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+    Only functions can reference themselves (for recursion). For non-function
+    values, the right-hand side must be fully computable without referring to
+    the value being assigned.
                                                           ┌────────────────────┐
 ┌─ Nothing is named tag1 in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -758,65 +766,65 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 └──────────────────────────────────────────────────── fuzz_crash_023.md:193:4 ┘
 
                                                              ┌─────────────────┐
-┌─ Variable tag_with_payload is not used anywhere in your ───┤ UNUSED VARIABLE │
-│  code.                                                     └────────────────┬┘
+┌─ Variable tag_with_payload is defined here and then never ─┤ UNUSED VARIABLE │
+│  used:                                                     └────────────────┬┘
 │                                                                             │
 │   tag_with_payload = Ok(number)                                             │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:164:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _tag_with_payload to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _tag_with_payload to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable record is not used anywhere in your code. ───────┤ UNUSED VARIABLE │
+┌─ Variable record is defined here and then never used: ─────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
 │   ‾‾‾‾‾‾                                                                    │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:178:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _record to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _record
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable qux is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable qux is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
 │                                                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
 
-    If you don't need this variable, prefix it with an underscore like _qux to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _qux to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable multiline_tuple is not used anywhere in your ────┤ UNUSED VARIABLE │
-│  code.                                                     └────────────────┬┘
+┌─ Variable multiline_tuple is defined here and then never ──┤ UNUSED VARIABLE │
+│  used:                                                     └────────────────┬┘
 │                                                                             │
 │   multiline_tuple = (                                                       │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:180:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _multiline_tuple to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _multiline_tuple to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable bin_op_result is not used anywhere in your code. ┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
+┌─ Variable bin_op_result is defined here and then never ────┤ UNUSED VARIABLE │
+│  used:                                                     └────────────────┬┘
 │                                                                             │
 │   bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5│
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:188:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _bin_op_result to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _bin_op_result to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable static_dispatch_style is not used anywhere in ───┤ UNUSED VARIABLE │
-│  your code.                                                └────────────────┬┘
+┌─ Variable static_dispatch_style is defined here and then ──┤ UNUSED VARIABLE │
+│  never used:                                               └────────────────┬┘
 │                                                                             │
 │   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:189:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _static_dispatch_style to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _static_dispatch_style to suppress this warning.
                                                              ┌─────────────────┐
 ┌─ The type Value is not declared in this scope. ────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘
@@ -943,7 +951,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                                                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                 ┌──────────────┐
 ┌─ The match_time function expects 2 arguments, but it got 1 ───┤ TOO FEW ARGS │
 │  instead:                                                     └─────────────┬┘
@@ -997,7 +1006,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                                                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1006,7 +1016,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
 └──────────────────────────────────────────────────── fuzz_crash_023.md:201:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This is trying to dispatch a method named ─────────────────┤ MISSING METHOD │
 │  static_dispatch_method on an unresolved type variable,     └───────────────┬┘
@@ -1016,7 +1027,10 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:189:26 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
                                                               ┌────────────────┐
 ┌─ This is trying to dispatch a method named ─────────────────┤ MISSING METHOD │
 │  next_static_dispatch_method on an unresolved type          └───────────────┬┘
@@ -1026,7 +1040,10 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾          │
 └─────────────────────────────────────────────────── fuzz_crash_023.md:189:26 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

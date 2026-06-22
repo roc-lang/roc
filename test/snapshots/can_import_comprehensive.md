@@ -61,7 +61,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
     The redeclaration is here:
 
     But Str was already defined here:
-      ┌───────────────────────────────────────────── can_import_comprehensive.md:1:1
+      ┌─────────────────────────────────────────────
+      can_import_comprehensive.md:1:1
       │
     1 │ import json.Json
       │ ^

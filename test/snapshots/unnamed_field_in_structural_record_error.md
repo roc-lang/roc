@@ -21,7 +21,8 @@ UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD - unnamed_field_in_structural_rec
 │                  ‾‾‾‾‾‾                                                     │
 └─────────────────────────── unnamed_field_in_structural_record_error.md:1:17 ┘
 
-    Hint: Unnamed fields reserve layout padding for a nominal type (declared with :=). Give the field a name, or move it into a nominal type declaration.
+    Hint: Unnamed fields reserve layout padding for a nominal type (declared
+    with :=). Give the field a name, or move it into a nominal type declaration.
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,Underscore,OpColon,UpperIdent,CloseCurly,

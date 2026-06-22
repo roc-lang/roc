@@ -102,15 +102,15 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable req is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable req is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  processRequest = |req| Http.Server.defaultResponse                         │
 │                    ‾‾‾                                                      │
 └─────────────────────────────────── can_import_unresolved_qualified.md:13:19 ┘
 
-    If you don't need this variable, prefix it with an underscore like _req to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _req to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named prase in this scope. ─────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘

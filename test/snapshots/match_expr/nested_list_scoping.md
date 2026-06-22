@@ -26,7 +26,8 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
 
         List(_a)
 
-    Hint: The * operator calls a method named times on the value preceding it, passing the value after the operator as the one argument.
+    Hint: The * operator calls a method named times on the value preceding it,
+    passing the value after the operator as the one argument.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

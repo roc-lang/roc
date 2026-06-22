@@ -39,15 +39,15 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 
     This type is referenced here:
                                                              ┌─────────────────┐
-┌─ Variable value is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable value is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  processValue = |value| {                                                   │
 │                  ‾‾‾‾‾                                                      │
 └────────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _value to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _value
+    to suppress this warning.
                                                          ┌─────────────────────┐
 ┌─ There is no module with the name SomeModule imported ─┤ MODULE NOT IMPORTED │
 │  into this Roc file.                                   └────────────────────┬┘

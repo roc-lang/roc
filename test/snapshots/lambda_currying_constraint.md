@@ -36,7 +36,8 @@ MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 
         a
 
-    Hint: The + operator calls a method named plus on the value preceding it, passing the value after the operator as the one argument.
+    Hint: The + operator calls a method named plus on the value preceding it,
+    passing the value after the operator as the one argument.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,

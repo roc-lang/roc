@@ -28,15 +28,15 @@ UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 
     This type is referenced here:
                                                              ┌─────────────────┐
-┌─ Variable p is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable p is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  expectsPerson = |p| "Got a person"                                         │
 │                   ‾                                                         │
 └─────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
 
-    If you don't need this variable, prefix it with an underscore like _p to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _p to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

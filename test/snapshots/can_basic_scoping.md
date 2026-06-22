@@ -34,7 +34,8 @@ DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
     The redeclaration is here:
 
     But x was already defined here:
-      ┌──────────────────────────────────────────────────── can_basic_scoping.md:2:1
+      ┌────────────────────────────────────────────────────
+      can_basic_scoping.md:2:1
       │
     2 │ x = 5
       │ ^

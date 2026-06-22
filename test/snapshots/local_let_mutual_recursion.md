@@ -25,7 +25,9 @@ MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 │                                               ‾‾‾‾‾‾                        │
 └───────────────────────────────────────── local_let_mutual_recursion.md:2:46 ┘
 
-    Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.
+    Local definitions are evaluated in order and can only refer to themselves
+    or to earlier definitions. Move these mutually recursive definitions to the
+    top level, where mutual recursion is supported.
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

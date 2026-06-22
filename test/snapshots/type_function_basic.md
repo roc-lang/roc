@@ -25,8 +25,10 @@ PARSE ERROR - type_function_basic.md:3:29:3:31
 └──────────────────────────────────────────────── type_function_basic.md:3:26 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘

@@ -32,7 +32,8 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
     The redeclaration is here:
 
     But Foo was already declared here:
-      ┌─────────────────────────────────────────────── type_scope_integration.md:2:1
+      ┌───────────────────────────────────────────────
+      type_scope_integration.md:2:1
       │
     2 │ Foo : U64
       │ ^^^^^^^^^

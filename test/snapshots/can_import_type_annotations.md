@@ -90,15 +90,15 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable req is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable req is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  processRequest = |req| Http.defaultResponse                                │
 │                    ‾‾‾                                                      │
 └──────────────────────────────────────── can_import_type_annotations.md:6:19 ┘
 
-    If you don't need this variable, prefix it with an underscore like _req to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _req to
+    suppress this warning.
                                                             ┌──────────────────┐
 ┌─ The type Value is qualified by the module json.Json, ────┤ MODULE NOT FOUND │
 │  but that module was not found in this Roc project.       └─────────────────┬┘

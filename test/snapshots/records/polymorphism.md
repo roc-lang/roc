@@ -26,7 +26,8 @@ MISSING METHOD - polymorphism.md:6:29:6:35
 
     The value's type, which does not have a method named to_str, is:
 
-        { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }
+        { pair1: { first: a, second: b }, pair2: { first: c, second: d },
+        pair3: { first: [True, ..], second: [False, ..] } }
           where [
             a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
             b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),

@@ -180,95 +180,95 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 
     You're attempting do this here:
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b,                                                                     │
 │      ‾                                                                      │
 └───────────────────────────────────────────────────────── everything.md:98:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │     b,                                                                      │
 │     ‾                                                                       │
 └──────────────────────────────────────────────────────── everything.md:103:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b,                                                                     │
 │      ‾                                                                      │
 └──────────────────────────────────────────────────────── everything.md:108:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b,                                                                     │
 │      ‾                                                                      │
 └──────────────────────────────────────────────────────── everything.md:114:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h1 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h1 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h1 = {                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:69:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h1 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h1 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h2 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h2 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h2 = h(                                                                   │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:77:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h2 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h2 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h3 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h3 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h3 = A(                                                                   │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:81:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h3 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h3 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h4 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h4 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h4 = [                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:85:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h4 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h4 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h5 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h5 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h5 = (                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:89:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h5 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h5 to
+    suppress this warning.
                                                     ┌──────────────────────────┐
 ┌─ The where clause syntax A is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
 │                                                   └─────────────────────────┬┘
@@ -277,7 +277,8 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 │    ‾‾‾                                                                      │
 └───────────────────────────────────────────────────────── everything.md:64:3 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
+    This syntax was used for abilities, which have been removed from Roc. Use
+    method constraints like where [a.methodName(args) -> ret] instead.
                                                     ┌──────────────────────────┐
 ┌─ The where clause syntax B is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
 │                                                   └─────────────────────────┬┘
@@ -286,7 +287,8 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 │    ‾‾‾                                                                      │
 └───────────────────────────────────────────────────────── everything.md:65:3 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
+    This syntax was used for abilities, which have been removed from Roc. Use
+    method constraints like where [a.methodName(args) -> ret] instead.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -298,7 +300,8 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 │   ]                                                                         │
 └───────────────────────────────────────────────────────── everything.md:62:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                         ┌──────────────────────┐
 ┌─ This match expression doesn't cover all possible ────┤ NON-EXHAUSTIVE MATCH │
 │  cases:                                               └─────────────────────┬┘

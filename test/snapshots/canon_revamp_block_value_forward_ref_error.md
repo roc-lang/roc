@@ -24,15 +24,15 @@ UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable y is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable y is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      y = 5                                                                  │
 │      ‾                                                                      │
 └────────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _y to
+    suppress this warning.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,

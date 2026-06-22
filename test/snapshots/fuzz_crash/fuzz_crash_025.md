@@ -49,7 +49,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_025.md:9:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -96,7 +97,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │  ‾                                                                          │
 └───────────────────────────────────────────────────── fuzz_crash_025.md:13:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8

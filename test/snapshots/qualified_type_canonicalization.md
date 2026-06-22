@@ -92,9 +92,11 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │  ]                                                                          │
 └───────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
-    Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
-    Remove the module header and ensure your file defines a type that matches the filename.
+    Remove the module header and ensure your file defines a type that matches
+    the filename.
                                                         ┌──────────────────────┐
 ┌─ The name Try is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
 │                                                       └─────────────────────┬┘
@@ -106,7 +108,8 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
     The redeclaration is here:
 
     But Try was already defined here:
-      ┌────────────────────────────────────── qualified_type_canonicalization.md:1:1
+      ┌──────────────────────────────────────
+      qualified_type_canonicalization.md:1:1
       │
     1 │ module [
       │ ^
@@ -239,15 +242,15 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 
     You're attempting to use this type here:
                                                              ┌─────────────────┐
-┌─ Variable color is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable color is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  processColor = |color|                                                     │
 │                  ‾‾‾‾‾                                                      │
 └─────────────────────────────────── qualified_type_canonicalization.md:35:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _color to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _color
+    to suppress this warning.
                                                          ┌─────────────────────┐
 ┌─ Try is in scope, but it doesn't have a nested type ───┤ MISSING NESTED TYPE │
 │  that's also named Try.                                └────────────────────┬┘
@@ -321,15 +324,15 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 └─────────────────────────────────── qualified_type_canonicalization.md:43:25 ┘
 
                                                              ┌─────────────────┐
-┌─ Variable err is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable err is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │          Try.Err(err) => TypeC.default                                      │
 │                  ‾‾‾                                                        │
 └─────────────────────────────────── qualified_type_canonicalization.md:43:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _err to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _err to
+    suppress this warning.
                                                      ┌─────────────────────────┐
 ┌─ The module header says that .TypeC is exposed, ───┤ EXPOSED BUT NOT DEFINED │
 │  but it is not defined anywhere in this module.    └────────────────────────┬┘
@@ -338,7 +341,8 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
 └───────────────────────────────────── qualified_type_canonicalization.md:3:5 ┘
 
-    You can fix this by either defining .TypeC in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining .TypeC in this module, or by removing
+    it from the list of exposed values.
                                                      ┌─────────────────────────┐
 ┌─ The module header says that Try is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
 │  it is not defined anywhere in this module.        └────────────────────────┬┘
@@ -347,7 +351,8 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │      ‾‾‾                                                                    │
 └───────────────────────────────────── qualified_type_canonicalization.md:4:5 ┘
 
-    You can fix this by either defining Try in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining Try in this module, or by removing it
+    from the list of exposed values.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,

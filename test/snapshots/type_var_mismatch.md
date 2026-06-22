@@ -34,7 +34,8 @@ TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 └─────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
 
     The type was determined to be non-numeric here:
-       ┌───────────────────────────────────────────────── type_var_mismatch.md:11:11
+       ┌─────────────────────────────────────────────────
+       type_var_mismatch.md:11:11
        │
     11 │ 	result = List.first(list).ok_or(item)
        │ 	         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -29,7 +29,8 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 │           ‾‾‾‾‾‾‾‾‾                                                         │
 └─────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
 
-    You can fix this by either defining something in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining something in this module, or by
+    removing it from the list of exposed values.
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

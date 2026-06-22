@@ -36,35 +36,35 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable result1 is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable result1 is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      result1 = testEllipsis(42)                                             │
 │      ‾‾‾‾‾‾‾                                                                │
 └──────────────────────────────────────────── crash_and_ellipsis_test.md:20:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _result1 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _result1
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable result2 is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable result2 is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      result2 = testCrash(42)                                                │
 │      ‾‾‾‾‾‾‾                                                                │
 └──────────────────────────────────────────── crash_and_ellipsis_test.md:21:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _result2 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _result2
+    to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable result3 is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable result3 is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      result3 = testCrashSimple(42)                                          │
 │      ‾‾‾‾‾‾‾                                                                │
 └──────────────────────────────────────────── crash_and_ellipsis_test.md:22:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _result3 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _result3
+    to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -29,7 +29,8 @@ INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 
         Str
 
-    Hint: The + operator calls a method named plus on the value preceding it, passing the value after the operator as the one argument.
+    Hint: The + operator calls a method named plus on the value preceding it,
+    passing the value after the operator as the one argument.
                                                               ┌────────────────┐
 ┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
 │                                                             └───────────────┬┘

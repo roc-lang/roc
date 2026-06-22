@@ -230,7 +230,8 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
 └─────────────────────────────────────── record_different_fields_error.md:2:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -239,7 +240,8 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │      ‾‾‾‾‾‾‾‾‾                                                              │
 └─────────────────────────────────────── record_different_fields_error.md:3:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                ┌───────────────┐
 ┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
 │                                                              └──────────────┬┘
@@ -284,7 +286,8 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
 └─────────────────────────────────────── record_different_fields_error.md:6:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                               ┌────────────────┐
 ┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘

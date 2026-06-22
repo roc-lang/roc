@@ -28,7 +28,8 @@ DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
 └─────────────────────────────────────────────────────── platform_str.md:7:16 ┘
 
-    You can fix this by either defining processString in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining processString in this module, or by
+    removing it from the list of exposed values.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -37,7 +38,8 @@ DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
 └──────────────────────────────────────────────────────── platform_str.md:9:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

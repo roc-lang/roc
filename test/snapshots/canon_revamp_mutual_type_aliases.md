@@ -20,12 +20,14 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 │  ‾‾‾‾‾                                                                      │
 └──────────────────────────────────── canon_revamp_mutual_type_aliases.md:1:1 ┘
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
+    Type aliases are transparent synonyms and cannot be mutually recursive. If
+    you need recursive types, use nominal types (:=) instead.
 
     This type is declared here:
 
     And it references B declared here:
-      ┌───────────────────────────────────── canon_revamp_mutual_type_aliases.md:2:1
+      ┌─────────────────────────────────────
+      canon_revamp_mutual_type_aliases.md:2:1
       │
     2 │ B : A
       │ ^^^^^
@@ -37,12 +39,14 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 │  ‾‾‾‾‾                                                                      │
 └──────────────────────────────────── canon_revamp_mutual_type_aliases.md:2:1 ┘
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
+    Type aliases are transparent synonyms and cannot be mutually recursive. If
+    you need recursive types, use nominal types (:=) instead.
 
     This type is declared here:
 
     And it references A declared here:
-      ┌───────────────────────────────────── canon_revamp_mutual_type_aliases.md:1:1
+      ┌─────────────────────────────────────
+      canon_revamp_mutual_type_aliases.md:1:1
       │
     1 │ A : B
       │ ^^^^^

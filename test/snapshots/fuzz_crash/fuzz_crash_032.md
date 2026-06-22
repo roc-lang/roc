@@ -59,7 +59,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                   ‾                                         │
 └───────────────────────────────────────────────────── fuzz_crash_032.md:1:34 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -79,7 +80,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                                             ‾                               │
 └───────────────────────────────────────────────────── fuzz_crash_032.md:1:44 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -99,7 +101,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │                   ‾‾‾‾‾‾                                                    │
 └───────────────────────────────────────────────────── fuzz_crash_032.md:4:18 ┘
 
-    Move this import to the top of the file, after the module header but before any definitions.
+    Move this import to the top of the file, after the module header but before
+    any definitions.
                                                  ┌─────────────────────────────┐
 ┌─ The token - is not expected in a pattern. ────┤ UNEXPECTED TOKEN IN PATTERN │
 │                                                └────────────────────────────┬┘
@@ -126,7 +129,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 │               ‾‾‾                                                           │
 └───────────────────────────────────────────────────── fuzz_crash_032.md:1:14 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                              ┌─────────────────┐

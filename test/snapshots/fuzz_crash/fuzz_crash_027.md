@@ -251,7 +251,8 @@ Numbers cannot have leading zeros.
 │      ‾                                                                      │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:40:5 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -508,7 +509,8 @@ Numbers cannot have leading zeros.
 │                                 ‾                                           │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:32:32 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                              ┌─────────────────┐
@@ -584,15 +586,15 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -601,27 +603,28 @@ Numbers cannot have leading zeros.
 │        ‾‾‾‾‾                                                                │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:74:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
 └────────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable ist is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable ist is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  ist                                                                        │
 │  ‾‾‾                                                                        │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:76:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _ist to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _ist to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -630,7 +633,8 @@ Numbers cannot have leading zeros.
 │        ‾‾‾‾‾                                                                │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:81:7 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                           ┌────────────────────┐
 ┌─ Nothing is named add in this scope. ───────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -641,15 +645,15 @@ Numbers cannot have leading zeros.
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable rest is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                      ‾‾‾‾‾‾                                                 │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:82:21 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _rest to
+    suppress this warning.
                                                              ┌─────────────────┐
 ┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
 │  pattern outside match expression                          └────────────────┬┘
@@ -658,17 +662,18 @@ Numbers cannot have leading zeros.
 │                   ‾‾‾‾‾                                                     │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:89:18 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   b,                                                                        │
 │   ‾                                                                         │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:62:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                           ┌────────────────────┐
 ┌─ Nothing is named blah in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
@@ -715,35 +720,35 @@ Numbers cannot have leading zeros.
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                              ┌─────────────────┐
-┌─ Variable tag_with is not used anywhere in your code. ─────┤ UNUSED VARIABLE │
+┌─ Variable tag_with is defined here and then never used: ───┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   tag_with = Ok(number)                                                     │
 │   ‾‾‾‾‾‾‾‾                                                                  │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:119:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _tag_with to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like
+    _tag_with to suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable ited is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable ited is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   ited = "Hello, ${world}"                                                  │
 │   ‾‾‾‾                                                                      │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:120:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _ited to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _ited to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable list is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable list is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   list = [                                                                  │
 │   ‾‾‾‾                                                                      │
 └──────────────────────────────────────────────────── fuzz_crash_027.md:121:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _list to
+    suppress this warning.
                                                                 ┌──────────────┐
 ┌─ The type List expects 1 argument, but got 0 instead. ────────┤ TOO FEW ARGS │
 │                                                               └─────────────┬┘
@@ -762,7 +767,8 @@ Numbers cannot have leading zeros.
 │  ) # Co                                                                     │
 └───────────────────────────────────────────────────── fuzz_crash_027.md:28:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                                ┌───────────────┐
 ┌─ This if condition must evaluate to a Bool – either True or ─┤ TYPE MISMATCH │
 │  False:                                                      └──────────────┬┘
@@ -822,7 +828,8 @@ Numbers cannot have leading zeros.
 
         [Red, ..]
 
-    A name shared across | patterns in the same match branch must have one compatible type.
+    A name shared across | patterns in the same match branch must have one
+    compatible type.
                                                               ┌────────────────┐
 ┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
 │  type doesn't have that method:                             └───────────────┬┘
@@ -925,7 +932,8 @@ Numbers cannot have leading zeros.
 
         Try({}, _d)
 
-    Hint: All return statements and the final expression in a function must have the same type.
+    Hint: All return statements and the final expression in a function must
+    have the same type.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -60,7 +60,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
     The redeclaration is here:
 
     But Try was already defined here:
-      ┌───────────────────────────────────────────── type_comprehensive_scope.md:1:1
+      ┌─────────────────────────────────────────────
+      type_comprehensive_scope.md:1:1
       │
     1 │ # Built-in types should work
       │ ^
@@ -72,12 +73,14 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
 └─────────────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
+    Type aliases are transparent synonyms and cannot be mutually recursive. If
+    you need recursive types, use nominal types (:=) instead.
 
     This type is declared here:
 
     And it references Node declared here:
-       ┌─────────────────────────────────────────── type_comprehensive_scope.md:16:1
+       ┌───────────────────────────────────────────
+       type_comprehensive_scope.md:16:1
        │
     16 │ Node(a) : { value: a, children: List(Tree(a)) }
        │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -89,12 +92,14 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
 └─────────────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
+    Type aliases are transparent synonyms and cannot be mutually recursive. If
+    you need recursive types, use nominal types (:=) instead.
 
     This type is declared here:
 
     And it references Tree declared here:
-       ┌─────────────────────────────────────────── type_comprehensive_scope.md:13:1
+       ┌───────────────────────────────────────────
+       type_comprehensive_scope.md:13:1
        │
     13 │ Tree(a) : [Branch(Node(a)), Leaf(a)]
        │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -109,7 +114,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
     The redeclaration is here:
 
     But Person was already declared here:
-      ┌───────────────────────────────────────────── type_comprehensive_scope.md:7:1
+      ┌─────────────────────────────────────────────
+      type_comprehensive_scope.md:7:1
       │
     7 │ Person : { name: Str, age: U64 }
       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

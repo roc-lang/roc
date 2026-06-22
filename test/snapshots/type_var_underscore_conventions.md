@@ -37,55 +37,55 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  single_use = |x| "hello"                                                   │
 │                ‾                                                            │
 └──────────────────────────────────── type_var_underscore_conventions.md:5:15 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable list is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable list is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  starting_dollar = |list| "default"                                         │
 │                     ‾‾‾‾                                                    │
 └──────────────────────────────────── type_var_underscore_conventions.md:9:20 ┘
 
-    If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _list to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  combo_single = |x| "combo"                                                 │
 │                  ‾                                                          │
 └─────────────────────────────────── type_var_underscore_conventions.md:13:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  valid_single = |x| "valid"                                                 │
 │                  ‾                                                          │
 └─────────────────────────────────── type_var_underscore_conventions.md:17:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  main = |x| "done"                                                          │
 │          ‾                                                                  │
 └──────────────────────────────────── type_var_underscore_conventions.md:22:9 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                                ┌───────────────┐
 ┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
 │  is needed:                                                  └──────────────┬┘

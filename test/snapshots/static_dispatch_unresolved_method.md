@@ -21,7 +21,10 @@ MISSING METHOD - static_dispatch_unresolved_method.md:3:10:3:16
 │           ‾‾‾‾‾‾                                                            │
 └────────────────────────────────── static_dispatch_unresolved_method.md:3:10 ┘
 
-    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,

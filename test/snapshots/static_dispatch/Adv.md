@@ -71,7 +71,8 @@ MISSING METHOD - Adv.md:28:21:28:27
 
         Adv
 
-    Hint: For this to work, the type would need to have a method named update_strr associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named
+    update_strr associated with it in the type's declaration.
                                                               ┌────────────────┐
 ┌─ This update method is being called on a value whose type ──┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
@@ -84,7 +85,8 @@ MISSING METHOD - Adv.md:28:21:28:27
 
         Str
 
-    Hint: For this to work, the type would need to have a method named update associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named update
+    associated with it in the type's declaration.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

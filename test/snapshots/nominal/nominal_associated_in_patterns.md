@@ -16,15 +16,15 @@ handleSuccess = |res| "success"
 UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable res is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable res is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  handleSuccess = |res| "success"                                            │
 │                   ‾‾‾                                                       │
 └───────────────────────────────────── nominal_associated_in_patterns.md:6:18 ┘
 
-    If you don't need this variable, prefix it with an underscore like _res to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _res to
+    suppress this warning.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

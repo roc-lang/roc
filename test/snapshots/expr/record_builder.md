@@ -72,7 +72,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │      ‾‾‾‾                                                                   │
 └────────────────────────────────────────────────────── record_builder.md:2:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -81,7 +82,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │      ‾‾‾‾                                                                   │
 └────────────────────────────────────────────────────── record_builder.md:3:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

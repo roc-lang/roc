@@ -137,7 +137,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 │  ‾‾‾‾‾‾                                                                     │
 └────────────────────────────────────────────────────── fuzz_crash_002.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,MalformedUnknownToken,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,LowerIdent,OpenSquare,OpPercent,

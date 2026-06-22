@@ -329,8 +329,10 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 └───────────────────────────────────────────────────────── everything.md:17:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -339,7 +341,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │            ‾                                                                │
 └──────────────────────────────────────────────────────── everything.md:17:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -459,8 +462,10 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 └───────────────────────────────────────────────────────── everything.md:21:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -469,7 +474,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │  ‾                                                                          │
 └───────────────────────────────────────────────────────── everything.md:22:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -643,8 +649,10 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 └───────────────────────────────────────────────────────── everything.md:27:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -653,7 +661,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │            ‾                                                                │
 └──────────────────────────────────────────────────────── everything.md:27:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -773,8 +782,10 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 └───────────────────────────────────────────────────────── everything.md:31:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
 │  arguments.                                                    └────────────┬┘
@@ -783,7 +794,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │  ‾                                                                          │
 └───────────────────────────────────────────────────────── everything.md:33:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -1031,95 +1043,95 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 
     Check the syntax of your where clause.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
 └───────────────────────────────────────────────────────── everything.md:88:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │     b                                                                       │
 │     ‾                                                                       │
 └───────────────────────────────────────────────────────── everything.md:93:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
 └───────────────────────────────────────────────────────── everything.md:98:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
 └──────────────────────────────────────────────────────── everything.md:104:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _b to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h1 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h1 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h1 = {                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:59:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h1 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h1 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h2 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h2 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h2 = h(                                                                   │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:67:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h2 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h2 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h3 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h3 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h3 = A(                                                                   │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:71:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h3 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h3 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h4 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h4 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h4 = [                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:75:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h4 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h4 to
+    suppress this warning.
                                                              ┌─────────────────┐
-┌─ Variable h5 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+┌─ Variable h5 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   h5 = (                                                                    │
 │   ‾‾                                                                        │
 └───────────────────────────────────────────────────────── everything.md:79:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h5 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _h5 to
+    suppress this warning.
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
 │  implementation.                                  └─────────────────────────┬┘
@@ -1128,7 +1140,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
 └───────────────────────────────────────────────────────── everything.md:56:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
                                                         ┌──────────────────────┐
 ┌─ This match expression doesn't cover all possible ────┤ NON-EXHAUSTIVE MATCH │
 │  cases:                                               └─────────────────────┬┘

@@ -22,7 +22,9 @@ MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
 
         Dec
 
-    Hint: This numeric literal was given the type Dec because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+    Hint: This numeric literal was given the type Dec because it was never used
+    as any concrete number type. To use a different numeric type, add a suffix
+    or a type annotation.
 # TOKENS
 ~~~zig
 OpBang,Int,

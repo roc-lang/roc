@@ -440,15 +440,97 @@ fn renderBelowContent(
     }
 
     try writer.writeByte('\n');
+    const width: usize = config.getMaxLineWidth();
     var it = std.mem.splitScalar(u8, trimmed, '\n');
     while (it.next()) |ln| {
-        if (ln.len == 0) {
-            try writer.writeByte('\n');
-        } else {
-            try writer.writeAll("    ");
-            try writer.writeAll(ln);
-            try writer.writeByte('\n');
+        try wrapAndEmitBelowLine(writer, ln, 4, width);
+    }
+}
+
+/// Length of the ANSI escape sequence starting at `bytes[i]`, or 0 if there
+/// isn't one there.
+fn ansiEscLen(bytes: []const u8, i: usize) usize {
+    if (i >= bytes.len or bytes[i] != 0x1b) return 0;
+    if (i + 1 >= bytes.len or bytes[i + 1] != '[') return 1;
+    var j = i + 2;
+    while (j < bytes.len and bytes[j] != 'm') j += 1;
+    if (j < bytes.len) j += 1; // include the terminating 'm'
+    return j - i;
+}
+
+/// Emit a single below-the-box line indented by `base_indent`, word-wrapping it
+/// to `width` display columns. Wrapped continuation lines line up under the
+/// first line's text (preserving any leading indent the line already had, e.g.
+/// for a code block). ANSI escapes pass through and don't count toward width.
+fn wrapAndEmitBelowLine(writer: *std.Io.Writer, line: []const u8, base_indent: usize, width: usize) error{WriteFailed}!void {
+    if (line.len == 0) {
+        try writer.writeByte('\n');
+        return;
+    }
+
+    // Leading prefix: ANSI escapes and spaces; its space count is the line's
+    // own indent (continuation lines reproduce it).
+    var prefix_end: usize = 0;
+    var lead: usize = 0;
+    while (prefix_end < line.len) {
+        const esc = ansiEscLen(line, prefix_end);
+        if (esc > 0) {
+            prefix_end += esc;
+        } else if (line[prefix_end] == ' ') {
+            lead += 1;
+            prefix_end += 1;
+        } else break;
+    }
+    const prefix = line[0..prefix_end];
+    const body = line[prefix_end..];
+    const avail = @max((width -| base_indent) -| lead, 16);
+
+    var start: usize = 0;
+    var first = true;
+    while (start < body.len) {
+        while (start < body.len and body[start] == ' ') start += 1;
+        if (start >= body.len) break;
+        var i = start;
+        var end = start;
+        var w: usize = 0;
+        var last_break: ?usize = null;
+        while (i < body.len) {
+            const esc = ansiEscLen(body, i);
+            if (esc > 0) {
+                i += esc;
+                end = i;
+                continue;
+            }
+            const seq = std.unicode.utf8ByteSequenceLength(body[i]) catch 1;
+            const next = @min(i + seq, body.len);
+            const cw = source_region.displayWidth(body[i..next]);
+            if (w + cw > avail and end > start) break;
+            if (body[i] == ' ') last_break = i;
+            w += cw;
+            i = next;
+            end = i;
         }
+        if (i < body.len) {
+            if (last_break) |lb| {
+                if (lb > start) end = lb;
+            }
+        }
+        try writer.splatByteAll(' ', base_indent);
+        if (first) {
+            try writer.writeAll(prefix);
+            first = false;
+        } else {
+            try writer.splatByteAll(' ', lead);
+        }
+        try writer.writeAll(body[start..end]);
+        try writer.writeByte('\n');
+        start = end;
+    }
+    if (first) {
+        // Body was empty (prefix only) — still emit it.
+        try writer.splatByteAll(' ', base_indent);
+        try writer.writeAll(prefix);
+        try writer.writeByte('\n');
     }
 }
 

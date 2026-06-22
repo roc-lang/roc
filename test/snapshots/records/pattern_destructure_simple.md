@@ -24,15 +24,15 @@ UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable age is not used anywhere in your code. ──────────┤ UNUSED VARIABLE │
+┌─ Variable age is defined here and then never used: ────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      { name, age } => name                                                  │
 │              ‾‾‾                                                            │
 └───────────────────────────────────────── pattern_destructure_simple.md:2:13 ┘
 
-    If you don't need this variable, prefix it with an underscore like _age to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _age to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

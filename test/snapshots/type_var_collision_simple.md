@@ -33,15 +33,15 @@ main! = |_| {
 UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable result3 is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable result3 is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │      result3 = pair(result1, result2)                                       │
 │      ‾‾‾‾‾‾‾                                                                │
 └────────────────────────────────────────── type_var_collision_simple.md:20:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _result3 to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _result3
+    to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

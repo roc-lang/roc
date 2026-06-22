@@ -29,8 +29,10 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 └──────────────────────────────────── type_higher_order_multiple_vars.md:3:36 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘
@@ -58,8 +60,10 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 └──────────────────────────────────── type_higher_order_multiple_vars.md:3:43 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns another function)
-            (a -> b) -> c for a higher-order function (a function that takes another function)
+            a -> (b -> c) for a curried function (a function that returns
+            another function)
+            (a -> b) -> c for a higher-order function (a function that takes
+            another function)
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
 │                                                                └────────────┬┘

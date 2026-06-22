@@ -20,7 +20,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 │  ‾                                                                          │
 └────────────────────────────────────── type_annotation_missing_parens.md:2:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8
@@ -48,7 +49,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 │  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
 └────────────────────────────────────── type_annotation_missing_parens.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,UpperIdent,

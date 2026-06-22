@@ -32,15 +32,15 @@ UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+┌─ Variable x is defined here and then never used: ──────────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  unused_regular = |x| 42                                                    │
 │                    ‾                                                        │
 └───────────────────────────────────────────────── unused_vars_simple.md:4:19 ┘
 
-    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _x to
+    suppress this warning.
                                                     ┌──────────────────────────┐
 ┌─ Variable _value is prefixed with an underscore ──┤ UNDERSCORE VARIABLE USED │
 │  but is actually used.                            └─────────────────────────┬┘
@@ -49,7 +49,8 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 │                             ‾‾‾‾‾‾                                          │
 └───────────────────────────────────────────────── unused_vars_simple.md:7:28 ┘
 
-    Variables prefixed with _ are intended to be unused. Remove the underscore prefix: value.
+    Variables prefixed with _ are intended to be unused. Remove the underscore
+    prefix: value.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

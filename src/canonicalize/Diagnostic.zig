@@ -1372,7 +1372,7 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addReflowingText("Variable ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is not used anywhere in your code.");
+        try report.document.addReflowingText(" is defined here and then never used:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1382,8 +1382,6 @@ pub const Diagnostic = union(enum) {
         try report.document.addUnqualifiedSymbol(ident_with_underscore);
         try report.document.addReflowingText(" to suppress this warning.");
 
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("The unused variable is declared here:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);

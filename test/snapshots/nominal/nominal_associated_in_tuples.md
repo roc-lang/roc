@@ -31,7 +31,8 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 │              ‾                                                              │
 └─────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                     ┌──────────────────────────┐
@@ -42,7 +43,8 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 │                              ‾                                              │
 └─────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
 
-    Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
     This type variable is referenced here:
                                                                ┌───────────────┐

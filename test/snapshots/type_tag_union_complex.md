@@ -45,7 +45,8 @@ DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
     The redeclaration is here:
 
     But Try was already defined here:
-      ┌─────────────────────────────────────────────── type_tag_union_complex.md:1:1
+      ┌───────────────────────────────────────────────
+      type_tag_union_complex.md:1:1
       │
     1 │ app [main!] { pf: platform "../basic-cli/main.roc" }
       │ ^

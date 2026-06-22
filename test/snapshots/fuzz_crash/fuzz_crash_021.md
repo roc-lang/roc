@@ -35,7 +35,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 │     ‾                                                                       │
 └────────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8

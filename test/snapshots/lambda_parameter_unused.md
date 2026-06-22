@@ -36,15 +36,15 @@ UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
                                                              ┌─────────────────┐
-┌─ Variable unused is not used anywhere in your code. ───────┤ UNUSED VARIABLE │
+┌─ Variable unused is defined here and then never used: ─────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  add = |unused| 42                                                          │
 │         ‾‾‾‾‾‾                                                              │
 └───────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
 
-    If you don't need this variable, prefix it with an underscore like _unused to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _unused
+    to suppress this warning.
                                                     ┌──────────────────────────┐
 ┌─ Variable _factor is prefixed with an underscore ─┤ UNDERSCORE VARIABLE USED │
 │  but is actually used.                            └─────────────────────────┬┘
@@ -53,7 +53,8 @@ UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 │                       ‾‾‾‾‾‾‾                                               │
 └──────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
 
-    Variables prefixed with _ are intended to be unused. Remove the underscore prefix: factor.
+    Variables prefixed with _ are intended to be unused. Remove the underscore
+    prefix: factor.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

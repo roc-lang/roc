@@ -35,7 +35,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 │      ‾‾‾‾‾‾                                                                 │
 └───────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
 
-    Move this import to the top of the file, after the module header but before any definitions.
+    Move this import to the top of the file, after the module header but before
+    any definitions.
                                                              ┌─────────────────┐
 ┌─ The type Color is not declared in this scope. ────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘

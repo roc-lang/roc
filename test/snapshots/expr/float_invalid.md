@@ -20,7 +20,9 @@ MISSING METHOD - float_invalid.md:1:1:1:5
 
     The value's type, which does not have a method named from_numeral, is:
 
-        (_field, _field2, _field3, _field4, _field5, _field6, _field7, _field8, _field9, _field10, _field11, _field12, _field13, _field14, _field15, _field16)
+        (_field, _field2, _field3, _field4, _field5, _field6, _field7, _field8,
+        _field9, _field10, _field11, _field12, _field13, _field14, _field15,
+        _field16)
 # TOKENS
 ~~~zig
 Float,NoSpaceDotInt,

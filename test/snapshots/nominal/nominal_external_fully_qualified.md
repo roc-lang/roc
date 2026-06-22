@@ -52,15 +52,15 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 
     You're attempting to use this type here:
                                                              ┌─────────────────┐
-┌─ Variable code is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+┌─ Variable code is defined here and then never used: ───────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │          MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"        │
 │                                    ‾‾‾‾                                     │
 └─────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
 
-    If you don't need this variable, prefix it with an underscore like _code to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _code to
+    suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

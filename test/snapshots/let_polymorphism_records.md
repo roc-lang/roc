@@ -74,7 +74,8 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 
         { data: a, ..b }, a -> { data: a, ..b }
 
-    Note: Roc does not have "truthiness". You must convert values to bools yourself.
+    Note: Roc does not have "truthiness". You must convert values to bools
+    yourself.
                                                                ┌───────────────┐
 ┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
 │  is needed:                                                  └──────────────┬┘

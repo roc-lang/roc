@@ -24,7 +24,9 @@ TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 │  ‾                                                                          │
 └────────────────────────────────────────────── test_error_propagation.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
                                                                ┌───────────────┐
 ┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
 │  is needed:                                                  └──────────────┬┘

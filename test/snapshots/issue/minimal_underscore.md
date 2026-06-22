@@ -18,7 +18,9 @@ UNDERSCORE IN TYPE ALIAS - minimal_underscore.md:1:1:1:1
 │  ‾                                                                          │
 └────────────────────────────────────────────────── minimal_underscore.md:1:1 ┘
 
-    Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

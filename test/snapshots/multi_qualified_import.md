@@ -133,15 +133,15 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 
     You're attempting to use this module here:
                                                              ┌─────────────────┐
-┌─ Variable encoder is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+┌─ Variable encoder is defined here and then never used: ────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │  process = |encoder| "processing"                                           │
 │             ‾‾‾‾‾‾‾                                                         │
 └───────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _encoder to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _encoder
+    to suppress this warning.
                                                          ┌─────────────────────┐
 ┌─ There is no module with the name json.Core.Utf8 ──────┤ MODULE NOT IMPORTED │
 │  imported into this Roc file.                          └────────────────────┬┘

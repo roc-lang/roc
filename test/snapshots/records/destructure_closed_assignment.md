@@ -34,7 +34,8 @@ TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
     But you are trying to use it as:
 
         { x: _field, y: _field2 }
-    Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or add .. to match all the remaining fields.
+    Hint: This pattern doesn't bind the z field. Match it explicitly with z: _,
+    or add .. to match all the remaining fields.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

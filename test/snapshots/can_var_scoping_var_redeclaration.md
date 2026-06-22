@@ -29,7 +29,8 @@ DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
     The redeclaration is here:
 
     But x_ was already defined here:
-      ┌──────────────────────────────────── can_var_scoping_var_redeclaration.md:3:2
+      ┌────────────────────────────────────
+      can_var_scoping_var_redeclaration.md:3:2
       │
     3 │ 	var x_ = 5
       │ 	^^^^^^^^^^

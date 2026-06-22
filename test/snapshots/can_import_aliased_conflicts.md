@@ -28,7 +28,8 @@ UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
     The redeclaration is here:
 
     But MyModule was already defined here:
-      ┌───────────────────────────────────────── can_import_aliased_conflicts.md:1:1
+      ┌─────────────────────────────────────────
+      can_import_aliased_conflicts.md:1:1
       │
     1 │ import json.Json as MyModule
       │ ^

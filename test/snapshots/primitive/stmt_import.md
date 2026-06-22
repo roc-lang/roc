@@ -48,7 +48,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
 │                            ‾                                                │
 └──────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
-    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
     Instead of:
         List U8

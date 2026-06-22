@@ -32,15 +32,15 @@ UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
-┌─ Variable world is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+┌─ Variable world is defined here and then never used: ──────┤ UNUSED VARIABLE │
 │                                                            └────────────────┬┘
 │                                                                             │
 │   world = "World"                                                           │
 │   ‾‾‾‾‾                                                                     │
 └────────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _world to suppress this warning.
-    The unused variable is declared here:
+    If you don't need this variable, prefix it with an underscore like _world
+    to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

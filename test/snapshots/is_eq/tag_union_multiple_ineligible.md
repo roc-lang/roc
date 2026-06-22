@@ -34,7 +34,8 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
             d.is_gt : d, d -> Bool,
           ]
 
-    This tag union does not support equality because these tags have payload types that don't support is_eq:
+    This tag union does not support equality because these tags have payload
+    types that don't support is_eq:
 
         Transform (a -> a)
             Function equality is not supported.
@@ -44,7 +45,8 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
         a.is_gt : a, a -> Bool,
       ])
             Function equality is not supported.
-    Hint: Tag unions only have an is_eq method if all of their payload types have is_eq methods.
+    Hint: Tag unions only have an is_eq method if all of their payload types
+    have is_eq methods.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,UpperIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
