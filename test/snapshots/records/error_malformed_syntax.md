@@ -11,28 +11,24 @@ type=expr
 PARSE ERROR - error_malformed_syntax.md:1:18:1:19
 PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_expr_record_field_name ────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
+│                   ‾                                                         │
+└───────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
 
-**error_malformed_syntax.md:1:18:1:19:**
-```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
-```
-                 ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_expr_close_curly_or_comma ─┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
+│                     ‾‾                                                      │
+└───────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**error_malformed_syntax.md:1:20:1:22:**
-```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
-```
-                   ^^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,Int,Comma,Comma,LowerIdent,OpColon,Comma,LowerIdent,UpperIdent,NoSpaceDotLowerIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,Int,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,CloseCurly,

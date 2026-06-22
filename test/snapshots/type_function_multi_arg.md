@@ -18,48 +18,40 @@ PARSE ERROR - type_function_multi_arg.md:3:40:3:42
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_ty_anno_close_round ───────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
+│                            ‾                                                │
+└──────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
 
-**type_function_multi_arg.md:3:27:3:28:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
+│                                         ‾‾                                  │
+└──────────────────────────────────────────── type_function_multi_arg.md:3:40 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
+│                                           ‾                                 │
+└──────────────────────────────────────────── type_function_multi_arg.md:3:42 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_function_multi_arg.md:3:40:3:42:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_function_multi_arg.md:3:42:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                         ^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_function_multi_arg.md:3:27:3:39:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^
-
+    This is an unexpected parsing error. Please check your syntax.
+                                                              ┌────────────────┐
+┌─ This type annotation is malformed or contains invalid ─────┤ MALFORMED TYPE │
+│  syntax.                                                    └───────────────┬┘
+│                                                                             │
+│  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                 │
+│                            ‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+└──────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
 
 # TOKENS
 ~~~zig

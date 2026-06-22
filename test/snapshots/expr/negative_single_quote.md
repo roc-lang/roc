@@ -10,17 +10,15 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token - is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│  -'i'                                                                       │
+│  ‾                                                                          │
+└─────────────────────────────────────────────── negative_single_quote.md:1:1 ┘
 
-**negative_single_quote.md:1:1:1:2:**
-```roc
--'i'
-```
-^
-
-
+    Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS
 ~~~zig
 OpBinaryMinus,SingleQuote,

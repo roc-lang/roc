@@ -11,27 +11,23 @@ r = 1..5
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
 UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
-**NOT A RANGE OPERATOR**
-`..` is not an operator. For an exclusive range use `..<`; for an inclusive range use `..=`.
+                                                        ┌──────────────────────┐
+┌─ .. is not an operator. For an exclusive range use ───┤ NOT A RANGE OPERATOR │
+│  ..<; for an inclusive range use ..=.                 └─────────────────────┬┘
+│                                                                             │
+│  r = 1..5                                                                   │
+│         ‾                                                                   │
+└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
-**range_bare_double_dot_error.md:1:8:1:9:**
-```roc
-r = 1..5
-```
-       ^
+                                                         ┌─────────────────────┐
+┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
+│                                                        └────────────────────┬┘
+│                                                                             │
+│  r = 1..5                                                                   │
+│         ‾                                                                   │
+└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**range_bare_double_dot_error.md:1:8:1:9:**
-```roc
-r = 1..5
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+    This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,DoubleDot,Int,

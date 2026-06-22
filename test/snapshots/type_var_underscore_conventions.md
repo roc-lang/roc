@@ -36,78 +36,67 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+                                                             ┌─────────────────┐
+┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  single_use = |x| "hello"                                                   │
+│                ‾                                                            │
+└──────────────────────────────────── type_var_underscore_conventions.md:5:15 ┘
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:5:15:5:16:**
-```roc
-single_use = |x| "hello"
-```
-              ^
+    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable list is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  starting_dollar = |list| "default"                                         │
+│                     ‾‾‾‾                                                    │
+└──────────────────────────────────── type_var_underscore_conventions.md:9:20 ┘
 
+    If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  combo_single = |x| "combo"                                                 │
+│                  ‾                                                          │
+└─────────────────────────────────── type_var_underscore_conventions.md:13:17 ┘
 
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  valid_single = |x| "valid"                                                 │
+│                  ‾                                                          │
+└─────────────────────────────────── type_var_underscore_conventions.md:17:17 ┘
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:9:20:9:24:**
-```roc
-starting_dollar = |list| "default"
-```
-                   ^^^^
+    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  main = |x| "done"                                                          │
+│          ‾                                                                  │
+└──────────────────────────────────── type_var_underscore_conventions.md:22:9 ┘
 
+    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+    The unused variable is declared here:
+                                                               ┌───────────────┐
+┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
+│  is needed:                                                  └──────────────┬┘
+│                                                                             │
+│  starting_dollar = |list| "default"                                         │
+│                           ‾‾‾‾‾‾‾‾‾                                         │
+└──────────────────────────────────── type_var_underscore_conventions.md:9:26 ┘
 
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+    The type was determined to be:
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:13:17:13:18:**
-```roc
-combo_single = |x| "combo"
-```
-                ^
-
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:17:17:17:18:**
-```roc
-valid_single = |x| "valid"
-```
-                ^
-
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:22:9:22:10:**
-```roc
-main = |x| "done"
-```
-        ^
-
-
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**type_var_underscore_conventions.md:9:26:9:35:**
-```roc
-starting_dollar = |list| "default"
-```
-                         ^^^^^^^^^
-
-The type was determined to be:
-
-    $elem
-
+        $elem
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

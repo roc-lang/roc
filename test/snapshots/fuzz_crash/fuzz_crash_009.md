@@ -20,71 +20,59 @@ PARSE ERROR - fuzz_crash_009.md:1:4:1:5
 PARSE ERROR - fuzz_crash_009.md:1:5:1:6
 PARSE ERROR - fuzz_crash_009.md:2:6:2:7
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
+                                                             ┌─────────────────┐
+┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      "onmo %                                                                │
+│      ‾‾‾‾‾‾‾                                                                │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:6:5 ┘
 
-**fuzz_crash_009.md:6:5:6:12:**
-```roc
-    "onmo %
-```
-    ^^^^^^^
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   f{o,                                                                      │
+│   ‾                                                                         │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:1:2 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   f{o,                                                                      │
+│    ‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:1:3 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   f{o,                                                                      │
+│     ‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:1:4 ┘
 
-**fuzz_crash_009.md:1:2:1:3:**
-```roc
- f{o,
-```
- ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   f{o,                                                                      │
+│      ‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:1:5 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│       ]                                                                     │
+│       ‾                                                                     │
+└────────────────────────────────────────────────────── fuzz_crash_009.md:2:6 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:1:3:1:4:**
-```roc
- f{o,
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:1:4:1:5:**
-```roc
- f{o,
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:1:5:1:6:**
-```roc
- f{o,
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:2:6:2:7:**
-```roc
-     ]
-```
-     ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 LowerIdent,OpenCurly,LowerIdent,Comma,

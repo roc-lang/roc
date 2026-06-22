@@ -11,18 +11,17 @@ x = -1
 # EXPECTED
 INVALID NUMBER - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**u8_negative_value.md:2:5:2:7:**
-```roc
-x = -1
-```
-    ^^
+                                                              ┌────────────────┐
+┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
+│                                                             └───────────────┬┘
+│                                                                             │
+│  x = -1                                                                     │
+│      ‾‾                                                                     │
+└─────────────────────────────────────────────────── u8_negative_value.md:2:5 ┘
 
-The inferred type is:
+    The inferred type is:
 
-    U8
-
+        U8
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

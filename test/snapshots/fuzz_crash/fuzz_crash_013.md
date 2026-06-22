@@ -11,28 +11,24 @@ type=file
 PARSE ERROR - fuzz_crash_013.md:1:1:1:2
 PARSE ERROR - fuzz_crash_013.md:1:2:1:3
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  0{                                                                         │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_013.md:1:1 ┘
 
-**fuzz_crash_013.md:1:1:1:2:**
-```roc
-0{
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  0{                                                                         │
+│   ‾                                                                         │
+└────────────────────────────────────────────────────── fuzz_crash_013.md:1:2 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_013.md:1:2:1:3:**
-```roc
-0{
-```
- ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 Int,OpenCurly,

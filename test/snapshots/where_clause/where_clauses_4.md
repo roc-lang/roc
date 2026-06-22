@@ -14,16 +14,15 @@ decodeThings = ...
 # EXPECTED
 UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 # PROBLEMS
-**UNSUPPORTED WHERE CLAUSE**
-The where clause syntax _Decode_ is not supported:
-**where_clauses_4.md:4:9:4:17:**
-```roc
-	where [a.Decode]
-```
-	       ^^^^^^^^
+                                                    ┌──────────────────────────┐
+┌─ The where clause syntax Decode is not supported: ┤ UNSUPPORTED WHERE CLAUSE │
+│                                                   └─────────────────────────┬┘
+│                                                                             │
+│   where [a.Decode]                                                          │
+│          ‾‾‾‾‾‾‾‾                                                           │
+└───────────────────────────────────────────────────── where_clauses_4.md:4:9 ┘
 
-This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
+    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

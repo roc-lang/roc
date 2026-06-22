@@ -17,47 +17,43 @@ DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**ann_effectful_fn.md:2:5:2:31:**
-```roc
-    launchTheNukes : {} => Try Bool LaunchNukeErr
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
+│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
+└──────────────────────────────────────────────────── ann_effectful_fn.md:2:5 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                               ┌───────────────┐
+┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
+│                                 ‾‾‾‾                                        │
+└─────────────────────────────────────────────────── ann_effectful_fn.md:2:32 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    It has the type:
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:32:2:36:**
-```roc
-    launchTheNukes : {} => Try Bool LaunchNukeErr
-```
-                               ^^^^
+        [Bool, ..]
 
-It has the type:
+    Since this expression is used as a statement, it must evaluate to {}.
+    If you don't need the value, you can ignore it with _ =.
+                                                               ┌───────────────┐
+┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│      launchTheNukes : {} => Try Bool LaunchNukeErr                          │
+│                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+└─────────────────────────────────────────────────── ann_effectful_fn.md:2:37 ┘
 
-    [Bool, ..]
+    It has the type:
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+        [LaunchNukeErr, ..]
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:37:2:50:**
-```roc
-    launchTheNukes : {} => Try Bool LaunchNukeErr
-```
-                                    ^^^^^^^^^^^^^
-
-It has the type:
-
-    [LaunchNukeErr, ..]
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
+    Since this expression is used as a statement, it must evaluate to {}.
+    If you don't need the value, you can ignore it with _ =.
 # TOKENS
 ~~~zig
 OpenCurly,

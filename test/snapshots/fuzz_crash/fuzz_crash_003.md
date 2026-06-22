@@ -14,60 +14,50 @@ PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
+                                                             ┌─────────────────┐
+┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  = "te                                                                      │
+│    ‾‾‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
-**fuzz_crash_003.md:1:3:1:6:**
-```roc
-= "te
-```
-  ^^^
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  = "te                                                                      │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:1 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  = "te                                                                      │
+│    ‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  = "te                                                                      │
+│     ‾‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:4 ┘
 
-**fuzz_crash_003.md:1:1:1:2:**
-```roc
-= "te
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  = "te                                                                      │
+│       ‾                                                                     │
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:6 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_003.md:1:3:1:4:**
-```roc
-= "te
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_003.md:1:4:1:6:**
-```roc
-= "te
-```
-   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_003.md:1:6:1:6:**
-```roc
-= "te
-```
-     ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 OpAssign,StringStart,StringPart,StringEnd,

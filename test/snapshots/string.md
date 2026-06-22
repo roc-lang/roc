@@ -31,109 +31,89 @@ PARSE ERROR - string.md:13:1:13:2
 PARSE ERROR - string.md:13:2:13:3
 PARSE ERROR - string.md:13:3:13:3
 # PROBLEMS
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+                                             ┌─────────────────────────────────┐
+┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
+│  valid.                                    └────────────────────────────────┬┘
+│                                                                             │
+│   "\u",                                                                     │
+│    ‾‾                                                                       │
+└────────────────────────────────────────────────────────────── string.md:4:3 ┘
 
-**string.md:4:3:4:5:**
-```roc
-	"\u",
-```
-	 ^^
+                                             ┌─────────────────────────────────┐
+┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
+│  valid.                                    └────────────────────────────────┬┘
+│                                                                             │
+│   "\u)",                                                                    │
+│    ‾‾                                                                       │
+└────────────────────────────────────────────────────────────── string.md:5:3 ┘
 
+                                             ┌─────────────────────────────────┐
+┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
+│  valid.                                    └────────────────────────────────┬┘
+│                                                                             │
+│   "\u(",                                                                    │
+│    ‾‾‾                                                                      │
+└────────────────────────────────────────────────────────────── string.md:6:3 ┘
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+                                             ┌─────────────────────────────────┐
+┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
+│  valid.                                    └────────────────────────────────┬┘
+│                                                                             │
+│   "\u()",                                                                   │
+│    ‾‾‾‾                                                                     │
+└────────────────────────────────────────────────────────────── string.md:7:3 ┘
 
-**string.md:5:3:5:5:**
-```roc
-	"\u)",
-```
-	 ^^
+                                             ┌─────────────────────────────────┐
+┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
+│  valid.                                    └────────────────────────────────┬┘
+│                                                                             │
+│   "\u(K)",                                                                  │
+│    ‾‾‾‾‾                                                                    │
+└────────────────────────────────────────────────────────────── string.md:8:3 ┘
 
+                                                     ┌─────────────────────────┐
+┌─ This escape sequence is not recognized. ──────────┤ INVALID ESCAPE SEQUENCE │
+│                                                    └────────────────────────┬┘
+│                                                                             │
+│  "\                                                                         │
+│                                                                             │
+└───────────────────────────────────────────────────────────── string.md:13:2 ┘
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+                                                             ┌─────────────────┐
+┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  "\                                                                         │
+│  ‾‾                                                                         │
+└───────────────────────────────────────────────────────────── string.md:13:1 ┘
 
-**string.md:6:3:6:6:**
-```roc
-	"\u(",
-```
-	 ^^^
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  "\                                                                         │
+│  ‾                                                                          │
+└───────────────────────────────────────────────────────────── string.md:13:1 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  "\                                                                         │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────────── string.md:13:2 ┘
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  "\                                                                         │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────────── string.md:13:3 ┘
 
-**string.md:7:3:7:7:**
-```roc
-	"\u()",
-```
-	 ^^^^
-
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**string.md:8:3:8:8:**
-```roc
-	"\u(K)",
-```
-	 ^^^^^
-
-
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
-
-**string.md:13:2:14:1:**
-```roc
-"\
-
-```
-
-
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
-**string.md:13:1:13:3:**
-```roc
-"\
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**string.md:13:1:13:2:**
-```roc
-"\
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**string.md:13:2:13:3:**
-```roc
-"\
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**string.md:13:3:13:3:**
-```roc
-"\
-```
-  ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

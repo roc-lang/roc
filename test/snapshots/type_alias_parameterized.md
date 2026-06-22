@@ -17,18 +17,17 @@ main! = |_| swapPair(1, 2)
 # EXPECTED
 TOO MANY ARGS - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
-**TOO MANY ARGS**
-The `swapPair` function expects 1 argument, but it got 2 instead:
-**type_alias_parameterized.md:8:13:8:27:**
-```roc
-main! = |_| swapPair(1, 2)
-```
-            ^^^^^^^^^^^^^^
+                                                               ┌───────────────┐
+┌─ The swapPair function expects 1 argument, but it got 2 ─────┤ TOO MANY ARGS │
+│  instead:                                                    └──────────────┬┘
+│                                                                             │
+│  main! = |_| swapPair(1, 2)                                                 │
+│              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└─────────────────────────────────────────── type_alias_parameterized.md:8:13 ┘
 
-The `swapPair` function has the type:
+    The swapPair function has the type:
 
-    Pair(a, b) -> Pair(b, a)
-
+        Pair(a, b) -> Pair(b, a)
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -18,68 +18,57 @@ PARSE ERROR - fuzz_crash_024.md:5:1:5:4
 UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `var_only_allowed_in_a_body`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: var_only_allowed_in_a_body ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  var t= ]                                                                   │
+│  ‾‾‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:1 ┘
 
-**fuzz_crash_024.md:2:1:2:4:**
-```roc
-var t= ]
-```
-^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                              ┌────────────────────────────────┐
+┌─ The token ] is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│  var t= ]                                                                   │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: var_only_allowed_in_a_body ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  var t= 0                                                                   │
+│  ‾‾‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_024.md:5:1 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **]** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    This is an unexpected parsing error. Please check your syntax.
+                                                         ┌─────────────────────┐
+┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
+│                                                        └────────────────────┬┘
+│                                                                             │
+│  var t= ]                                                                   │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
 
-**fuzz_crash_024.md:2:8:2:9:**
-```roc
-var t= ]
-```
-       ^
+    This might be a syntax error, an unsupported language feature, or a typo.
+                                                        ┌──────────────────────┐
+┌─ The name t is being redeclared in this scope. ───────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│  var t= 0                                                                   │
+│      ‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_024.md:5:5 ┘
 
+    The redeclaration is here:
 
-**PARSE ERROR**
-A parsing error occurred: `var_only_allowed_in_a_body`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_024.md:5:1:5:4:**
-```roc
-var t= 0
-```
-^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_024.md:2:8:2:9:**
-```roc
-var t= ]
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**DUPLICATE DEFINITION**
-The name `t` is being redeclared in this scope.
-
-The redeclaration is here:
-**fuzz_crash_024.md:5:5:5:6:**
-```roc
-var t= 0
-```
-    ^
-
-But `t` was already defined here:
-**fuzz_crash_024.md:2:5:2:6:**
-```roc
-var t= ]
-```
-    ^
-
-
+    But t was already defined here:
+      ┌─────────────────────────────────────────────────────── fuzz_crash_024.md:2:5
+      │
+    2 │ var t= ]
+      │     ^
 # TOKENS
 ~~~zig
 KwVar,LowerIdent,OpAssign,CloseSquare,

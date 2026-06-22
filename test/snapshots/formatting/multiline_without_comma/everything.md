@@ -212,1158 +212,960 @@ UNUSED VARIABLE - everything.md:79:2:79:4
 DECLARATION HAS NO VALUE - everything.md:56:1:56:17
 NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
-**WHERE CLAUSE ERROR**
-Expected an opening bracket **[** after `where`.
-Where clauses should look like:     where [a.method : Type]
-
-**everything.md:13:2:13:7:**
-```roc
-	where
-```
-	^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:3:14:9:**
-```roc
-		module(a).a1 : (
-```
-		^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:9:14:10:**
-```roc
-		module(a).a1 : (
-```
-		      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:10:14:11:**
-```roc
-		module(a).a1 : (
-```
-		       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:11:14:12:**
-```roc
-		module(a).a1 : (
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:12:14:15:**
-```roc
-		module(a).a1 : (
-```
-		         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:16:14:17:**
-```roc
-		module(a).a1 : (
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:14:18:14:19:**
-```roc
-		module(a).a1 : (
-```
-		               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:15:4:15:5:**
-```roc
-			a,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:15:5:15:6:**
-```roc
-			a,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:16:4:16:5:**
-```roc
-			a
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:17:3:17:4:**
-```roc
-		) -> Str,
-```
-		^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-**everything.md:17:5:17:7:**
-```roc
-		) -> Str,
-```
-		  ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:17:11:17:12:**
-```roc
-		) -> Str,
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:3:18:9:**
-```roc
-		module(a).a2 : (
-```
-		^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:9:18:10:**
-```roc
-		module(a).a2 : (
-```
-		      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:10:18:11:**
-```roc
-		module(a).a2 : (
-```
-		       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:11:18:12:**
-```roc
-		module(a).a2 : (
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:12:18:15:**
-```roc
-		module(a).a2 : (
-```
-		         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:16:18:17:**
-```roc
-		module(a).a2 : (
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:18:18:18:19:**
-```roc
-		module(a).a2 : (
-```
-		               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:19:4:19:5:**
-```roc
-			a,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:19:5:19:6:**
-```roc
-			a,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:20:4:20:5:**
-```roc
-			a
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:21:3:21:4:**
-```roc
-		) -> Str
-```
-		^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-**everything.md:21:5:21:7:**
-```roc
-		) -> Str
-```
-		  ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:22:1:22:2:**
-```roc
-B(b) : b
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:2:22:3:**
-```roc
-B(b) : b
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:3:22:4:**
-```roc
-B(b) : b
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:4:22:5:**
-```roc
-B(b) : b
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:6:22:7:**
-```roc
-B(b) : b
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:8:22:9:**
-```roc
-B(b) : b
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:23:2:23:7:**
-```roc
-	where
-```
-	^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:3:24:9:**
-```roc
-		module(b).b1 : (
-```
-		^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:9:24:10:**
-```roc
-		module(b).b1 : (
-```
-		      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:10:24:11:**
-```roc
-		module(b).b1 : (
-```
-		       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:11:24:12:**
-```roc
-		module(b).b1 : (
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:12:24:15:**
-```roc
-		module(b).b1 : (
-```
-		         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:16:24:17:**
-```roc
-		module(b).b1 : (
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:24:18:24:19:**
-```roc
-		module(b).b1 : (
-```
-		               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:25:4:25:5:**
-```roc
-			b,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:25:5:25:6:**
-```roc
-			b,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:26:4:26:5:**
-```roc
-			b
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:27:3:27:4:**
-```roc
-		) -> Str,
-```
-		^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-**everything.md:27:5:27:7:**
-```roc
-		) -> Str,
-```
-		  ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:27:11:27:12:**
-```roc
-		) -> Str,
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:3:28:9:**
-```roc
-		module(b).b2 : (
-```
-		^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:9:28:10:**
-```roc
-		module(b).b2 : (
-```
-		      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:10:28:11:**
-```roc
-		module(b).b2 : (
-```
-		       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:11:28:12:**
-```roc
-		module(b).b2 : (
-```
-		        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:12:28:15:**
-```roc
-		module(b).b2 : (
-```
-		         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:16:28:17:**
-```roc
-		module(b).b2 : (
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:28:18:28:19:**
-```roc
-		module(b).b2 : (
-```
-		               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:29:4:29:5:**
-```roc
-			b,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:29:5:29:6:**
-```roc
-			b,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:30:4:30:5:**
-```roc
-			b
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:31:3:31:4:**
-```roc
-		) -> Str
-```
-		^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-**everything.md:31:5:31:7:**
-```roc
-		) -> Str
-```
-		  ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:33:1:33:2:**
-```roc
-C(
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:33:2:33:3:**
-```roc
-C(
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:34:2:34:3:**
-```roc
-	a,
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:34:3:34:4:**
-```roc
-	a,
-```
-	 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:35:2:35:3:**
-```roc
-	b
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:1:36:2:**
-```roc
-) : (
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:3:36:4:**
-```roc
-) : (
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:5:36:6:**
-```roc
-) : (
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:2:37:3:**
-```roc
-	a,
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:3:37:4:**
-```roc
-	a,
-```
-	 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:38:2:38:3:**
-```roc
-	b
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:39:1:39:2:**
-```roc
-)
-```
-^
-
-
-**WHERE CLAUSE ERROR**
-Expected an opening bracket **[** after `where`.
-Where clauses should look like:     where [a.method : Type]
-
-**everything.md:56:12:56:17:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-           ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:18:56:24:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                 ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:24:56:25:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:25:56:26:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:26:56:27:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:27:56:29:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                          ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:29:56:30:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:31:56:37:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                              ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:37:56:38:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:38:56:39:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:39:56:40:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                                      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:56:40:56:42:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                                       ^^
-
-
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
-
-You're attempting do this here:
-**everything.md:12:1:13:7:**
-```roc
-A(a) : a
-	where
-```
-
-
-**UNDECLARED TYPE**
-The type _C_ is not declared in this scope.
-
-This type is referenced here:
-**everything.md:43:5:43:6:**
-```roc
-) : C(
-```
-    ^
-
-
-**MALFORMED WHERE CLAUSE**
-This where clause could not be parsed correctly.
-
-**everything.md:56:12:56:17:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-           ^^^^^
-
-Check the syntax of your where clause.
-
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:88:5:88:6:**
-```roc
-				b
-```
-				^
-
-
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:93:4:93:5:**
-```roc
-			b
-```
-			^
-
-
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:98:5:98:6:**
-```roc
-				b
-```
-				^
-
-
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:104:5:104:6:**
-```roc
-				b
-```
-				^
-
-
-**UNUSED VARIABLE**
-Variable `h1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
-The unused variable is declared here:
-**everything.md:59:2:59:4:**
-```roc
-	h1 = {
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:67:2:67:4:**
-```roc
-	h2 = h(
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
-**everything.md:71:2:71:4:**
-```roc
-	h3 = A(
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
-The unused variable is declared here:
-**everything.md:75:2:75:4:**
-```roc
-	h4 = [
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:79:2:79:4:**
-```roc
-	h5 = (
-```
-	^^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**everything.md:56:1:56:17:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
-**everything.md:84:2:107:3:**
-```roc
-	match x {
-		Z1(
-			(
-				a,
-				b
-			)
-		) => a
-		Z2(
-			a,
-			b
-		) => a
-		Z3(
-			{
-				a,
-				b
-			}
-		) => a
-		Z4(
-			[
-				a,
-				b
-			]
-		) => a
-	}
-```
-
-The value being matched on has type:
-        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]_
-
-Missing patterns:
-        Z4 []
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
-
+                                                          ┌────────────────────┐
+┌─ Expected an opening bracket [ after where. ────────────┤ WHERE CLAUSE ERROR │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│   where                                                                     │
+│   ‾‾‾‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:13:2 ┘
+
+    Where clauses should look like:     where [a.method : Type]
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│    ‾‾‾‾‾‾                                                                   │
+└───────────────────────────────────────────────────────── everything.md:14:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│          ‾                                                                  │
+└───────────────────────────────────────────────────────── everything.md:14:9 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:14:10 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:14:11 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│             ‾‾‾                                                             │
+└──────────────────────────────────────────────────────── everything.md:14:12 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│                 ‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:14:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a1 : (                                                         │
+│                   ‾                                                         │
+└──────────────────────────────────────────────────────── everything.md:14:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a,                                                                      │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:15:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a,                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:15:5 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a                                                                       │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:16:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:17:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│      ‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:17:5 ┘
+
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:17:11 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│    ‾‾‾‾‾‾                                                                   │
+└───────────────────────────────────────────────────────── everything.md:18:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│          ‾                                                                  │
+└───────────────────────────────────────────────────────── everything.md:18:9 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:18:10 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:18:11 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│             ‾‾‾                                                             │
+└──────────────────────────────────────────────────────── everything.md:18:12 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│                 ‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:18:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(a).a2 : (                                                         │
+│                   ‾                                                         │
+└──────────────────────────────────────────────────────── everything.md:18:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a,                                                                      │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:19:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a,                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:19:5 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     a                                                                       │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:20:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str                                                                 │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:21:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str                                                                 │
+│      ‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:21:5 ┘
+
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│  ‾                                                                          │
+└───────────────────────────────────────────────────────── everything.md:22:1 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:22:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:22:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:22:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│       ‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:22:6 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  B(b) : b                                                                   │
+│         ‾                                                                   │
+└───────────────────────────────────────────────────────── everything.md:22:8 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   where                                                                     │
+│   ‾‾‾‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:23:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│    ‾‾‾‾‾‾                                                                   │
+└───────────────────────────────────────────────────────── everything.md:24:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│          ‾                                                                  │
+└───────────────────────────────────────────────────────── everything.md:24:9 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:24:10 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:24:11 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│             ‾‾‾                                                             │
+└──────────────────────────────────────────────────────── everything.md:24:12 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│                 ‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:24:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b1 : (                                                         │
+│                   ‾                                                         │
+└──────────────────────────────────────────────────────── everything.md:24:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b,                                                                      │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:25:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b,                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:25:5 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b                                                                       │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:26:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:27:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│      ‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:27:5 ┘
+
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│    ) -> Str,                                                                │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:27:11 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│    ‾‾‾‾‾‾                                                                   │
+└───────────────────────────────────────────────────────── everything.md:28:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│          ‾                                                                  │
+└───────────────────────────────────────────────────────── everything.md:28:9 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:28:10 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:28:11 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│             ‾‾‾                                                             │
+└──────────────────────────────────────────────────────── everything.md:28:12 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│                 ‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:28:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    module(b).b2 : (                                                         │
+│                   ‾                                                         │
+└──────────────────────────────────────────────────────── everything.md:28:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b,                                                                      │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:29:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b,                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:29:5 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│     b                                                                       │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:30:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str                                                                 │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:31:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ) -> Str                                                                 │
+│      ‾‾                                                                     │
+└───────────────────────────────────────────────────────── everything.md:31:5 ┘
+
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  C(                                                                         │
+│  ‾                                                                          │
+└───────────────────────────────────────────────────────── everything.md:33:1 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  C(                                                                         │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:33:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   a,                                                                        │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:34:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   a,                                                                        │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:34:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   b                                                                         │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:35:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ) : (                                                                      │
+│  ‾                                                                          │
+└───────────────────────────────────────────────────────── everything.md:36:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ) : (                                                                      │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:36:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ) : (                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:36:5 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   a,                                                                        │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:37:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   a,                                                                        │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:37:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   b                                                                         │
+│   ‾                                                                         │
+└───────────────────────────────────────────────────────── everything.md:38:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  )                                                                          │
+│  ‾                                                                          │
+└───────────────────────────────────────────────────────── everything.md:39:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                          ┌────────────────────┐
+┌─ Expected an opening bracket [ after where. ────────────┤ WHERE CLAUSE ERROR │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│             ‾‾‾‾‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:56:12 ┘
+
+    Where clauses should look like:     where [a.method : Type]
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                   ‾‾‾‾‾‾                                                    │
+└──────────────────────────────────────────────────────── everything.md:56:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                         ‾                                                   │
+└──────────────────────────────────────────────────────── everything.md:56:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                          ‾                                                  │
+└──────────────────────────────────────────────────────── everything.md:56:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                           ‾                                                 │
+└──────────────────────────────────────────────────────── everything.md:56:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                            ‾‾                                               │
+└──────────────────────────────────────────────────────── everything.md:56:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                              ‾                                              │
+└──────────────────────────────────────────────────────── everything.md:56:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                                ‾‾‾‾‾‾                                       │
+└──────────────────────────────────────────────────────── everything.md:56:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                                      ‾                                      │
+└──────────────────────────────────────────────────────── everything.md:56:37 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                                       ‾                                     │
+└──────────────────────────────────────────────────────── everything.md:56:38 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                                        ‾                                    │
+└──────────────────────────────────────────────────────── everything.md:56:39 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│                                         ‾‾                                  │
+└──────────────────────────────────────────────────────── everything.md:56:40 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                ┌──────────────────────────────────────────────┐
+┌─ You cannot define a where ───┤ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION │
+│  clause inside a type         └─────────────────────────────────────────────┬┘
+│  declaration.                                                               │
+│                                                                             │
+│  A(a) : a                                                                   │
+│   where                                                                     │
+└───────────────────────────────────────────────────────── everything.md:12:1 ┘
+
+    You're attempting do this here:
+                                                             ┌─────────────────┐
+┌─ The type C is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  ) : C(                                                                     │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:43:5 ┘
+
+    This type is referenced here:
+                                                      ┌────────────────────────┐
+┌─ This where clause could not be parsed correctly. ──┤ MALFORMED WHERE CLAUSE │
+│                                                     └───────────────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│             ‾‾‾‾‾                                                           │
+└──────────────────────────────────────────────────────── everything.md:56:12 ┘
+
+    Check the syntax of your where clause.
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      b                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:88:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│     b                                                                       │
+│     ‾                                                                       │
+└───────────────────────────────────────────────────────── everything.md:93:4 ┘
+
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      b                                                                      │
+│      ‾                                                                      │
+└───────────────────────────────────────────────────────── everything.md:98:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      b                                                                      │
+│      ‾                                                                      │
+└──────────────────────────────────────────────────────── everything.md:104:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h1 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h1 = {                                                                    │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:59:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like _h1 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h2 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h2 = h(                                                                   │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:67:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like _h2 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h3 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h3 = A(                                                                   │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:71:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like _h3 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h4 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h4 = [                                                                    │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:75:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like _h4 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h5 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h5 = (                                                                    │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:79:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like _h5 to suppress this warning.
+    The unused variable is declared here:
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  g : e -> e where module(e).A, module(e).B                                  │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
+└───────────────────────────────────────────────────────── everything.md:56:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                        ┌──────────────────────┐
+┌─ This match expression doesn't cover all possible ────┤ NON-EXHAUSTIVE MATCH │
+│  cases:                                               └─────────────────────┬┘
+│                                                                             │
+│   match x {                                                                 │
+│    Z1(                                                                      │
+│     (                                                                       │
+│      a,                                                                     │
+│      b                                                                      │
+│     )                                                                       │
+│    ) => a                                                                   │
+│    Z2(                                                                      │
+│     a,                                                                      │
+│     b                                                                       │
+│    ) => a                                                                   │
+│    Z3(                                                                      │
+│     {                                                                       │
+│      a,                                                                     │
+│      b                                                                      │
+│     }                                                                       │
+│    ) => a                                                                   │
+│    Z4(                                                                      │
+│     [                                                                       │
+│      a,                                                                     │
+│      b                                                                      │
+│     ]                                                                       │
+│    ) => a                                                                   │
+│   }                                                                         │
+└───────────────────────────────────────────────────────── everything.md:84:2 ┘
+
+    The value being matched on has type:
+            [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]
+
+    Missing patterns:
+            Z4 []
+
+    Hint: Add branches to handle these cases, or use _ to match anything.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

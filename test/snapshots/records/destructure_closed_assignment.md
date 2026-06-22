@@ -14,28 +14,27 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**destructure_closed_assignment.md:3:16:3:36:**
-```roc
-    { x, y } = { x: 1, y: 2, z: 3 }
-```
-               ^^^^^^^^^^^^^^^^^^^^
+                                                               ┌───────────────┐
+┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│      { x, y } = { x: 1, y: 2, z: 3 }                                        │
+│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
+└────────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
 
-It has the type:
+    It has the type:
 
-    { x: a, y: b, z: c }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-      ]
+        { x: a, y: b, z: c }
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+            c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+          ]
 
-But you are trying to use it as:
+    But you are trying to use it as:
 
-    { x: _field, y: _field2 }
-**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
-
+        { x: _field, y: _field2 }
+    Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or add .. to match all the remaining fields.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

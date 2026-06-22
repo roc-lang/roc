@@ -11,28 +11,24 @@ module[}{0      0)(0}
 PARSE ERROR - fuzz_crash_051.md:1:8:1:9
 PARSE ERROR - fuzz_crash_051.md:1:9:1:10
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: exposed_item_unexpected_token ──────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module[}{0      0)(0}                                                      │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_051.md:1:8 ┘
 
-**fuzz_crash_051.md:1:8:1:9:**
-```roc
-module[}{0      0)(0}
-```
-       ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: header_expected_close_square ───────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module[}{0      0)(0}                                                      │
+│          ‾                                                                  │
+└────────────────────────────────────────────────────── fuzz_crash_051.md:1:9 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `header_expected_close_square`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_051.md:1:9:1:10:**
-```roc
-module[}{0      0)(0}
-```
-        ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,CloseCurly,OpenCurly,Int,Int,CloseRound,NoSpaceOpenRound,Int,CloseCurly,

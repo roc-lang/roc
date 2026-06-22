@@ -444,6 +444,9 @@ fn echoReadStdin(ctx_ptr: ?*anyopaque, _: std.Io, buf: []u8) Io.StdioError!usize
 fn echoIsTty(ctx_ptr: ?*anyopaque, _: std.Io) bool {
     return echoGetCtx(ctx_ptr).fallback.isTty();
 }
+fn echoTerminalWidth(ctx_ptr: ?*anyopaque, _: std.Io) ?u16 {
+    return echoGetCtx(ctx_ptr).fallback.terminalWidth();
+}
 fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.DeleteError!void {
     return echoGetCtx(ctx_ptr).fallback.deleteFile(path);
 }
@@ -488,4 +491,5 @@ const echo_vtable = Io.VTable{
     .writeStderr = &echoWriteStderr,
     .readStdin = &echoReadStdin,
     .isTty = &echoIsTty,
+    .terminalWidth = &echoTerminalWidth,
 };

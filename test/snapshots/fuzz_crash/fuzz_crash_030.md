@@ -36,138 +36,114 @@ PARSE ERROR - fuzz_crash_030.md:15:1:15:3
 PARSE ERROR - fuzz_crash_030.md:15:3:15:4
 PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: exposed_item_unexpected_token ──────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    [ .                                                                      │
+│      ‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_030.md:8:5 ┘
 
-**fuzz_crash_030.md:8:5:8:6:**
-```roc
-		[ .
-```
-		  ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                      ┌────────────────────────┐
+┌─ Platform headers must have a packages section ─────┤ EXPECTED CLOSING BRACE │
+│  that lists package dependencies.                   └───────────────────────┬┘
+│                                                                             │
+│    { # pen                                                                  │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:11:3 ┘
 
+    For example:     packages { base: "../base/main.roc" }
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_provides ──────────────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  pkg: 77"..c", mm} #                                                        │
+│          ‾‾‾                                                                │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:12:9 ┘
 
-**EXPECTED CLOSING BRACE**
-Platform headers must have a `packages` section that lists package dependencies.
-For example:     packages { base: "../base/main.roc" }
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  pkg: 77"..c", mm} #                                                        │
+│             ‾                                                               │
+└──────────────────────────────────────────────────── fuzz_crash_030.md:12:12 ┘
 
-**fuzz_crash_030.md:11:3:11:4:**
-```roc
-		{ # pen
-```
-		^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  pkg: 77"..c", mm} #                                                        │
+│              ‾                                                              │
+└──────────────────────────────────────────────────── fuzz_crash_030.md:12:13 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  pkg: 77"..c", mm} #                                                        │
+│                ‾‾                                                           │
+└──────────────────────────────────────────────────── fuzz_crash_030.md:12:15 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `expected_provides`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  pkg: 77"..c", mm} #                                                        │
+│                  ‾                                                          │
+└──────────────────────────────────────────────────── fuzz_crash_030.md:12:17 ┘
 
-**fuzz_crash_030.md:12:9:12:12:**
-```roc
-pkg: 77"..c", mm} #
-```
-        ^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│   provides # Cd                                                             │
+│   ‾‾‾‾‾‾‾‾                                                                  │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:13:2 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    [ # pen                                                                  │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:14:3 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ar,                                                                        │
+│  ‾‾                                                                         │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:15:1 ┘
 
-**fuzz_crash_030.md:12:12:12:13:**
-```roc
-pkg: 77"..c", mm} #
-```
-           ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ar,                                                                        │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:15:3 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    ]                                                                        │
+│    ‾                                                                        │
+└───────────────────────────────────────────────────── fuzz_crash_030.md:16:3 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:12:13:12:14:**
-```roc
-pkg: 77"..c", mm} #
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:12:15:12:17:**
-```roc
-pkg: 77"..c", mm} #
-```
-              ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:12:17:12:18:**
-```roc
-pkg: 77"..c", mm} #
-```
-                ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:13:2:13:10:**
-```roc
-	provides # Cd
-```
-	^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:14:3:14:4:**
-```roc
-		[ # pen
-```
-		^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:15:1:15:3:**
-```roc
-ar,
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:15:3:15:4:**
-```roc
-ar,
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:16:3:16:4:**
-```roc
-		]
-```
-		^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwPlatform,

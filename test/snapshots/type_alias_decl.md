@@ -54,60 +54,50 @@ OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
+                                                        ┌──────────────────────┐
+┌─ The name Try is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│  Try(ok, err) : [Ok(ok), Err(err)]                                          │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+└───────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
 
-The redeclaration is here:
-**type_alias_decl.md:7:1:7:34:**
-```roc
-Try(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    The redeclaration is here:
 
-But `Try` was already defined here:
-**type_alias_decl.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-^
+    But Try was already defined here:
+      ┌────────────────────────────────────────────────────── type_alias_decl.md:1:1
+      │
+    1 │ app [main!] { pf: platform "../basic-cli/main.roc" }
+      │ ^
+                                    ┌──────────────────────────────────────────┐
+┌─ You cannot use a .. inside a ────┤ OPEN EXT NOT ALLOWED IN TYPE DECLARATION │
+│  type declaration:                └─────────────────────────────────────────┬┘
+│                                                                             │
+│  Letters : [A, B, ..]                                                       │
+│                   ‾‾                                                        │
+└─────────────────────────────────────────────────── type_alias_decl.md:22:18 ┘
 
+    Hint: You need a named variable, like ..others, to use this here.
+                                                             ┌─────────────────┐
+┌─ Variable person is not used anywhere in your code. ───────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      person = { name: "Alice", age: 30 }                                    │
+│      ‾‾‾‾‾‾                                                                 │
+└──────────────────────────────────────────────────── type_alias_decl.md:36:5 ┘
 
-**OPEN EXT NOT ALLOWED IN TYPE DECLARATION**
-You cannot use a `..` inside a type declaration:
+    If you don't need this variable, prefix it with an underscore like _person to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable color is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      color = Red                                                            │
+│      ‾‾‾‾‾                                                                  │
+└──────────────────────────────────────────────────── type_alias_decl.md:39:5 ┘
 
-**type_alias_decl.md:22:18:22:20:**
-```roc
-Letters : [A, B, ..]
-```
-                 ^^
-
-
-**Hint:** You need a named variable, like `..others`, to use this here.
-
-**UNUSED VARIABLE**
-Variable `person` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
-The unused variable is declared here:
-**type_alias_decl.md:36:5:36:11:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-    ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `color` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
-The unused variable is declared here:
-**type_alias_decl.md:39:5:39:10:**
-```roc
-    color = Red
-```
-    ^^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _color to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

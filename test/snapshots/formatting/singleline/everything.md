@@ -58,187 +58,162 @@ UNSUPPORTED WHERE CLAUSE - everything.md:20:24:20:27
 DECLARATION HAS NO VALUE - everything.md:20:1:20:28
 NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 # PROBLEMS
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+                                ┌──────────────────────────────────────────────┐
+┌─ You cannot define a where ───┤ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION │
+│  clause inside a type         └─────────────────────────────────────────────┬┘
+│  declaration.                                                               │
+│                                                                             │
+│  A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                │
+└────────────────────────────────────────────────────────── everything.md:6:1 ┘
 
-You're attempting do this here:
-**everything.md:6:1:6:60:**
-```roc
-A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    You're attempting do this here:
+                                ┌──────────────────────────────────────────────┐
+┌─ You cannot define a where ───┤ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION │
+│  clause inside a type         └─────────────────────────────────────────────┬┘
+│  declaration.                                                               │
+│                                                                             │
+│  B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                │
+└────────────────────────────────────────────────────────── everything.md:8:1 ┘
 
+    You're attempting do this here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│    Z1((a, b)) => a                                                          │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:30:10 ┘
 
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│    Z2(a, b) => a                                                            │
+│          ‾                                                                  │
+└───────────────────────────────────────────────────────── everything.md:31:9 ┘
 
-You're attempting do this here:
-**everything.md:8:1:8:60:**
-```roc
-B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│    Z3({ a, b }) => a                                                        │
+│            ‾                                                                │
+└──────────────────────────────────────────────────────── everything.md:32:11 ┘
 
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable b is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│    Z4([a, b]) => a                                                          │
+│           ‾                                                                 │
+└──────────────────────────────────────────────────────── everything.md:33:10 ┘
 
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h1 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }                        │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:23:2 ┘
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:30:10:30:11:**
-```roc
-		Z1((a, b)) => a
-```
-		       ^
+    If you don't need this variable, prefix it with an underscore like _h1 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h2 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h2 = h(x, y)                                                              │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:24:2 ┘
 
+    If you don't need this variable, prefix it with an underscore like _h2 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h3 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h3 = A(x, y)                                                              │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:25:2 ┘
 
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like _h3 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h4 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h4 = [x, y]                                                               │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:26:2 ┘
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:31:9:31:10:**
-```roc
-		Z2(a, b) => a
-```
-		      ^
+    If you don't need this variable, prefix it with an underscore like _h4 to suppress this warning.
+    The unused variable is declared here:
+                                                             ┌─────────────────┐
+┌─ Variable h5 is not used anywhere in your code. ───────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   h5 = (x, y)                                                               │
+│   ‾‾                                                                        │
+└───────────────────────────────────────────────────────── everything.md:27:2 ┘
 
+    If you don't need this variable, prefix it with an underscore like _h5 to suppress this warning.
+    The unused variable is declared here:
+                                                    ┌──────────────────────────┐
+┌─ The where clause syntax A is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
+│                                                   └─────────────────────────┬┘
+│                                                                             │
+│  g : e -> e where [e.A, e.B]                                                │
+│                    ‾‾‾                                                      │
+└──────────────────────────────────────────────────────── everything.md:20:19 ┘
 
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
+    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
+                                                    ┌──────────────────────────┐
+┌─ The where clause syntax B is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
+│                                                   └─────────────────────────┬┘
+│                                                                             │
+│  g : e -> e where [e.A, e.B]                                                │
+│                         ‾‾‾                                                 │
+└──────────────────────────────────────────────────────── everything.md:20:24 ┘
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:32:11:32:12:**
-```roc
-		Z3({ a, b }) => a
-```
-		        ^
+    This syntax was used for abilities, which have been removed from Roc. Use method constraints like where [a.methodName(args) -> ret] instead.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  g : e -> e where [e.A, e.B]                                                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+└───────────────────────────────────────────────────────── everything.md:20:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                        ┌──────────────────────┐
+┌─ This match expression doesn't cover all possible ────┤ NON-EXHAUSTIVE MATCH │
+│  cases:                                               └─────────────────────┬┘
+│                                                                             │
+│   match x {                                                                 │
+│    Z1((a, b)) => a                                                          │
+│    Z2(a, b) => a                                                            │
+│    Z3({ a, b }) => a                                                        │
+│    Z4([a, b]) => a                                                          │
+│   }                                                                         │
+└───────────────────────────────────────────────────────── everything.md:29:2 ┘
 
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
+    The value being matched on has type:
+            [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**everything.md:33:10:33:11:**
-```roc
-		Z4([a, b]) => a
-```
-		       ^
+    Missing patterns:
+            Z4 []
 
-
-**UNUSED VARIABLE**
-Variable `h1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
-The unused variable is declared here:
-**everything.md:23:2:23:4:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:24:2:24:4:**
-```roc
-	h2 = h(x, y)
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
-**everything.md:25:2:25:4:**
-```roc
-	h3 = A(x, y)
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
-The unused variable is declared here:
-**everything.md:26:2:26:4:**
-```roc
-	h4 = [x, y]
-```
-	^^
-
-
-**UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:27:2:27:4:**
-```roc
-	h5 = (x, y)
-```
-	^^
-
-
-**UNSUPPORTED WHERE CLAUSE**
-The where clause syntax _A_ is not supported:
-**everything.md:20:19:20:22:**
-```roc
-g : e -> e where [e.A, e.B]
-```
-                  ^^^
-
-This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
-**UNSUPPORTED WHERE CLAUSE**
-The where clause syntax _B_ is not supported:
-**everything.md:20:24:20:27:**
-```roc
-g : e -> e where [e.A, e.B]
-```
-                       ^^^
-
-This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**everything.md:20:1:20:28:**
-```roc
-g : e -> e where [e.A, e.B]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
-**everything.md:29:2:34:3:**
-```roc
-	match x {
-		Z1((a, b)) => a
-		Z2(a, b) => a
-		Z3({ a, b }) => a
-		Z4([a, b]) => a
-	}
-```
-
-The value being matched on has type:
-        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]_
-
-Missing patterns:
-        Z4 []
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
-
+    Hint: Add branches to handle these cases, or use _ to match anything.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

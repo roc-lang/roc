@@ -3228,12 +3228,12 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
                 ctx.gpa.free(@constCast(note_entry.value));
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         }
     }
@@ -4010,7 +4010,7 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
                 const owned = report.addOwnedString(diagnostic.message) catch break;
                 report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
-                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
             }
             ctx.io.flush();
@@ -8198,10 +8198,16 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     const color_disabled = repl_args.no_color or no_color_env;
     const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
 
+    // Always render the box layout; when color is disabled, keep the
+    // color_terminal target but force the no-color palette so the REPL shows the
+    // same plain box as non-TTY output (rather than the old markdown layout).
     var config = if (should_color)
-        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
-    else
-        reporting.ReportingConfig.initMarkdown();
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else ctx.terminalReportConfig()
+    else blk: {
+        var plain = ctx.terminalReportConfig();
+        plain.color_preference = .never;
+        break :blk plain;
+    };
 
     config.is_tty = stderr_is_tty;
     return config;
@@ -8853,11 +8859,12 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
+    const term_config = ctx.terminalReportConfig();
     for (check_result.reports) |module| {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, term_config);
         }
     }
 
@@ -9151,7 +9158,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};

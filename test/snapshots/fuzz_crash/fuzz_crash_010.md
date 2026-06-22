@@ -19,77 +19,65 @@ PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
+                                                             ┌─────────────────┐
+┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      "on        (string 'onmo %')))                                         │
+│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+└────────────────────────────────────────────────────── fuzz_crash_010.md:5:5 ┘
 
-**UNCLOSED STRING**
-This string is missing a closing quote.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  H{o,                                                                       │
+│   ‾                                                                         │
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
 
-**fuzz_crash_010.md:5:5:5:35:**
-```roc
-    "on        (string 'onmo %')))
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+    Instead of:
+        List U8
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+    Use:
+        List(U8)
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  H{o,                                                                       │
+│    ‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
 
-Instead of:
-    **List U8**
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  H{o,                                                                       │
+│     ‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
 
-Use:
-    **List(U8)**
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      ]                                                                     │
+│       ‾                                                                     │
+└────────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_010.md:1:2:1:3:**
-```roc
-H{o,
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:1:3:1:4:**
-```roc
-H{o,
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:1:4:1:5:**
-```roc
-H{o,
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:2:6:2:7:**
-```roc
-    ]
-```
-     ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 UpperIdent,OpenCurly,LowerIdent,Comma,

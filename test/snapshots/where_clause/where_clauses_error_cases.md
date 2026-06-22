@@ -30,130 +30,108 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
-**WHERE CLAUSE ERROR**
-Expected a colon **:** after the method name in this where clause constraint.
-Method constraints require a colon to separate the method name from its type.
-For example:     a.method : a -> b
+                                                          ┌────────────────────┐
+┌─ Expected a colon : after the method name in this ──────┤ WHERE CLAUSE ERROR │
+│  where clause constraint.                               └───────────────────┬┘
+│                                                                             │
+│    where [a.method -> b]                                                    │
+│           ‾                                                                 │
+└────────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
 
-**where_clauses_error_cases.md:3:10:3:11:**
-```roc
-  where [a.method -> b]
-```
-         ^
+    Method constraints require a colon to separate the method name from its type.
+    For example:     a.method : a -> b
+                                                          ┌────────────────────┐
+┌─ Expected a closing bracket ] after the where clause ───┤ WHERE CLAUSE ERROR │
+│  constraints.                                           └───────────────────┬┘
+│                                                                             │
+│    where [a.method -> b]                                                    │
+│    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────────────── where_clauses_error_cases.md:3:3 ┘
 
+    Where clauses should look like:     where [a.method : Type]
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    where [a.method -> b]                                                    │
+│                       ‾                                                     │
+└────────────────────────────────────────── where_clauses_error_cases.md:3:22 ┘
 
-**WHERE CLAUSE ERROR**
-Expected a closing bracket **]** after the where clause constraints.
-Where clauses should look like:     where [a.method : Type]
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    where [a.method -> b]                                                    │
+│                        ‾                                                    │
+└────────────────────────────────────────── where_clauses_error_cases.md:3:23 ┘
 
-**where_clauses_error_cases.md:3:3:3:21:**
-```roc
-  where [a.method -> b]
-```
-  ^^^^^^^^^^^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                          ┌────────────────────┐
+┌─ A where clause cannot be empty. ───────────────────────┤ WHERE CLAUSE ERROR │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│    where []                                                                 │
+│    ‾‾‾‾‾‾‾                                                                  │
+└─────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
 
+    Where clauses must contain at least one constraint.
+    For example:
+            where [a.method : a -> b]
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│    where []                                                                 │
+│           ‾                                                                 │
+└────────────────────────────────────────── where_clauses_error_cases.md:7:10 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                      ┌────────────────────────┐
+┌─ This where clause could not be parsed correctly. ──┤ MALFORMED WHERE CLAUSE │
+│                                                     └───────────────────────┬┘
+│                                                                             │
+│    where [a.method -> b]                                                    │
+│           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└────────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
 
-**where_clauses_error_cases.md:3:22:3:23:**
-```roc
-  where [a.method -> b]
-```
-                     ^
+    Check the syntax of your where clause.
+                                                      ┌────────────────────────┐
+┌─ This where clause could not be parsed correctly. ──┤ MALFORMED WHERE CLAUSE │
+│                                                     └───────────────────────┬┘
+│                                                                             │
+│    where []                                                                 │
+│    ‾‾‾‾‾‾‾                                                                  │
+└─────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
 
+    Check the syntax of your where clause.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  broken_fn1 : a -> b                                                        │
+│    where [a.method -> b]                                                    │
+└─────────────────────────────────────────── where_clauses_error_cases.md:2:1 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  broken_fn2 : a -> b                                                        │
+│    where []                                                                 │
+└─────────────────────────────────────────── where_clauses_error_cases.md:6:1 ┘
 
-**where_clauses_error_cases.md:3:23:3:24:**
-```roc
-  where [a.method -> b]
-```
-                      ^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  broken_fn3 : a -> b                                                        │
+│    where [c.method : c -> d]                                                │
+└────────────────────────────────────────── where_clauses_error_cases.md:10:1 ┘
 
-
-**WHERE CLAUSE ERROR**
-A `where` clause cannot be empty.
-Where clauses must contain at least one constraint.
-For example:
-        where [a.method : a -> b]
-
-**where_clauses_error_cases.md:7:3:7:10:**
-```roc
-  where []
-```
-  ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**where_clauses_error_cases.md:7:10:7:11:**
-```roc
-  where []
-```
-         ^
-
-
-**MALFORMED WHERE CLAUSE**
-This where clause could not be parsed correctly.
-
-**where_clauses_error_cases.md:3:10:3:21:**
-```roc
-  where [a.method -> b]
-```
-         ^^^^^^^^^^^
-
-Check the syntax of your where clause.
-
-**MALFORMED WHERE CLAUSE**
-This where clause could not be parsed correctly.
-
-**where_clauses_error_cases.md:7:3:7:10:**
-```roc
-  where []
-```
-  ^^^^^^^
-
-Check the syntax of your where clause.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**where_clauses_error_cases.md:2:1:3:21:**
-```roc
-broken_fn1 : a -> b
-  where [a.method -> b]
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**where_clauses_error_cases.md:6:1:7:10:**
-```roc
-broken_fn2 : a -> b
-  where []
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**where_clauses_error_cases.md:10:1:11:28:**
-```roc
-broken_fn3 : a -> b
-  where [c.method : c -> d]
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,

@@ -13,17 +13,15 @@ red = ... # not implemented
 # EXPECTED
 UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _CE_ is not declared in this scope.
+                                                             ┌─────────────────┐
+┌─ The type CE is not declared in this scope. ───────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  red : CE                                                                   │
+│        ‾‾                                                                   │
+└───────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
 
-This type is referenced here:
-**nominal_import_long_package.md:3:7:3:9:**
-```roc
-red : CE
-```
-      ^^
-
-
+    This type is referenced here:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,KwAs,UpperIdent,CloseSquare,

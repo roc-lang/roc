@@ -15,22 +15,21 @@ main = "${y}"
 # EXPECTED
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**issue_9075.md:6:11:6:12:**
-```roc
-main = "${y}"
-```
-          ^
+                                                               ┌───────────────┐
+┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│  main = "${y}"                                                              │
+│            ‾                                                                │
+└───────────────────────────────────────────────────────── issue_9075.md:6:11 ┘
 
-It has the type:
+    It has the type:
 
-    Dec
+        Dec
 
-But you are trying to use it as:
+    But you are trying to use it as:
 
-    Str
-
+        Str
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,LowerIdent,

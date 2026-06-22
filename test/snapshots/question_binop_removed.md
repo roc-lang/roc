@@ -20,43 +20,38 @@ UNEXPECTED TOKEN IN EXPRESSION - question_binop_removed.md:7:15:7:16
 UNRECOGNIZED SYNTAX - question_binop_removed.md:7:15:7:16
 TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **?** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token ? is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│   value = f(x) ? BadInput                                                   │
+│                ‾                                                            │
+└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
-**question_binop_removed.md:7:15:7:16:**
-```roc
-	value = f(x) ? BadInput
-```
-	             ^
+    Expressions can be identifiers, literals, function calls, or operators.
+                                                         ┌─────────────────────┐
+┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
+│                                                        └────────────────────┬┘
+│                                                                             │
+│   value = f(x) ? BadInput                                                   │
+│                ‾                                                            │
+└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
+    This might be a syntax error, an unsupported language feature, or a typo.
+                                                               ┌───────────────┐
+┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│   value = f(x) ? BadInput                                                   │
+│                  ‾‾‾‾‾‾‾‾                                                   │
+└───────────────────────────────────────────── question_binop_removed.md:7:17 ┘
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+    It has the type:
 
-**question_binop_removed.md:7:15:7:16:**
-```roc
-	value = f(x) ? BadInput
-```
-	             ^
+        [BadInput, ..]
 
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**question_binop_removed.md:7:17:7:25:**
-```roc
-	value = f(x) ? BadInput
-```
-	               ^^^^^^^^
-
-It has the type:
-
-    [BadInput, ..]
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
+    Since this expression is used as a statement, it must evaluate to {}.
+    If you don't need the value, you can ignore it with _ =.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

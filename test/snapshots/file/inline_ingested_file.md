@@ -14,28 +14,24 @@ foo = Json.parse(data)
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-**FILE NOT FOUND**
-The file **users.json** was not found.
+                                                              ┌────────────────┐
+┌─ The file users.json was not found. ────────────────────────┤ FILE NOT FOUND │
+│                                                             └───────────────┬┘
+│                                                                             │
+│  import "users.json" as data : Str                                          │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+└──────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
 
-Make sure the file exists relative to your source file:
-**inline_ingested_file.md:1:1:1:34:**
-```roc
-import "users.json" as data : Str
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Make sure the file exists relative to your source file:
+                                                          ┌────────────────────┐
+┌─ Nothing is named parse in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  foo = Json.parse(data)                                                     │
+│        ‾‾‾‾‾‾‾‾‾‾                                                           │
+└──────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**inline_ingested_file.md:4:7:4:17:**
-```roc
-foo = Json.parse(data)
-```
-      ^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwImport,StringStart,StringPart,StringEnd,KwAs,LowerIdent,OpColon,UpperIdent,

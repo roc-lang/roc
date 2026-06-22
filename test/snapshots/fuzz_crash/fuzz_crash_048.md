@@ -25,110 +25,91 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
+                                                             ┌─────────────────┐
+┌─ The type Thing is not declared in this scope. ────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  bar : Thing(a, b, _)                                                       │
+│        ‾‾‾‾‾                                                                │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:2:7 ┘
 
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ The type String is not declared in this scope. ───────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  main! : List(String) -> Try({}, _)                                         │
+│               ‾‾‾‾‾‾                                                        │
+└───────────────────────────────────────────────────── fuzz_crash_048.md:6:14 ┘
 
-This type is referenced here:
-**fuzz_crash_048.md:2:7:2:12:**
-```roc
-bar : Thing(a, b, _)
-```
-      ^^^^^
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ The type Value is not declared in this scope. ────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  tag_tuple : Value((a, b, c))                                               │
+│              ‾‾‾‾‾                                                          │
+└───────────────────────────────────────────────────── fuzz_crash_048.md:7:13 ┘
 
+    This type is referenced here:
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  foo : U64                                                                  │
+│  ‾‾‾‾‾‾‾‾‾                                                                  │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:1:1 ┘
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  bar : Thing(a, b, _)                                                       │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:2:1 ┘
 
-This type is referenced here:
-**fuzz_crash_048.md:6:14:6:20:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-             ^^^^^^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  biz : (a, b, c)                                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:3:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  add_one : (                                                               │
+│  U8, U16 -> U32)                                                            │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:4:1 ┘
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  main! : List(String) -> Try({}, _)                                         │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:6:1 ┘
 
-This type is referenced here:
-**fuzz_crash_048.md:7:13:7:18:**
-```roc
-tag_tuple : Value((a, b, c))
-```
-            ^^^^^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  tag_tuple : Value((a, b, c))                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+└────────────────────────────────────────────────────── fuzz_crash_048.md:7:1 ┘
 
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:1:1:1:10:**
-```roc
-foo : U64
-```
-^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:2:1:2:21:**
-```roc
-bar : Thing(a, b, _)
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:3:1:3:16:**
-```roc
-biz : (a, b, c)
-```
-^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:4:1:5:16:**
-```roc
-add_one : (
-U8, U16 -> U32)
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:6:1:6:35:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:7:1:7:29:**
-```roc
-tag_tuple : Value((a, b, c))
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

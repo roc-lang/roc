@@ -15,72 +15,60 @@ PARSE ERROR - fuzz_crash_055.md:1:10:1:12
 PARSE ERROR - fuzz_crash_055.md:1:12:1:13
 PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: header_expected_open_square ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│        ‾                                                                    │
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:7 ┘
 
-**fuzz_crash_055.md:1:7:1:8:**
-```roc
-module(a).h:s
-```
-      ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:8 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│          ‾                                                                  │
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:9 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│           ‾‾                                                                │
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:10 ┘
 
-**fuzz_crash_055.md:1:8:1:9:**
-```roc
-module(a).h:s
-```
-       ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│             ‾                                                               │
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:12 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module(a).h:s                                                              │
+│              ‾                                                              │
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:13 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_055.md:1:9:1:10:**
-```roc
-module(a).h:s
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_055.md:1:10:1:12:**
-```roc
-module(a).h:s
-```
-         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_055.md:1:12:1:13:**
-```roc
-module(a).h:s
-```
-           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_055.md:1:13:1:14:**
-```roc
-module(a).h:s
-```
-            ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwModule,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,OpColon,LowerIdent,

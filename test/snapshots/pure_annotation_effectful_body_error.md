@@ -18,17 +18,15 @@ main! = bad_function("This should fail")
 # EXPECTED
 UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  bad_function = |msg| Stdout.line!(msg)                                     │
+│                       ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+└─────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
 
-**pure_annotation_effectful_body_error.md:7:22:7:34:**
-```roc
-bad_function = |msg| Stdout.line!(msg)
-```
-                     ^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -20,22 +20,21 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12:**
-```roc
-strs = bare
-```
-       ^^^^
+                                                               ┌───────────────┐
+┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│  strs = bare                                                                │
+│         ‾‾‾‾                                                                │
+└────────────── generalize_annotated_value_unannotated_not_generalized.md:9:8 ┘
 
-It has the type:
+    It has the type:
 
-    List(U64)
+        List(U64)
 
-But the annotation says it should be:
+    But the annotation says it should be:
 
-    List(Str)
-
+        List(Str)
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

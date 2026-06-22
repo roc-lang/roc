@@ -13,62 +13,53 @@ PARSE ERROR - stmt_import.md:1:19:1:22
 PARSE ERROR - stmt_import.md:1:22:1:23
 PARSE ERROR - stmt_import.md:1:27:1:28
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  import json.Json [foo, BAR]                                                │
+│                   ‾                                                         │
+└──────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
-**stmt_import.md:1:18:1:19:**
-```roc
-import json.Json [foo, BAR]
-```
-                 ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  import json.Json [foo, BAR]                                                │
+│                    ‾‾‾                                                      │
+└──────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  import json.Json [foo, BAR]                                                │
+│                       ‾                                                     │
+└──────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  import json.Json [foo, BAR]                                                │
+│                            ‾                                                │
+└──────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
-**stmt_import.md:1:19:1:22:**
-```roc
-import json.Json [foo, BAR]
-```
-                  ^^^
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+    Instead of:
+        List U8
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    Use:
+        List(U8)
 
-**stmt_import.md:1:22:1:23:**
-```roc
-import json.Json [foo, BAR]
-```
-                     ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**stmt_import.md:1:27:1:28:**
-```roc
-import json.Json [foo, BAR]
-```
-                          ^
-
-
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,

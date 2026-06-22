@@ -16,31 +16,26 @@ main! = |_| {}
 PARSE ERROR - type_function_simple.md:3:26:3:28
 PARSE ERROR - type_function_simple.md:3:29:3:31
 # PROBLEMS
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  apply : (_a -> _b) -> _a -> _b                                             │
+│                           ‾‾                                                │
+└─────────────────────────────────────────────── type_function_simple.md:3:26 ┘
 
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  apply : (_a -> _b) -> _a -> _b                                             │
+│                              ‾‾                                             │
+└─────────────────────────────────────────────── type_function_simple.md:3:29 ┘
 
-**type_function_simple.md:3:26:3:28:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_function_simple.md:3:29:3:31:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                            ^^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

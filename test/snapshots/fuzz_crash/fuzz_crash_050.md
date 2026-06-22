@@ -11,17 +11,15 @@ type=snippet
 # EXPECTED
 PARSE ERROR - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  )                                                                          │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_050.md:1:1 ┘
 
-**fuzz_crash_050.md:1:1:1:2:**
-```roc
-)
-```
-^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 CloseRound,

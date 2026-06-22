@@ -10,17 +10,15 @@ type=snippet
 # EXPECTED
 UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named person in this scope. ────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  { name, age, email } = person                                              │
+│                         ‾‾‾‾‾‾                                              │
+└─────────────────────────────────────── statement_record_destructure.md:1:24 ┘
 
-**statement_record_destructure.md:1:24:1:30:**
-```roc
-{ name, age, email } = person
-```
-                       ^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseCurly,OpAssign,LowerIdent,

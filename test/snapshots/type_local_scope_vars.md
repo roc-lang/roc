@@ -41,22 +41,21 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**type_local_scope_vars.md:19:14:**
-```roc
-		_result2 = f(b)
-```
-               ^
+                                                               ┌───────────────┐
+┌─ The first argument being passed to this function has the ───┤ TYPE MISMATCH │
+│  wrong type:                                                 └──────────────┬┘
+│                                                                             │
+│    _result2 = f(b)                                                          │
+│                 ‾                                                           │
+└───────────────────────────────────────────── type_local_scope_vars.md:19:16 ┘
 
-This argument has the type:
+    This argument has the type:
 
-    b
+        b
 
-But `f` needs the first argument to be:
+    But f needs the first argument to be:
 
-    a
-
+        a
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -12,17 +12,15 @@ main = Module.something
 # EXPECTED
 UNDEFINED VARIABLE - can_import_module_not_found.md:3:8:3:24
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `something` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named something in this scope. ─────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  main = Module.something                                                    │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
+└───────────────────────────────────────── can_import_module_not_found.md:3:8 ┘
 
-**can_import_module_not_found.md:3:8:3:24:**
-```roc
-main = Module.something
-```
-       ^^^^^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

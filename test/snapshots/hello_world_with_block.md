@@ -22,29 +22,25 @@ main! = |_| {
 UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│   Stdout.line!("Hello, world!")                                             │
+│   ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+└───────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
 
-**hello_world_with_block.md:11:2:11:14:**
-```roc
-	Stdout.line!("Hello, world!")
-```
-	^^^^^^^^^^^^
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ Variable world is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│   world = "World"                                                           │
+│   ‾‾‾‾‾                                                                     │
+└────────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
 
-
-**UNUSED VARIABLE**
-Variable `world` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
-	^^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _world to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

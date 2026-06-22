@@ -83,6 +83,31 @@ test "SYNTAX_PROBLEM report along with all four render types" {
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.
+
+    // Plain-text box (the layout used for snapshots and non-color output).
+    // Assert the alignment invariant: every row that reaches the right edge has
+    // the same display width, so the right wall lines up. The right-aligned
+    // label box pokes one column past the main box, so rows are 79 or 80 wide
+    // at the default 80-column width.
+    writer.clearRetainingCapacity();
+    try reporting.renderReportToBoxPlain(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
+    const box = writer.written();
+    try testing.expect(std.mem.find(u8, box, "SYNTAX PROBLEM") != null);
+    try testing.expect(std.mem.find(u8, box, "example.roc:1:10") != null);
+    var box_lines = std.mem.splitScalar(u8, box, '\n');
+    var box_rows: usize = 0;
+    while (box_lines.next()) |line| {
+        if (std.mem.endsWith(u8, line, "│") or
+            std.mem.endsWith(u8, line, "┐") or
+            std.mem.endsWith(u8, line, "┘"))
+        {
+            const w = reporting.source_region.displayWidth(line);
+            try testing.expect(w == 79 or w == 80);
+            box_rows += 1;
+        }
+    }
+    // top edge, title-box bottom, separator, source line, underline, bottom edge
+    try testing.expect(box_rows >= 6);
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {

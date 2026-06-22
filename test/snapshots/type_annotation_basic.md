@@ -36,18 +36,16 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `pair` is not used anywhere in your code.
+                                                             ┌─────────────────┐
+┌─ Variable pair is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      pair = combine(num, text)                                              │
+│      ‾‾‾‾                                                                   │
+└────────────────────────────────────────────── type_annotation_basic.md:21:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
-The unused variable is declared here:
-**type_annotation_basic.md:21:5:21:9:**
-```roc
-    pair = combine(num, text)
-```
-    ^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _pair to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

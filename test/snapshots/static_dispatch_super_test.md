@@ -16,67 +16,59 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `some_fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named some_fn in this scope. ───────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│  ‾‾‾‾‾‾‾                                                                    │
+└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-**static_dispatch_super_test.md:1:1:1:8:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named arg1 in this scope. ──────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│          ‾‾‾‾                                                               │
+└────────────────────────────────────────── static_dispatch_super_test.md:1:9 ┘
 
+    Is there an import or exposing missing up-top?
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `arg1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
+└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-**static_dispatch_super_test.md:1:9:1:13:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-        ^^^^
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾    │
+└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
-
-**static_dispatch_super_test.md:1:1:1:15:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^^^^^^^^
-
-
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
-
-**static_dispatch_super_test.md:1:1:1:41:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
-
-**static_dispatch_super_test.md:1:1:1:72:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
-
-**static_dispatch_super_test.md:1:1:1:86:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾│
+└────────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
 # TOKENS
 ~~~zig

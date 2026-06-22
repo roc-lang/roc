@@ -57,36 +57,34 @@ x = {
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**multiline_string_complex.md:40:5:40:8:**
-```roc
-	e: !\\
-```
-	   ^^^
+                                                              ┌────────────────┐
+┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│   e: !\\                                                                    │
+│      ‾‾‾                                                                    │
+└─────────────────────────────────────────── multiline_string_complex.md:40:5 ┘
 
-The value's type, which does not have a method named **not**, is:
+    The value's type, which does not have a method named not, is:
 
-    Str
+        Str
 
-**Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
+    Hint: For this to work, the type would need to have a method named not associated with it in the type's declaration.
+                                                               ┌───────────────┐
+┌─ The minus method on Dec has an incompatible type: ──────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│    0 - \\                                                                   │
+│    ‾                                                                        │
+└─────────────────────────────────────────── multiline_string_complex.md:37:3 ┘
 
-**TYPE MISMATCH**
-The `minus` method on `Dec` has an incompatible type:
-**multiline_string_complex.md:37:3:37:4:**
-```roc
-		0 - \\
-```
-		^
+    The method minus has the type:
 
-The method `minus` has the type:
+        Dec, Dec -> Dec
 
-    Dec, Dec -> Dec
+    But I need it to have the type:
 
-But I need it to have the type:
-
-    Dec, Str -> Dec
-
+        Dec, Str -> Dec
 # TOKENS
 ~~~zig
 KwPackage,

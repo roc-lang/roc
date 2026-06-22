@@ -19,17 +19,15 @@ main! = |_| {}
 # EXPECTED
 UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      Stdout.line!(person.name)                                              │
+│      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
+└─────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
 
-**type_record_effectful.md:7:5:7:17:**
-```roc
-    Stdout.line!(person.name)
-```
-    ^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

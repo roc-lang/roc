@@ -11,28 +11,24 @@ type=file
 PARSE ERROR - fuzz_hang_001.md:1:1:1:2
 PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  0 (                                                                        │
+│  ‾                                                                          │
+└─────────────────────────────────────────────────────── fuzz_hang_001.md:1:1 ┘
 
-**fuzz_hang_001.md:1:1:1:2:**
-```roc
-0 (
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  0 (                                                                        │
+│    ‾                                                                        │
+└─────────────────────────────────────────────────────── fuzz_hang_001.md:1:3 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_hang_001.md:1:3:1:4:**
-```roc
-0 (
-```
-  ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 Int,OpenRound,

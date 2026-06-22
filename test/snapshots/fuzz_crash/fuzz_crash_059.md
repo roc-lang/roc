@@ -19,105 +19,87 @@ PARSE ERROR - fuzz_crash_059.md:2:14:2:15
 PARSE ERROR - fuzz_crash_059.md:2:15:2:16
 MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│    ‾‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
 
-**fuzz_crash_059.md:2:3:2:5:**
-```roc
-G	if 0{}else||0
-```
- 	^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│       ‾                                                                     │
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│        ‾                                                                    │
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
 
-**fuzz_crash_059.md:2:6:2:7:**
-```roc
-G	if 0{}else||0
-```
- 	   ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│          ‾‾‾‾                                                               │
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│              ‾                                                              │
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│               ‾                                                             │
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
 
-**fuzz_crash_059.md:2:7:2:8:**
-```roc
-G	if 0{}else||0
-```
- 	    ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  G if 0{}else||0                                                            │
+│                ‾                                                            │
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                            ┌──────────────────┐
+┌─ The module B was not found in this Roc project. ─────────┤ MODULE NOT FOUND │
+│                                                           └─────────────────┬┘
+│                                                                             │
+│  app[]{f:platform""}import B as                                             │
+│  G if 0{}else||0                                                            │
+└───────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_059.md:2:8:2:9:**
-```roc
-G	if 0{}else||0
-```
- 	     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_059.md:2:9:2:13:**
-```roc
-G	if 0{}else||0
-```
- 	      ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_059.md:2:13:2:14:**
-```roc
-G	if 0{}else||0
-```
- 	          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_059.md:2:14:2:15:**
-```roc
-G	if 0{}else||0
-```
- 	           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_059.md:2:15:2:16:**
-```roc
-G	if 0{}else||0
-```
- 	            ^
-
-
-**MODULE NOT FOUND**
-The module `B` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_059.md:1:20:2:2:**
-```roc
-app[]{f:platform""}import	B	as
-G	if 0{}else||0
-```
-
-
+    You're attempting to use this module here:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,UpperIdent,KwAs,

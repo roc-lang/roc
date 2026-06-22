@@ -13,38 +13,32 @@ UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
 PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 # PROBLEMS
-**UNCLOSED SINGLE QUOTE**
-This single-quoted literal is missing a closing quote.
+                                                       ┌───────────────────────┐
+┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
+│  quote.                                              └──────────────────────┬┘
+│                                                                             │
+│  module[}('                                                                 │
+│           ‾                                                                 │
+└───────────────────────────────────────────────────── fuzz_crash_039.md:1:10 ┘
 
-**fuzz_crash_039.md:1:10:1:11:**
-```roc
-module[}('
-```
-         ^
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: exposed_item_unexpected_token ──────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module[}('                                                                 │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: header_expected_close_square ───────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module[}('                                                                 │
+│          ‾                                                                  │
+└────────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_039.md:1:8:1:9:**
-```roc
-module[}('
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `header_expected_close_square`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_039.md:1:9:1:10:**
-```roc
-module[}('
-```
-        ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,CloseCurly,NoSpaceOpenRound,MalformedSingleQuote,

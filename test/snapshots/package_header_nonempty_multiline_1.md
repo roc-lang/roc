@@ -13,27 +13,25 @@ package # This comment is here
 MODULE NOT FOUND - package_header_nonempty_multiline_1.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_1.md:2:3:2:12
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `SomeType` was not found in this Roc project.
+                                                            ┌──────────────────┐
+┌─ The module SomeType was not found in this Roc project. ──┤ MODULE NOT FOUND │
+│                                                           └─────────────────┬┘
+│                                                                             │
+│   [something, SomeType]                                                     │
+│               ‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────────── package_header_nonempty_multiline_1.md:2:14 ┘
 
-You're attempting to use this module here:
-**package_header_nonempty_multiline_1.md:2:14:2:22:**
-```roc
-	[something, SomeType]
-```
-	            ^^^^^^^^
+    You're attempting to use this module here:
+                                                     ┌─────────────────────────┐
+┌─ The module header says that something is ─────────┤ EXPOSED BUT NOT DEFINED │
+│  exposed, but it is not defined anywhere in this   └────────────────────────┬┘
+│  module.                                                                    │
+│                                                                             │
+│   [something, SomeType]                                                     │
+│    ‾‾‾‾‾‾‾‾‾                                                                │
+└───────────────────────────────── package_header_nonempty_multiline_1.md:2:3 ┘
 
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**package_header_nonempty_multiline_1.md:2:3:2:12:**
-```roc
-	[something, SomeType]
-```
-	 ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
+    You can fix this by either defining something in this module, or by removing it from the list of exposed values.
 # TOKENS
 ~~~zig
 KwPackage,

@@ -10,18 +10,17 @@ type=expr
 # EXPECTED
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**can_list_number_doesnt_fit.md:1:14:1:17:**
-```roc
-[1.U8, 2.U8, 300]
-```
-             ^^^
+                                                              ┌────────────────┐
+┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
+│                                                             └───────────────┬┘
+│                                                                             │
+│  [1.U8, 2.U8, 300]                                                          │
+│               ‾‾‾                                                           │
+└───────────────────────────────────────── can_list_number_doesnt_fit.md:1:14 ┘
 
-The inferred type is:
+    The inferred type is:
 
-    U8
-
+        U8
 # TOKENS
 ~~~zig
 OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,

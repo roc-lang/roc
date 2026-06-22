@@ -10,18 +10,17 @@ type=expr
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:1:1:4
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**call_float_literal.md:1:1:1:4:**
-```roc
-0.0()
-```
-^^^
+                                                              ┌────────────────┐
+┌─ This from_numeral method is being called on a value whose ─┤ MISSING METHOD │
+│  type doesn't have that method:                             └───────────────┬┘
+│                                                                             │
+│  0.0()                                                                      │
+│  ‾‾‾                                                                        │
+└────────────────────────────────────────────────── call_float_literal.md:1:1 ┘
 
-The value's type, which does not have a method named **from_numeral**, is:
+    The value's type, which does not have a method named from_numeral, is:
 
-    ({}) -> _ret
-
+        ({}) -> _ret
 # TOKENS
 ~~~zig
 Float,NoSpaceOpenRound,CloseRound,

@@ -40,43 +40,36 @@ PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  transform : _a -> _b -> _b                                                 │
+│                       ‾‾                                                    │
+└───────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
 
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  transform : _a -> _b -> _b                                                 │
+│                          ‾‾                                                 │
+└───────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
 
-**underscore_in_regular_annotations.md:28:22:28:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                             ┌─────────────────┐
+┌─ Variable list is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  process = |list| "processed"                                               │
+│             ‾‾‾‾                                                            │
+└────────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_in_regular_annotations.md:28:25:28:27:**
-```roc
-transform : _a -> _b -> _b
-```
-                        ^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**underscore_in_regular_annotations.md:9:12:9:16:**
-```roc
-process = |list| "processed"
-```
-           ^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

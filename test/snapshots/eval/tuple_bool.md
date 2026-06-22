@@ -13,54 +13,50 @@ MISSING METHOD - tuple_bool.md:1:45:1:51
 MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:38:1:43:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                     ^^^^^
+                                                              ┌────────────────┐
+┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
+│                                       ‾‾‾‾‾                                 │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:38 ┘
 
-The value's type, which does not have a method named **not**, is:
+    The value's type, which does not have a method named not, is:
 
-    [True, ..]
+        [True, ..]
+                                                              ┌────────────────┐
+┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
+│                                              ‾‾‾‾‾‾                         │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:45 ┘
 
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:45:1:51:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                            ^^^^^^
+    The value's type, which does not have a method named not, is:
 
-The value's type, which does not have a method named **not**, is:
+        [False, ..]
+                                                              ┌────────────────┐
+┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
+│                                                                      ‾‾‾‾‾  │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:69 ┘
 
-    [False, ..]
+    The value's type, which does not have a method named not, is:
 
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:69:1:74:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                                                    ^^^^^
+        [True, ..]
+                                                              ┌────────────────┐
+┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
+│                                                                               ‾‾‾‾‾│
+└───────────────────────────────────────────────────────── tuple_bool.md:1:78 ┘
 
-The value's type, which does not have a method named **not**, is:
+    The value's type, which does not have a method named not, is:
 
-    [True, ..]
-
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:78:1:83:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                                                             ^^^^^
-
-The value's type, which does not have a method named **not**, is:
-
-    [True, ..]
-
+        [True, ..]
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,

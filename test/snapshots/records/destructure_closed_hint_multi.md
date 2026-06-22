@@ -14,31 +14,30 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**destructure_closed_hint_multi.md:3:13:3:33:**
-```roc
-    { x } = { x: 1, y: 2, z: 3 }
-```
-            ^^^^^^^^^^^^^^^^^^^^
+                                                               ┌───────────────┐
+┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│      { x } = { x: 1, y: 2, z: 3 }                                           │
+│              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+└────────────────────────────────────── destructure_closed_hint_multi.md:3:13 ┘
 
-It has the type:
+    It has the type:
 
-    { x: a, y: b, z: c }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-      ]
+        { x: a, y: b, z: c }
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+            c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+          ]
 
-But you are trying to use it as:
+    But you are trying to use it as:
 
-    { x: _field }
-**Hint:** This pattern doesn't bind these fields:
- - `y`
- - `z`
-Match them explicitly with `y: _`, or add `..` to match all the remaining fields.
-
+        { x: _field }
+    Hint: This pattern doesn't bind these fields:
+     - y
+     - z
+    Match them explicitly with y: _, or add .. to match all the remaining fields.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

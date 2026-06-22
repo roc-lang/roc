@@ -831,5688 +831,4816 @@ TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
 TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:2:1:2:11:**
-```roc
-d1_forward := [A].{
-```
-^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:2:12:2:14:**
-```roc
-d1_forward := [A].{
-```
-           ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:2:15:2:16:**
-```roc
-d1_forward := [A].{
-```
-              ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:2:17:2:18:**
-```roc
-d1_forward := [A].{
-```
-                ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:2:18:2:19:**
-```roc
-d1_forward := [A].{
-```
-                 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:2:19:2:20:**
-```roc
-d1_forward := [A].{
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:5:1:5:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:8:1:8:9:**
-```roc
-d1_scope := [B].{
-```
-^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:8:10:8:12:**
-```roc
-d1_scope := [B].{
-```
-         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:8:13:8:14:**
-```roc
-d1_scope := [B].{
-```
-            ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:8:15:8:16:**
-```roc
-d1_scope := [B].{
-```
-              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:8:16:8:17:**
-```roc
-d1_scope := [B].{
-```
-               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:8:17:8:18:**
-```roc
-d1_scope := [B].{
-```
-                ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:10:1:10:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:13:1:13:15:**
-```roc
-d2_inner_first := [C].{
-```
-^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:13:16:13:18:**
-```roc
-d2_inner_first := [C].{
-```
-               ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:13:19:13:20:**
-```roc
-d2_inner_first := [C].{
-```
-                  ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:13:21:13:22:**
-```roc
-d2_inner_first := [C].{
-```
-                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:13:22:13:23:**
-```roc
-d2_inner_first := [C].{
-```
-                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:13:23:13:24:**
-```roc
-d2_inner_first := [C].{
-```
-                      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:19:1:19:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:21:22:21:28:**
-```roc
-d2_2 = d2_inner_first.Inner.inner_val
-```
-                     ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:21:28:21:38:**
-```roc
-d2_2 = d2_inner_first.Inner.inner_val
-```
-                           ^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:23:1:23:20:**
-```roc
-d2_outer_val_middle := [G].{
-```
-^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:23:21:23:23:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                    ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:23:24:23:25:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                       ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:23:26:23:27:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:23:27:23:28:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:23:28:23:29:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:29:1:29:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:30:27:30:33:**
-```roc
-d2_3 = d2_outer_val_middle.Inner.inner_val
-```
-                          ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:30:33:30:43:**
-```roc
-d2_3 = d2_outer_val_middle.Inner.inner_val
-```
-                                ^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:32:1:32:20:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:32:21:32:23:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                    ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:32:24:32:25:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                       ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:32:26:32:27:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:32:27:32:28:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:32:28:32:29:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:33:36:33:42:**
-```roc
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-```
-                                   ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:33:42:33:52:**
-```roc
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-```
-                                         ^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:38:1:38:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:41:1:41:19:**
-```roc
-d2_scope_violation := [K].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:41:20:41:22:**
-```roc
-d2_scope_violation := [K].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:41:23:41:24:**
-```roc
-d2_scope_violation := [K].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:41:25:41:26:**
-```roc
-d2_scope_violation := [K].{
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:41:26:41:27:**
-```roc
-d2_scope_violation := [K].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:41:27:41:28:**
-```roc
-d2_scope_violation := [K].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:47:1:47:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:49:1:49:12:**
-```roc
-d2_siblings := [M].{
-```
-^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:49:13:49:15:**
-```roc
-d2_siblings := [M].{
-```
-            ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:49:16:49:17:**
-```roc
-d2_siblings := [M].{
-```
-               ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:49:18:49:19:**
-```roc
-d2_siblings := [M].{
-```
-                 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:49:19:49:20:**
-```roc
-d2_siblings := [M].{
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:49:20:49:21:**
-```roc
-d2_siblings := [M].{
-```
-                   ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.InnerB** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**associated_items_complete_all_patterns.md:51:27:51:34:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-                          ^^^^^^^
-
-
-**EXPRESSION IN ASSOCIATED ITEMS**
-Associated items (such as types or methods) can only have associated types and values, not plain expressions.
-
-To fix this, remove the expression at the very end.
-
-**associated_items_complete_all_patterns.md:51:27:51:43:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-                          ^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:57:1:57:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:58:19:58:26:**
-```roc
-d2_5 = d2_siblings.InnerA.valA
-```
-                  ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:58:26:58:31:**
-```roc
-d2_5 = d2_siblings.InnerA.valA
-```
-                         ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:60:1:60:19:**
-```roc
-d3_types_then_vals := [P].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:60:20:60:22:**
-```roc
-d3_types_then_vals := [P].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:60:23:60:24:**
-```roc
-d3_types_then_vals := [P].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:60:25:60:26:**
-```roc
-d3_types_then_vals := [P].{
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:60:26:60:27:**
-```roc
-d3_types_then_vals := [P].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:60:27:60:28:**
-```roc
-d3_types_then_vals := [P].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:70:1:70:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:72:26:72:29:**
-```roc
-d3_2 = d3_types_then_vals.L2.val2
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:72:29:72:34:**
-```roc
-d3_2 = d3_types_then_vals.L2.val2
-```
-                            ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:73:26:73:29:**
-```roc
-d3_3 = d3_types_then_vals.L2.L3.val3
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:73:29:73:32:**
-```roc
-d3_3 = d3_types_then_vals.L2.L3.val3
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:73:32:73:37:**
-```roc
-d3_3 = d3_types_then_vals.L2.L3.val3
-```
-                               ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:75:1:75:19:**
-```roc
-d3_vals_then_types := [S].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:75:20:75:22:**
-```roc
-d3_vals_then_types := [S].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:75:23:75:24:**
-```roc
-d3_vals_then_types := [S].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:75:25:75:26:**
-```roc
-d3_vals_then_types := [S].{
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:75:26:75:27:**
-```roc
-d3_vals_then_types := [S].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:75:27:75:28:**
-```roc
-d3_vals_then_types := [S].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:85:1:85:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:87:26:87:29:**
-```roc
-d3_5 = d3_vals_then_types.L2.val2
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:87:29:87:34:**
-```roc
-d3_5 = d3_vals_then_types.L2.val2
-```
-                            ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:88:26:88:29:**
-```roc
-d3_6 = d3_vals_then_types.L2.L3.val3
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:88:29:88:32:**
-```roc
-d3_6 = d3_vals_then_types.L2.L3.val3
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:88:32:88:37:**
-```roc
-d3_6 = d3_vals_then_types.L2.L3.val3
-```
-                               ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:90:1:90:22:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:90:23:90:25:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:90:26:90:27:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:90:28:90:29:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:90:29:90:30:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:90:30:90:31:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:98:1:98:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:100:1:100:22:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:100:23:100:25:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:100:26:100:27:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:100:28:100:29:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:100:29:100:30:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:100:30:100:31:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:108:1:108:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:110:1:110:20:**
-```roc
-d3_val_after_nested := [AB].{
-```
-^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:110:21:110:23:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                    ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:110:24:110:25:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                       ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:110:27:110:28:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:110:28:110:29:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:110:29:110:30:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:120:1:120:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:122:27:122:30:**
-```roc
-d3_8 = d3_val_after_nested.L2.val2
-```
-                          ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:122:30:122:35:**
-```roc
-d3_8 = d3_val_after_nested.L2.val2
-```
-                             ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:123:27:123:30:**
-```roc
-d3_9 = d3_val_after_nested.L2.L3.val3
-```
-                          ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:123:30:123:33:**
-```roc
-d3_9 = d3_val_after_nested.L2.L3.val3
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:123:33:123:38:**
-```roc
-d3_9 = d3_val_after_nested.L2.L3.val3
-```
-                                ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:125:1:125:23:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:125:24:125:26:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:125:27:125:28:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                          ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:125:30:125:31:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:125:31:125:32:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:125:32:125:33:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:139:1:139:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:140:30:140:33:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:140:33:140:36:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-                                ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:140:36:140:39:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-                                   ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:140:39:140:44:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-                                      ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:142:1:142:23:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:142:24:142:26:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:142:27:142:28:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                          ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:142:30:142:31:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:142:31:142:32:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:142:32:142:33:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:156:1:156:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:157:30:157:33:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:157:33:157:36:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-                                ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:157:36:157:39:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-                                   ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:157:39:157:44:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-                                      ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:159:1:159:17:**
-```roc
-d4_reverse_types := [AM].{
-```
-^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:159:18:159:20:**
-```roc
-d4_reverse_types := [AM].{
-```
-                 ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:159:21:159:22:**
-```roc
-d4_reverse_types := [AM].{
-```
-                    ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:159:24:159:25:**
-```roc
-d4_reverse_types := [AM].{
-```
-                       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:159:25:159:26:**
-```roc
-d4_reverse_types := [AM].{
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:159:26:159:27:**
-```roc
-d4_reverse_types := [AM].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:173:1:173:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:174:24:174:27:**
-```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-```
-                       ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:174:27:174:30:**
-```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-```
-                          ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:174:30:174:33:**
-```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:174:33:174:38:**
-```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-```
-                                ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:176:1:176:15:**
-```roc
-d4_interleaved := [AQ].{
-```
-^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:176:16:176:18:**
-```roc
-d4_interleaved := [AQ].{
-```
-               ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:176:19:176:20:**
-```roc
-d4_interleaved := [AQ].{
-```
-                  ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:176:22:176:23:**
-```roc
-d4_interleaved := [AQ].{
-```
-                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:176:23:176:24:**
-```roc
-d4_interleaved := [AQ].{
-```
-                      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:176:24:176:25:**
-```roc
-d4_interleaved := [AQ].{
-```
-                       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:190:1:190:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:191:22:191:25:**
-```roc
-d4_4 = d4_interleaved.L2.L3.L4.val4
-```
-                     ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:191:25:191:28:**
-```roc
-d4_4 = d4_interleaved.L2.L3.L4.val4
-```
-                        ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:191:28:191:31:**
-```roc
-d4_4 = d4_interleaved.L2.L3.L4.val4
-```
-                           ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:191:31:191:36:**
-```roc
-d4_4 = d4_interleaved.L2.L3.L4.val4
-```
-                              ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:193:1:193:19:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:193:20:193:22:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:193:23:193:24:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:193:26:193:27:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:193:27:193:28:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:193:28:193:29:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:202:1:202:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:203:26:203:29:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:203:29:203:32:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:203:32:203:35:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:203:35:203:40:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-                                  ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:205:1:205:19:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:205:20:205:22:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:205:23:205:24:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:205:26:205:27:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:205:27:205:28:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:205:28:205:29:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:217:1:217:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:218:26:218:29:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:218:29:218:32:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:218:32:218:35:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:218:35:218:40:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-                                  ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:220:1:220:19:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:220:20:220:22:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:220:23:220:24:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:220:26:220:27:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:220:27:220:28:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:220:28:220:29:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:234:1:234:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:235:26:235:29:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:235:29:235:32:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:235:32:235:35:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:235:35:235:40:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-```
-                                  ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:237:1:237:22:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:237:23:237:25:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:237:26:237:27:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:237:29:237:30:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:237:30:237:31:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:237:31:237:32:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:247:1:247:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:249:1:249:22:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:249:23:249:25:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:249:26:249:27:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:249:29:249:30:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:249:30:249:31:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:249:31:249:32:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:259:1:259:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:261:1:261:22:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:261:23:261:25:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:261:26:261:27:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:261:29:261:30:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:261:30:261:31:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:261:31:261:32:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:271:1:271:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:273:1:273:23:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:273:24:273:26:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:273:27:273:28:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                          ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:273:30:273:31:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:273:31:273:32:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:273:32:273:33:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:291:1:291:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:292:30:292:33:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:292:33:292:36:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-                                ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:292:36:292:39:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-                                   ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:292:39:292:42:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-                                      ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:292:42:292:47:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-                                         ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:294:1:294:23:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:294:24:294:26:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:294:27:294:28:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                          ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:294:30:294:31:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:294:31:294:32:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:294:32:294:33:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:312:1:312:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:313:30:313:33:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-                             ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:313:33:313:36:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-                                ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:313:36:313:39:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-                                   ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:313:39:313:42:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-                                      ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:313:42:313:47:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-                                         ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:315:1:315:19:**
-```roc
-d5_deep_interleave := [CI].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:315:20:315:22:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:315:23:315:24:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:315:26:315:27:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:315:27:315:28:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:315:28:315:29:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:333:1:333:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:334:26:334:29:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:334:29:334:32:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:334:32:334:35:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:334:35:334:38:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-                                  ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:334:38:334:43:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-                                     ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:336:1:336:19:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:336:20:336:22:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:336:23:336:24:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:336:26:336:27:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:336:27:336:28:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:336:28:336:29:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:348:1:348:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:349:26:349:29:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:349:29:349:32:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:349:32:349:35:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:349:35:349:38:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-                                  ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:349:38:349:43:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-                                     ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:351:1:351:19:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:351:20:351:22:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:351:23:351:24:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:351:26:351:27:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:351:27:351:28:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:351:28:351:29:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:365:1:365:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:366:26:366:29:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:366:29:366:32:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:366:32:366:35:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:366:35:366:38:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-                                  ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:366:38:366:43:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-                                     ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:368:1:368:15:**
-```roc
-d5_l1_val_last := [DC].{
-```
-^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:368:16:368:18:**
-```roc
-d5_l1_val_last := [DC].{
-```
-               ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:368:19:368:20:**
-```roc
-d5_l1_val_last := [DC].{
-```
-                  ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:368:22:368:23:**
-```roc
-d5_l1_val_last := [DC].{
-```
-                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:368:23:368:24:**
-```roc
-d5_l1_val_last := [DC].{
-```
-                      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:368:24:368:25:**
-```roc
-d5_l1_val_last := [DC].{
-```
-                       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:386:1:386:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:388:22:388:25:**
-```roc
-d5_7 = d5_l1_val_last.L2.val2
-```
-                     ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:388:25:388:30:**
-```roc
-d5_7 = d5_l1_val_last.L2.val2
-```
-                        ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:389:22:389:25:**
-```roc
-d5_8 = d5_l1_val_last.L2.L3.val3
-```
-                     ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:389:25:389:28:**
-```roc
-d5_8 = d5_l1_val_last.L2.L3.val3
-```
-                        ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:389:28:389:33:**
-```roc
-d5_8 = d5_l1_val_last.L2.L3.val3
-```
-                           ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:390:22:390:25:**
-```roc
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-```
-                     ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:390:25:390:28:**
-```roc
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-```
-                        ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:390:28:390:31:**
-```roc
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-```
-                           ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:390:31:390:36:**
-```roc
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-```
-                              ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:391:23:391:26:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-                      ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:391:26:391:29:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-                         ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:391:29:391:32:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-                            ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:391:32:391:35:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-                               ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:391:35:391:40:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-                                  ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:393:1:393:22:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:393:23:393:25:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:393:26:393:27:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:393:29:393:30:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:393:30:393:31:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:393:31:393:32:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:405:1:405:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:407:1:407:22:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:407:23:407:25:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:407:26:407:27:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:407:29:407:30:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:407:30:407:31:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:407:31:407:32:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:419:1:419:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:421:1:421:22:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:421:23:421:25:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:421:26:421:27:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**associated_items_complete_all_patterns.md:421:29:421:30:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:421:30:421:31:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:421:31:421:32:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**associated_items_complete_all_patterns.md:433:1:433:2:**
-```roc
-}
-```
-^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d1_forward` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:6:8:6:18:**
-```roc
-d1_1 = d1_forward.first
-```
-       ^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d1_scope` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:11:8:11:16:**
-```roc
-d1_2 = d1_scope.inner
-```
-       ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_inner_first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:20:8:20:22:**
-```roc
-d2_1 = d2_inner_first.outer_val
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_inner_first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:21:8:21:22:**
-```roc
-d2_2 = d2_inner_first.Inner.inner_val
-```
-       ^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _Inner_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:24:5:26:6:**
-```roc
-    Inner := [H].{
-        inner_val = outer_val
-    }
-```
-
-But _Inner_ was already declared here:
-**associated_items_complete_all_patterns.md:14:5:16:6:**
-```roc
-    Inner := [D].{
-        inner_val = outer_val
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `outer_val` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:28:5:28:14:**
-```roc
-    outer_val = 500
-```
-    ^^^^^^^^^
-
-But `outer_val` was already defined here:
-**associated_items_complete_all_patterns.md:15:21:15:30:**
-```roc
-        inner_val = outer_val
-```
-                    ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_outer_val_middle` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:30:8:30:27:**
-```roc
-d2_3 = d2_outer_val_middle.Inner.inner_val
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `outer_val` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:33:5:33:14:**
-```roc
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-```
-    ^^^^^^^^^
-
-But `outer_val` was already defined here:
-**associated_items_complete_all_patterns.md:28:5:28:14:**
-```roc
-    outer_val = 500
-```
-    ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_outer_refs_inner` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:33:17:33:36:**
-```roc
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-```
-                ^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _Inner_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:35:5:37:6:**
-```roc
-    Inner := [J].{
-        inner_val = 600
-    }
-```
-
-But _Inner_ was already declared here:
-**associated_items_complete_all_patterns.md:14:5:16:6:**
-```roc
-    Inner := [D].{
-        inner_val = outer_val
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_outer_refs_inner` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:39:8:39:27:**
-```roc
-d2_4 = d2_outer_refs_inner.outer_val
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _Inner_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:42:5:44:6:**
-```roc
-    Inner := [L].{
-        inner_private = 700
-    }
-```
-
-But _Inner_ was already declared here:
-**associated_items_complete_all_patterns.md:14:5:16:6:**
-```roc
-    Inner := [D].{
-        inner_val = outer_val
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `inner_private` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:46:26:46:39:**
-```roc
-    outer_trying_inner = inner_private
-```
-                         ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_siblings` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:51:16:51:27:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-               ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_siblings` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:58:8:58:19:**
-```roc
-d2_5 = d2_siblings.InnerA.valA
-```
-       ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:71:8:71:26:**
-```roc
-d3_1 = d3_types_then_vals.val1
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:72:8:72:26:**
-```roc
-d3_2 = d3_types_then_vals.L2.val2
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:73:8:73:26:**
-```roc
-d3_3 = d3_types_then_vals.L2.L3.val3
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:76:5:76:9:**
-```roc
-    val1 = 30
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:63:20:63:24:**
-```roc
-            val3 = val1 + val2
-```
-                   ^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:78:5:84:6:**
-```roc
-    L2 := [T].{
-        val2 = val1 + 5
-
-        L3 := [U].{
-            val3 = val1 + val2
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:86:8:86:26:**
-```roc
-d3_4 = d3_vals_then_types.val1
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:87:8:87:26:**
-```roc
-d3_5 = d3_vals_then_types.L2.val2
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:88:8:88:26:**
-```roc
-d3_6 = d3_vals_then_types.L2.L3.val3
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:91:5:95:6:**
-```roc
-    L2 := [W].{
-        L3 := [X].{
-            l3_private = 999
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l3_private` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:97:14:97:24:**
-```roc
-    bad_l1 = l3_private
-```
-             ^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:101:5:107:6:**
-```roc
-    L2 := [Z].{
-        L3 := [AA].{
-            l3_secret = 888
-        }
-
-        bad_l2 = l3_secret
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:111:5:117:6:**
-```roc
-    L2 := [AC].{
-        L3 := [AD].{
-            val3 = val2 * 2
-        }
-
-        val2 = val1 * 3
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:119:5:119:9:**
-```roc
-    val1 = 5
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:76:5:76:9:**
-```roc
-    val1 = 30
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_val_after_nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:121:8:121:27:**
-```roc
-d3_7 = d3_val_after_nested.val1
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_val_after_nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:122:8:122:27:**
-```roc
-d3_8 = d3_val_after_nested.L2.val2
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_val_after_nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:123:8:123:27:**
-```roc
-d3_9 = d3_val_after_nested.L2.L3.val3
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:126:5:136:6:**
-```roc
-    L2 := [AF].{
-        L3 := [AG].{
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-
-            val3 = 3
-        }
-
-        val2 = 2
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:138:5:138:9:**
-```roc
-    val1 = 1
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:119:5:119:9:**
-```roc
-    val1 = 5
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_all_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:140:8:140:30:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:143:5:143:9:**
-```roc
-    val1 = 10
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:138:5:138:9:**
-```roc
-    val1 = 1
-```
-    ^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:145:5:155:6:**
-```roc
-    L2 := [AJ].{
-        val2 = val1 + 1
-
-        L3 := [AK].{
-            val3 = val1 + val2
-
-            L4 := [AL].{
-                val4 = val1 + val2 + val3
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_all_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:157:8:157:30:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:160:5:170:6:**
-```roc
-    L2 := [AN].{
-        L3 := [AO].{
-            L4 := [AP].{
-                val4 = val3 + 1
-            }
-
-            val3 = val2 + 1
-        }
-
-        val2 = val1 + 1
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:172:5:172:9:**
-```roc
-    val1 = 7
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:143:5:143:9:**
-```roc
-    val1 = 10
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_reverse_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:174:8:174:24:**
-```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:177:5:177:9:**
-```roc
-    val1 = 15
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:172:5:172:9:**
-```roc
-    val1 = 7
-```
-    ^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:179:5:189:6:**
-```roc
-    L2 := [AR].{
-        L3 := [AS].{
-            val3 = val1 + val2
-
-            L4 := [AT].{
-                val4 = val1 + val2 + val3
-            }
-        }
-
-        val2 = val1 + 5
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_interleaved` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:191:8:191:22:**
-```roc
-d4_4 = d4_interleaved.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:194:5:201:6:**
-```roc
-    L2 := [BB].{
-        L3 := [BC].{
-            L4 := [BD].{
-                val4 = val3 * 3
-            }
-            val3 = 12
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l3_val_after_l4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:203:8:203:26:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:206:5:216:6:**
-```roc
-    L2 := [BF].{
-        L3 := [BG].{
-            L4 := [BH].{
-                val4 = val2 + val3
-            }
-
-            val3 = 8
-        }
-
-        val2 = 4
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l2_val_after_l3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:218:8:218:26:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:221:5:231:6:**
-```roc
-    L2 := [BJ].{
-        L3 := [BK].{
-            L4 := [BL].{
-                val4 = val1 + 100
-            }
-
-            val3 = val1 + 50
-        }
-
-        val2 = val1 + 10
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:233:5:233:9:**
-```roc
-    val1 = 3
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:177:5:177:9:**
-```roc
-    val1 = 15
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l1_val_after_l2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:235:8:235:26:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:238:5:244:6:**
-```roc
-    L2 := [BN].{
-        L3 := [BO].{
-            L4 := [BP].{
-                l4_val = 444
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l4_val` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:246:11:246:17:**
-```roc
-    bad = l4_val
-```
-          ^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:250:5:258:6:**
-```roc
-    L2 := [BR].{
-        L3 := [BS].{
-            L4 := [BT].{
-                l4_secret = 333
-            }
-        }
-
-        bad = l4_secret
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:262:5:270:6:**
-```roc
-    L2 := [BV].{
-        L3 := [BW].{
-            L4 := [BX].{
-                l4_private = 555
-            }
-
-            attempt = l4_private
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:274:5:288:6:**
-```roc
-    L2 := [BZ].{
-        L3 := [CA].{
-            L4 := [CB].{
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = 4
-            }
-
-            val3 = 3
-        }
-
-        val2 = 2
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:290:5:290:9:**
-```roc
-    val1 = 1
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:233:5:233:9:**
-```roc
-    val1 = 3
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_all_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:292:8:292:30:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:295:5:295:9:**
-```roc
-    val1 = 100
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:290:5:290:9:**
-```roc
-    val1 = 1
-```
-    ^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:297:5:311:6:**
-```roc
-    L2 := [CE].{
-        val2 = val1 + 10
-
-        L3 := [CF].{
-            val3 = val1 + val2
-
-            L4 := [CG].{
-                val4 = val1 + val2 + val3
-
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_all_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:313:8:313:30:**
-```roc
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:316:5:316:9:**
-```roc
-    val1 = 2
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:295:5:295:9:**
-```roc
-    val1 = 100
-```
-    ^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:318:5:332:6:**
-```roc
-    L2 := [CJ].{
-        L3 := [CK].{
-            val3 = val1 + val2
-
-            L4 := [CL].{
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = val1 + val2 + val3
-            }
-        }
-
-        val2 = val1 + 1
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_deep_interleave` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:334:8:334:26:**
-```roc
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:337:5:347:6:**
-```roc
-    L2 := [CO].{
-        L3 := [CP].{
-            L4 := [CQ].{
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-
-                val4 = 6
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l4_val_after_l5` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:349:8:349:26:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:352:5:364:6:**
-```roc
-    L2 := [CT].{
-        L3 := [CU].{
-            L4 := [CV].{
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-
-                val4 = 7
-            }
-
-            val3 = 3
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l3_val_after_l4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:366:8:366:26:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:369:5:383:6:**
-```roc
-    L2 := [DD].{
-        val2 = val1 + 10
-
-        L3 := [DE].{
-            val3 = val1 + val2
-
-            L4 := [DF].{
-                val4 = val1 + val2 + val3
-
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `val1` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:385:5:385:9:**
-```roc
-    val1 = 5
-```
-    ^^^^
-
-But `val1` was already defined here:
-**associated_items_complete_all_patterns.md:316:5:316:9:**
-```roc
-    val1 = 2
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:387:8:387:22:**
-```roc
-d5_6 = d5_l1_val_last.val1
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:388:8:388:22:**
-```roc
-d5_7 = d5_l1_val_last.L2.val2
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:389:8:389:22:**
-```roc
-d5_8 = d5_l1_val_last.L2.L3.val3
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:390:8:390:22:**
-```roc
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:391:9:391:23:**
-```roc
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-```
-        ^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:394:5:402:6:**
-```roc
-    L2 := [DI].{
-        L3 := [DJ].{
-            L4 := [DK].{
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**DUPLICATE DEFINITION**
-The name `bad` is being redeclared in this scope.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:404:5:404:8:**
-```roc
-    bad = deep_secret
-```
-    ^^^
-
-But `bad` was already defined here:
-**associated_items_complete_all_patterns.md:246:5:246:8:**
-```roc
-    bad = l4_val
-```
-    ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `deep_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:404:11:404:22:**
-```roc
-    bad = deep_secret
-```
-          ^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:408:5:418:6:**
-```roc
-    L2 := [DN].{
-        L3 := [DO].{
-            L4 := [DP].{
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-            }
-
-            bad = l5_secret
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**TYPE REDECLARED**
-The type _L2_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:422:5:432:6:**
-```roc
-    L2 := [DS].{
-        L3 := [DT].{
-            L4 := [DU].{
-                L5 := [DV].{
-                    l5_only = 8888
-                }
-
-                bad = l5_only
-            }
-        }
-    }
-```
-
-But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:61:5:67:6:**
-```roc
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-```
-
-
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a nominal type declaration matching the module name.
-
-This file is named `Test`.roc, but no top-level nominal type named `Test` was found.
-
-Add a nominal type like:
-`Test := ...`
-or:
-`Test :: ...` (opaque nominal type)
-**associated_items_complete_all_patterns.md:2:1:433:2:**
-```roc
-d1_forward := [A].{
-    first = second
-    second = 100
-}
-d1_1 = d1_forward.first
-
-d1_scope := [B].{
-    inner = 200
-}
-d1_2 = d1_scope.inner
-
-d2_inner_first := [C].{
-    Inner := [D].{
-        inner_val = outer_val
-    }
-
-    outer_val = 300
-}
-d2_1 = d2_inner_first.outer_val
-d2_2 = d2_inner_first.Inner.inner_val
-
-d2_outer_val_middle := [G].{
-    Inner := [H].{
-        inner_val = outer_val
-    }
-
-    outer_val = 500
-}
-d2_3 = d2_outer_val_middle.Inner.inner_val
-
-d2_outer_refs_inner := [I].{
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-
-    Inner := [J].{
-        inner_val = 600
-    }
-}
-d2_4 = d2_outer_refs_inner.outer_val
-
-d2_scope_violation := [K].{
-    Inner := [L].{
-        inner_private = 700
-    }
-
-    outer_trying_inner = inner_private
-}
-
-d2_siblings := [M].{
-    InnerA := [N].{
-        valA = d2_siblings.InnerB.valB + 1
-    }
-
-    InnerB := [O].{
-        valB = 800
-    }
-}
-d2_5 = d2_siblings.InnerA.valA
-
-d3_types_then_vals := [P].{
-    L2 := [Q].{
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-
-        val2 = 20
-    }
-
-    val1 = 10
-}
-d3_1 = d3_types_then_vals.val1
-d3_2 = d3_types_then_vals.L2.val2
-d3_3 = d3_types_then_vals.L2.L3.val3
-
-d3_vals_then_types := [S].{
-    val1 = 30
-
-    L2 := [T].{
-        val2 = val1 + 5
-
-        L3 := [U].{
-            val3 = val1 + val2
-        }
-    }
-}
-d3_4 = d3_vals_then_types.val1
-d3_5 = d3_vals_then_types.L2.val2
-d3_6 = d3_vals_then_types.L2.L3.val3
-
-d3_l1_scope_violation := [V].{
-    L2 := [W].{
-        L3 := [X].{
-            l3_private = 999
-        }
-    }
-
-    bad_l1 = l3_private
-}
-
-d3_l2_scope_violation := [Y].{
-    L2 := [Z].{
-        L3 := [AA].{
-            l3_secret = 888
-        }
-
-        bad_l2 = l3_secret
-    }
-}
-
-d3_val_after_nested := [AB].{
-    L2 := [AC].{
-        L3 := [AD].{
-            val3 = val2 * 2
-        }
-
-        val2 = val1 * 3
-    }
-
-    val1 = 5
-}
-d3_7 = d3_val_after_nested.val1
-d3_8 = d3_val_after_nested.L2.val2
-d3_9 = d3_val_after_nested.L2.L3.val3
-
-d4_all_types_then_vals := [AE].{
-    L2 := [AF].{
-        L3 := [AG].{
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-
-            val3 = 3
-        }
-
-        val2 = 2
-    }
-
-    val1 = 1
-}
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-
-d4_all_vals_then_types := [AI].{
-    val1 = 10
-
-    L2 := [AJ].{
-        val2 = val1 + 1
-
-        L3 := [AK].{
-            val3 = val1 + val2
-
-            L4 := [AL].{
-                val4 = val1 + val2 + val3
-            }
-        }
-    }
-}
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-
-d4_reverse_types := [AM].{
-    L2 := [AN].{
-        L3 := [AO].{
-            L4 := [AP].{
-                val4 = val3 + 1
-            }
-
-            val3 = val2 + 1
-        }
-
-        val2 = val1 + 1
-    }
-
-    val1 = 7
-}
-d4_3 = d4_reverse_types.L2.L3.L4.val4
-
-d4_interleaved := [AQ].{
-    val1 = 15
-
-    L2 := [AR].{
-        L3 := [AS].{
-            val3 = val1 + val2
-
-            L4 := [AT].{
-                val4 = val1 + val2 + val3
-            }
-        }
-
-        val2 = val1 + 5
-    }
-}
-d4_4 = d4_interleaved.L2.L3.L4.val4
-
-d4_l3_val_after_l4 := [BA].{
-    L2 := [BB].{
-        L3 := [BC].{
-            L4 := [BD].{
-                val4 = val3 * 3
-            }
-            val3 = 12
-        }
-    }
-}
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-
-d4_l2_val_after_l3 := [BE].{
-    L2 := [BF].{
-        L3 := [BG].{
-            L4 := [BH].{
-                val4 = val2 + val3
-            }
-
-            val3 = 8
-        }
-
-        val2 = 4
-    }
-}
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-
-d4_l1_val_after_l2 := [BI].{
-    L2 := [BJ].{
-        L3 := [BK].{
-            L4 := [BL].{
-                val4 = val1 + 100
-            }
-
-            val3 = val1 + 50
-        }
-
-        val2 = val1 + 10
-    }
-
-    val1 = 3
-}
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
-
-d4_l1_scope_violation := [BM].{
-    L2 := [BN].{
-        L3 := [BO].{
-            L4 := [BP].{
-                l4_val = 444
-            }
-        }
-    }
-
-    bad = l4_val
-}
-
-d4_l2_scope_violation := [BQ].{
-    L2 := [BR].{
-        L3 := [BS].{
-            L4 := [BT].{
-                l4_secret = 333
-            }
-        }
-
-        bad = l4_secret
-    }
-}
-
-d4_l3_scope_violation := [BU].{
-    L2 := [BV].{
-        L3 := [BW].{
-            L4 := [BX].{
-                l4_private = 555
-            }
-
-            attempt = l4_private
-        }
-    }
-}
-
-d5_all_types_then_vals := [BY].{
-    L2 := [BZ].{
-        L3 := [CA].{
-            L4 := [CB].{
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = 4
-            }
-
-            val3 = 3
-        }
-
-        val2 = 2
-    }
-
-    val1 = 1
-}
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-
-d5_all_vals_then_types := [CD].{
-    val1 = 100
-
-    L2 := [CE].{
-        val2 = val1 + 10
-
-        L3 := [CF].{
-            val3 = val1 + val2
-
-            L4 := [CG].{
-                val4 = val1 + val2 + val3
-
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-    }
-}
-d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
-
-d5_deep_interleave := [CI].{
-    val1 = 2
-
-    L2 := [CJ].{
-        L3 := [CK].{
-            val3 = val1 + val2
-
-            L4 := [CL].{
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = val1 + val2 + val3
-            }
-        }
-
-        val2 = val1 + 1
-    }
-}
-d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
-
-d5_l4_val_after_l5 := [CN].{
-    L2 := [CO].{
-        L3 := [CP].{
-            L4 := [CQ].{
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-
-                val4 = 6
-            }
-        }
-    }
-}
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-
-d5_l3_val_after_l4 := [CS].{
-    L2 := [CT].{
-        L3 := [CU].{
-            L4 := [CV].{
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-
-                val4 = 7
-            }
-
-            val3 = 3
-        }
-    }
-}
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-
-d5_l1_val_last := [DC].{
-    L2 := [DD].{
-        val2 = val1 + 10
-
-        L3 := [DE].{
-            val3 = val1 + val2
-
-            L4 := [DF].{
-                val4 = val1 + val2 + val3
-
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-    }
-
-    val1 = 5
-}
-d5_6 = d5_l1_val_last.val1
-d5_7 = d5_l1_val_last.L2.val2
-d5_8 = d5_l1_val_last.L2.L3.val3
-d5_9 = d5_l1_val_last.L2.L3.L4.val4
-d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
-
-d5_l1_to_l5_violation := [DH].{
-    L2 := [DI].{
-        L3 := [DJ].{
-            L4 := [DK].{
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-            }
-        }
-    }
-
-    bad = deep_secret
-}
-
-d5_l3_to_l5_violation := [DM].{
-    L2 := [DN].{
-        L3 := [DO].{
-            L4 := [DP].{
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-            }
-
-            bad = l5_secret
-        }
-    }
-}
-
-d5_l4_to_l5_violation := [DR].{
-    L2 := [DS].{
-        L3 := [DT].{
-            L4 := [DU].{
-                L5 := [DV].{
-                    l5_only = 8888
-                }
-
-                bad = l5_only
-            }
-        }
-    }
-}
-```
-
-
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│  ‾‾‾‾‾‾‾‾‾‾                                                                 │
+└────────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│             ‾‾                                                              │
+└───────────────────────────── associated_items_complete_all_patterns.md:2:12 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│                ‾                                                            │
+└───────────────────────────── associated_items_complete_all_patterns.md:2:15 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│                  ‾                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:2:17 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│                   ‾                                                         │
+└───────────────────────────── associated_items_complete_all_patterns.md:2:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│                    ‾                                                        │
+└───────────────────────────── associated_items_complete_all_patterns.md:2:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└────────────────────────────── associated_items_complete_all_patterns.md:5:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│  ‾‾‾‾‾‾‾‾                                                                   │
+└────────────────────────────── associated_items_complete_all_patterns.md:8:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│           ‾‾                                                                │
+└───────────────────────────── associated_items_complete_all_patterns.md:8:10 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│              ‾                                                              │
+└───────────────────────────── associated_items_complete_all_patterns.md:8:13 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│                ‾                                                            │
+└───────────────────────────── associated_items_complete_all_patterns.md:8:15 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│                 ‾                                                           │
+└───────────────────────────── associated_items_complete_all_patterns.md:8:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│                  ‾                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:8:17 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:10:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+└───────────────────────────── associated_items_complete_all_patterns.md:13:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│                 ‾‾                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:13:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│                    ‾                                                        │
+└──────────────────────────── associated_items_complete_all_patterns.md:13:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│                      ‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:13:21 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│                       ‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:13:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│                        ‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:13:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:19:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_2 = d2_inner_first.Inner.inner_val                                      │
+│                       ‾‾‾‾‾‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:21:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_2 = d2_inner_first.Inner.inner_val                                      │
+│                             ‾‾‾‾‾‾‾‾‾‾                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:21:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+└───────────────────────────── associated_items_complete_all_patterns.md:23:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│                      ‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:23:21 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│                         ‾                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:23:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:23:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│                            ‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:23:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│                             ‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:23:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:29:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
+│                            ‾‾‾‾‾‾                                           │
+└──────────────────────────── associated_items_complete_all_patterns.md:30:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
+│                                  ‾‾‾‾‾‾‾‾‾‾                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:30:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+└───────────────────────────── associated_items_complete_all_patterns.md:32:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│                      ‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:32:21 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│                         ‾                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:32:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:32:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│                            ‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:32:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│                             ‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:32:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
+│                                     ‾‾‾‾‾‾                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:33:36 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
+│                                           ‾‾‾‾‾‾‾‾‾‾                        │
+└──────────────────────────── associated_items_complete_all_patterns.md:33:42 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:38:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└───────────────────────────── associated_items_complete_all_patterns.md:41:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│                     ‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:41:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│                        ‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:41:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│                          ‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:41:25 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:41:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│                            ‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:41:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:47:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
+└───────────────────────────── associated_items_complete_all_patterns.md:49:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│              ‾‾                                                             │
+└──────────────────────────── associated_items_complete_all_patterns.md:49:13 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│                 ‾                                                           │
+└──────────────────────────── associated_items_complete_all_patterns.md:49:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│                   ‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:49:18 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│                    ‾                                                        │
+└──────────────────────────── associated_items_complete_all_patterns.md:49:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│                     ‾                                                       │
+└──────────────────────────── associated_items_complete_all_patterns.md:49:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                              ┌────────────────────────────────┐
+┌─ The token .InnerB is not expected in an ───┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│          valA = d2_siblings.InnerB.valB + 1                                 │
+│                            ‾‾‾‾‾‾‾                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ Associated items (such as types or ────────┤ EXPRESSION IN ASSOCIATED ITEMS │
+│  methods) can only have associated types    └───────────────────────────────┬┘
+│  and values, not plain expressions.                                         │
+│                                                                             │
+│          valA = d2_siblings.InnerB.valB + 1                                 │
+│                            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
+
+    To fix this, remove the expression at the very end.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:57:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_5 = d2_siblings.InnerA.valA                                             │
+│                    ‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:58:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d2_5 = d2_siblings.InnerA.valA                                             │
+│                           ‾‾‾‾‾                                             │
+└──────────────────────────── associated_items_complete_all_patterns.md:58:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└───────────────────────────── associated_items_complete_all_patterns.md:60:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│                     ‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:60:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│                        ‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:60:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│                          ‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:60:25 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:60:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│                            ‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:60:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:70:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_2 = d3_types_then_vals.L2.val2                                          │
+│                           ‾‾‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:72:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_2 = d3_types_then_vals.L2.val2                                          │
+│                              ‾‾‾‾‾                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:72:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
+│                           ‾‾‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:73:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
+│                              ‾‾‾                                            │
+└──────────────────────────── associated_items_complete_all_patterns.md:73:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
+│                                 ‾‾‾‾‾                                       │
+└──────────────────────────── associated_items_complete_all_patterns.md:73:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└───────────────────────────── associated_items_complete_all_patterns.md:75:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│                     ‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:75:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│                        ‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:75:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│                          ‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:75:25 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:75:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│                            ‾                                                │
+└──────────────────────────── associated_items_complete_all_patterns.md:75:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:85:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_5 = d3_vals_then_types.L2.val2                                          │
+│                           ‾‾‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:87:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_5 = d3_vals_then_types.L2.val2                                          │
+│                              ‾‾‾‾‾                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:87:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
+│                           ‾‾‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:88:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
+│                              ‾‾‾                                            │
+└──────────────────────────── associated_items_complete_all_patterns.md:88:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
+│                                 ‾‾‾‾‾                                       │
+└──────────────────────────── associated_items_complete_all_patterns.md:88:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:90:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│                        ‾‾                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:90:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│                           ‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:90:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│                             ‾                                               │
+└──────────────────────────── associated_items_complete_all_patterns.md:90:28 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│                              ‾                                              │
+└──────────────────────────── associated_items_complete_all_patterns.md:90:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│                               ‾                                             │
+└──────────────────────────── associated_items_complete_all_patterns.md:90:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└───────────────────────────── associated_items_complete_all_patterns.md:98:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:100:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:100:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:100:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:100:28 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:100:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:100:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:108:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+└──────────────────────────── associated_items_complete_all_patterns.md:110:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│                      ‾‾                                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:110:21 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│                         ‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:110:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:110:27 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:110:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:110:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:120:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_8 = d3_val_after_nested.L2.val2                                         │
+│                            ‾‾‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:122:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_8 = d3_val_after_nested.L2.val2                                         │
+│                               ‾‾‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:122:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
+│                            ‾‾‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:123:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:123:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
+│                                  ‾‾‾‾‾                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:123:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:125:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│                         ‾‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:125:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:125:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:125:30 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:125:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│                                 ‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:125:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:139:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:140:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│                                  ‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:140:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│                                     ‾‾‾                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:140:36 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│                                        ‾‾‾‾‾                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:140:39 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:142:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│                         ‾‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:142:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:142:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:142:30 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:142:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│                                 ‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:142:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:156:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:157:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│                                  ‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:157:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│                                     ‾‾‾                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:157:36 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│                                        ‾‾‾‾‾                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:157:39 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
+└──────────────────────────── associated_items_complete_all_patterns.md:159:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│                   ‾‾                                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:159:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│                      ‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:159:21 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│                         ‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:159:24 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│                          ‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:159:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:159:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:173:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│                         ‾‾‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:174:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│                            ‾‾‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:174:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:174:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│                                  ‾‾‾‾‾                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:174:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+└──────────────────────────── associated_items_complete_all_patterns.md:176:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│                 ‾‾                                                          │
+└─────────────────────────── associated_items_complete_all_patterns.md:176:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│                    ‾                                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:176:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│                       ‾                                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:176:22 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:176:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│                         ‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:176:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:190:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│                       ‾‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:191:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│                          ‾‾‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:191:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│                             ‾‾‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:191:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│                                ‾‾‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:191:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:193:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:193:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:193:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:193:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:193:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:193:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:202:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:203:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:203:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:203:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│                                    ‾‾‾‾‾                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:203:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:205:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:205:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:205:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:205:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:205:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:205:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:217:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:218:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:218:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:218:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│                                    ‾‾‾‾‾                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:218:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:220:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:220:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:220:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:220:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:220:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:220:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:234:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:235:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:235:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:235:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│                                    ‾‾‾‾‾                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:235:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:237:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:237:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:237:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:237:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:237:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:237:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:247:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:249:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:249:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:249:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:249:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:249:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:249:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:259:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:261:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:261:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:261:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:261:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:261:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:261:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:271:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:273:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│                         ‾‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:273:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:273:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:273:30 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:273:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│                                 ‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:273:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:291:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:292:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                                  ‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:292:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                                     ‾‾‾                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:292:36 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                                        ‾‾‾                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:292:39 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                                           ‾‾‾‾‾                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:292:42 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:294:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│                         ‾‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:294:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:294:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:294:30 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:294:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│                                 ‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:294:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:312:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                               ‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:313:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                                  ‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:313:33 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                                     ‾‾‾                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:313:36 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                                        ‾‾‾                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:313:39 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                                           ‾‾‾‾‾                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:313:42 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:315:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:315:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:315:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:315:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:315:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:315:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:333:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:334:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:334:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:334:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                                    ‾‾‾                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:334:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                                       ‾‾‾‾‾                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:334:38 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:336:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:336:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:336:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:336:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:336:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:336:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:348:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:349:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:349:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:349:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                                    ‾‾‾                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:349:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                                       ‾‾‾‾‾                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:349:38 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────── associated_items_complete_all_patterns.md:351:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│                     ‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:351:20 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:351:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:351:26 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│                            ‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:351:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│                             ‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:351:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:365:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:366:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:366:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:366:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                                    ‾‾‾                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:366:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                                       ‾‾‾‾‾                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:366:38 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+└──────────────────────────── associated_items_complete_all_patterns.md:368:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│                 ‾‾                                                          │
+└─────────────────────────── associated_items_complete_all_patterns.md:368:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│                    ‾                                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:368:19 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│                       ‾                                                     │
+└─────────────────────────── associated_items_complete_all_patterns.md:368:22 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│                        ‾                                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:368:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│                         ‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:368:24 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:386:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_7 = d5_l1_val_last.L2.val2                                              │
+│                       ‾‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:388:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_7 = d5_l1_val_last.L2.val2                                              │
+│                          ‾‾‾‾‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:388:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
+│                       ‾‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:389:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
+│                          ‾‾‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:389:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
+│                             ‾‾‾‾‾                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:389:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│                       ‾‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:390:22 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│                          ‾‾‾                                                │
+└─────────────────────────── associated_items_complete_all_patterns.md:390:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│                             ‾‾‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:390:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│                                ‾‾‾‾‾                                        │
+└─────────────────────────── associated_items_complete_all_patterns.md:390:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                        ‾‾‾                                                  │
+└─────────────────────────── associated_items_complete_all_patterns.md:391:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                           ‾‾‾                                               │
+└─────────────────────────── associated_items_complete_all_patterns.md:391:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                              ‾‾‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:391:29 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                                 ‾‾‾                                         │
+└─────────────────────────── associated_items_complete_all_patterns.md:391:32 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                                    ‾‾‾‾‾                                    │
+└─────────────────────────── associated_items_complete_all_patterns.md:391:35 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:393:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:393:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:393:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:393:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:393:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:393:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:405:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:407:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:407:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:407:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:407:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:407:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:407:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:419:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:421:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│                        ‾‾                                                   │
+└─────────────────────────── associated_items_complete_all_patterns.md:421:23 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│                           ‾                                                 │
+└─────────────────────────── associated_items_complete_all_patterns.md:421:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│                              ‾                                              │
+└─────────────────────────── associated_items_complete_all_patterns.md:421:29 ┘
+
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│                               ‾                                             │
+└─────────────────────────── associated_items_complete_all_patterns.md:421:30 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│                                ‾                                            │
+└─────────────────────────── associated_items_complete_all_patterns.md:421:31 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└──────────────────────────── associated_items_complete_all_patterns.md:433:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+                                                          ┌────────────────────┐
+┌─ Nothing is named d1_forward in this scope. ────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d1_1 = d1_forward.first                                                    │
+│         ‾‾‾‾‾‾‾‾‾‾                                                          │
+└────────────────────────────── associated_items_complete_all_patterns.md:6:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d1_scope in this scope. ──────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d1_2 = d1_scope.inner                                                      │
+│         ‾‾‾‾‾‾‾‾                                                            │
+└───────────────────────────── associated_items_complete_all_patterns.md:11:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_inner_first in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d2_1 = d2_inner_first.outer_val                                            │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:20:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_inner_first in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d2_2 = d2_inner_first.Inner.inner_val                                      │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:21:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type Inner is being redeclared. ──────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      Inner := [H].{                                                         │
+│          inner_val = outer_val                                              │
+│      }                                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:24:5 ┘
+
+    The redeclaration is here:
+
+    But Inner was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       │
+    14 │     Inner := [D].{
+    15 │         inner_val = outer_val
+    16 │     }
+                                                        ┌──────────────────────┐
+┌─ The name outer_val is being redeclared in this ──────┤ DUPLICATE DEFINITION │
+│  scope.                                               └─────────────────────┬┘
+│                                                                             │
+│      outer_val = 500                                                        │
+│      ‾‾‾‾‾‾‾‾‾                                                              │
+└───────────────────────────── associated_items_complete_all_patterns.md:28:5 ┘
+
+    The redeclaration is here:
+
+    But outer_val was already defined here:
+       ┌──────────────────────────── associated_items_complete_all_patterns.md:15:21
+       │
+    15 │         inner_val = outer_val
+       │                     ^^^^^^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_outer_val_middle in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└───────────────────────────── associated_items_complete_all_patterns.md:30:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name outer_val is being redeclared in this ──────┤ DUPLICATE DEFINITION │
+│  scope.                                               └─────────────────────┬┘
+│                                                                             │
+│      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
+│      ‾‾‾‾‾‾‾‾‾                                                              │
+└───────────────────────────── associated_items_complete_all_patterns.md:33:5 ┘
+
+    The redeclaration is here:
+
+    But outer_val was already defined here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:28:5
+       │
+    28 │     outer_val = 500
+       │     ^^^^^^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_outer_refs_inner in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
+│                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
+└──────────────────────────── associated_items_complete_all_patterns.md:33:17 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type Inner is being redeclared. ──────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      Inner := [J].{                                                         │
+│          inner_val = 600                                                    │
+│      }                                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:35:5 ┘
+
+    The redeclaration is here:
+
+    But Inner was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       │
+    14 │     Inner := [D].{
+    15 │         inner_val = outer_val
+    16 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_outer_refs_inner in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d2_4 = d2_outer_refs_inner.outer_val                                       │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└───────────────────────────── associated_items_complete_all_patterns.md:39:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type Inner is being redeclared. ──────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      Inner := [L].{                                                         │
+│          inner_private = 700                                                │
+│      }                                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:42:5 ┘
+
+    The redeclaration is here:
+
+    But Inner was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:14:5
+       │
+    14 │     Inner := [D].{
+    15 │         inner_val = outer_val
+    16 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named inner_private in this scope. ─────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      outer_trying_inner = inner_private                                     │
+│                           ‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:46:26 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_siblings in this scope. ───────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│          valA = d2_siblings.InnerB.valB + 1                                 │
+│                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:51:16 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d2_siblings in this scope. ───────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d2_5 = d2_siblings.InnerA.valA                                             │
+│         ‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└───────────────────────────── associated_items_complete_all_patterns.md:58:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_types_then_vals in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_1 = d3_types_then_vals.val1                                             │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:71:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_types_then_vals in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_2 = d3_types_then_vals.L2.val2                                          │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:72:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_types_then_vals in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:73:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 30                                                              │
+│      ‾‾‾‾                                                                   │
+└───────────────────────────── associated_items_complete_all_patterns.md:76:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+       ┌──────────────────────────── associated_items_complete_all_patterns.md:63:20
+       │
+    63 │             val3 = val1 + val2
+       │                    ^^^^
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [T].{                                                            │
+│          val2 = val1 + 5                                                    │
+│                                                                             │
+│          L3 := [U].{                                                        │
+│              val3 = val1 + val2                                             │
+│          }                                                                  │
+│      }                                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:78:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_vals_then_types in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_4 = d3_vals_then_types.val1                                             │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:86:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_vals_then_types in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_5 = d3_vals_then_types.L2.val2                                          │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:87:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_vals_then_types in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└───────────────────────────── associated_items_complete_all_patterns.md:88:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [W].{                                                            │
+│          L3 := [X].{                                                        │
+│              l3_private = 999                                               │
+│          }                                                                  │
+│      }                                                                      │
+└───────────────────────────── associated_items_complete_all_patterns.md:91:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named l3_private in this scope. ────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      bad_l1 = l3_private                                                    │
+│               ‾‾‾‾‾‾‾‾‾‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:97:14 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [Z].{                                                            │
+│          L3 := [AA].{                                                       │
+│              l3_secret = 888                                                │
+│          }                                                                  │
+│                                                                             │
+│          bad_l2 = l3_secret                                                 │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:101:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [AC].{                                                           │
+│          L3 := [AD].{                                                       │
+│              val3 = val2 * 2                                                │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 * 3                                                    │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:111:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 5                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:119:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:76:5
+       │
+    76 │     val1 = 30
+       │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_val_after_nested in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_7 = d3_val_after_nested.val1                                            │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:121:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_val_after_nested in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_8 = d3_val_after_nested.L2.val2                                         │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:122:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d3_val_after_nested in this scope. ───┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────── associated_items_complete_all_patterns.md:123:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [AF].{                                                           │
+│          L3 := [AG].{                                                       │
+│              L4 := [AH].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 2                                                           │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:126:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 1                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:138:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:119:5
+        │
+    119 │     val1 = 5
+        │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_all_types_then_vals in this scope. ┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+└──────────────────────────── associated_items_complete_all_patterns.md:140:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 10                                                              │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:143:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:138:5
+        │
+    138 │     val1 = 1
+        │     ^^^^
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [AJ].{                                                           │
+│          val2 = val1 + 1                                                    │
+│                                                                             │
+│          L3 := [AK].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [AL].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:145:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_all_vals_then_types in this scope. ┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+└──────────────────────────── associated_items_complete_all_patterns.md:157:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [AN].{                                                           │
+│          L3 := [AO].{                                                       │
+│              L4 := [AP].{                                                   │
+│                  val4 = val3 + 1                                            │
+│              }                                                              │
+│                                                                             │
+│              val3 = val2 + 1                                                │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 1                                                    │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:160:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 7                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:172:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:143:5
+        │
+    143 │     val1 = 10
+        │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_reverse_types in this scope. ──────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:174:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 15                                                              │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:177:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:172:5
+        │
+    172 │     val1 = 7
+        │     ^^^^
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [AR].{                                                           │
+│          L3 := [AS].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [AT].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 5                                                    │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:179:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_interleaved in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:191:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BB].{                                                           │
+│          L3 := [BC].{                                                       │
+│              L4 := [BD].{                                                   │
+│                  val4 = val3 * 3                                            │
+│              }                                                              │
+│              val3 = 12                                                      │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:194:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_l3_val_after_l4 in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:203:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BF].{                                                           │
+│          L3 := [BG].{                                                       │
+│              L4 := [BH].{                                                   │
+│                  val4 = val2 + val3                                         │
+│              }                                                              │
+│                                                                             │
+│              val3 = 8                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 4                                                           │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:206:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_l2_val_after_l3 in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:218:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BJ].{                                                           │
+│          L3 := [BK].{                                                       │
+│              L4 := [BL].{                                                   │
+│                  val4 = val1 + 100                                          │
+│              }                                                              │
+│                                                                             │
+│              val3 = val1 + 50                                               │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 10                                                   │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:221:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 3                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:233:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:177:5
+        │
+    177 │     val1 = 15
+        │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d4_l1_val_after_l2 in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:235:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BN].{                                                           │
+│          L3 := [BO].{                                                       │
+│              L4 := [BP].{                                                   │
+│                  l4_val = 444                                               │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:238:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named l4_val in this scope. ────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      bad = l4_val                                                           │
+│            ‾‾‾‾‾‾                                                           │
+└─────────────────────────── associated_items_complete_all_patterns.md:246:11 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BR].{                                                           │
+│          L3 := [BS].{                                                       │
+│              L4 := [BT].{                                                   │
+│                  l4_secret = 333                                            │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          bad = l4_secret                                                    │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:250:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BV].{                                                           │
+│          L3 := [BW].{                                                       │
+│              L4 := [BX].{                                                   │
+│                  l4_private = 555                                           │
+│              }                                                              │
+│                                                                             │
+│              attempt = l4_private                                           │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:262:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [BZ].{                                                           │
+│          L3 := [CA].{                                                       │
+│              L4 := [CB].{                                                   │
+│                  L5 := [CC].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 4                                                   │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 2                                                           │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:274:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 1                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:290:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:233:5
+        │
+    233 │     val1 = 3
+        │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_all_types_then_vals in this scope. ┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+└──────────────────────────── associated_items_complete_all_patterns.md:292:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 100                                                             │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:295:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:290:5
+        │
+    290 │     val1 = 1
+        │     ^^^^
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [CE].{                                                           │
+│          val2 = val1 + 10                                                   │
+│                                                                             │
+│          L3 := [CF].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [CG].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│                                                                             │
+│                  L5 := [CH].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:297:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_all_vals_then_types in this scope. ┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+└──────────────────────────── associated_items_complete_all_patterns.md:313:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 2                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:316:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:295:5
+        │
+    295 │     val1 = 100
+        │     ^^^^
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [CJ].{                                                           │
+│          L3 := [CK].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [CL].{                                                   │
+│                  L5 := [CM].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 1                                                    │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:318:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_deep_interleave in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:334:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [CO].{                                                           │
+│          L3 := [CP].{                                                       │
+│              L4 := [CQ].{                                                   │
+│                  L5 := [CR].{                                               │
+│                      val5 = val4 * 5                                        │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 6                                                   │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:337:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l4_val_after_l5 in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:349:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [CT].{                                                           │
+│          L3 := [CU].{                                                       │
+│              L4 := [CV].{                                                   │
+│                  L5 := [CW].{                                               │
+│                      val5 = val3 + val4                                     │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 7                                                   │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:352:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l3_val_after_l4 in this scope. ────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+└──────────────────────────── associated_items_complete_all_patterns.md:366:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [DD].{                                                           │
+│          val2 = val1 + 10                                                   │
+│                                                                             │
+│          L3 := [DE].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [DF].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│                                                                             │
+│                  L5 := [DG].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:369:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name val1 is being redeclared in this scope. ────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      val1 = 5                                                               │
+│      ‾‾‾‾                                                                   │
+└──────────────────────────── associated_items_complete_all_patterns.md:385:5 ┘
+
+    The redeclaration is here:
+
+    But val1 was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:316:5
+        │
+    316 │     val1 = 2
+        │     ^^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l1_val_last in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_6 = d5_l1_val_last.val1                                                 │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:387:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l1_val_last in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_7 = d5_l1_val_last.L2.val2                                              │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:388:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l1_val_last in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:389:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l1_val_last in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:390:8 ┘
+
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named d5_l1_val_last in this scope. ────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────── associated_items_complete_all_patterns.md:391:9 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [DI].{                                                           │
+│          L3 := [DJ].{                                                       │
+│              L4 := [DK].{                                                   │
+│                  L5 := [DL].{                                               │
+│                      deep_secret = 12345                                    │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:394:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                        ┌──────────────────────┐
+┌─ The name bad is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│      bad = deep_secret                                                      │
+│      ‾‾‾                                                                    │
+└──────────────────────────── associated_items_complete_all_patterns.md:404:5 ┘
+
+    The redeclaration is here:
+
+    But bad was already defined here:
+        ┌─────────────────────────── associated_items_complete_all_patterns.md:246:5
+        │
+    246 │     bad = l4_val
+        │     ^^^
+                                                          ┌────────────────────┐
+┌─ Nothing is named deep_secret in this scope. ───────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      bad = deep_secret                                                      │
+│            ‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└─────────────────────────── associated_items_complete_all_patterns.md:404:11 ┘
+
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [DN].{                                                           │
+│          L3 := [DO].{                                                       │
+│              L4 := [DP].{                                                   │
+│                  L5 := [DQ].{                                               │
+│                      l5_secret = 9999                                       │
+│                  }                                                          │
+│              }                                                              │
+│                                                                             │
+│              bad = l5_secret                                                │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:408:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                                             ┌─────────────────┐
+┌─ The type L2 is being redeclared. ─────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      L2 := [DS].{                                                           │
+│          L3 := [DT].{                                                       │
+│              L4 := [DU].{                                                   │
+│                  L5 := [DV].{                                               │
+│                      l5_only = 8888                                         │
+│                  }                                                          │
+│                                                                             │
+│                  bad = l5_only                                              │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+└──────────────────────────── associated_items_complete_all_patterns.md:422:5 ┘
+
+    The redeclaration is here:
+
+    But L2 was already declared here:
+       ┌───────────────────────────── associated_items_complete_all_patterns.md:61:5
+       │
+    61 │     L2 := [Q].{
+    62 │         L3 := [R].{
+    63 │             val3 = val1 + val2
+    64 │         }
+    65 │         val2 = 20
+    66 │     }
+                                           ┌───────────────────────────────────┐
+┌─ Type modules must have a nominal type ──┤ TYPE MODULE MISSING MATCHING TYPE │
+│  declaration matching the module name.   └──────────────────────────────────┬┘
+│                                                                             │
+│  d1_forward := [A].{                                                        │
+│      first = second                                                         │
+│      second = 100                                                           │
+│  }                                                                          │
+│  d1_1 = d1_forward.first                                                    │
+│                                                                             │
+│  d1_scope := [B].{                                                          │
+│      inner = 200                                                            │
+│  }                                                                          │
+│  d1_2 = d1_scope.inner                                                      │
+│                                                                             │
+│  d2_inner_first := [C].{                                                    │
+│      Inner := [D].{                                                         │
+│          inner_val = outer_val                                              │
+│      }                                                                      │
+│                                                                             │
+│      outer_val = 300                                                        │
+│  }                                                                          │
+│  d2_1 = d2_inner_first.outer_val                                            │
+│  d2_2 = d2_inner_first.Inner.inner_val                                      │
+│                                                                             │
+│  d2_outer_val_middle := [G].{                                               │
+│      Inner := [H].{                                                         │
+│          inner_val = outer_val                                              │
+│      }                                                                      │
+│                                                                             │
+│      outer_val = 500                                                        │
+│  }                                                                          │
+│  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
+│                                                                             │
+│  d2_outer_refs_inner := [I].{                                               │
+│      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
+│                                                                             │
+│      Inner := [J].{                                                         │
+│          inner_val = 600                                                    │
+│      }                                                                      │
+│  }                                                                          │
+│  d2_4 = d2_outer_refs_inner.outer_val                                       │
+│                                                                             │
+│  d2_scope_violation := [K].{                                                │
+│      Inner := [L].{                                                         │
+│          inner_private = 700                                                │
+│      }                                                                      │
+│                                                                             │
+│      outer_trying_inner = inner_private                                     │
+│  }                                                                          │
+│                                                                             │
+│  d2_siblings := [M].{                                                       │
+│      InnerA := [N].{                                                        │
+│          valA = d2_siblings.InnerB.valB + 1                                 │
+│      }                                                                      │
+│                                                                             │
+│      InnerB := [O].{                                                        │
+│          valB = 800                                                         │
+│      }                                                                      │
+│  }                                                                          │
+│  d2_5 = d2_siblings.InnerA.valA                                             │
+│                                                                             │
+│  d3_types_then_vals := [P].{                                                │
+│      L2 := [Q].{                                                            │
+│          L3 := [R].{                                                        │
+│              val3 = val1 + val2                                             │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 20                                                          │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 10                                                              │
+│  }                                                                          │
+│  d3_1 = d3_types_then_vals.val1                                             │
+│  d3_2 = d3_types_then_vals.L2.val2                                          │
+│  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
+│                                                                             │
+│  d3_vals_then_types := [S].{                                                │
+│      val1 = 30                                                              │
+│                                                                             │
+│      L2 := [T].{                                                            │
+│          val2 = val1 + 5                                                    │
+│                                                                             │
+│          L3 := [U].{                                                        │
+│              val3 = val1 + val2                                             │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d3_4 = d3_vals_then_types.val1                                             │
+│  d3_5 = d3_vals_then_types.L2.val2                                          │
+│  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
+│                                                                             │
+│  d3_l1_scope_violation := [V].{                                             │
+│      L2 := [W].{                                                            │
+│          L3 := [X].{                                                        │
+│              l3_private = 999                                               │
+│          }                                                                  │
+│      }                                                                      │
+│                                                                             │
+│      bad_l1 = l3_private                                                    │
+│  }                                                                          │
+│                                                                             │
+│  d3_l2_scope_violation := [Y].{                                             │
+│      L2 := [Z].{                                                            │
+│          L3 := [AA].{                                                       │
+│              l3_secret = 888                                                │
+│          }                                                                  │
+│                                                                             │
+│          bad_l2 = l3_secret                                                 │
+│      }                                                                      │
+│  }                                                                          │
+│                                                                             │
+│  d3_val_after_nested := [AB].{                                              │
+│      L2 := [AC].{                                                           │
+│          L3 := [AD].{                                                       │
+│              val3 = val2 * 2                                                │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 * 3                                                    │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 5                                                               │
+│  }                                                                          │
+│  d3_7 = d3_val_after_nested.val1                                            │
+│  d3_8 = d3_val_after_nested.L2.val2                                         │
+│  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
+│                                                                             │
+│  d4_all_types_then_vals := [AE].{                                           │
+│      L2 := [AF].{                                                           │
+│          L3 := [AG].{                                                       │
+│              L4 := [AH].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 2                                                           │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 1                                                               │
+│  }                                                                          │
+│  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
+│                                                                             │
+│  d4_all_vals_then_types := [AI].{                                           │
+│      val1 = 10                                                              │
+│                                                                             │
+│      L2 := [AJ].{                                                           │
+│          val2 = val1 + 1                                                    │
+│                                                                             │
+│          L3 := [AK].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [AL].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
+│                                                                             │
+│  d4_reverse_types := [AM].{                                                 │
+│      L2 := [AN].{                                                           │
+│          L3 := [AO].{                                                       │
+│              L4 := [AP].{                                                   │
+│                  val4 = val3 + 1                                            │
+│              }                                                              │
+│                                                                             │
+│              val3 = val2 + 1                                                │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 1                                                    │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 7                                                               │
+│  }                                                                          │
+│  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
+│                                                                             │
+│  d4_interleaved := [AQ].{                                                   │
+│      val1 = 15                                                              │
+│                                                                             │
+│      L2 := [AR].{                                                           │
+│          L3 := [AS].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [AT].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 5                                                    │
+│      }                                                                      │
+│  }                                                                          │
+│  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
+│                                                                             │
+│  d4_l3_val_after_l4 := [BA].{                                               │
+│      L2 := [BB].{                                                           │
+│          L3 := [BC].{                                                       │
+│              L4 := [BD].{                                                   │
+│                  val4 = val3 * 3                                            │
+│              }                                                              │
+│              val3 = 12                                                      │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
+│                                                                             │
+│  d4_l2_val_after_l3 := [BE].{                                               │
+│      L2 := [BF].{                                                           │
+│          L3 := [BG].{                                                       │
+│              L4 := [BH].{                                                   │
+│                  val4 = val2 + val3                                         │
+│              }                                                              │
+│                                                                             │
+│              val3 = 8                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 4                                                           │
+│      }                                                                      │
+│  }                                                                          │
+│  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
+│                                                                             │
+│  d4_l1_val_after_l2 := [BI].{                                               │
+│      L2 := [BJ].{                                                           │
+│          L3 := [BK].{                                                       │
+│              L4 := [BL].{                                                   │
+│                  val4 = val1 + 100                                          │
+│              }                                                              │
+│                                                                             │
+│              val3 = val1 + 50                                               │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 10                                                   │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 3                                                               │
+│  }                                                                          │
+│  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
+│                                                                             │
+│  d4_l1_scope_violation := [BM].{                                            │
+│      L2 := [BN].{                                                           │
+│          L3 := [BO].{                                                       │
+│              L4 := [BP].{                                                   │
+│                  l4_val = 444                                               │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│                                                                             │
+│      bad = l4_val                                                           │
+│  }                                                                          │
+│                                                                             │
+│  d4_l2_scope_violation := [BQ].{                                            │
+│      L2 := [BR].{                                                           │
+│          L3 := [BS].{                                                       │
+│              L4 := [BT].{                                                   │
+│                  l4_secret = 333                                            │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          bad = l4_secret                                                    │
+│      }                                                                      │
+│  }                                                                          │
+│                                                                             │
+│  d4_l3_scope_violation := [BU].{                                            │
+│      L2 := [BV].{                                                           │
+│          L3 := [BW].{                                                       │
+│              L4 := [BX].{                                                   │
+│                  l4_private = 555                                           │
+│              }                                                              │
+│                                                                             │
+│              attempt = l4_private                                           │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│                                                                             │
+│  d5_all_types_then_vals := [BY].{                                           │
+│      L2 := [BZ].{                                                           │
+│          L3 := [CA].{                                                       │
+│              L4 := [CB].{                                                   │
+│                  L5 := [CC].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 4                                                   │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│                                                                             │
+│          val2 = 2                                                           │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 1                                                               │
+│  }                                                                          │
+│  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
+│                                                                             │
+│  d5_all_vals_then_types := [CD].{                                           │
+│      val1 = 100                                                             │
+│                                                                             │
+│      L2 := [CE].{                                                           │
+│          val2 = val1 + 10                                                   │
+│                                                                             │
+│          L3 := [CF].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [CG].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│                                                                             │
+│                  L5 := [CH].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
+│                                                                             │
+│  d5_deep_interleave := [CI].{                                               │
+│      val1 = 2                                                               │
+│                                                                             │
+│      L2 := [CJ].{                                                           │
+│          L3 := [CK].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [CL].{                                                   │
+│                  L5 := [CM].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = val1 + val2 + val3                                  │
+│              }                                                              │
+│          }                                                                  │
+│                                                                             │
+│          val2 = val1 + 1                                                    │
+│      }                                                                      │
+│  }                                                                          │
+│  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
+│                                                                             │
+│  d5_l4_val_after_l5 := [CN].{                                               │
+│      L2 := [CO].{                                                           │
+│          L3 := [CP].{                                                       │
+│              L4 := [CQ].{                                                   │
+│                  L5 := [CR].{                                               │
+│                      val5 = val4 * 5                                        │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 6                                                   │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
+│                                                                             │
+│  d5_l3_val_after_l4 := [CS].{                                               │
+│      L2 := [CT].{                                                           │
+│          L3 := [CU].{                                                       │
+│              L4 := [CV].{                                                   │
+│                  L5 := [CW].{                                               │
+│                      val5 = val3 + val4                                     │
+│                  }                                                          │
+│                                                                             │
+│                  val4 = 7                                                   │
+│              }                                                              │
+│                                                                             │
+│              val3 = 3                                                       │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
+│                                                                             │
+│  d5_l1_val_last := [DC].{                                                   │
+│      L2 := [DD].{                                                           │
+│          val2 = val1 + 10                                                   │
+│                                                                             │
+│          L3 := [DE].{                                                       │
+│              val3 = val1 + val2                                             │
+│                                                                             │
+│              L4 := [DF].{                                                   │
+│                  val4 = val1 + val2 + val3                                  │
+│                                                                             │
+│                  L5 := [DG].{                                               │
+│                      val5 = val1 + val2 + val3 + val4                       │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│                                                                             │
+│      val1 = 5                                                               │
+│  }                                                                          │
+│  d5_6 = d5_l1_val_last.val1                                                 │
+│  d5_7 = d5_l1_val_last.L2.val2                                              │
+│  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
+│  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
+│  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
+│                                                                             │
+│  d5_l1_to_l5_violation := [DH].{                                            │
+│      L2 := [DI].{                                                           │
+│          L3 := [DJ].{                                                       │
+│              L4 := [DK].{                                                   │
+│                  L5 := [DL].{                                               │
+│                      deep_secret = 12345                                    │
+│                  }                                                          │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│                                                                             │
+│      bad = deep_secret                                                      │
+│  }                                                                          │
+│                                                                             │
+│  d5_l3_to_l5_violation := [DM].{                                            │
+│      L2 := [DN].{                                                           │
+│          L3 := [DO].{                                                       │
+│              L4 := [DP].{                                                   │
+│                  L5 := [DQ].{                                               │
+│                      l5_secret = 9999                                       │
+│                  }                                                          │
+│              }                                                              │
+│                                                                             │
+│              bad = l5_secret                                                │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+│                                                                             │
+│  d5_l4_to_l5_violation := [DR].{                                            │
+│      L2 := [DS].{                                                           │
+│          L3 := [DT].{                                                       │
+│              L4 := [DU].{                                                   │
+│                  L5 := [DV].{                                               │
+│                      l5_only = 8888                                         │
+│                  }                                                          │
+│                                                                             │
+│                  bad = l5_only                                              │
+│              }                                                              │
+│          }                                                                  │
+│      }                                                                      │
+│  }                                                                          │
+└────────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
+
+    This file is named Test.roc, but no top-level nominal type named Test was found.
+
+    Add a nominal type like:
+    Test := ...
+    or:
+    Test :: ... (opaque nominal type)
 # TOKENS
 ~~~zig
 LowerIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

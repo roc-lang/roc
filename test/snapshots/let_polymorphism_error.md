@@ -10,18 +10,17 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**let_polymorphism_error.md:1:11:1:18:**
-```roc
-[42, 4.2, "hello"]
-```
-          ^^^^^^^
+                                                               ┌───────────────┐
+┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
+│  is needed:                                                  └──────────────┬┘
+│                                                                             │
+│  [42, 4.2, "hello"]                                                         │
+│            ‾‾‾‾‾‾‾                                                          │
+└───────────────────────────────────────────── let_polymorphism_error.md:1:11 ┘
 
-The type was determined to be:
+    The type was determined to be:
 
-    Dec
-
+        Dec
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Float,Comma,StringStart,StringPart,StringEnd,CloseSquare,

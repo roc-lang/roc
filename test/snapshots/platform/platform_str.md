@@ -19,27 +19,25 @@ processString : Str -> Str
 EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:50
 DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `processString` is exposed, but it is not defined anywhere in this module.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that processString is ─────┤ EXPOSED BUT NOT DEFINED │
+│  exposed, but it is not defined anywhere in this   └────────────────────────┬┘
+│  module.                                                                    │
+│                                                                             │
+│      provides { "roc_processString": processString }                        │
+│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+└─────────────────────────────────────────────────────── platform_str.md:7:16 ┘
 
-**platform_str.md:7:16:7:50:**
-```roc
-    provides { "roc_processString": processString }
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `processString` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining processString in this module, or by removing it from the list of exposed values.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  processString : Str -> Str                                                 │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────────────────────────────────── platform_str.md:9:1 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**platform_str.md:9:1:9:27:**
-```roc
-processString : Str -> Str
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

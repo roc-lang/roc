@@ -14,29 +14,25 @@ x = {
 UNDEFINED VARIABLE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named y in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      y + 1                                                                  │
+│      ‾                                                                      │
+└────────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
 
-**canon_revamp_block_value_forward_ref_error.md:2:5:2:6:**
-```roc
-    y + 1
-```
-    ^
+    Is there an import or exposing missing up-top?
+                                                             ┌─────────────────┐
+┌─ Variable y is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      y = 5                                                                  │
+│      ‾                                                                      │
+└────────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
 
-
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_block_value_forward_ref_error.md:3:5:3:6:**
-```roc
-    y = 5
-```
-    ^
-
-
+    If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,

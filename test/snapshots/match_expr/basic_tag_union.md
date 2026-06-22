@@ -14,18 +14,17 @@ match color {
 # EXPECTED
 TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**basic_tag_union.md:4:11:4:14:**
-```roc
-	Green => "3"
-```
-	         ^^^
+                                                               ┌───────────────┐
+┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
+│  is needed:                                                  └──────────────┬┘
+│                                                                             │
+│   Green => "3"                                                              │
+│            ‾‾‾                                                              │
+└──────────────────────────────────────────────────── basic_tag_union.md:4:11 ┘
 
-The type was determined to be:
+    The type was determined to be:
 
-    Dec
-
+        Dec
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

@@ -15,30 +15,26 @@ r : [
 MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
 DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+                                                              ┌────────────────┐
+┌─ This type annotation is malformed or contains invalid ─────┤ MALFORMED TYPE │
+│  syntax.                                                    └───────────────┬┘
+│                                                                             │
+│   a,                                                                        │
+│   ‾                                                                         │
+└──────────────────────────────────────────── open_tag_union_stability.md:2:2 ┘
 
-**open_tag_union_stability.md:2:2:2:3:**
-```roc
-	a,
-```
-	^
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  r : [                                                                      │
+│   a,                                                                        │
+│                                                                             │
+│   ..,                                                                       │
+│  ]                                                                          │
+└──────────────────────────────────────────── open_tag_union_stability.md:1:1 ┘
 
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**open_tag_union_stability.md:1:1:5:2:**
-```roc
-r : [
-	a,
-
-	..,
-]
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenSquare,

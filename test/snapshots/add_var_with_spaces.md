@@ -10,17 +10,15 @@ add2 = x +      2
 # EXPECTED
 UNDEFINED VARIABLE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named x in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  add2 = x +      2                                                          │
+│         ‾                                                                   │
+└───────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
 
-**add_var_with_spaces.md:1:8:1:9:**
-```roc
-add2 = x +      2
-```
-       ^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,OpPlus,Int,

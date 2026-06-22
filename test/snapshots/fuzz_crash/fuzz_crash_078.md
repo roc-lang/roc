@@ -10,17 +10,15 @@ import#\
 # EXPECTED
 PARSE ERROR - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `incomplete_import`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│                                                                             │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
 
-**fuzz_crash_078.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwImport,

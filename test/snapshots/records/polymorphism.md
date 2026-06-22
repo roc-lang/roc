@@ -16,24 +16,23 @@ type=expr
 # EXPECTED
 MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
-**MISSING METHOD**
-This **to_str** method is being called on a value whose type doesn't have that method:
-**polymorphism.md:6:29:6:35:**
-```roc
-    { pair1, pair2, pair3 }.to_str()
-```
-                            ^^^^^^
+                                                              ┌────────────────┐
+┌─ This to_str method is being called on a value whose type ──┤ MISSING METHOD │
+│  doesn't have that method:                                  └───────────────┬┘
+│                                                                             │
+│      { pair1, pair2, pair3 }.to_str()                                       │
+│                              ‾‾‾‾‾‾                                         │
+└─────────────────────────────────────────────────────── polymorphism.md:6:29 ┘
 
-The value's type, which does not have a method named **to_str**, is:
+    The value's type, which does not have a method named to_str, is:
 
-    { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-        c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-      ]
-
+        { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+            c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
+            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+          ]
 # TOKENS
 ~~~zig
 OpenCurly,

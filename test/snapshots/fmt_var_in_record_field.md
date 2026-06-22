@@ -10,18 +10,16 @@ f=||{var c:[]}
 # EXPECTED
 UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `c` is not used anywhere in your code.
+                                                             ┌─────────────────┐
+┌─ Variable c is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  f=||{var c:[]}                                                             │
+│       ‾‾‾‾‾‾‾‾                                                              │
+└───────────────────────────────────────────── fmt_var_in_record_field.md:1:6 ┘
 
-If you don't need this variable, prefix it with an underscore like `_c` to suppress this warning.
-The unused variable is declared here:
-**fmt_var_in_record_field.md:1:6:1:14:**
-```roc
-f=||{var c:[]}
-```
-     ^^^^^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _c to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwVar,LowerIdent,OpColon,OpenSquare,CloseSquare,CloseCurly,

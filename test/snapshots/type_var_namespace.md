@@ -25,18 +25,16 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `item` is not used anywhere in your code.
+                                                             ┌─────────────────┐
+┌─ Variable item is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│      item = 42                                                              │
+│      ‾‾‾‾                                                                   │
+└────────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_item` to suppress this warning.
-The unused variable is declared here:
-**type_var_namespace.md:7:5:7:9:**
-```roc
-    item = 42
-```
-    ^^^^
-
-
+    If you don't need this variable, prefix it with an underscore like _item to suppress this warning.
+    The unused variable is declared here:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

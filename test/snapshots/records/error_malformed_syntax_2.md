@@ -12,39 +12,33 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **42** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+                                         ┌─────────────────────────────────────┐
+┌─ The token 42 is not expected in a ────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│  { age: 42, name = "Alice" }                                                │
+│         ‾‾                                                                  │
+└──────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
 
-**error_malformed_syntax_2.md:1:8:1:10:**
-```roc
-{ age: 42, name = "Alice" }
-```
-       ^^
+    Type annotations should contain types like Str, Num a, or List U64.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│  { age: 42, name = "Alice" }                                                │
+│           ‾                                                                 │
+└─────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  { age: 42, name = "Alice" }                                                │
+│    ‾‾‾‾‾‾‾                                                                  │
+└──────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**error_malformed_syntax_2.md:1:10:1:11:**
-```roc
-{ age: 42, name = "Alice" }
-```
-         ^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**error_malformed_syntax_2.md:1:3:1:10:**
-```roc
-{ age: 42, name = "Alice" }
-```
-  ^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,CloseCurly,

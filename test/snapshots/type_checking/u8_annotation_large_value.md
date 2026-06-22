@@ -11,18 +11,17 @@ x = 500
 # EXPECTED
 INVALID NUMBER - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**u8_annotation_large_value.md:2:5:2:8:**
-```roc
-x = 500
-```
-    ^^^
+                                                              ┌────────────────┐
+┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
+│                                                             └───────────────┬┘
+│                                                                             │
+│  x = 500                                                                    │
+│      ‾‾‾                                                                    │
+└─────────────────────────────────────────── u8_annotation_large_value.md:2:5 ┘
 
-The inferred type is:
+    The inferred type is:
 
-    U8
-
+        U8
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

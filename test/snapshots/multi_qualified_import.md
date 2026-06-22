@@ -34,160 +34,132 @@ UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│             ‾‾‾‾‾                                                           │
+└──────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
 
-**multi_qualified_import.md:12:12:12:17:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-           ^^^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                  ‾‾‾‾‾                                                      │
+└──────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                       ‾‾‾‾‾‾‾                                               │
+└──────────────────────────────────────────── multi_qualified_import.md:12:22 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                              ‾                                              │
+└──────────────────────────────────────────── multi_qualified_import.md:12:29 ┘
 
-**multi_qualified_import.md:12:17:12:22:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                ^^^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                               ‾                                             │
+└──────────────────────────────────────────── multi_qualified_import.md:12:30 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                                ‾‾‾‾‾                                        │
+└──────────────────────────────────────────── multi_qualified_import.md:12:31 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                                     ‾                                       │
+└──────────────────────────────────────────── multi_qualified_import.md:12:36 ┘
 
-**multi_qualified_import.md:12:22:12:29:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                     ^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│                                      ‾                                      │
+└──────────────────────────────────────────── multi_qualified_import.md:12:37 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                             ┌─────────────────┐
+┌─ The type Encoder is not declared in this scope. ──────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  json_encoder : Encoder                                                     │
+│                 ‾‾‾‾‾‾‾                                                     │
+└───────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This type is referenced here:
+                                                              ┌────────────────┐
+┌─ Json.Core.Utf8.defaultEncoder does not exist. ─────────────┤ DOES NOT EXIST │
+│                                                             └───────────────┬┘
+│                                                                             │
+│  json_encoder = Json.Core.Utf8.defaultEncoder                               │
+│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
+└───────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
 
-**multi_qualified_import.md:12:29:12:30:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                            ^
+                                                         ┌─────────────────────┐
+┌─ There is no module with the name json.Core.Utf8 ──────┤ MODULE NOT IMPORTED │
+│  imported into this Roc file.                          └────────────────────┬┘
+│                                                                             │
+│  process : json.Core.Utf8.Encoder -> Str                                    │
+│            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+└───────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
 
+    You're attempting to use this module here:
+                                                             ┌─────────────────┐
+┌─ Variable encoder is not used anywhere in your code. ──────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  process = |encoder| "processing"                                           │
+│             ‾‾‾‾‾‾‾                                                         │
+└───────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    If you don't need this variable, prefix it with an underscore like _encoder to suppress this warning.
+    The unused variable is declared here:
+                                                         ┌─────────────────────┐
+┌─ There is no module with the name json.Core.Utf8 ──────┤ MODULE NOT IMPORTED │
+│  imported into this Roc file.                          └────────────────────┬┘
+│                                                                             │
+│  data : json.Core.Utf8.EncodedData                                          │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+└───────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
 
-**multi_qualified_import.md:12:30:12:31:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                             ^
+    You're attempting to use this module here:
+                                                          ┌────────────────────┐
+┌─ Nothing is named json in this scope. ──────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  data = json.Core.Utf8.encode("hello")                                      │
+│         ‾‾‾‾                                                                │
+└───────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:31:12:36:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                              ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:36:12:37:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                                   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:37:12:38:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                                    ^
-
-
-**UNDECLARED TYPE**
-The type _Encoder_ is not declared in this scope.
-
-This type is referenced here:
-**multi_qualified_import.md:3:16:3:23:**
-```roc
-json_encoder : Encoder
-```
-               ^^^^^^^
-
-
-**DOES NOT EXIST**
-`Json.Core.Utf8.defaultEncoder` does not exist.
-
-**multi_qualified_import.md:4:16:4:45:**
-```roc
-json_encoder = Json.Core.Utf8.defaultEncoder
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
-
-You're attempting to use this module here:
-**multi_qualified_import.md:7:11:7:33:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-          ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `encoder` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_encoder` to suppress this warning.
-The unused variable is declared here:
-**multi_qualified_import.md:8:12:8:19:**
-```roc
-process = |encoder| "processing"
-```
-           ^^^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
-
-You're attempting to use this module here:
-**multi_qualified_import.md:11:8:11:34:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `json` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**multi_qualified_import.md:12:8:12:12:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-       ^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

@@ -29,49 +29,44 @@ EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that pr1 is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│    "roc_not implemented": pr1,                                              │
+│    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+└─────────────────────────────────────────────────────────── platform.md:14:3 ┘
 
-**platform.md:14:3:14:29:**
-```roc
-		"roc_not implemented": pr1,
-```
-		^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `pr1` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining pr1 in this module, or by removing it from the list of exposed values.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that pr2 is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│    "roc_not implemented": pr2,                                              │
+│    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+└─────────────────────────────────────────────────────────── platform.md:15:3 ┘
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `pr2` is exposed, but it is not defined anywhere in this module.
+    You can fix this by either defining pr2 in this module, or by removing it from the list of exposed values.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that E1 is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│    E1,                                                                      │
+│    ‾‾                                                                       │
+└──────────────────────────────────────────────────────────── platform.md:6:3 ┘
 
-**platform.md:15:3:15:29:**
-```roc
-		"roc_not implemented": pr2,
-```
-		^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `pr2` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining E1 in this module, or by removing it from the list of exposed values.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that E2 is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│    E2,                                                                      │
+│    ‾‾                                                                       │
+└──────────────────────────────────────────────────────────── platform.md:7:3 ┘
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `E1` is exposed, but it is not defined anywhere in this module.
-
-**platform.md:6:3:6:5:**
-```roc
-		E1,
-```
-		^^
-You can fix this by either defining `E1` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `E2` is exposed, but it is not defined anywhere in this module.
-
-**platform.md:7:3:7:5:**
-```roc
-		E2,
-```
-		^^
-You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
-
-**INVALID HOSTED SECTION**
-The platform header maps more than one function to the linker symbol `roc_not implemented`. Each provides and hosted entry needs a distinct symbol.
-
+    You can fix this by either defining E2 in this module, or by removing it from the list of exposed values.
+INVALID HOSTED SECTION
+The platform header maps more than one function to the linker symbol roc_not implemented. Each provides and hosted entry needs a distinct symbol.
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

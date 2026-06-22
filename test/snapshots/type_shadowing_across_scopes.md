@@ -25,89 +25,74 @@ DUPLICATE DEFINITION - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_type_field_name`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_type_field_name ───────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      Try : [Success, Failure]                                               │
+│      ‾‾‾                                                                    │
+└──────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
 
-**type_shadowing_across_scopes.md:9:5:9:8:**
-```roc
-    Try : [Success, Failure]
-```
-    ^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_ty_close_curly_or_comma ───┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      Try : [Success, Failure]                                               │
+│                      ‾‾‾‾‾‾‾                                                │
+└─────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│      Try : [Success, Failure]                                               │
+│                             ‾                                               │
+└─────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  }                                                                          │
+│  ‾                                                                          │
+└─────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
 
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                        ┌──────────────────────┐
+┌─ The name Try is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
+│                                                       └─────────────────────┬┘
+│                                                                             │
+│  Try(a, b) : [Ok(a), Err(b)]                                                │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+└──────────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
 
+    The redeclaration is here:
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    But Try was already defined here:
+      ┌───────────────────────────────────────── type_shadowing_across_scopes.md:1:1
+      │
+    1 │ Try(a, b) : [Ok(a), Err(b)]
+      │ ^
+                                                             ┌─────────────────┐
+┌─ Variable data is not used anywhere in your code. ─────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  processData = |data|                                                       │
+│                 ‾‾‾‾                                                        │
+└─────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
 
-**type_shadowing_across_scopes.md:9:28:9:29:**
-```roc
-    Try : [Success, Failure]
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_shadowing_across_scopes.md:10:1:10:2:**
-```roc
-}
-```
-^
-
-
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:28:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Try` was already defined here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^
-
-
-**UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**type_shadowing_across_scopes.md:4:16:4:20:**
-```roc
-processData = |data|
-```
-               ^^^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
-
+    If you don't need this variable, prefix it with an underscore like _data to suppress this warning.
+    The unused variable is declared here:
+                                                              ┌────────────────┐
+┌─ This type annotation is malformed or contains invalid ─────┤ MALFORMED TYPE │
+│  syntax.                                                    └───────────────┬┘
+│                                                                             │
+│      Try : [Success, Failure]                                               │
+│                      ‾‾‾‾‾‾‾                                                │
+└─────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
 # TOKENS
 ~~~zig

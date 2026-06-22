@@ -179,6 +179,16 @@ pub const CliCtx = struct {
         return CoreCtx.default(self.gpa, self.arena, self.io.std_io);
     }
 
+    /// Build a colored-terminal reporting config sized to the real terminal
+    /// width (falling back to the default for narrow/unknown terminals).
+    pub fn terminalReportConfig(self: *const Self) ReportingConfig {
+        var config = ReportingConfig.initColorTerminal();
+        if (self.coreCtx().terminalWidth()) |cols| {
+            if (cols >= 40) config.max_line_width = cols;
+        }
+        return config;
+    }
+
     /// Clean up resources and flush I/O
     pub fn deinit(self: *Self) void {
         self.io.flush();
@@ -264,7 +274,7 @@ pub const CliCtx = struct {
 
     /// Render all problems to a writer
     pub fn renderProblemsTo(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
-        const config = ReportingConfig.initColorTerminal();
+        const config = self.terminalReportConfig();
 
         for (self.problems.items) |problem| {
             var report = try problem.toReport(self.gpa);

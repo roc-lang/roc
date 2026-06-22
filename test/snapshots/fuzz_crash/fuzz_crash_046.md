@@ -11,22 +11,19 @@ app[]{f:platform""}import fS
 ASCII CONTROL CHARACTER - :0:0:0:0
 PARSE ERROR - fuzz_crash_046.md:1:20:1:26
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  app[]{f:platform""}import fS                                              │
+│                     ‾‾‾‾‾‾                                                  │
+└───────────────────────────────────────────────────── fuzz_crash_046.md:1:20 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `incomplete_import`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_046.md:1:20:1:26:**
-```roc
-app[]{f:platform""}import fS
-```
-                   ^^^^^^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,LowerIdent,UpperIdent,

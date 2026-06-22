@@ -11,27 +11,25 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 MODULE NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `SomeType` was not found in this Roc project.
+                                                            ┌──────────────────┐
+┌─ The module SomeType was not found in this Roc project. ──┤ MODULE NOT FOUND │
+│                                                           └─────────────────┬┘
+│                                                                             │
+│  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
+│                      ‾‾‾‾‾‾‾‾                                               │
+└─────────────────────────────── package_header_nonempty_singleline_1.md:1:21 ┘
 
-You're attempting to use this module here:
-**package_header_nonempty_singleline_1.md:1:21:1:29:**
-```roc
-package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-```
-                    ^^^^^^^^
+    You're attempting to use this module here:
+                                                     ┌─────────────────────────┐
+┌─ The module header says that something is ─────────┤ EXPOSED BUT NOT DEFINED │
+│  exposed, but it is not defined anywhere in this   └────────────────────────┬┘
+│  module.                                                                    │
+│                                                                             │
+│  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
+│           ‾‾‾‾‾‾‾‾‾                                                         │
+└─────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
 
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**package_header_nonempty_singleline_1.md:1:10:1:19:**
-```roc
-package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-```
-         ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
+    You can fix this by either defining something in this module, or by removing it from the list of exposed values.
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

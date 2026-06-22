@@ -12,30 +12,28 @@ A?
 TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
 TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 # PROBLEMS
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  A?                                                                         │
+│  ‾‾                                                                         │
+└─────────────────────────────────────────────────── try_undefined_tag.md:1:1 ┘
 
-**try_undefined_tag.md:1:1:1:3:**
-```roc
-A?
-```
-^^
+                                                               ┌───────────────┐
+┌─ The ? operator expects a Try type (a tag union containing ──┤ TYPE MISMATCH │
+│  ONLY Ok and Err tags), but I found:                         └──────────────┬┘
+│                                                                             │
+│  A?                                                                         │
+│  ‾                                                                          │
+└─────────────────────────────────────────────────── try_undefined_tag.md:1:1 ┘
 
+    This expression has type:
 
-**TYPE MISMATCH**
-The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err` tags), but I found:
-**try_undefined_tag.md:1:1:1:2:**
-```roc
-A?
-```
-^
+        [A, ..]
 
-This expression has type:
-
-    [A, ..]
-
-__Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
-
+    Tip: Maybe wrap a value using Ok(value) or Err(value).
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpQuestion,

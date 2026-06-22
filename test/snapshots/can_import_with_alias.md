@@ -12,17 +12,15 @@ main = MyJson.decode
 # EXPECTED
 UNDEFINED VARIABLE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `decode` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named decode in this scope. ────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  main = MyJson.decode                                                       │
+│         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────────────────── can_import_with_alias.md:3:8 ┘
 
-**can_import_with_alias.md:3:8:3:21:**
-```roc
-main = MyJson.decode
-```
-       ^^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

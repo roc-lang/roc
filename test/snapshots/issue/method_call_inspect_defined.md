@@ -10,17 +10,15 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **;** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token ; is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│  { x = "hello"; x.inspect() }                                               │
+│               ‾                                                             │
+└──────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
 
-**method_call_inspect_defined.md:1:14:1:15:**
-```roc
-{ x = "hello"; x.inspect() }
-```
-             ^
-
-
+    Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

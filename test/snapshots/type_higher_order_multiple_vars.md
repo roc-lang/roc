@@ -20,78 +20,64 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                     ‾‾                                      │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:36 ┘
 
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                        ‾                                    │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:39 ┘
 
-**type_higher_order_multiple_vars.md:3:36:3:38:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                   ^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                         ‾‾                                  │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:40 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                            ‾‾                               │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:43 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
+            a -> (b -> c) for a curried function (a function that returns another function)
+            (a -> b) -> c for a higher-order function (a function that takes another function)
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                               ‾‾                            │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:46 ┘
 
-**type_higher_order_multiple_vars.md:3:39:3:40:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                      ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                           │
+│                                                 ‾                           │
+└──────────────────────────────────── type_higher_order_multiple_vars.md:3:48 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_higher_order_multiple_vars.md:3:40:3:42:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                       ^^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-**type_higher_order_multiple_vars.md:3:43:3:45:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                          ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_higher_order_multiple_vars.md:3:46:3:48:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                             ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_higher_order_multiple_vars.md:3:48:3:49:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                               ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

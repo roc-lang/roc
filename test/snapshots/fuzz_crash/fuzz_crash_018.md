@@ -14,50 +14,42 @@ PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  0 b:S                                                                      │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
 
-**fuzz_crash_018.md:1:1:1:2:**
-```roc
-0 b:S
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  .R                                                                         │
+│  ‾‾                                                                         │
+└────────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                             ┌─────────────────┐
+┌─ The type S is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  0 b:S                                                                      │
+│      ‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This type is referenced here:
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  0 b:S                                                                      │
+│    ‾‾‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
 
-**fuzz_crash_018.md:2:1:2:3:**
-```roc
-.R
-```
-^^
-
-
-**UNDECLARED TYPE**
-The type _S_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_018.md:1:5:1:6:**
-```roc
-0 b:S
-```
-    ^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_018.md:1:3:1:6:**
-```roc
-0 b:S
-```
-  ^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

@@ -39,130 +39,108 @@ DECLARATION HAS NO VALUE - type_annotations.md:11:1:11:32
 DECLARATION HAS NO VALUE - type_annotations.md:13:1:15:2
 DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
+                                                             ┌─────────────────┐
+┌─ The type Thing is not declared in this scope. ────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  bar : Thing(_a, _b, _)                                                     │
+│        ‾‾‾‾‾                                                                │
+└──────────────────────────────────────────────────── type_annotations.md:3:7 ┘
 
-This type is referenced here:
-**type_annotations.md:3:7:3:12:**
-```roc
-bar : Thing(_a, _b, _)
-```
-      ^^^^^
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ The type String is not declared in this scope. ───────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  main! : List(String) -> Try({}, _)                                         │
+│               ‾‾‾‾‾‾                                                        │
+└─────────────────────────────────────────────────── type_annotations.md:9:14 ┘
 
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ The type Value is not declared in this scope. ────────────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  tag_tuple : Value((_a, _b, _c))                                            │
+│              ‾‾‾‾‾                                                          │
+└────────────────────────────────────────────────── type_annotations.md:11:13 ┘
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
+    This type is referenced here:
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  foo : U64                                                                  │
+│  ‾‾‾‾‾‾‾‾‾                                                                  │
+└──────────────────────────────────────────────────── type_annotations.md:1:1 ┘
 
-This type is referenced here:
-**type_annotations.md:9:14:9:20:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-             ^^^^^^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  bar : Thing(_a, _b, _)                                                     │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+└──────────────────────────────────────────────────── type_annotations.md:3:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  baz : (_a, _b, _c)                                                         │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+└──────────────────────────────────────────────────── type_annotations.md:5:1 ┘
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  add_one : (U8, U16 -> U32)                                                 │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└──────────────────────────────────────────────────── type_annotations.md:7:1 ┘
 
-This type is referenced here:
-**type_annotations.md:11:13:11:18:**
-```roc
-tag_tuple : Value((_a, _b, _c))
-```
-            ^^^^^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  main! : List(String) -> Try({}, _)                                         │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+└──────────────────────────────────────────────────── type_annotations.md:9:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  tag_tuple : Value((_a, _b, _c))                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+└─────────────────────────────────────────────────── type_annotations.md:11:1 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:1:1:1:10:**
-```roc
-foo : U64
-```
-^^^^^^^^^
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  closed_record_with_comma : {                                               │
+│   a : U8,                                                                   │
+│  }                                                                          │
+└─────────────────────────────────────────────────── type_annotations.md:13:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  open_record_with_comma : {                                                 │
+│   a : U8,                                                                   │
+│   ..,                                                                       │
+│  }                                                                          │
+└─────────────────────────────────────────────────── type_annotations.md:17:1 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:3:1:3:23:**
-```roc
-bar : Thing(_a, _b, _)
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:5:1:5:19:**
-```roc
-baz : (_a, _b, _c)
-```
-^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:7:1:7:27:**
-```roc
-add_one : (U8, U16 -> U32)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:9:1:9:35:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:11:1:11:32:**
-```roc
-tag_tuple : Value((_a, _b, _c))
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:13:1:15:2:**
-```roc
-closed_record_with_comma : {
-	a : U8,
-}
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:17:1:20:2:**
-```roc
-open_record_with_comma : {
-	a : U8,
-	..,
-}
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

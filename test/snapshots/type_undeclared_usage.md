@@ -20,51 +20,43 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _UnknownType_ is not declared in this scope.
+                                                             ┌─────────────────┐
+┌─ The type UnknownType is not declared in this scope. ──────┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  MyType : UnknownType                                                       │
+│           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└────────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
 
-This type is referenced here:
-**type_undeclared_usage.md:1:10:1:21:**
-```roc
-MyType : UnknownType
-```
-         ^^^^^^^^^^^
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ The type UndeclaredResult is not declared in this scope. ─┤ UNDECLARED TYPE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  processValue : UndeclaredResult -> Str                                     │
+│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+└────────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
 
+    This type is referenced here:
+                                                             ┌─────────────────┐
+┌─ Variable value is not used anywhere in your code. ────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  processValue = |value| {                                                   │
+│                  ‾‾‾‾‾                                                      │
+└────────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
 
-**UNDECLARED TYPE**
-The type _UndeclaredResult_ is not declared in this scope.
+    If you don't need this variable, prefix it with an underscore like _value to suppress this warning.
+    The unused variable is declared here:
+                                                         ┌─────────────────────┐
+┌─ There is no module with the name SomeModule imported ─┤ MODULE NOT IMPORTED │
+│  into this Roc file.                                   └────────────────────┬┘
+│                                                                             │
+│  AnotherType : SomeModule.MissingType                                       │
+│                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
+└────────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
-This type is referenced here:
-**type_undeclared_usage.md:3:16:3:32:**
-```roc
-processValue : UndeclaredResult -> Str
-```
-               ^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**type_undeclared_usage.md:4:17:4:22:**
-```roc
-processValue = |value| {
-```
-                ^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `SomeModule` imported into this Roc file.
-
-You're attempting to use this module here:
-**type_undeclared_usage.md:8:15:8:37:**
-```roc
-AnotherType : SomeModule.MissingType
-```
-              ^^^^^^^^^^^^^^^^^^^^^^
-
-
+    You're attempting to use this module here:
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

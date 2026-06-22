@@ -12,39 +12,33 @@ PARSE ERROR - fuzz_crash_042.md:1:11:1:12
 MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  import u.R}g:r->R.a.E                                                      │
+│            ‾                                                                │
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
-**fuzz_crash_042.md:1:11:1:12:**
-```roc
-import u.R}g:r->R.a.E
-```
-          ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                            ┌──────────────────┐
+┌─ The type a.E is qualified by the module u.R, but that ───┤ MODULE NOT FOUND │
+│  module was not found in this Roc project.                └─────────────────┬┘
+│                                                                             │
+│  import u.R}g:r->R.a.E                                                      │
+│                     ‾‾                                                      │
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
+    You're attempting to use this type here:
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  import u.R}g:r->R.a.E                                                      │
+│             ‾‾‾‾‾‾‾‾‾‾                                                      │
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
 
-**MODULE NOT FOUND**
-The type `a.E` is qualified by the module `u.R`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**fuzz_crash_042.md:1:20:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-                   ^^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_042.md:1:12:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-           ^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,CloseCurly,LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceDotUpperIdent,

@@ -16,17 +16,15 @@ Foo := [Whatever].{
 # EXPECTED
 UNDEFINED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `ghostName` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named ghostName in this scope. ─────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      callsGhost = ghostName                                                 │
+│                   ‾‾‾‾‾‾‾‾‾                                                 │
+└────────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
 
-**canon_revamp_undefined_in_assoc_error.md:3:18:3:27:**
-```roc
-    callsGhost = ghostName
-```
-                 ^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

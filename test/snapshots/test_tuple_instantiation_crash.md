@@ -18,18 +18,17 @@ main = swap(1, 2)
 # EXPECTED
 TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
-**TOO MANY ARGS**
-The `swap` function expects 1 argument, but it got 2 instead:
-**test_tuple_instantiation_crash.md:9:8:9:18:**
-```roc
-main = swap(1, 2)
-```
-       ^^^^^^^^^^
+                                                               ┌───────────────┐
+┌─ The swap function expects 1 argument, but it got 2 instead: ┤ TOO MANY ARGS │
+│                                                              └──────────────┬┘
+│                                                                             │
+│  main = swap(1, 2)                                                          │
+│         ‾‾‾‾‾‾‾‾‾‾                                                          │
+└────────────────────────────────────── test_tuple_instantiation_crash.md:9:8 ┘
 
-The `swap` function has the type:
+    The swap function has the type:
 
-    (a, b) -> (b, a)
-
+        (a, b) -> (b, a)
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

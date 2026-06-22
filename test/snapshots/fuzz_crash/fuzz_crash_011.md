@@ -12,51 +12,44 @@ PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: header_expected_open_square ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module P]F                                                                 │
+│         ‾                                                                   │
+└────────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
 
-**fuzz_crash_011.md:1:8:1:9:**
-```roc
-module P]F
-```
-       ^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  module P]F                                                                 │
+│          ‾                                                                  │
+└────────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
+│  arguments.                                                    └────────────┬┘
+│                                                                             │
+│                                                                             │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
-**fuzz_crash_011.md:1:9:1:10:**
-```roc
-module P]F
-```
-        ^
+    Instead of:
+        List U8
 
+    Use:
+        List(U8)
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_011.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 # TOKENS
 ~~~zig
 KwModule,UpperIdent,CloseSquare,UpperIdent,

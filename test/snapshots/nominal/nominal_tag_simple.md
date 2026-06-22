@@ -16,22 +16,21 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**nominal_tag_simple.md:7:10:7:22:**
-```roc
-yellow = Color.Yellow
-```
-         ^^^^^^^^^^^^
+                                                         ┌─────────────────────┐
+┌─ I'm having trouble with this nominal tag: ────────────┤ INVALID NOMINAL TAG │
+│                                                        └────────────────────┬┘
+│                                                                             │
+│  yellow = Color.Yellow                                                      │
+│           ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└───────────────────────────────────────────────── nominal_tag_simple.md:7:10 ┘
 
-The tag is:
+    The tag is:
 
-    Yellow
+        Yellow
 
-But the nominal type needs it to one of:
+    But the nominal type needs it to one of:
 
-    [Blue, Green, Red]
-
+        [Blue, Green, Red]
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

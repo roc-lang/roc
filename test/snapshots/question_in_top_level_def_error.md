@@ -15,15 +15,14 @@ result = f(3)?
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 # PROBLEMS
-**TRY OPERATOR OUTSIDE FUNCTION**
-The `?` operator can only be used inside function bodies because it can cause an early return.
-
-**question_in_top_level_def_error.md:6:10:6:15:**
-```roc
-result = f(3)?
-```
-         ^^^^^
-
+                                               ┌───────────────────────────────┐
+┌─ The ? operator can only be used inside ─────┤ TRY OPERATOR OUTSIDE FUNCTION │
+│  function bodies because it can cause an     └──────────────────────────────┬┘
+│  early return.                                                              │
+│                                                                             │
+│  result = f(3)?                                                             │
+│           ‾‾‾‾‾                                                             │
+└──────────────────────────────────── question_in_top_level_def_error.md:6:10 ┘
 
 # TOKENS
 ~~~zig

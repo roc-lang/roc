@@ -17,48 +17,42 @@ EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
 DECLARATION HAS NO VALUE - hosted.md:3:1:3:16
 DECLARATION HAS NO VALUE - hosted.md:5:1:5:16
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that a! is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│  hosted [a!, b!]                                                            │
+│          ‾‾                                                                 │
+└────────────────────────────────────────────────────────────── hosted.md:1:9 ┘
 
-**hosted.md:1:9:1:11:**
-```roc
-hosted [a!, b!]
-```
-        ^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining a! in this module, or by removing it from the list of exposed values.
+                                                     ┌─────────────────────────┐
+┌─ The module header says that b! is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
+│  it is not defined anywhere in this module.        └────────────────────────┬┘
+│                                                                             │
+│  hosted [a!, b!]                                                            │
+│              ‾‾                                                             │
+└───────────────────────────────────────────────────────────── hosted.md:1:13 ┘
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
+    You can fix this by either defining b! in this module, or by removing it from the list of exposed values.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  a! : Str => Str                                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
+└────────────────────────────────────────────────────────────── hosted.md:3:1 ┘
 
-**hosted.md:1:13:1:15:**
-```roc
-hosted [a!, b!]
-```
-            ^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  b! : Str => Str                                                            │
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
+└────────────────────────────────────────────────────────────── hosted.md:5:1 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**hosted.md:3:1:3:16:**
-```roc
-a! : Str => Str
-```
-^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**hosted.md:5:1:5:16:**
-```roc
-b! : Str => Str
-```
-^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwHosted,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

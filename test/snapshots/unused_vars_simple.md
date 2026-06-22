@@ -31,30 +31,25 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+                                                             ┌─────────────────┐
+┌─ Variable x is not used anywhere in your code. ────────────┤ UNUSED VARIABLE │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  unused_regular = |x| 42                                                    │
+│                    ‾                                                        │
+└───────────────────────────────────────────────── unused_vars_simple.md:4:19 ┘
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**unused_vars_simple.md:4:19:4:20:**
-```roc
-unused_regular = |x| 42
-```
-                  ^
+    If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+    The unused variable is declared here:
+                                                    ┌──────────────────────────┐
+┌─ Variable _value is prefixed with an underscore ──┤ UNDERSCORE VARIABLE USED │
+│  but is actually used.                            └─────────────────────────┬┘
+│                                                                             │
+│  used_underscore = |_value| _value                                          │
+│                             ‾‾‾‾‾‾                                          │
+└───────────────────────────────────────────────── unused_vars_simple.md:7:28 ┘
 
-
-**UNDERSCORE VARIABLE USED**
-Variable `_value` is prefixed with an underscore but is actually used.
-
-Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `value`.
-
-**unused_vars_simple.md:7:28:7:34:**
-```roc
-used_underscore = |_value| _value
-```
-                           ^^^^^^
-
-
+    Variables prefixed with _ are intended to be unused. Remove the underscore prefix: value.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

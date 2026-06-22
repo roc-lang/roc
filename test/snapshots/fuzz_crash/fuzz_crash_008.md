@@ -13,44 +13,37 @@ PARSE ERROR - fuzz_crash_008.md:1:1:1:2
 PARSE ERROR - fuzz_crash_008.md:1:3:1:4
 PARSE ERROR - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ||1                                                                       │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ||1                                                                       │
+│    ‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
 
-**fuzz_crash_008.md:1:1:1:2:**
-```roc
-||1
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ||1                                                                       │
+│     ‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_008.md:1:3:1:4:**
-```roc
-||1
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_008.md:1:4:1:5:**
-```roc
-||1
-```
-   ^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 OpBar,OpBar,Int,

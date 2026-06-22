@@ -13,17 +13,15 @@ world = "World"
 # EXPECTED
 UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  hello! = Stdout.line!("Hello")                                             │
+│           ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+└──────────────────────────────────────────── simple_module_no_blanks.md:2:10 ┘
 
-**simple_module_no_blanks.md:2:10:2:22:**
-```roc
-hello! = Stdout.line!("Hello")
-```
-         ^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

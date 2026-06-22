@@ -10,15 +10,13 @@ type=expr
 # EXPECTED
 UNCLOSED STRING - parse_unclosed_string.md:1:1:1:7
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
-**parse_unclosed_string.md:1:1:1:7:**
-```roc
-"hello
-```
-^^^^^^
-
+                                                             ┌─────────────────┐
+┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  "hello                                                                     │
+│  ‾‾‾‾‾‾                                                                     │
+└─────────────────────────────────────────────── parse_unclosed_string.md:1:1 ┘
 
 # TOKENS
 ~~~zig

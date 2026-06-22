@@ -21,35 +21,30 @@ Baz : Foo
 TYPE REDECLARED - type_scope_integration.md:5:1:5:10
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Foo_ is being redeclared.
+                                                             ┌─────────────────┐
+┌─ The type Foo is being redeclared. ────────────────────────┤ TYPE REDECLARED │
+│                                                            └────────────────┬┘
+│                                                                             │
+│  Foo : Str                                                                  │
+│  ‾‾‾‾‾‾‾‾‾                                                                  │
+└────────────────────────────────────────────── type_scope_integration.md:5:1 ┘
 
-The redeclaration is here:
-**type_scope_integration.md:5:1:5:10:**
-```roc
-Foo : Str
-```
-^^^^^^^^^
+    The redeclaration is here:
 
-But _Foo_ was already declared here:
-**type_scope_integration.md:2:1:2:10:**
-```roc
-Foo : U64
-```
-^^^^^^^^^
+    But Foo was already declared here:
+      ┌─────────────────────────────────────────────── type_scope_integration.md:2:1
+      │
+    2 │ Foo : U64
+      │ ^^^^^^^^^
+                                                             ┌─────────────────┐
+┌─ The type SomeUndeclaredType is not declared in this ──────┤ UNDECLARED TYPE │
+│  scope.                                                    └────────────────┬┘
+│                                                                             │
+│  Bar : SomeUndeclaredType                                                   │
+│        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+└────────────────────────────────────────────── type_scope_integration.md:8:7 ┘
 
-
-**UNDECLARED TYPE**
-The type _SomeUndeclaredType_ is not declared in this scope.
-
-This type is referenced here:
-**type_scope_integration.md:8:7:8:25:**
-```roc
-Bar : SomeUndeclaredType
-```
-      ^^^^^^^^^^^^^^^^^^
-
-
+    This type is referenced here:
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

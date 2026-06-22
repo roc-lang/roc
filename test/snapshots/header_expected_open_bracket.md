@@ -10,17 +10,15 @@ module
 # EXPECTED
 PARSE ERROR - header_expected_open_bracket.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: header_expected_open_square ────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│                                                                             │
+│  ‾                                                                          │
+└──────────────────────────────────────── header_expected_open_bracket.md:2:1 ┘
 
-**header_expected_open_bracket.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 KwModule,

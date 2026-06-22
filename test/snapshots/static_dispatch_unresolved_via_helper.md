@@ -16,23 +16,22 @@ ok = conv(5.U8)
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
-**MISSING METHOD**
-This is trying to dispatch a method named `to_i128` on an unresolved type variable, but unresolved type variables have no methods.
-**static_dispatch_unresolved_via_helper.md:5:13:5:25:**
-```roc
-ambiguous = conv(poly())
-```
-            ^^^^^^^^^^^^
+                                                              ┌────────────────┐
+┌─ This is trying to dispatch a method named to_i128 on an ───┤ MISSING METHOD │
+│  unresolved type variable, but unresolved type variables    └───────────────┬┘
+│  have no methods.                                                           │
+│                                                                             │
+│  ambiguous = conv(poly())                                                   │
+│              ‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+└────────────────────────────── static_dispatch_unresolved_via_helper.md:5:13 ┘
 
-The type was left undetermined by this call:
-**static_dispatch_unresolved_via_helper.md:5:18:5:24:**
-```roc
-ambiguous = conv(poly())
-```
-                 ^^^^^^
+    The type was left undetermined by this call:
+      ┌─────────────────────────────── static_dispatch_unresolved_via_helper.md:5:18
+      │
+    5 │ ambiguous = conv(poly())
+      │                  ^^^^^^
 
-**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
-
+    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,

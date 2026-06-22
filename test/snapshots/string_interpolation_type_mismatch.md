@@ -13,22 +13,21 @@ y = "value: ${x}"
 # EXPECTED
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**string_interpolation_type_mismatch.md:4:15:4:16:**
-```roc
-y = "value: ${x}"
-```
-              ^
+                                                               ┌───────────────┐
+┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│  y = "value: ${x}"                                                          │
+│                ‾                                                            │
+└───────────────────────────────── string_interpolation_type_mismatch.md:4:15 ┘
 
-It has the type:
+    It has the type:
 
-    U8
+        U8
 
-But you are trying to use it as:
+    But you are trying to use it as:
 
-    Str
-
+        Str
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

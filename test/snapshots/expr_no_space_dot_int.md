@@ -10,17 +10,15 @@ foo = asd.0
 # EXPECTED
 UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `asd` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named asd in this scope. ───────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  foo = asd.0                                                                │
+│        ‾‾‾                                                                  │
+└─────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
 
-**expr_no_space_dot_int.md:1:7:1:10:**
-```roc
-foo = asd.0
-```
-      ^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,

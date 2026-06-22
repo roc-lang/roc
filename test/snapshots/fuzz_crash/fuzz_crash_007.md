@@ -12,39 +12,33 @@ PARSE ERROR - fuzz_crash_007.md:1:1:1:4
 PARSE ERROR - fuzz_crash_007.md:1:4:1:6
 PARSE ERROR - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ff8.8.d                                                                    │
+│  ‾‾‾                                                                        │
+└────────────────────────────────────────────────────── fuzz_crash_007.md:1:1 ┘
 
-**fuzz_crash_007.md:1:1:1:4:**
-```roc
-ff8.8.d
-```
-^^^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ff8.8.d                                                                    │
+│     ‾‾                                                                      │
+└────────────────────────────────────────────────────── fuzz_crash_007.md:1:4 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  ff8.8.d                                                                    │
+│       ‾‾                                                                    │
+└────────────────────────────────────────────────────── fuzz_crash_007.md:1:6 ┘
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_007.md:1:4:1:6:**
-```roc
-ff8.8.d
-```
-   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_007.md:1:6:1:8:**
-```roc
-ff8.8.d
-```
-     ^^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,

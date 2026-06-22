@@ -11,26 +11,22 @@ C:[0]
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:1:4:1:5
 MALFORMED TYPE - fuzz_crash_066.md:1:4:1:5
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+                                         ┌─────────────────────────────────────┐
+┌─ The token 0 is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│  C:[0]                                                                      │
+│     ‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_066.md:1:4 ┘
 
-**fuzz_crash_066.md:1:4:1:5:**
-```roc
-C:[0]
-```
-   ^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_066.md:1:4:1:5:**
-```roc
-C:[0]
-```
-   ^
-
+    Type annotations should contain types like Str, Num a, or List U64.
+                                                              ┌────────────────┐
+┌─ This type annotation is malformed or contains invalid ─────┤ MALFORMED TYPE │
+│  syntax.                                                    └───────────────┬┘
+│                                                                             │
+│  C:[0]                                                                      │
+│     ‾                                                                       │
+└────────────────────────────────────────────────────── fuzz_crash_066.md:1:4 ┘
 
 # TOKENS
 ~~~zig

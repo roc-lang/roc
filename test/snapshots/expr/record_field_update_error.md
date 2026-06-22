@@ -12,39 +12,33 @@ UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **&** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token & is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│  { person & age: 31 }                                                       │
+│           ‾                                                                 │
+└────────────────────────────────────────── record_field_update_error.md:1:10 ┘
 
-**record_field_update_error.md:1:10:1:11:**
-```roc
-{ person & age: 31 }
-```
-         ^
+    Expressions can be identifiers, literals, function calls, or operators.
+                                         ┌─────────────────────────────────────┐
+┌─ The token 31 is not expected in a ────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│  { person & age: 31 }                                                       │
+│                  ‾‾                                                         │
+└────────────────────────────────────────── record_field_update_error.md:1:17 ┘
 
+    Type annotations should contain types like Str, Num a, or List U64.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│  { person & age: 31 }                                                       │
+│             ‾‾‾‾‾‾‾                                                         │
+└────────────────────────────────────────── record_field_update_error.md:1:12 ┘
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **31** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_field_update_error.md:1:17:1:19:**
-```roc
-{ person & age: 31 }
-```
-                ^^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_field_update_error.md:1:12:1:19:**
-```roc
-{ person & age: 31 }
-```
-           ^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

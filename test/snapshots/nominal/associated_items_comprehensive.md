@@ -449,116 +449,96 @@ UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
 UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
 UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named value in this scope. ─────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  errModuleUnqualified = value  # ERROR: 'value' not in scope at module level│
+│                         ‾‾‾‾‾                                               │
+└─────────────────────────────────── associated_items_comprehensive.md:350:24 ┘
 
-**associated_items_comprehensive.md:350:24:350:29:**
-```roc
-errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
-```
-                       ^^^^^
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named innerItem in this scope. ─────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      badAccess = innerItem  # ERROR: 'innerItem' not in scope here          │
+│                  ‾‾‾‾‾‾‾‾‾                                                  │
+└─────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
 
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named sibAVal in this scope. ───────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│          badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope        │
+│                             ‾‾‾‾‾‾‾                                         │
+└─────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `innerItem` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named leaf1Val in this scope. ──────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│              badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope   │
+│                                ‾‾‾‾‾‾‾‾                                     │
+└─────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
 
-**associated_items_comprehensive.md:361:17:361:26:**
-```roc
-    badAccess = innerItem  # ERROR: 'innerItem' not in scope here
-```
-                ^^^^^^^^^
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named grandchildVal in this scope. ─────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│      badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope│
+│                            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
+└─────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
 
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named otherVal in this scope. ──────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│          badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope         │
+│                          ‾‾‾‾‾‾‾‾                                           │
+└─────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `sibAVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named outerItem in this scope. ─────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  errTryOuter = outerItem      # ERROR: not in scope                         │
+│                ‾‾‾‾‾‾‾‾‾                                                    │
+└─────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
 
-**associated_items_comprehensive.md:372:28:372:35:**
-```roc
-        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
-```
-                           ^^^^^^^
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named sibAVal in this scope. ───────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  errTrySibA = sibAVal         # ERROR: not in scope                         │
+│               ‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
 
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named leaf1Val in this scope. ──────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  errTryLeaf = leaf1Val        # ERROR: not in scope                         │
+│               ‾‾‾‾‾‾‾‾                                                      │
+└─────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `leaf1Val` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an import or exposing missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named grandchildVal in this scope. ─────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  errTryGrand = grandchildVal  # ERROR: not in scope                         │
+│                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+└─────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
 
-**associated_items_comprehensive.md:387:31:387:39:**
-```roc
-            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
-```
-                              ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `grandchildVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:401:27:401:40:**
-```roc
-    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
-```
-                          ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `otherVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:423:25:423:33:**
-```roc
-        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
-```
-                        ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `outerItem` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:428:15:428:24:**
-```roc
-errTryOuter = outerItem      # ERROR: not in scope
-```
-              ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `sibAVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:429:14:429:21:**
-```roc
-errTrySibA = sibAVal         # ERROR: not in scope
-```
-             ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `leaf1Val` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:430:14:430:22:**
-```roc
-errTryLeaf = leaf1Val        # ERROR: not in scope
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `grandchildVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:431:15:431:28:**
-```roc
-errTryGrand = grandchildVal  # ERROR: not in scope
-```
-              ^^^^^^^^^^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

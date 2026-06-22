@@ -11,27 +11,24 @@ a=()->b()()()
 EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
 UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**formatter_idempotence_issue_8851_comment2.md:1:3:1:5:**
-```roc
-a=()->b()()()
-```
-  ^^
+                                                     ┌─────────────────────────┐
+┌─ I am part way through parsing this tuple, but it ─┤ EMPTY TUPLE NOT ALLOWED │
+│  is empty:                                         └────────────────────────┬┘
+│                                                                             │
+│  a=()->b()()()                                                              │
+│    ‾‾                                                                       │
+└─────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:3 ┘
 
-If you want to represent nothing, try using an empty record: `{}`.
+    If you want to represent nothing, try using an empty record: {}.
+                                                          ┌────────────────────┐
+┌─ Nothing is named b in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  a=()->b()()()                                                              │
+│        ‾                                                                    │
+└─────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**formatter_idempotence_issue_8851_comment2.md:1:7:1:8:**
-```roc
-a=()->b()()()
-```
-      ^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

@@ -9,31 +9,29 @@ type=expr
 ~~~
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
-: - :0:0:0:0
 # PROBLEMS
-**TYPE DOES NOT SUPPORT EQUALITY**
-This expression is doing an equality check on a type that doesn't support equality:
-**record_with_lambda_field.md:1:1:1:91:**
-```roc
-{ name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25", process: |y| y }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                              ┌────────────────────────────────┐
+┌─ This expression is doing an equality ──────┤ TYPE DOES NOT SUPPORT EQUALITY │
+│  check on a type that doesn't support       └───────────────────────────────┬┘
+│  equality:                                                                  │
+│                                                                             │
+│  { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25", process: |y| y }│
+│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾│
+└──────────────────────────────────────────── record_with_lambda_field.md:1:1 ┘
 
-The type is:
+    The type is:
 
-    { age: a, name: b, process: c -> c }
-      where [
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-      ]
+        { age: a, name: b, process: c -> c }
+          where [
+            a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+          ]
 
-This record does not support equality because these fields have types that don't support **is_eq**:
+    This record does not support equality because these fields have types that don't support is_eq:
 
-    **process**: _a -> a_
-        Function equality is not supported.
-**Hint:** Anonymous records only have an **is_eq** method if all of their fields have **is_eq** methods.
-
-
+        process: a -> a
+            Function equality is not supported.
+    Hint: Anonymous records only have an is_eq method if all of their fields have is_eq methods.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,OpEquals,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,

@@ -43,309 +43,259 @@ MISSING METHOD - record_different_fields_error.md:5:17:5:24
 DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 MISSING METHOD - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
-**STRAY DOLLAR SIGN**
-Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
-
-**record_different_fields_error.md:6:10:6:11:**
-```roc
-    field$special: "dollar",
-```
-         ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_different_fields_error.md:2:20:2:21:**
-```roc
-    _privateField: "leading underscore",
-```
-                   ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **leading underscore** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:2:21:2:39:**
-```roc
-    _privateField: "leading underscore",
-```
-                    ^^^^^^^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:2:39:2:40:**
-```roc
-    _privateField: "leading underscore",
-```
-                                      ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:2:40:2:41:**
-```roc
-    _privateField: "leading underscore",
-```
-                                       ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_different_fields_error.md:3:13:3:14:**
-```roc
-    field_: "trailing underscore",
-```
-            ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **trailing underscore** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:3:14:3:33:**
-```roc
-    field_: "trailing underscore",
-```
-             ^^^^^^^^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:3:33:3:34:**
-```roc
-    field_: "trailing underscore",
-```
-                                ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:3:34:3:35:**
-```roc
-    field_: "trailing underscore",
-```
-                                 ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:4:15:4:16:**
-```roc
-    PascalCase: "pascal",
-```
-              ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:4:25:4:26:**
-```roc
-    PascalCase: "pascal",
-```
-                        ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:5:15:5:16:**
-```roc
-    kebab-case: "kebab",
-```
-              ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:5:24:5:25:**
-```roc
-    kebab-case: "kebab",
-```
-                       ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_different_fields_error.md:6:20:6:21:**
-```roc
-    field$special: "dollar",
-```
-                   ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **dollar** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:21:6:27:**
-```roc
-    field$special: "dollar",
-```
-                    ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:27:6:28:**
-```roc
-    field$special: "dollar",
-```
-                          ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:28:6:29:**
-```roc
-    field$special: "dollar",
-```
-                           ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **@symbol** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:7:10:7:17:**
-```roc
-    field@symbol: "at symbol",
-```
-         ^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:7:17:7:18:**
-```roc
-    field@symbol: "at symbol",
-```
-                ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:7:30:7:31:**
-```roc
-    field@symbol: "at symbol",
-```
-                             ^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_error.md:2:5:2:21:**
-```roc
-    _privateField: "leading underscore",
-```
-    ^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_error.md:3:5:3:14:**
-```roc
-    field_: "trailing underscore",
-```
-    ^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**record_different_fields_error.md:4:5:4:15:**
-```roc
-    PascalCase: "pascal",
-```
-    ^^^^^^^^^^
-
-It has the type:
-
-    [PascalCase, ..]
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**record_different_fields_error.md:4:17:4:25:**
-```roc
-    PascalCase: "pascal",
-```
-                ^^^^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    {}
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**record_different_fields_error.md:5:17:5:24:**
-```roc
-    kebab-case: "kebab",
-```
-                ^^^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    {}
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_error.md:6:5:6:21:**
-```roc
-    field$special: "dollar",
-```
-    ^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**record_different_fields_error.md:7:19:7:30:**
-```roc
-    field@symbol: "at symbol",
-```
-                  ^^^^^^^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    {}
-
+                                                           ┌───────────────────┐
+┌─ Dollar sign ($) is only allowed at the very beginning ──┤ STRAY DOLLAR SIGN │
+│  of a name, not in the middle or at the end.             └──────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│           ‾                                                                 │
+└────────────────────────────────────── record_different_fields_error.md:6:10 ┘
+
+                                         ┌─────────────────────────────────────┐
+┌─ The token " is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│      _privateField: "leading underscore",                                   │
+│                     ‾                                                       │
+└────────────────────────────────────── record_different_fields_error.md:2:20 ┘
+
+    Type annotations should contain types like Str, Num a, or List U64.
+                                              ┌────────────────────────────────┐
+┌─ The token leading underscore is not ───────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expected in an expression.                 └───────────────────────────────┬┘
+│                                                                             │
+│      _privateField: "leading underscore",                                   │
+│                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+└────────────────────────────────────── record_different_fields_error.md:2:21 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token " is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      _privateField: "leading underscore",                                   │
+│                                        ‾                                    │
+└────────────────────────────────────── record_different_fields_error.md:2:39 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      _privateField: "leading underscore",                                   │
+│                                         ‾                                   │
+└────────────────────────────────────── record_different_fields_error.md:2:40 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                         ┌─────────────────────────────────────┐
+┌─ The token " is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│      field_: "trailing underscore",                                         │
+│              ‾                                                              │
+└────────────────────────────────────── record_different_fields_error.md:3:13 ┘
+
+    Type annotations should contain types like Str, Num a, or List U64.
+                                              ┌────────────────────────────────┐
+┌─ The token trailing underscore is not ──────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expected in an expression.                 └───────────────────────────────┬┘
+│                                                                             │
+│      field_: "trailing underscore",                                         │
+│               ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+└────────────────────────────────────── record_different_fields_error.md:3:14 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token " is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field_: "trailing underscore",                                         │
+│                                  ‾                                          │
+└────────────────────────────────────── record_different_fields_error.md:3:33 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field_: "trailing underscore",                                         │
+│                                   ‾                                         │
+└────────────────────────────────────── record_different_fields_error.md:3:34 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      PascalCase: "pascal",                                                  │
+│                ‾                                                            │
+└────────────────────────────────────── record_different_fields_error.md:4:15 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      PascalCase: "pascal",                                                  │
+│                          ‾                                                  │
+└────────────────────────────────────── record_different_fields_error.md:4:25 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      kebab-case: "kebab",                                                   │
+│                ‾                                                            │
+└────────────────────────────────────── record_different_fields_error.md:5:15 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      kebab-case: "kebab",                                                   │
+│                         ‾                                                   │
+└────────────────────────────────────── record_different_fields_error.md:5:24 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                         ┌─────────────────────────────────────┐
+┌─ The token " is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
+│  type annotation.                      └────────────────────────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│                     ‾                                                       │
+└────────────────────────────────────── record_different_fields_error.md:6:20 ┘
+
+    Type annotations should contain types like Str, Num a, or List U64.
+                                              ┌────────────────────────────────┐
+┌─ The token dollar is not expected in an ────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│                      ‾‾‾‾‾‾                                                 │
+└────────────────────────────────────── record_different_fields_error.md:6:21 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token " is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│                            ‾                                                │
+└────────────────────────────────────── record_different_fields_error.md:6:27 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│                             ‾                                               │
+└────────────────────────────────────── record_different_fields_error.md:6:28 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token @symbol is not expected in an ───┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field@symbol: "at symbol",                                             │
+│           ‾‾‾‾‾‾‾                                                           │
+└────────────────────────────────────── record_different_fields_error.md:7:10 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field@symbol: "at symbol",                                             │
+│                  ‾                                                          │
+└────────────────────────────────────── record_different_fields_error.md:7:17 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                              ┌────────────────────────────────┐
+┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
+│  expression.                                └───────────────────────────────┬┘
+│                                                                             │
+│      field@symbol: "at symbol",                                             │
+│                               ‾                                             │
+└────────────────────────────────────── record_different_fields_error.md:7:30 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│      _privateField: "leading underscore",                                   │
+│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────────── record_different_fields_error.md:2:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│      field_: "trailing underscore",                                         │
+│      ‾‾‾‾‾‾‾‾‾                                                              │
+└─────────────────────────────────────── record_different_fields_error.md:3:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                               ┌───────────────┐
+┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
+│                                                              └──────────────┬┘
+│                                                                             │
+│      PascalCase: "pascal",                                                  │
+│      ‾‾‾‾‾‾‾‾‾‾                                                             │
+└─────────────────────────────────────── record_different_fields_error.md:4:5 ┘
+
+    It has the type:
+
+        [PascalCase, ..]
+
+    Since this expression is used as a statement, it must evaluate to {}.
+    If you don't need the value, you can ignore it with _ =.
+                                                              ┌────────────────┐
+┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
+│  type doesn't have that method:                             └───────────────┬┘
+│                                                                             │
+│      PascalCase: "pascal",                                                  │
+│                  ‾‾‾‾‾‾‾‾                                                   │
+└────────────────────────────────────── record_different_fields_error.md:4:17 ┘
+
+    The value's type, which does not have a method named from_quote, is:
+
+        {}
+                                                              ┌────────────────┐
+┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
+│  type doesn't have that method:                             └───────────────┬┘
+│                                                                             │
+│      kebab-case: "kebab",                                                   │
+│                  ‾‾‾‾‾‾‾                                                    │
+└────────────────────────────────────── record_different_fields_error.md:5:17 ┘
+
+    The value's type, which does not have a method named from_quote, is:
+
+        {}
+                                                    ┌──────────────────────────┐
+┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
+│  implementation.                                  └─────────────────────────┬┘
+│                                                                             │
+│      field$special: "dollar",                                               │
+│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────────── record_different_fields_error.md:6:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+                                                              ┌────────────────┐
+┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
+│  type doesn't have that method:                             └───────────────┬┘
+│                                                                             │
+│      field@symbol: "at symbol",                                             │
+│                    ‾‾‾‾‾‾‾‾‾‾‾                                              │
+└────────────────────────────────────── record_different_fields_error.md:7:19 ┘
+
+    The value's type, which does not have a method named from_quote, is:
+
+        {}
 # TOKENS
 ~~~zig
 OpenCurly,

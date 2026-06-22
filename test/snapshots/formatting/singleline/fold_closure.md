@@ -10,17 +10,15 @@ sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 # EXPECTED
 UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `fold` in this scope.
-Is there an `import` or `exposing` missing up-top?
+                                                          ┌────────────────────┐
+┌─ Nothing is named fold in this scope. ──────────────────┤ UNDEFINED VARIABLE │
+│                                                         └───────────────────┬┘
+│                                                                             │
+│  sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)                        │
+│              ‾‾‾‾                                                           │
+└─────────────────────────────────────────────────────── fold_closure.md:1:13 ┘
 
-**fold_closure.md:1:13:1:17:**
-```roc
-sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
-```
-            ^^^^
-
-
+    Is there an import or exposing missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,Comma,Int,CloseSquare,Comma,Int,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,CloseRound,

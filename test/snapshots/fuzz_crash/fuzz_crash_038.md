@@ -11,28 +11,24 @@ type=file
 PARSE ERROR - fuzz_crash_038.md:1:1:1:2
 PARSE ERROR - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  *import B as                                                               │
+│  ‾                                                                          │
+└────────────────────────────────────────────────────── fuzz_crash_038.md:1:1 ┘
 
-**fuzz_crash_038.md:1:1:1:2:**
-```roc
-*import B as
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
+                                                                 ┌─────────────┐
+┌─ A parsing error occurred: expected_upper_name_after_import_as ┤ PARSE ERROR │
+│                                                                └────────────┬┘
+│                                                                             │
+│  *import B as                                                               │
+│   ‾‾‾‾‾‾                                                                    │
+└────────────────────────────────────────────────────── fuzz_crash_038.md:1:2 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `expected_upper_name_after_import_as`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_038.md:1:2:1:8:**
-```roc
-*import B as
-```
- ^^^^^^
-
-
+    This is an unexpected parsing error. Please check your syntax.
 # TOKENS
 ~~~zig
 OpStar,KwImport,UpperIdent,KwAs,
