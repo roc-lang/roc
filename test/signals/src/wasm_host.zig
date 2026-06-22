@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
+const render = @import("render_commands.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
@@ -21,6 +22,7 @@ const HostValueSlot = union(enum) {
 };
 
 var host_values: std.ArrayListUnmanaged(HostValueSlot) = .empty;
+var command_buffer: render.Buffer = .{};
 var roc_host_env: u8 = 0;
 var roc_host = abi.RocHost{
     .env = @ptrCast(&roc_host_env),
@@ -90,6 +92,22 @@ export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) 
     @memcpy(new_user_ptr[0..@min(old_user_size, new_length)], user_ptr[0..@min(old_user_size, new_length)]);
     deallocWithHeader(ptr, alignment);
     return new_ptr;
+}
+
+export fn roc_ui_command_buffer_ptr() callconv(.c) usize {
+    return command_buffer.ptrAddress();
+}
+
+export fn roc_ui_command_buffer_len() callconv(.c) usize {
+    return command_buffer.len();
+}
+
+export fn roc_ui_command_record_words() callconv(.c) usize {
+    return render.Record.word_count;
+}
+
+export fn roc_ui_command_buffer_clear() callconv(.c) void {
+    command_buffer.clearRetainingCapacity();
 }
 
 export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}

@@ -702,10 +702,10 @@ apply them to a real DOM, and dispatches spec actions (`click`, `fill`, `check`)
 by firing the bound event id into the source node's retained reducer thunk.
 
 The patch command set is the typed, host-independent set already present:
-`ResetDom`, `CreateElement`, `AppendChild`, `RemoveNode`, `MoveBefore`,
-`SetText`, `SetValue`, `SetChecked`, `SetDisabled`, `SetRole`, `SetLabel`,
-`SetTestId`, `BindClick`, `BindInput`, `BindCheck`. A browser host implements
-the same commands against the real DOM.
+`ResetDom`, `CreateElement`, `CreateText`, `AppendChild`, `RemoveNode`,
+`MoveBefore`, `SetText`, `SetValue`, `SetChecked`, `SetDisabled`, `SetRole`,
+`SetLabel`, `SetTestId`, `BindClick`, `BindInput`, `BindCheck`. A browser host
+implements the same commands against the real DOM.
 
 ### Metrics
 

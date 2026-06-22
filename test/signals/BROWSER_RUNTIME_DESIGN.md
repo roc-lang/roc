@@ -1,11 +1,12 @@
 # Signals Browser Runtime — JS/WASM Architecture Design
 
-> Status: design plus the G-B1/G-B2 browser spikes; no wasm runtime
-> implementation yet. This document proposes how a JavaScript runtime loads,
-> instantiates, mounts, and drives a Signals Roc app compiled to `wasm32`.
-> It is written against the *actual* code in this directory:
-> `src/native_host.zig`, `src/wasm_host.zig`, `src/roc_platform_abi.zig`,
-> `platform/main.roc`, and the authoritative `DESIGN.md`.
+> Status: design plus the G-B1/G-B2 browser spikes and the shared render-command
+> buffer skeleton; no reactive wasm runtime implementation yet. This document
+> proposes how a JavaScript runtime loads, instantiates, mounts, and drives a
+> Signals Roc app compiled to `wasm32`. It is written against the *actual* code
+> in this directory: `src/native_host.zig`, `src/wasm_host.zig`,
+> `src/render_commands.zig`, `src/roc_platform_abi.zig`, `platform/main.roc`,
+> and the authoritative `DESIGN.md`.
 
 ## 0. The framing that decides everything
 
@@ -150,10 +151,13 @@ divergence from the vdom design and the reason the boundary is cheap.
 
 ### Layer B — the patch-op stream (host→JS)
 
-When `roc_ui_mount`/`roc_ui_event`/etc. run, the host produces patch ops. We
-must choose *how* JS receives them. **Recommended: a single shared command
-buffer in linear memory that JS drains synchronously after each host call**,
-rather than one host→JS function call per op.
+When `roc_ui_mount`/`roc_ui_event`/etc. run, the host produces patch ops. The
+shared command vocabulary and fixed-width record shape live in
+`src/render_commands.zig`; `wasm_host.zig` exposes the command-buffer pointer,
+length, record width, and clear operation. We must choose *how* JS receives
+them. **Recommended: a single shared command buffer in linear memory that JS
+drains synchronously after each host call**, rather than one host→JS function
+call per op.
 
 ```
 // JS imports exactly ONE function into WASM for DOM work:

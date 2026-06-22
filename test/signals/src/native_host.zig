@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
+const render = @import("render_commands.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -15,6 +16,10 @@ const HostValue = u64;
 const HostValueTypeTag = *anyopaque;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
+const RenderTextField = render.TextField;
+const RenderBoolField = render.BoolField;
+const RenderEventKind = render.EventKind;
+const CommandCounts = render.Counts;
 
 const host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -64,25 +69,6 @@ const SignalKind = enum(u64) {
     source = 1,
     map = 2,
     map2 = 3,
-};
-
-const RenderTextField = enum(u64) {
-    text = 1,
-    role = 2,
-    label = 3,
-    test_id = 4,
-    value = 5,
-};
-
-const RenderBoolField = enum(u64) {
-    checked = 1,
-    disabled = 2,
-};
-
-const RenderEventKind = enum(u64) {
-    click = 1,
-    input = 2,
-    check = 3,
 };
 
 const HostEventDescriptor = struct {
@@ -1422,35 +1408,7 @@ const HostEachRowRenderMove = struct {
     len: usize,
 };
 
-const HostRenderMetrics = struct {
-    patches_emitted: u64 = 0,
-    reset_dom: u64 = 0,
-    create_element: u64 = 0,
-    append_child: u64 = 0,
-    remove_node: u64 = 0,
-    move_before: u64 = 0,
-    set_text: u64 = 0,
-    set_value: u64 = 0,
-    set_checked: u64 = 0,
-    set_disabled: u64 = 0,
-    set_metadata: u64 = 0,
-    bind_event: u64 = 0,
-
-    fn addCommandCounts(self: *HostRenderMetrics, counts: CommandCounts) void {
-        self.patches_emitted += counts.total;
-        self.reset_dom += counts.reset_dom;
-        self.create_element += counts.create_element;
-        self.append_child += counts.append_child;
-        self.remove_node += counts.remove_node;
-        self.move_before += counts.move_before;
-        self.set_text += counts.set_text;
-        self.set_value += counts.set_value;
-        self.set_checked += counts.set_checked;
-        self.set_disabled += counts.set_disabled;
-        self.set_metadata += counts.set_metadata;
-        self.bind_event += counts.bind_event;
-    }
-};
+const HostRenderMetrics = render.Metrics;
 
 const HostDispatchMetrics = struct {
     events_processed: u64 = 0,
@@ -6241,106 +6199,6 @@ fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: 
     field.* = allocator.dupe(u8, value) catch std.process.exit(1);
     return true;
 }
-
-const RenderCommandKind = enum {
-    reset_dom,
-    create_element,
-    append_child,
-    remove_node,
-    move_before,
-    set_text,
-    set_value,
-    set_checked,
-    set_disabled,
-    set_metadata,
-    bind_event,
-};
-
-const CommandCounts = struct {
-    total: u64 = 0,
-    reset_dom: u64 = 0,
-    create_element: u64 = 0,
-    append_child: u64 = 0,
-    remove_node: u64 = 0,
-    move_before: u64 = 0,
-    set_text: u64 = 0,
-    set_value: u64 = 0,
-    set_checked: u64 = 0,
-    set_disabled: u64 = 0,
-    set_metadata: u64 = 0,
-    bind_event: u64 = 0,
-
-    fn addCommand(self: *CommandCounts, kind: RenderCommandKind) void {
-        self.total += 1;
-        switch (kind) {
-            .reset_dom => self.reset_dom += 1,
-            .create_element => self.create_element += 1,
-            .append_child => self.append_child += 1,
-            .remove_node => self.remove_node += 1,
-            .move_before => self.move_before += 1,
-            .set_text => self.set_text += 1,
-            .set_value => self.set_value += 1,
-            .set_checked => self.set_checked += 1,
-            .set_disabled => self.set_disabled += 1,
-            .set_metadata => self.set_metadata += 1,
-            .bind_event => self.bind_event += 1,
-        }
-    }
-
-    fn addHostReset(self: *CommandCounts) void {
-        self.addCommand(.reset_dom);
-    }
-
-    fn addCreateElement(self: *CommandCounts) void {
-        self.addCommand(.create_element);
-    }
-
-    fn addAppendChild(self: *CommandCounts) void {
-        self.addCommand(.append_child);
-    }
-
-    fn addRemoveNode(self: *CommandCounts) void {
-        self.addCommand(.remove_node);
-    }
-
-    fn addMoveBefore(self: *CommandCounts) void {
-        self.addCommand(.move_before);
-    }
-
-    fn addTextField(self: *CommandCounts, field: RenderTextField) void {
-        switch (field) {
-            .text => self.addCommand(.set_text),
-            .value => self.addCommand(.set_value),
-            .role, .label, .test_id => self.addCommand(.set_metadata),
-        }
-    }
-
-    fn addBoolField(self: *CommandCounts, field: RenderBoolField) void {
-        switch (field) {
-            .checked => self.addCommand(.set_checked),
-            .disabled => self.addCommand(.set_disabled),
-        }
-    }
-
-    fn addEventBinding(self: *CommandCounts) void {
-        self.addCommand(.bind_event);
-    }
-
-    fn addAll(self: *CommandCounts, other: CommandCounts) void {
-        self.total += other.total;
-        self.reset_dom += other.reset_dom;
-        self.create_element += other.create_element;
-        self.append_child += other.append_child;
-        self.remove_node += other.remove_node;
-        self.move_before += other.move_before;
-        self.set_text += other.set_text;
-        self.set_value += other.set_value;
-        self.set_checked += other.set_checked;
-        self.set_disabled += other.set_disabled;
-        self.set_metadata += other.set_metadata;
-        self.bind_event += other.bind_event;
-    }
-};
 
 const BenchmarkStats = struct {
     init_roc_ns: u64 = 0,

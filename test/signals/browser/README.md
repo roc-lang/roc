@@ -40,3 +40,16 @@ Run the guard with:
 ```sh
 node --test test/signals/browser/wasm_memory_views.test.mjs
 ```
+
+## Render Command Buffer
+
+`../src/render_commands.zig` owns the shared render op ids, command-count
+rollup, metrics accumulator, and fixed-width command-buffer record shape. The
+native host consumes the shared counters; the wasm host exposes an empty command
+buffer surface that the future browser render sink will fill.
+
+Run the guard with:
+
+```sh
+zig test test/signals/src/render_commands.zig
+```

@@ -217,6 +217,13 @@ The open questions (O1–O9) referenced below are defined in
   extraction (native host now drives the shared engine); the engine module
   builds for the `wasm32` target. This is a refactor with no behavior change —
   the existing native specs are the regression guard.
+- **Status:** first boundary extraction landed: `src/render_commands.zig` owns
+  the host-independent render ops, command counts, metrics accumulator, and
+  fixed-width command-buffer record. `native_host.zig` consumes those shared
+  types, and `wasm_host.zig` exposes an empty command-buffer surface for the
+  future browser sink. Remaining G-B0 work is the actual engine extraction
+  (scheduler/scope/node-table/keyed-diff logic) out of the native simulated-DOM
+  coupling.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
@@ -270,14 +277,15 @@ The open questions (O1–O9) referenced below are defined in
   hosts behind one contract.
 - **Status:** `RemoveNode`/`MoveBefore` are now first-class native render-command
   counters. Structural removals emit `remove_node`; pure keyed reorders emit
-  `move_before` rather than `append_child`.
+  `move_before` rather than `append_child`. The shared command module also
+  defines the fixed-width WASM record shape, and `wasm_host.zig` exposes the
+  command-buffer pointer/length/record-width/clear exports.
 - **Finding + guard:** the op-code table is documented; native-host tests assert
   reorder emits only `MoveBefore` for displaced rows, and the kanban/identity
   specs assert the new command counters for reorder and removal cases.
-- **Remaining:** define the fixed-width WASM command record format (op-code +
-  integer operands + optional `(ptr,len)` for free-form strings; integer enum
-  refs for tag/attr/event names), the single `env.host_flush` drain protocol,
-  and the JS executor cases for `RemoveNode`/`MoveBefore`.
+- **Remaining:** wire the shared engine's browser render sink to the command
+  buffer, define the single `env.host_flush` drain protocol, and implement the
+  JS executor cases for the command set including `RemoveNode`/`MoveBefore`.
 
 ### G-B4 — Minimal end-to-end counter in a real browser (High, the milestone)
 
