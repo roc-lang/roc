@@ -44,6 +44,17 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             return false;
         }
 
+        pub fn liveCount(self: *const Self) usize {
+            var count: usize = 0;
+            for (self.slots.items) |entry| {
+                switch (entry) {
+                    .vacant => {},
+                    .occupied => count += 1,
+                }
+            }
+            return count;
+        }
+
         fn cell(box: abi.RocBox, owned_tag: ?TypeTag) Cell {
             if (comptime tags_enabled) {
                 return .{ .box = box, .tag = owned_tag };
@@ -241,6 +252,37 @@ test "host value registry uses one-based handles and reuses vacant slots" {
     const reused = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x30), null, ops);
     try std.testing.expectEqual(first, reused);
     try std.testing.expectEqual(@as(usize, 2), registry.slots.items.len);
+}
+
+test "host value registry reports live count and reaches zero when drained" {
+    var registry: Registry(TestTag, false) = .{};
+    defer registry.deinit(std.testing.allocator);
+
+    var retained_boxes: u64 = 0;
+    var released_boxes: u64 = 0;
+    var retained_tags: u64 = 0;
+    var released_tags: u64 = 0;
+    const ops = TestOps{
+        .retained_boxes = &retained_boxes,
+        .released_boxes = &released_boxes,
+        .retained_tags = &retained_tags,
+        .released_tags = &released_tags,
+    };
+
+    try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
+    try std.testing.expect(!registry.hasLiveValues());
+
+    const first = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x10), null, ops);
+    const second = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x20), null, ops);
+    try std.testing.expectEqual(@as(usize, 2), registry.liveCount());
+
+    _ = try registry.take(first, ops);
+    try std.testing.expectEqual(@as(usize, 1), registry.liveCount());
+    try std.testing.expect(registry.hasLiveValues());
+
+    _ = try registry.take(second, ops);
+    try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
+    try std.testing.expect(!registry.hasLiveValues());
 }
 
 test "host value registry clones retained boxes and tags" {

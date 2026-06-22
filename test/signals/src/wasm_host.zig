@@ -838,6 +838,14 @@ export fn roc_ui_command_buffer_clear() callconv(.c) void {
     clearCommandBuffers();
 }
 
+/// Number of retained host values currently live in the registry.
+///
+/// The browser leak guard asserts this returns to zero after `roc_ui_unmount`,
+/// proving the host drops every retained closure/value it stored while mounted.
+export fn roc_ui_live_host_values() callconv(.c) usize {
+    return host_values.liveCount();
+}
+
 export fn roc_ui_mount() callconv(.c) void {
     clearActiveRuntime();
     clearCommandBuffers();

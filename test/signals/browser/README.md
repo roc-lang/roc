@@ -52,7 +52,36 @@ offset/length pairs.
 
 `runtime.mjs` is the browser-side command executor. It instantiates a Signals
 wasm app, calls `roc_ui_mount`, applies command-buffer records to the DOM, and
-routes click/input/check events back through `roc_ui_event`.
+routes click/input/check events back through `roc_ui_event`. It records the
+records drained by the most recent host call in `lastCommands` so guards can
+assert the per-event patch budget.
+
+`dom_double.mjs` is a dependency-free DOM stand-in implementing exactly the
+surface `runtime.mjs` touches, so the executor can be driven under `node --test`
+without jsdom.
+
+`executor.test.mjs` is the executor smoke test (G-B3): a mock host backed by a
+real `WebAssembly.Memory` drives the real `SignalsRuntime` through every render
+op — element/text creation, attribute/value/checked/disabled/role/label/test-id
+patches, click/input/check event dispatch, structural `RemoveNode`/`MoveBefore`,
+and a `memory.grow` mid-dispatch — and asserts the command records become the
+expected DOM. Run it with:
+
+```sh
+node --test test/signals/browser/executor.test.mjs
+```
+
+`counter_app.test.mjs` is the end-to-end counter guard (G-B4): it loads the real
+Roc-compiled `counter.wasm` (building it via `serve.py --no-server` when absent
+and the Roc toolchain is present, skipping loudly otherwise) and drives it
+through the executor against the DOM double. It asserts the mount tree and patch
+budget, that clicking `Increment`/`Decrement` changes the count with exactly one
+`set_text` per click, and that `roc_ui_unmount` drops every retained host value
+(`roc_ui_live_host_values()` returns to zero). Run it with:
+
+```sh
+node --test test/signals/browser/counter_app.test.mjs
+```
 
 The first manual browser app is `../apps/counter.roc`. Build the local ignored
 wasm next to the page, then serve the browser asset directory:

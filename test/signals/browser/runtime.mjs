@@ -53,6 +53,14 @@ export class SignalsRuntime {
     this.views = createMemoryViewCache(exports.memory);
     this.nodes = new Map([[0, root]]);
     this.eventCleanups = new Map();
+    // The patch stream is inspectable: `lastCommands` holds the records drained
+    // by the most recent host call so guards can assert the per-event patch
+    // budget (mirrors the native host's `patches_emitted` discipline).
+    this.lastCommands = [];
+  }
+
+  liveHostValues() {
+    return this.exports.roc_ui_live_host_values?.() ?? 0;
   }
 
   mount() {
@@ -130,9 +138,12 @@ export class SignalsRuntime {
   }
 
   applyPendingCommands() {
-    for (const record of this.readPendingCommands()) {
+    const records = this.readPendingCommands();
+    this.lastCommands = records;
+    for (const record of records) {
       this.applyCommand(record);
     }
+    return records;
   }
 
   applyCommand(record) {

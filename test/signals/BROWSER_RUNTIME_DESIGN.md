@@ -1,9 +1,13 @@
 # Signals Browser Runtime — JS/WASM Architecture Design
 
-> Status: design plus the G-B1/G-B2 browser spikes and the shared render-command
-> buffer skeleton; no reactive wasm runtime implementation yet. This document
-> proposes how a JavaScript runtime loads, instantiates, mounts, and drives a
-> Signals Roc app compiled to `wasm32`. It is written against the *actual* code
+> Status: design plus the G-B1/G-B2 browser spikes, the shared render-command
+> buffer, a non-structural wasm runtime (`wasm_host.zig`), and automated
+> executor + end-to-end counter guards (`browser/executor.test.mjs`,
+> `browser/counter_app.test.mjs`) driven through a dependency-free DOM double.
+> Structural `Ui.each`/`Ui.when`, async, and the shared-engine extraction are
+> still ahead. This document proposes how a JavaScript runtime loads,
+> instantiates, mounts, and drives a Signals Roc app compiled to `wasm32`. It is
+> written against the *actual* code
 > in this directory: `src/native_host.zig`, `src/wasm_host.zig`,
 > `src/render_commands.zig`, `src/signal_graph.zig`, `src/scope_tree.zig`,
 > `src/identity_table.zig`, `src/keyed_rows.zig`,
@@ -490,6 +494,16 @@ Milestone exit criterion: counter increments/decrements in a real browser, and
 the same metric assertions the native host uses (one recompute, one patch per
 click; zero retained-closure leak on unmount) hold.
 
+> Status: steps 1–7 are implemented and guarded by `browser/counter_app.test.mjs`
+> — the real `counter.wasm` mounts, `Increment`/`Decrement` change the count with
+> exactly one `set_text` per click, and `roc_ui_unmount` drops every retained
+> host value (`roc_ui_live_host_values()` returns to 0). The automated guard
+> drives a DOM double, not a real browser; running `counter.html` in a real
+> browser remains the manual QA surface. The one-recompute budget is proven for
+> the single-sink counter (`set_text == 1`); the general multi-sink
+> `nodes_recomputed == 1` pruning is deferred to the shared-engine extraction
+> (O9) rather than added as bespoke wasm-host logic.
+
 Deliberately **out of milestone 1**: `Ui.each`/`Ui.when` structural splicing,
 focused-input normalization beyond the guarded `SetValue` rule, async tasks,
 intervals, event delegation sophistication, and high-pressure allocation tuning.
@@ -505,11 +519,14 @@ line up with the `DESIGN.md` "Definition of Done" being *simulated-host* scoped
 These require inspecting compiler behavior, generated ABI, layout rules, or
 browser constraints, and should be settled before milestone 2.
 
-- **O1 — New render commands.** Settled for the native command set: `RemoveNode`
-  and `MoveBefore` are shared host-emitted render commands, and the native host's
-  metrics can assert move-only reorder plus explicit detach. Remaining browser
-  work: serialize these commands through the WASM command buffer and implement
-  the JS executor cases against the real DOM.
+- **O1 — New render commands.** Settled for the native command set and the
+  browser executor: `RemoveNode` and `MoveBefore` are shared host-emitted render
+  commands, the native host's metrics assert move-only reorder plus explicit
+  detach, and `browser/runtime.mjs` implements both ops against the DOM.
+  `browser/executor.test.mjs` asserts a `MoveBefore`/`RemoveNode` response
+  reorders and detaches live nodes. Remaining: exercise them from a real
+  structural app (`Ui.each`/`Ui.when`) once the browser host grows row scopes
+  (G-B6).
 
 - **O2 — Command-buffer wire format vs. the simulated host's direct apply.** The
   native host applies patches by direct Zig calls into its `DomElement` array.

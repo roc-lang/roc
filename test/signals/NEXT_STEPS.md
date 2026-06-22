@@ -86,6 +86,14 @@ history.
   serializes render commands for `browser/runtime.mjs`. `browser/counter.html`
   loads the runtime, and `serve.py` builds the ReleaseSmall host plus a wasm32
   app and serves only `test/signals/browser`.
+- The browser executor and the end-to-end counter now have automated guards.
+  `browser/executor.test.mjs` drives the real `runtime.mjs` through every render
+  op against a mock host plus a dependency-free DOM double
+  (`browser/dom_double.mjs`), and `browser/counter_app.test.mjs` drives the real
+  `counter.wasm` end to end (mount tree, one `set_text` per click, zero retained
+  host values on unmount). The wasm host exports `roc_ui_live_host_values()` as
+  the leak gauge, and `runtime.mjs` records `lastCommands` per host call so the
+  patch budget is assertable.
 
 ## Foundation Gaps (the current frontier)
 
@@ -314,12 +322,18 @@ The open questions (O1–O9) referenced below are defined in
 - **Finding:** the first runtime does not use an imported `env.host_flush`;
   JS calls a host export, refreshes memory views, then drains the command buffer
   synchronously. That keeps the boundary smaller for the counter milestone.
-- **Remaining:** add an automated JS/browser executor smoke test that asserts
-  command records become the expected DOM, and decide whether the native spec
-  runner should migrate to the same command-buffer consumer to reduce divergent
-  render surfaces.
+- **Status (executor smoke test done):** `browser/executor.test.mjs` drives the
+  real `SignalsRuntime` through a mock host (backed by a real
+  `WebAssembly.Memory`) and the dependency-free `browser/dom_double.mjs`, and
+  asserts command records become the expected DOM for every render op:
+  element/text creation, attribute/value/checked/disabled/role/label/test-id
+  patches, click/input/check dispatch, structural `RemoveNode`/`MoveBefore`, and
+  a `memory.grow` mid-dispatch. The runtime now records `lastCommands` per host
+  call so the patch budget is assertable.
+- **Remaining:** decide whether the native spec runner should migrate to the
+  same command-buffer consumer to reduce divergent render surfaces.
 
-### G-B4 — Minimal end-to-end counter in a real browser (High, manual path landed)
+### G-B4 — Minimal end-to-end counter in a real browser (High, automated guard landed)
 
 - **Why:** the `BROWSER_RUNTIME_DESIGN.md` §10 milestone — the smallest proof the
   whole boundary works on a real DOM. It uses the G-B1..G-B3 findings; the full
@@ -334,13 +348,24 @@ The open questions (O1–O9) referenced below are defined in
   nodes, binds click/input/check events, and forwards payloads. `apps/counter.roc`
   lives with the other examples, `browser/counter.html` loads it, and
   `serve.py` builds and serves the manual QA page.
-- **Remaining:** convert the manual counter path into a guard: clicking `+`/`-`
-  in a real browser changes the count; the update emits the expected `SetText`
-  patch budget; `roc_ui_unmount` drops all retained closures/host values without
-  leaking. The current wasm host updates all active sinks after a changed state,
-  so the exact native-style `nodes_recomputed == 1` budget is not proven yet.
-  Out of scope here: `Ui.each`/`Ui.when`, async, intervals, IME — those are
-  G-B6/G-B7.
+- **Status (automated guard landed):** `browser/counter_app.test.mjs` loads the
+  real Roc-compiled `counter.wasm` (building it via `serve.py --no-server` when
+  absent and the toolchain is present; skipping loudly otherwise) and drives it
+  through the real executor against `browser/dom_double.mjs`. It asserts the
+  mount tree and 17-command mount budget (one `reset_dom`, two `bind_click`, one
+  `create_text`), that clicking `Increment`/`Decrement` changes the count with
+  exactly one `set_text` per click, and that `roc_ui_unmount` drops every
+  retained host value — `wasm_host.zig` now exports `roc_ui_live_host_values()`
+  (backed by `host_value_registry.liveCount()`) which returns 1 while mounted and
+  0 after unmount, and a clean re-mount succeeds.
+- **Remaining:** run the same flow in a *real* browser (the `counter.html` page
+  is still the manual QA surface; the automated guard uses a DOM double, not a
+  real browser/IME). The single-sink counter proves a `set_text == 1` budget, but
+  the wasm host still updates all active sinks after a changed state, so the
+  general multi-sink `nodes_recomputed == 1` pruning is unproven and belongs with
+  the G-B0 shared-engine extraction (or a multi-sink browser fixture), not more
+  bespoke wasm-host pruning. Out of scope here: `Ui.each`/`Ui.when`, async,
+  intervals, IME — those are G-B6/G-B7.
 
 ### G-B5 — Event payload accessor path (High)
 
@@ -419,6 +444,11 @@ Browser-runtime slices (G-B*) additionally gate on:
   `node --test test/signals/browser/controlled_input_policy.test.mjs`
 - `memory.grow` view invalidation policy:
   `node --test test/signals/browser/wasm_memory_views.test.mjs`
+- Browser executor smoke test (command records become expected DOM):
+  `node --test test/signals/browser/executor.test.mjs`
+- End-to-end counter guard (requires the serve.py wasm build above, or builds it
+  on demand):
+  `node --test test/signals/browser/counter_app.test.mjs`
 - The browser executor + spike findings: each G-B slice records its finding in
   `BROWSER_RUNTIME_DESIGN.md` (O1–O9) and lands a JS/host test or assertion that
   would catch a regression. A browser spike with no recorded finding or guard is
