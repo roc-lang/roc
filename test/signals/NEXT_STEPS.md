@@ -58,9 +58,9 @@ history.
   reorder existing active render-row segments in place, update nested scope-site
   insertion points, and patch the parent child list with moves counted by the
   longest stable subsequence; they do not re-run row bodies, rebuild the active
-  signal graph, or rebind row events. Mixed set-change plus reorder churn still
-  uses the explicit whole-site replacement path until it gets its own
-  moves-plus-splices implementation.
+  signal graph, or rebind row events. Mixed set-change plus reorder churn now
+  uses the named local row-splice plus survivor-move path instead of whole-site
+  replacement.
 - `Ui.component` introduces reusable local scopes for helper-owned state. The
   component app proves multiple stateful instances keep separate construction
   identities across keyed row movement and dispose state when the owning row
@@ -121,20 +121,22 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   as `Hasher.finish : Hasher -> U64`. The generated large-N proof remains part
   of G-F6.
 
-### G-F4 — Moves-only reorder (High, pure-permutation slice done)
+### G-F4 — Moves-only reorder (High, local row-move slices done)
 
 - **Status:** pure `Ui.each` permutations no longer re-collect row descriptors
   or whole-site splice. The dirty path reorders existing active render-row
   segments, updates descendant scope-site insertion indexes, and patches the
-  parent DOM child list using a longest-stable-subsequence move count.
+  parent DOM child list using a longest-stable-subsequence move count. Mixed
+  set-change plus reorder churn first splices only removed/changed/new row
+  scopes, then moves survivor row segments into the requested order.
 - **Counter + assertion:** host coverage asserts a `3 -> 1 -> 2` dirty reorder
   emits one `append_child`, creates no elements, makes no row-body calls, and
+  rebuilds no active graph records. Host coverage also asserts `1,2,3 -> 3,1,4`
+  re-enters only the new row body, creates one row element, removes one row, and
   rebuilds no active graph records. `kanban_board` now asserts the same
   zero-create/one-move/no-rebuild budget for its real reorder action.
 - **Remaining:** the generated large-N app still needs to pin the same invariant
-  across N. Mixed set-change plus reorder churn still uses the explicit
-  whole-site path and should get a named moves-plus-local-splices path before it
-  is treated as complete.
+  across N.
 
 ### G-F5 — Telemetry and benchmark-gate coverage (High, representative gate done)
 
@@ -146,9 +148,8 @@ result. Each slice lands its fix *and* the assertion that locks it in.
 - **Spec-vs-CSV split:** scaling invariants go in `expect_metric_delta`
   assertions; timing/aggregate evidence stays CSV-only (see `DESIGN.md` →
   Metrics).
-- **Remaining:** the generated large-N app and long-session leak experiment
-  still need to extend the benchmark/spec surface beyond the six representative
-  fixtures.
+- **Remaining:** the generated large-N app still needs to extend the
+  benchmark/spec surface beyond the six representative fixtures.
 
 ### G-F6 — Foundation coverage apps and assertions (Medium, lands alongside the fixes)
 
