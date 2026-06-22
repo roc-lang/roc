@@ -55,18 +55,30 @@ wasm app, calls `roc_ui_mount`, applies command-buffer records to the DOM, and
 routes click/input/check events back through `roc_ui_event`.
 
 The first manual browser app is `../apps/counter.roc`. Build the local ignored
-wasm next to the page, then serve the repo root:
+wasm next to the page, then serve the browser asset directory:
 
 ```sh
-./zig-out/bin/roc build --target=wasm32 --output=test/signals/browser/counter.wasm test/signals/apps/counter.roc
-python3 -m http.server 8000
+test/signals/serve.py
 ```
 
 Open:
 
 ```text
-http://localhost:8000/test/signals/browser/counter.html
+http://localhost:8000/counter.html
 ```
+
+The helper builds `test/signals/src/wasm_host.zig` with `ReleaseSmall`, builds
+the app with `--target=wasm32 --opt=size`, writes
+`test/signals/browser/counter.wasm`, and serves only `test/signals/browser`.
+
+Build a different app or use the dev backend with:
+
+```sh
+test/signals/serve.py test/signals/apps/ops_dashboard.roc --port 9001
+test/signals/serve.py --app-opt dev
+```
+
+Use `--no-server` when you only want the build steps.
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
 mutation, reachable-dependent traversal, and rank sorting. The native host
