@@ -259,6 +259,7 @@ const ExprParentKind = enum(u16) {
     expr_match_guard = 0x0f6b,
     expr_match_body = 0xe148,
     expr_dbg = 0x68b5,
+    expr_return = 0xf86e,
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
     expr_lambda_body = 0xdca0,
@@ -1647,7 +1648,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
     };
 
-    var inputs_path: ?TokenIdx = null;
+    var inputs_dir: ?TokenIdx = null;
     const entries_top = self.store.scratchTargetEntryTop();
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1664,10 +1665,14 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 
         switch (self.peek()) {
             .StringStart => {
-                // inputs: "targets/" directory directive
+                if (!std.mem.eql(u8, self.tokenText(field_name_tok), "inputs_dir")) {
+                    self.store.clearScratchTargetEntriesFrom(entries_top);
+                    return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+                }
+                // inputs_dir: "targets/" directory directive
                 self.advance();
                 if (self.peek() == .StringPart) {
-                    inputs_path = self.pos;
+                    inputs_dir = self.pos;
                     self.advance();
                 }
                 while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
@@ -1700,7 +1705,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
     };
     return try self.store.addTargetsSection(.{
-        .inputs_path = inputs_path,
+        .inputs_dir = inputs_dir,
         .entries = try self.store.targetEntrySpanFrom(entries_top),
         .region = .{ .start = start, .end = self.pos },
     });
@@ -2213,6 +2218,7 @@ const ExprStringState = struct {
 const ExprRecordExtState = struct {
     start: Token.Idx,
     min_bp: u8,
+    nominal_mapper: ?AST.Expr.Idx,
 };
 
 const ExprRecordState = struct {
@@ -2220,6 +2226,7 @@ const ExprRecordState = struct {
     min_bp: u8,
     scratch_top: u32,
     ext: ?AST.Expr.Idx,
+    nominal_mapper: ?AST.Expr.Idx,
 };
 
 const ExprRecordFieldState = struct {
@@ -2227,6 +2234,7 @@ const ExprRecordFieldState = struct {
     min_bp: u8,
     scratch_top: u32,
     ext: ?AST.Expr.Idx,
+    nominal_mapper: ?AST.Expr.Idx,
     field_start: Token.Idx,
     name: Token.Idx,
 };
@@ -3071,6 +3079,7 @@ fn runExprStatementKernel(
                             .min_bp = expr_state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = null,
+                            .nominal_mapper = null,
                         };
                         continue :expr_kernel .record_finish;
                     } else if (self.peek() == .DoubleDot) {
@@ -3078,6 +3087,7 @@ fn runExprStatementKernel(
                         try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
                             .start = start,
                             .min_bp = expr_state.min_bp,
+                            .nominal_mapper = null,
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
@@ -3122,6 +3132,7 @@ fn runExprStatementKernel(
                             .min_bp = expr_state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = null,
+                            .nominal_mapper = null,
                         };
                         continue :expr_kernel .record_fields_next;
                     } else {
@@ -3222,7 +3233,17 @@ fn runExprStatementKernel(
                 }
                 if (tok == .KwReturn) {
                     const start = self.pos;
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_return, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwBreak) {
+                    const start = self.pos;
+                    self.advance();
+                    const expr = try self.store.addExpr(.{ .@"break" = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
@@ -3284,6 +3305,34 @@ fn runExprStatementKernel(
         .suffix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
+
+            if (tok == .Dot and self.peekN(1) == .OpenCurly) {
+                self.advance();
+                self.advance();
+                expr_record_state = .{
+                    .start = expr_finish_state.start,
+                    .min_bp = expr_finish_state.min_bp,
+                    .scratch_top = self.store.scratchRecordFieldTop(),
+                    .ext = null,
+                    .nominal_mapper = expr_finish_state.expr,
+                };
+
+                if (self.peek() == .CloseCurly) {
+                    continue :expr_kernel .record_finish;
+                }
+                if (self.peek() == .DoubleDot) {
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .nominal_mapper = expr_finish_state.expr,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+
+                continue :expr_kernel .record_fields_next;
+            }
 
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
                 if (tok == .NoSpaceDotInt or tok == .DotInt) {
@@ -3514,6 +3563,7 @@ fn runExprStatementKernel(
                             .min_bp = state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = completed,
+                            .nominal_mapper = state.nominal_mapper,
                         };
                         continue :expr_kernel .record_fields_next;
                     },
@@ -3531,6 +3581,7 @@ fn runExprStatementKernel(
                             .min_bp = state.min_bp,
                             .scratch_top = state.scratch_top,
                             .ext = state.ext,
+                            .nominal_mapper = state.nominal_mapper,
                         };
                         if (self.peek() == .Comma) {
                             self.advance();
@@ -3664,6 +3715,16 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .dbg = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_return => {
+                        const state = open_syntax.popExprPayload(.expr_return, ExprAfterExprState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .@"return" = .{
                             .region = .{ .start = state.start, .end = self.pos },
                             .expr = completed,
                         } });
@@ -4052,6 +4113,7 @@ fn runExprStatementKernel(
                         .min_bp = expr_record_state.min_bp,
                         .scratch_top = expr_record_state.scratch_top,
                         .ext = expr_record_state.ext,
+                        .nominal_mapper = expr_record_state.nominal_mapper,
                         .field_start = field_start,
                         .name = name,
                     });
@@ -4089,7 +4151,7 @@ fn runExprStatementKernel(
             .CloseCurly => {
                 self.advance();
                 const fields = try self.store.recordFieldSpanFrom(expr_record_state.scratch_top);
-                const expr = try self.finishRecordExpr(expr_record_state.start, fields, expr_record_state.ext);
+                const expr = try self.finishRecordExpr(expr_record_state.start, fields, expr_record_state.ext, expr_record_state.nominal_mapper);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
             },
@@ -5183,6 +5245,23 @@ fn runExprStatementKernel(
                     last_statement = try self.addTopLevelUnexpectedStatement();
                     continue :expr_kernel .statement_complete;
                 }
+                // `{ x }` on its own is a block whose body is the expression `x`,
+                // since a single-field record would otherwise be useless. As a
+                // statement inside an enclosing block, however, `{ x }` is a punned
+                // single-field record, so that `{ { x } }` yields a record nested in
+                // a do-nothing block (and further braces add more do-nothing blocks).
+                if (isCurly and self.peekNext() == .LowerIdent and self.peekN(2) == .CloseCurly) {
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                    expr_record_state = .{
+                        .start = start,
+                        .min_bp = 0,
+                        .scratch_top = self.store.scratchRecordFieldTop(),
+                        .ext = null,
+                        .nominal_mapper = null,
+                    };
+                    continue :expr_kernel .record_fields_next;
+                }
                 try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                 expr_state = .{ .start = start, .min_bp = 0 };
                 continue :expr_kernel .prefix;
@@ -6176,7 +6255,22 @@ fn finishRecordExpr(
     start: Token.Idx,
     fields: AST.RecordField.Span,
     ext: ?AST.Expr.Idx,
+    nominal_mapper: ?AST.Expr.Idx,
 ) std.mem.Allocator.Error!AST.Expr.Idx {
+    if (nominal_mapper) |mapper| {
+        const record_expr = try self.store.addExpr(.{ .record = .{
+            .fields = fields,
+            .ext = ext,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+
+        return try self.store.addExpr(.{ .nominal_record = .{
+            .mapper = mapper,
+            .backing = record_expr,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+
     if (ext == null and self.peek() == .NoSpaceDotUpperIdent) {
         const suffix_start = self.pos;
         var final_token = self.pos;
@@ -6202,11 +6296,13 @@ fn finishRecordExpr(
         } });
     }
 
-    return try self.store.addExpr(.{ .record = .{
+    const record_expr = try self.store.addExpr(.{ .record = .{
         .fields = fields,
         .ext = ext,
         .region = .{ .start = start, .end = self.pos },
     } });
+
+    return record_expr;
 }
 
 /// Binding power of the lhs and rhs of a particular operator.

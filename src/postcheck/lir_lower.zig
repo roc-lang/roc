@@ -591,7 +591,12 @@ const Lowerer = struct {
         errdefer self.allocator.free(slots);
         for (fields, 0..) |field, index| {
             slots[index] = .{
-                .binder = field.binder orelse Common.invariant("function result capture had no checked binder"),
+                .id = if (field.binder) |binder|
+                    .{ .binder = binder }
+                else if (field.capture_id) |capture_id|
+                    .{ .generated = capture_id }
+                else
+                    .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
                 .plan = try self.constPlanOfType(field.ty),
             };
@@ -745,6 +750,7 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .uninitialized, .uninitialized_payload => next,
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_data.ty, fields, next),
@@ -764,6 +770,9 @@ const Lowerer = struct {
             .structural_hash => |h| try self.lowerStructuralHashInto(target, h.value, h.hasher, next),
             .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
+            .if_initialized_payload => |payload_switch| try self.lowerInitializedPayloadSwitchInto(target, payload_switch, next),
+            .try_sequence => |sequence| try self.lowerTrySequenceInto(target, expr_data.ty, sequence, next),
+            .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(target, expr_data.ty, sequence, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
             .break_ => |value| try self.lowerBreak(value),
@@ -1144,6 +1153,7 @@ const Lowerer = struct {
             .target = target,
             .proc = self.fn_map[@intFromEnum(call.target)],
             .args = try self.result.store.addLocalSpan(lowered.ids),
+            .is_cold = call.is_cold,
             .next = next,
         } });
         current = try self.prependExprs(lowered, current);
@@ -1486,6 +1496,203 @@ const Lowerer = struct {
         } });
     }
 
+    fn lowerInitializedPayloadSwitchInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        payload_switch: LambdaMono.InitializedPayloadSwitch,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const done = self.freshJoinPointId();
+        const branch_done = try self.joinJump(done);
+        var initialized_body: LIR.CFStmtId = undefined;
+        var uninitialized_body: LIR.CFStmtId = undefined;
+        if (payload_switch.initialized == payload_switch.uninitialized) {
+            const shared = try self.lowerExprInto(target, payload_switch.initialized, branch_done);
+            initialized_body = shared;
+            uninitialized_body = shared;
+        } else {
+            initialized_body = try self.lowerExprInto(target, payload_switch.initialized, branch_done);
+            uninitialized_body = try self.lowerExprInto(target, payload_switch.uninitialized, branch_done);
+        }
+        const cond_data = self.expr(payload_switch.cond);
+        const cond_local = switch (cond_data.data) {
+            .local => |local| try self.localFor(local),
+            else => try self.addTemp(cond_data.ty),
+        };
+        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
+            .cond = cond_local,
+            .cond_mask = payload_switch.cond_mask,
+            .payload = try self.localFor(payload_switch.payload),
+            .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
+            .initialized_branch = initialized_body,
+            .uninitialized_branch = uninitialized_body,
+        } });
+        const remainder = switch (cond_data.data) {
+            .local => switch_stmt,
+            else => try self.lowerExprInto(cond_local, payload_switch.cond, switch_stmt),
+        };
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+            .body = next,
+            .remainder = remainder,
+        } });
+    }
+
+    fn lowerTrySequenceInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: LambdaMono.TrySequence,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_try_ty = self.expr(sequence.try_expr).ty;
+        const input_try_local = try self.addTemp(input_try_ty);
+
+        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+        const err_variant = self.tagIndexByText(input_try_ty, "Err");
+        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
+
+        const ok_body = try self.lowerExprInto(target, sequence.ok_body, next);
+        const ok_payload_local = try self.localFor(sequence.ok_local);
+        const ok_start = if (self.isZstLocal(ok_payload_local))
+            try self.assignZst(ok_payload_local, ok_body)
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = ok_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = ok_variant,
+                    .tag_discriminant = ok_variant,
+                } },
+                .next = ok_body,
+            } });
+
+        const out_backing_ty = self.runtimeBackingType(out_try_ty);
+        const out_backing_layout = try self.layoutOfType(out_backing_ty);
+        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+
+        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+        const err_tag = if (self.isZstLocal(out_backing_local))
+            try self.assignZst(out_backing_local, boundary)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = out_backing_local,
+                .variant_index = out_err_variant,
+                .discriminant = out_err_variant,
+                .payload = err_payload_local,
+                .next = boundary,
+            } });
+        const err_start = if (self.isZstLocal(err_payload_local))
+            err_tag
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = err_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } },
+                .next = err_tag,
+            } });
+
+        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+    }
+
+    fn lowerTryRecordSequenceInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: LambdaMono.TryRecordSequence,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_try_ty = self.expr(sequence.try_expr).ty;
+        const input_try_local = try self.addTemp(input_try_ty);
+
+        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+        const err_variant = self.tagIndexByText(input_try_ty, "Err");
+        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
+        const ok_payload_ty = self.singleTagPayloadTypeByIndex(input_try_ty, ok_variant);
+
+        var ok_start = try self.lowerExprInto(target, sequence.ok_body, next);
+        ok_start = try self.bindTryRecordPayloadField(
+            sequence.rest_local,
+            input_try_local,
+            ok_variant,
+            ok_payload_ty,
+            sequence.rest_field,
+            ok_start,
+        );
+        ok_start = try self.bindTryRecordPayloadField(
+            sequence.value_local,
+            input_try_local,
+            ok_variant,
+            ok_payload_ty,
+            sequence.value_field,
+            ok_start,
+        );
+
+        const out_backing_ty = self.runtimeBackingType(out_try_ty);
+        const out_backing_layout = try self.layoutOfType(out_backing_ty);
+        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+
+        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+        const err_tag = if (self.isZstLocal(out_backing_local))
+            try self.assignZst(out_backing_local, boundary)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = out_backing_local,
+                .variant_index = out_err_variant,
+                .discriminant = out_err_variant,
+                .payload = err_payload_local,
+                .next = boundary,
+            } });
+        const err_start = if (self.isZstLocal(err_payload_local))
+            err_tag
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = err_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } },
+                .next = err_tag,
+            } });
+
+        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+    }
+
+    fn bindTryRecordPayloadField(
+        self: *Lowerer,
+        local: LambdaMono.LocalId,
+        input_try_local: LIR.LocalId,
+        ok_variant: u16,
+        ok_payload_ty: Type.TypeId,
+        field_name: Type.names.RecordFieldNameId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const target = try self.localFor(local);
+        if (self.isZstLocal(target)) return try self.assignZst(target, next);
+        const field_index = self.recordFieldIndex(ok_payload_ty, field_name);
+        return try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .tag_payload = .{
+                .source = input_try_local,
+                .payload_idx = field_index,
+                .variant_index = ok_variant,
+                .tag_discriminant = ok_variant,
+            } },
+            .next = next,
+        } });
+    }
+
     fn lowerBlockInto(self: *Lowerer, target: LIR.LocalId, stmts_span: LambdaMono.Span(LambdaMono.StmtId), final_expr: LambdaMono.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         var current = try self.lowerExprInto(target, final_expr, next);
         const stmts = self.program.stmtSpan(stmts_span);
@@ -1628,6 +1835,25 @@ const Lowerer = struct {
         defer self.allocator.free(param_locals);
         for (params, 0..) |param, i| param_locals[i] = try self.localFor(param.local);
         const param_span = try self.result.store.addLocalSpan(param_locals);
+        var maybe_uninitialized_params: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_params.deinit(self.allocator);
+        var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_conditions.deinit(self.allocator);
+        var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
+        defer maybe_uninitialized_condition_masks.deinit(self.allocator);
+        for (initial_values, param_locals) |initial, param_local| {
+            switch (self.expr(initial).data) {
+                .uninitialized_payload => |payload| {
+                    try maybe_uninitialized_params.append(self.allocator, param_local);
+                    try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
+                    try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
+                },
+                else => {},
+            }
+        }
+        const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_params.items);
+        const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
+        const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
         const join_id = self.freshJoinPointId();
 
         try self.loop_stack.append(self.allocator, .{
@@ -1639,17 +1865,20 @@ const Lowerer = struct {
         defer _ = self.loop_stack.pop();
 
         const body = try self.lowerExprInto(target, loop.body, next);
-        const jump_args = try self.lowerExprsToTemps(initial_values);
+        const jump_args = try self.lowerExprsToJoinTemps(param_span, initial_values);
         defer self.allocator.free(jump_args.ids);
         var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{
             .target = join_id,
         } });
         initial_jump = try self.prependJoinParamInitializers(param_span, jump_args.ids, initial_jump);
-        initial_jump = try self.prependExprs(jump_args, initial_jump);
+        initial_jump = try self.prependJoinExprs(jump_args, initial_jump);
 
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = param_span,
+            .maybe_uninitialized_params = maybe_uninitialized_span,
+            .maybe_uninitialized_conditions = maybe_uninitialized_conditions_span,
+            .maybe_uninitialized_condition_masks = maybe_uninitialized_condition_masks_span,
             .body = body,
             .remainder = initial_jump,
         } });
@@ -1669,13 +1898,13 @@ const Lowerer = struct {
         if (self.result.store.getLocalSpan(loop.params).len != values.len) {
             Common.invariant("continue value count differed from loop parameter count during direct LIR lowering");
         }
-        const locals = try self.lowerExprsToTemps(values);
+        const locals = try self.lowerExprsToJoinTemps(loop.params, values);
         defer self.allocator.free(locals.ids);
         var jump = try self.result.store.addCFStmt(.{ .jump = .{
             .target = loop.join_id,
         } });
         jump = try self.prependJoinParamInitializers(loop.params, locals.ids, jump);
-        jump = try self.prependExprs(locals, jump);
+        jump = try self.prependJoinExprs(locals, jump);
         return jump;
     }
 
@@ -1930,7 +2159,7 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const variant_index = self.tagIndex(ty, name);
         const bind_payloads = try self.matchTagPayloadPatterns(variant_index, payloads, source, on_match, miss, continuation);
-        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss));
+        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss), false);
     }
 
     fn lowerCallablePatternThen(
@@ -1960,7 +2189,7 @@ const Lowerer = struct {
                     .next = bound,
                 } });
         } else on_match;
-        return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss));
+        return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss), false);
     }
 
     fn lowerRecordPatternThen(
@@ -2703,7 +2932,14 @@ const Lowerer = struct {
         } });
     }
 
-    fn discriminantSwitch(self: *Lowerer, source: LIR.LocalId, discriminant: u16, body: LIR.CFStmtId, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn discriminantSwitch(
+        self: *Lowerer,
+        source: LIR.LocalId,
+        discriminant: u16,
+        body: LIR.CFStmtId,
+        default: LIR.CFStmtId,
+        default_is_cold: bool,
+    ) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
         const disc_local = try self.addLocalForLayout(.u16);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
@@ -2711,6 +2947,7 @@ const Lowerer = struct {
             .cond = disc_local,
             .branches = try self.result.store.addCFSwitchBranches(&branches),
             .default_branch = default,
+            .default_is_cold = default_is_cold,
             .continuation = null,
         } });
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
@@ -2725,11 +2962,43 @@ const Lowerer = struct {
         ids: []LIR.LocalId,
     };
 
+    const LoweredJoinExprLocals = struct {
+        exprs: []const LambdaMono.ExprId,
+        ids: []?LIR.LocalId,
+    };
+
     fn lowerExprsToTemps(self: *Lowerer, exprs: []const LambdaMono.ExprId) Common.LowerError!LoweredExprLocals {
         const ids = try self.allocator.alloc(LIR.LocalId, exprs.len);
         errdefer self.allocator.free(ids);
         for (exprs, 0..) |expr_id, i| ids[i] = try self.addTemp(self.expr(expr_id).ty);
         return .{ .exprs = exprs, .ids = ids };
+    }
+
+    fn lowerExprsToJoinTemps(
+        self: *Lowerer,
+        params: LIR.LocalSpan,
+        exprs: []const LambdaMono.ExprId,
+    ) Common.LowerError!LoweredJoinExprLocals {
+        const param_locals = self.result.store.getLocalSpan(params);
+        if (param_locals.len != exprs.len) Common.invariant("LIR join arg arity differed from parameter arity");
+
+        const ids = try self.allocator.alloc(?LIR.LocalId, exprs.len);
+        errdefer self.allocator.free(ids);
+        for (exprs, 0..) |expr_id, i| {
+            ids[i] = if (try self.joinArgNeedsWrite(param_locals[i], expr_id))
+                try self.addTemp(self.expr(expr_id).ty)
+            else
+                null;
+        }
+        return .{ .exprs = exprs, .ids = ids };
+    }
+
+    fn joinArgNeedsWrite(self: *Lowerer, param: LIR.LocalId, expr_id: LambdaMono.ExprId) Common.LowerError!bool {
+        return switch (self.expr(expr_id).data) {
+            .uninitialized, .uninitialized_payload => false,
+            .local => |local| (try self.localFor(local)) != param,
+            else => true,
+        };
     }
 
     fn prependExprs(self: *Lowerer, lowered: LoweredExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -2742,10 +3011,21 @@ const Lowerer = struct {
         return current;
     }
 
+    fn prependJoinExprs(self: *Lowerer, lowered: LoweredJoinExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        var current = next;
+        var i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            const target = lowered.ids[i] orelse continue;
+            current = try self.lowerExprInto(target, lowered.exprs[i], current);
+        }
+        return current;
+    }
+
     fn prependJoinParamInitializers(
         self: *Lowerer,
         params: LIR.LocalSpan,
-        args: []const LIR.LocalId,
+        args: []const ?LIR.LocalId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const param_locals = self.result.store.getLocalSpan(params);
@@ -2757,9 +3037,10 @@ const Lowerer = struct {
         var i = args.len;
         while (i > 0) {
             i -= 1;
+            const arg = args[i] orelse continue;
             current = try self.result.store.addCFStmt(.{ .set_local = .{
                 .target = param_locals[i],
-                .value = args[i],
+                .value = arg,
                 .mode = .initialize_join_param,
                 .next = current,
             } });
@@ -3119,7 +3400,12 @@ const Lowerer = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
-            .list, .box => null,
+            .list,
+            .box,
+            .parse_tag_union_spec,
+            .fields,
+            .field,
+            => null,
         };
     }
 
@@ -3130,11 +3416,32 @@ const Lowerer = struct {
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
     }
 
+    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u16 {
+        for (self.tagUnionTags(ty), 0..) |tag, index| {
+            if (std.mem.eql(u8, self.program.names.tagLabelText(tag.name), text)) return @intCast(index);
+        }
+        Common.invariant("tag operation referenced tag text absent from Lambda Mono type");
+    }
+
     fn tagUnionTags(self: *Lowerer, ty: Type.TypeId) []const Type.Tag {
         return switch (self.program.types.get(ty)) {
             .tag_union => |tags| self.program.types.tagSpan(tags),
             .named => |named| if (named.backing) |backing| return self.tagUnionTags(backing.ty) else Common.invariant("named tag has no backing"),
             else => Common.invariant("tag operation expected tag-union type"),
+        };
+    }
+
+    fn singleTagPayloadTypeByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u16) Type.TypeId {
+        const tags = self.tagUnionTags(ty);
+        const payloads = self.program.types.span(tags[variant_index].payloads);
+        if (payloads.len != 1) Common.invariant("operation expected tag with exactly one payload");
+        return payloads[0];
+    }
+
+    fn runtimeBackingType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
+        return switch (self.program.types.get(ty)) {
+            .named => |named| if (named.backing) |backing| backing.ty else ty,
+            else => ty,
         };
     }
 
@@ -3269,6 +3576,14 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
         .checked_generated => |template| .{ .checked_generated = template },
+        .parser_runtime => |runtime| .{ .parser_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
+        .encode_to_runtime => |runtime| .{ .encode_to_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
     };
 }
 

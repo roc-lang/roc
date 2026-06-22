@@ -30,6 +30,14 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 
+fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
+    return switch (module.getStatement(stmt_idx)) {
+        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
+        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
+        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+    };
+}
+
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
@@ -1339,6 +1347,9 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .primitive,
                     .list,
                     .box,
+                    .parse_tag_union_spec,
+                    .fields,
+                    .field,
                     => break :blk true,
                     .bool_tag_union => {},
                 },
@@ -1570,6 +1581,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .structural_hash => |h| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.value, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.hasher, relation_blocked_exprs),
         .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
+        .break_ => false,
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
@@ -2182,6 +2194,9 @@ pub const CheckedBuiltinNominal = enum {
     dec,
     list,
     box,
+    parse_tag_union_spec,
+    fields,
+    field,
 };
 
 /// Public `CheckedPrimitive` declaration.
@@ -2209,6 +2224,9 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     bool_tag_union,
     list,
     box,
+    parse_tag_union_spec,
+    fields,
+    field,
 };
 
 /// Public `builtinRuntimeEncoding` function.
@@ -2231,6 +2249,9 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .dec => .{ .primitive = .dec },
         .list => .list,
         .box => .box,
+        .parse_tag_union_spec => .parse_tag_union_spec,
+        .fields => .fields,
+        .field => .field,
     };
 }
 
@@ -5336,8 +5357,7 @@ fn appendStaticDispatchTypeRoots(
                 );
             },
             .e_type_dispatch_call => |dispatch_call| {
-                const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt));
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, dispatch_call.constraint_fn_var);
             },
             .e_method_eq => |eq| {
@@ -5867,6 +5887,9 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
+    if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
+    if (ident.eql(common.builtin_str_field_names)) return .fields;
+    if (ident.eql(common.builtin_str_field_name)) return .field;
     return null;
 }
 
@@ -6527,6 +6550,7 @@ pub const CheckedExprData = union(enum) {
     expect: CheckedExprId,
     ellipsis,
     anno_only,
+    break_,
     return_: struct {
         expr: CheckedExprId,
         lambda: CheckedExprId,
@@ -6718,6 +6742,7 @@ pub const StoredCheckedExprData = union(enum) {
     expect: CheckedExprId,
     ellipsis,
     anno_only,
+    break_,
     return_: struct {
         expr: CheckedExprId,
         lambda: CheckedExprId,
@@ -6943,6 +6968,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .dbg => |e| .{ .dbg = e },
         .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
         .expect => |e| .{ .expect = e },
+        .break_ => .break_,
         .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
         .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan } },
         .hosted_lambda => |h| .{ .hosted_lambda = .{
@@ -7513,11 +7539,11 @@ const CheckedSourceNodes = struct {
                 try self.markExpr(eq.rhs, work);
             },
             .e_type_method_call => |call| {
-                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markStatement(call.type_dispatch_stmt, work);
                 try self.markExprSpan(module, call.args, work);
             },
             .e_type_dispatch_call => |call| {
-                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markStatement(call.type_dispatch_stmt, work);
                 try self.markExprSpan(module, call.args, work);
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
@@ -7556,6 +7582,7 @@ const CheckedSourceNodes = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_break,
             => {},
         }
     }
@@ -8144,6 +8171,7 @@ pub const CheckedBodyStore = struct {
             .dbg => |e| .{ .dbg = e },
             .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
             .expect => |e| .{ .expect = e },
+            .break_ => .break_,
             .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
             .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan } },
             .hosted_lambda => |h| .{ .hosted_lambda = .{
@@ -8821,6 +8849,7 @@ fn checkedExprDataDiverges(
     return switch (data) {
         .crash,
         .ellipsis,
+        .break_,
         .return_,
         => true,
         .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
@@ -9307,6 +9336,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
+            .e_break => .break_,
             .e_return => |ret| .{ .return_ = .{
                 .expr = self.checkedExpr(ret.expr),
                 .lambda = self.checkedExpr(ret.lambda),
@@ -10459,6 +10489,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .expect,
         .ellipsis,
         .anno_only,
+        .break_,
         .return_,
         .for_,
         => {},
@@ -11198,6 +11229,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .expect,
         .ellipsis,
         .anno_only,
+        .break_,
         .return_,
         .for_,
         .hosted_lambda,
@@ -11368,6 +11400,7 @@ fn categorizeValueRef(
         .e_expect,
         .e_ellipsis,
         .e_anno_only,
+        .e_break,
         .e_return,
         .e_for,
         .e_hosted_lambda,
@@ -12171,6 +12204,7 @@ const CheckedTemplateRefCollector = struct {
             .dbg => |child| try self.collectExpr(child),
             .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
+            .break_ => {},
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
                 // `ret.lambda` is the enclosing lambda context for early-return
@@ -12871,6 +12905,7 @@ const NestedProcSiteBuilder = struct {
             .dbg => |child| try self.scanExpr(child, owner, false),
             .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
+            .break_ => {},
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
                 // `ret.lambda` is the enclosing lambda context for early-return
@@ -17932,6 +17967,9 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .f64,
                     .dec,
                     .bool,
+                    .parse_tag_union_spec,
+                    .fields,
+                    .field,
                     => break :blk true,
                     .list,
                     .box,
@@ -18850,6 +18888,7 @@ fn checkedExprContainsExpr(
         .hosted_lambda,
         .runtime_error,
         .crash,
+        .break_,
         .ellipsis,
         .anno_only,
         .pending,
@@ -18996,6 +19035,7 @@ fn checkedExprContainsPattern(
         .type_dispatch_call,
         .runtime_error,
         .crash,
+        .break_,
         .ellipsis,
         .anno_only,
         .pending,
@@ -22612,7 +22652,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 2;
+    const serialized_layout_version: u32 = 3;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -26346,8 +26386,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD4, 0xDD, 0x14, 0x86, 0x0C, 0x8F, 0x75, 0x35, 0x61, 0xCF, 0xC8, 0x17, 0x8B, 0x83, 0x2B, 0x5C,
-        0xFD, 0xAB, 0xCD, 0x7B, 0x61, 0x6A, 0x8F, 0x9B, 0xEF, 0xE9, 0x29, 0xFF, 0xA4, 0xA4, 0xC8, 0x29,
+        0x81, 0x65, 0x50, 0x85, 0xF9, 0x00, 0x4F, 0x01, 0xD4, 0xE0, 0x12, 0xED, 0x11, 0x56, 0x3E, 0xE4,
+        0x1D, 0xB9, 0x5A, 0xB1, 0x98, 0x7E, 0x0F, 0xB9, 0x32, 0x82, 0xAD, 0x37, 0x8D, 0xB3, 0x8B, 0x32,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

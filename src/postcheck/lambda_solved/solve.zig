@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -10,6 +11,7 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
+const static_dispatch = check.StaticDispatchRegistry;
 
 const UnifyPair = struct {
     first: Type.TypeVarId,
@@ -201,6 +203,7 @@ const Solver = struct {
                 .local = capture.local,
                 .symbol = local.symbol,
                 .binder = local.binder,
+                .capture_id = local.capture_id,
                 .ty = self.localTy(capture.local),
             };
         }
@@ -375,6 +378,8 @@ const Solver = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .uninitialized,
+            .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
@@ -409,7 +414,11 @@ const Solver = struct {
             },
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    _ = try self.expectExpr(backing, backing_ty);
+                    if (self.hasBuiltinOwner(expected, .fields)) {
+                        _ = try self.inferExpr(backing);
+                    } else {
+                        _ = try self.expectExpr(backing, backing_ty);
+                    }
                 } else {
                     _ = try self.inferExpr(backing);
                 }
@@ -488,6 +497,48 @@ const Solver = struct {
                     _ = try self.expectExpr(branch.body, expected);
                 }
                 _ = try self.expectExpr(if_.final_else, expected);
+            },
+            .if_initialized_payload => |payload_switch| {
+                _ = try self.inferExpr(payload_switch.cond);
+                _ = self.localTy(payload_switch.payload);
+                _ = try self.expectExpr(payload_switch.initialized, expected);
+                _ = try self.expectExpr(payload_switch.uninitialized, expected);
+            },
+            .try_sequence => |sequence| {
+                const try_ty = try self.inferExpr(sequence.try_expr);
+                const tags = switch (try self.shapeContent(try_ty)) {
+                    .tag_union => |span| self.program.types.tagSpan(span),
+                    else => Common.invariant("try_sequence input was not a Try tag union"),
+                };
+                var ok_ty: ?Type.TypeVarId = null;
+                for (tags) |tag| {
+                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    const payloads = self.program.types.span(tag.payloads);
+                    if (payloads.len != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
+                    ok_ty = payloads[0];
+                    break;
+                }
+                try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
+                _ = try self.expectExpr(sequence.ok_body, expected);
+            },
+            .try_record_sequence => |sequence| {
+                const try_ty = try self.inferExpr(sequence.try_expr);
+                const tags = switch (try self.shapeContent(try_ty)) {
+                    .tag_union => |span| self.program.types.tagSpan(span),
+                    else => Common.invariant("try_record_sequence input was not a Try tag union"),
+                };
+                var ok_ty: ?Type.TypeVarId = null;
+                for (tags) |tag| {
+                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    const payloads = self.program.types.span(tag.payloads);
+                    if (payloads.len != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
+                    ok_ty = payloads[0];
+                    break;
+                }
+                const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
+                try self.unify(self.localTy(sequence.value_local), try self.recordField(ok_record_ty, sequence.value_field));
+                try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
+                _ = try self.expectExpr(sequence.ok_body, expected);
             },
             .block => |block| {
                 for (self.program.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
@@ -832,6 +883,13 @@ const Solver = struct {
         };
     }
 
+    fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) bool {
+        return switch (self.program.types.rootContent(ty)) {
+            .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
+            else => false,
+        };
+    }
+
     fn bindLowLevelTypes(
         self: *Solver,
         op: can.CIR.Expr.LowLevel,
@@ -1105,12 +1163,14 @@ const Solver = struct {
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
-                    if (left_named.backing) |left_backing| {
-                        const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                        if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                        try self.unify(left_backing.ty, right_backing.ty);
-                    } else if (right_named.backing != null) {
-                        Common.invariant("named type backing differed during Lambda Solved unification");
+                    if (!sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields)) {
+                        if (left_named.backing) |left_backing| {
+                            const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
+                            if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
+                            try self.unify(left_backing.ty, right_backing.ty);
+                        } else if (right_named.backing != null) {
+                            Common.invariant("named type backing differed during Lambda Solved unification");
+                        }
                     }
                     self.program.types.set(b, .{ .link = a });
                 },
@@ -1187,7 +1247,8 @@ const Solver = struct {
             const right_capture = self.program.types.captureItem(rhs, i);
             if (left_capture.local != right_capture.local or
                 left_capture.symbol != right_capture.symbol or
-                left_capture.binder != right_capture.binder)
+                left_capture.binder != right_capture.binder or
+                left_capture.capture_id != right_capture.capture_id)
             {
                 Common.invariant("capture identity failed Lambda Solved unification");
             }
@@ -1454,6 +1515,12 @@ const TypeCloner = struct {
         }
     }
 };
+
+fn sameBuiltinOwner(left: ?static_dispatch.BuiltinOwner, right: ?static_dispatch.BuiltinOwner, owner: static_dispatch.BuiltinOwner) bool {
+    const left_owner = left orelse return false;
+    const right_owner = right orelse return false;
+    return left_owner == owner and right_owner == owner;
+}
 
 fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
     return left.module_name == right.module_name and

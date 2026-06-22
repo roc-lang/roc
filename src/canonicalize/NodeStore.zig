@@ -419,7 +419,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 82;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 54;
+pub const MODULEENV_EXPR_NODE_COUNT = 55;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1104,6 +1104,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .context = @enumFromInt(p.context),
             } };
         },
+        .expr_break => {
+            return CIR.Expr{ .e_break = .{} };
+        },
         .expr_hosted_lambda => {
             const p = payload.expr_hosted_lambda;
             const args_span = store.span2_data.items.items[p.args_span2_idx];
@@ -1230,7 +1233,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_type_method_call => {
             const p = payload.expr_type_method_call;
             return CIR.Expr{ .e_type_method_call = .{
-                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .type_dispatch_stmt = @enumFromInt(p.type_dispatch_stmt),
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
@@ -1239,7 +1242,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_type_dispatch_call => {
             const p = payload.expr_type_dispatch_call;
             return CIR.Expr{ .e_type_dispatch_call = .{
-                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .type_dispatch_stmt = @enumFromInt(p.type_dispatch_stmt),
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
@@ -1460,7 +1463,7 @@ pub fn replaceExprWithInterpolationConstraint(
 pub fn replaceExprWithTypeDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
-    type_var_alias_stmt: CIR.Statement.Idx,
+    type_dispatch_stmt: CIR.Statement.Idx,
     method_name: base.Ident.Idx,
     method_name_region: Region,
     args: CIR.Expr.Span,
@@ -1470,7 +1473,7 @@ pub fn replaceExprWithTypeDispatchCall(
     const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
     var node = Node.init(.expr_type_dispatch_call);
     node.setPayload(.{ .expr_type_dispatch_call = .{
-        .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
+        .type_dispatch_stmt = @intFromEnum(type_dispatch_stmt),
         .method_name = @bitCast(method_name),
         .method_call_data_idx = method_call_data_idx,
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
@@ -2547,7 +2550,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_type_method_call;
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_method_call = .{
-                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .type_dispatch_stmt = @intFromEnum(e.type_dispatch_stmt),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
             } });
@@ -2556,7 +2559,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_type_dispatch_call;
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_dispatch_call = .{
-                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .type_dispatch_stmt = @intFromEnum(e.type_dispatch_stmt),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
                 .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
@@ -2603,6 +2606,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .lambda = @intFromEnum(ret.lambda),
                 .context = @intFromEnum(ret.context),
             } });
+        },
+        .e_break => {
+            node.tag = .expr_break;
         },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;

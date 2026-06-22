@@ -347,11 +347,16 @@ const Pass = struct {
             .comptime_branch_taken => |s| try self.pushStmt(s.next),
             .incref => |s| try self.pushStmt(s.next),
             .decref => |s| try self.pushStmt(s.next),
+            .decref_if_initialized => |s| try self.pushStmt(s.next),
             .free => |s| try self.pushStmt(s.next),
             .switch_stmt => |s| {
                 for (self.store.getCFSwitchBranches(s.branches)) |branch| try self.pushStmt(branch.body);
                 try self.pushStmt(s.default_branch);
                 if (s.continuation) |continuation| try self.pushStmt(continuation);
+            },
+            .switch_initialized_payload => |s| {
+                try self.pushStmt(s.initialized_branch);
+                try self.pushStmt(s.uninitialized_branch);
             },
             .str_match => |s| {
                 try self.pushStmt(s.on_match);
@@ -448,11 +453,19 @@ const Pass = struct {
             .expect => |s| self.noteUse(s.condition),
             .expect_err => |s| self.noteUse(s.message),
             .switch_stmt => |s| self.noteUse(s.cond),
+            .switch_initialized_payload => |s| {
+                self.noteUse(s.cond);
+                self.noteUse(s.payload);
+            },
             .str_match => |s| self.noteUse(s.source),
             .str_match_set => |s| self.noteUse(s.source),
             .ret => |s| self.noteUse(s.value),
             .incref => |s| self.noteUse(s.value),
             .decref => |s| self.noteUse(s.value),
+            .decref_if_initialized => |s| {
+                self.noteUse(s.cond);
+                self.noteUse(s.value);
+            },
             .free => |s| self.noteUse(s.value),
             .init_uninitialized,
             .assign_literal,
@@ -570,6 +583,7 @@ const Pass = struct {
                 .comptime_branch_taken => |*s| s.next = self.resolveRedirect(s.next),
                 .incref => |*s| s.next = self.resolveRedirect(s.next),
                 .decref => |*s| s.next = self.resolveRedirect(s.next),
+                .decref_if_initialized => |*s| s.next = self.resolveRedirect(s.next),
                 .free => |*s| s.next = self.resolveRedirect(s.next),
                 .switch_stmt => |*s| {
                     for (self.store.getCFSwitchBranchesMut(s.branches)) |*branch| {
@@ -577,6 +591,10 @@ const Pass = struct {
                     }
                     s.default_branch = self.resolveRedirect(s.default_branch);
                     if (s.continuation) |continuation| s.continuation = self.resolveRedirect(continuation);
+                },
+                .switch_initialized_payload => |*s| {
+                    s.initialized_branch = self.resolveRedirect(s.initialized_branch);
+                    s.uninitialized_branch = self.resolveRedirect(s.uninitialized_branch);
                 },
                 .str_match => |*s| {
                     s.on_match = self.resolveRedirect(s.on_match);

@@ -297,6 +297,7 @@ fn collectExprDependencies(
             .e_return => |ret| {
                 try pending.append(stack_allocator, ret.expr);
             },
+            .e_break => {},
             .e_for => |for_expr| {
                 try pending.append(stack_allocator, for_expr.body);
                 try pending.append(stack_allocator, for_expr.expr);

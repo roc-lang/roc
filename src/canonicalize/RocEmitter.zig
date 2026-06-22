@@ -519,7 +519,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
-            const alias_str = try std.fmt.allocPrint(allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(method_call.type_dispatch_stmt)});
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_type_dispatch_call => |method_call| {
@@ -527,7 +527,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
-            const alias_str = try std.fmt.allocPrint(allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(method_call.type_dispatch_stmt)});
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_runtime_error => try self.write("<runtime_error>"),
@@ -547,6 +547,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = ret.expr });
             try frames.append(allocator, .{ .write = "return " });
         },
+        .e_break => try self.write("break"),
         .e_match => |match| {
             try self.write("match ");
             try frames.append(allocator, .{ .write = "}" });
