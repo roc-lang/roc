@@ -16,9 +16,9 @@ platform ""
 	}
 	targets: {
 		inputs: "../targets/",
+		wasm32: { inputs: ["host.wasm", app], output: Shared },
 		x64mac: { inputs: ["libhost.a", app] },
 		arm64mac: { inputs: ["libhost.a", app] },
-		wasm32: { inputs: ["host.wasm", app], output: Shared },
 	}
 
 import Elem exposing [Elem]
