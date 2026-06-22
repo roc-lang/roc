@@ -374,7 +374,7 @@ pub const Resolver = struct {
         const root_node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), root_path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
-                try self.addDiagnostic("INVALID PACKAGE HEADER", "Could not load the header of {s}: {s}", .{ root_path, @errorName(err) });
+                try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}", .{ root_path, @errorName(err) });
                 return error.ResolutionFailed;
             },
         };
@@ -429,7 +429,7 @@ pub const Resolver = struct {
             }
         }
         try self.addDiagnostic(
-            "DEPENDENCY VERSIONS DO NOT CONVERGE",
+            "Dependency Versions Do Not Converge",
             "This dependency graph has no stable version resolution: lower versions of some packages " ++
                 "pull in dependencies that demand higher versions of those same packages, and vice versa, " ++
                 "so version solving oscillates forever.\n\n" ++
@@ -632,7 +632,7 @@ pub const Resolver = struct {
             gop.value_ptr.* = hash;
         } else if (!std.mem.eql(u8, gop.value_ptr.*, hash)) {
             try self.addDiagnostic(
-                "CONFLICTING PACKAGE CONTENTS",
+                "Conflicting Package Contents",
                 "The same package version is being served with two different content hashes:\n\n" ++
                     "    {s}\n\n" ++
                     "appears with hash {s} and also with hash {s}.\n\n" ++
@@ -662,7 +662,7 @@ pub const Resolver = struct {
             const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
-                    try self.addDiagnostic("INVALID PACKAGE DEPENDENCY", "Could not load the package at {s}: {s}", .{ abs, @errorName(err) });
+                    try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}", .{ abs, @errorName(err) });
                     continue;
                 },
             };
@@ -730,7 +730,7 @@ pub const Resolver = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ExpandedSizeLimitExceeded => {
                     try self.addDiagnostic(
-                        "PACKAGE TOO LARGE",
+                        "Package Too Large",
                         "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
                             "You can raise the limit with the --max-package-bytes flag, or stop depending on this package.",
                         .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
@@ -739,7 +739,7 @@ pub const Resolver = struct {
                 },
                 else => {
                     try self.addDiagnostic(
-                        "PACKAGE DOWNLOAD FAILED",
+                        "Package Download Failed",
                         "Failed to download and extract this package:\n\n    {s}\n\nError: {s}",
                         .{ task.missing.url, @errorName(err) },
                     );
@@ -803,7 +803,7 @@ pub const Resolver = struct {
 
             if (total > limit) {
                 try self.addDiagnostic(
-                    "DEPENDENCY TREE TOO LARGE",
+                    "Dependency Tree Too Large",
                     "Depending on\n\n    {s}\n\nhas pulled more than {d} bytes of packages into the build ({d} bytes so far).\n\n" ++
                         "You can raise the limit with the --max-transitive-bytes flag, or stop depending on this package.",
                     .{ dep.spec, limit, total },
@@ -839,19 +839,19 @@ pub const Resolver = struct {
                     const owner = try self.describeOwner(walk_result, edge.parent);
                     switch (reason) {
                         .insecure_url => try self.addDiagnostic(
-                            "INSECURE PACKAGE URL",
+                            "Insecure Package URL",
                             "{s} depends on this URL, which does not use https:\n\n    {s}\n\n" ++
                                 "Package URLs must use https (or http to localhost, for testing).",
                             .{ owner, edge.spec },
                         ),
                         .reserved_version => try self.addDiagnostic(
-                            "INVALID PACKAGE VERSION",
+                            "Invalid Package Version",
                             "{s} depends on this URL, which uses the reserved version 0.0.0:\n\n    {s}\n\n" ++
                                 "The lowest publishable package version is 0.0.1.",
                             .{ owner, edge.spec },
                         ),
                         .unparsable_url => try self.addDiagnostic(
-                            "INVALID PACKAGE URL",
+                            "Invalid Package URL",
                             "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}",
                             .{ owner, edge.spec },
                         ),
@@ -886,7 +886,7 @@ pub const Resolver = struct {
                 if (gop.found_existing) {
                     if (!gop.value_ptr.version.eql(target.version)) {
                         try self.addDiagnostic(
-                            "CONFLICTING PACKAGE VERSIONS",
+                            "Conflicting Package Versions",
                             "This app's header depends on two different versions of the same package:\n\n" ++
                                 "    {s}\n    {s}\n\n" ++
                                 "An app's dependency versions are exact, so it can only declare one version per package.",
@@ -908,7 +908,7 @@ pub const Resolver = struct {
                 if (pin.version.orderWithinMajor(target.version) == .lt) {
                     const chain = try self.describeChain(walk_result, edge.parent);
                     try self.addDiagnostic(
-                        "PACKAGE VERSION CONFLICT",
+                        "Package Version Conflict",
                         "This app's header depends on exactly this package version:\n\n    {s}\n\n" ++
                             "but a dependency needs version {d}.{d}.{d} of it:\n\n{s}    which depends on {s}\n\n" ++
                             "An app's dependency versions are exact. Either upgrade the app's header to " ++
@@ -1039,7 +1039,7 @@ pub const Resolver = struct {
         const owner = try self.describeOwner(walk_result, edge.parent);
         if (target_kind == .app) {
             try self.addDiagnostic(
-                "INVALID PACKAGE DEPENDENCY",
+                "Invalid Package Dependency",
                 "{s} depends on {s}, which is an app. Packages may not depend on apps.",
                 .{ owner, edge.spec },
             );
@@ -1048,7 +1048,7 @@ pub const Resolver = struct {
         if (edge.is_platform) {
             if (target_kind != .platform) {
                 try self.addDiagnostic(
-                    "INVALID PLATFORM",
+                    "Invalid Platform",
                     "{s} declares {s} as its platform, but that package does not have a platform header.",
                     .{ owner, edge.spec },
                 );
@@ -1057,7 +1057,7 @@ pub const Resolver = struct {
         }
         if (target_kind == .platform) {
             try self.addDiagnostic(
-                "INVALID PACKAGE DEPENDENCY",
+                "Invalid Package Dependency",
                 "{s} depends on {s}, which is a platform. Only apps may depend on platforms.",
                 .{ owner, edge.spec },
             );
@@ -1156,7 +1156,7 @@ pub const Resolver = struct {
                         try cycle.appendSlice(self.arena(), "\n");
                     }
                     try self.addDiagnostic(
-                        "PACKAGE CYCLE",
+                        "Package Cycle",
                         "These packages depend on each other in a cycle:\n\n{s}\nPackages cannot depend on each other in cycles.",
                         .{cycle.items},
                     );
@@ -1838,7 +1838,7 @@ test "app pin violation reports the dependency chain" {
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
     const diagnostic = resolver.diagnostics.items[0];
-    try std.testing.expectEqualStrings("PACKAGE VERSION CONFLICT", diagnostic.title);
+    try std.testing.expectEqualStrings("Package Version Conflict", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_123) != null);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, b_url) != null);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, "1.2.4") != null);
@@ -1905,7 +1905,7 @@ test "app declaring two versions of the same package is an error" {
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("CONFLICTING PACKAGE VERSIONS", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Conflicting Package Versions", resolver.diagnostics.items[0].title);
 }
 
 test "same version with two different hashes is an error" {
@@ -1934,7 +1934,7 @@ test "same version with two different hashes is an error" {
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("CONFLICTING PACKAGE CONTENTS", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Conflicting Package Contents", resolver.diagnostics.items[0].title);
 }
 
 test "versionless URLs do not participate in solving" {
@@ -1999,7 +1999,7 @@ test "oscillating graphs are reported instead of looping" {
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("DEPENDENCY VERSIONS DO NOT CONVERGE", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Dependency Versions Do Not Converge", resolver.diagnostics.items[0].title);
 }
 
 test "transitive size limit counts each direct dependency's reachable packages" {
@@ -2031,7 +2031,7 @@ test "transitive size limit counts each direct dependency's reachable packages" 
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("DEPENDENCY TREE TOO LARGE", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Dependency Tree Too Large", resolver.diagnostics.items[0].title);
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, a_url) != null);
 }
 
@@ -2063,7 +2063,7 @@ test "per-package size limit is enforced for packages but not platforms" {
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
     const diagnostic = resolver.diagnostics.items[0];
-    try std.testing.expectEqualStrings("PACKAGE TOO LARGE", diagnostic.title);
+    try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
 }
 
@@ -2114,7 +2114,7 @@ test "local package cycles are reported" {
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("PACKAGE CYCLE", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Package Cycle", resolver.diagnostics.items[0].title);
 }
 
 test "local packages mix with URL packages" {
@@ -2175,7 +2175,7 @@ test "pin violations report the full chain through deep indirect dependencies" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     const diagnostic = resolver.diagnostics.items[0];
-    try std.testing.expectEqualStrings("PACKAGE VERSION CONFLICT", diagnostic.title);
+    try std.testing.expectEqualStrings("Package Version Conflict", diagnostic.title);
     // Every link of the indirect chain appears, in order, plus the
     // violating version itself.
     const b_at = std.mem.find(u8, diagnostic.message, b_url).?;
@@ -2455,7 +2455,7 @@ test "transitive tally counts retracted downloads against every root that reache
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqual(@as(usize, 2), resolver.diagnostics.items.len);
     for (resolver.diagnostics.items) |diagnostic| {
-        try std.testing.expectEqualStrings("DEPENDENCY TREE TOO LARGE", diagnostic.title);
+        try std.testing.expectEqualStrings("Dependency Tree Too Large", diagnostic.title);
     }
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, q_100) != null);
     try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[1].message, s_url) != null);
@@ -2580,5 +2580,5 @@ test "insecure URLs are rejected" {
     defer resolver.deinit();
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
-    try std.testing.expectEqualStrings("INSECURE PACKAGE URL", resolver.diagnostics.items[0].title);
+    try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
 }

@@ -2170,7 +2170,11 @@ fn extractDiagnosticsFromReports(
         {
             continue;
         }
-        const message = report.title;
+        // Titles are authored in title case; shout them to ALL CAPS here to
+        // match the box/HTML/LSP renderers. Owned by the report so the message
+        // lives as long as the borrowed title would have.
+        const message = try report.addOwnedString(report.title);
+        for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
         const diagnostic_severity = switch (report.severity) {
             .info => DiagnosticSeverity.info,
             .warning => DiagnosticSeverity.warning,
