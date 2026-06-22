@@ -10393,18 +10393,16 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                var operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
-                defer operands.deinit(self.allocator);
-                var result = try self.lowerEqualityExpr(operands.arg_tys[0], operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
+                const operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
                 }
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .hash => |hash| if (hash.structural_allowed) blk: {
-                var operands = try self.lowerStructuralBinaryOperands("hash", plan, callable_mono_ty, arg_ctx, pre_lowered);
-                defer operands.deinit(self.allocator);
-                break :blk try self.lowerHashExpr(operands.arg_tys[0], operands.first, operands.second, ret_ty);
+                const operands = try self.lowerStructuralBinaryOperands("hash", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                break :blk try self.lowerHashExpr(operands.derived_ty, operands.first, operands.second, ret_ty);
             } else Common.invariant("structural hash dispatch plan did not permit structural hashing"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
             .parser_for => Common.invariant("parser_for dispatch plan reached structural equality lowering"),
@@ -10412,17 +10410,13 @@ const BodyContext = struct {
         };
     }
 
-    /// Operands of a structural binary derivation (equality / hash) once both
-    /// have been lowered. `arg_tys` is owned by the caller and freed via
-    /// `deinit`; the terminal lowering reads `arg_tys[0]` for the derived type.
+    /// The two lowered operands of a structural binary derivation (equality /
+    /// hash) plus `derived_ty`, the type being derived on (the operands' shared
+    /// type), which the terminal lowering needs.
     const StructuralBinaryOperands = struct {
         first: Ast.ExprId,
         second: Ast.ExprId,
-        arg_tys: []Type.TypeId,
-
-        fn deinit(self: *StructuralBinaryOperands, allocator: Allocator) void {
-            allocator.free(self.arg_tys);
-        }
+        derived_ty: Type.TypeId,
     };
 
     /// Lower the two operands of a structural equality/hash dispatch, honoring a
@@ -10439,8 +10433,10 @@ const BodyContext = struct {
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (plan_args.len != 2) Common.invariant("structural " ++ noun ++ " dispatch plan must have two operands");
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural " ++ noun ++ " target had a non-function type");
+        // Copy because the recursive operand lowering below may reallocate
+        // types.span, dangling the slice; only the scalar derived type escapes.
         const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
-        errdefer self.allocator.free(arg_tys);
+        defer self.allocator.free(arg_tys);
         if (arg_tys.len != 2) Common.invariant("structural " ++ noun ++ " callable type must have two operands");
         const first = if (pre_lowered != null and pre_lowered.?.index == 0)
             pre_lowered.?.expr
@@ -10450,7 +10446,7 @@ const BodyContext = struct {
             pre_lowered.?.expr
         else
             try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
-        return .{ .first = first, .second = second, .arg_tys = arg_tys };
+        return .{ .first = first, .second = second, .derived_ty = arg_tys[0] };
     }
 
     fn lowerStructuralParser(
