@@ -102,11 +102,7 @@ test "NoMetrics is a zero-size no-op metrics sink" {
     metrics.bump(.nodes_recomputed, 1);
 }
 
-const EventPayloadKind = enum(u64) {
-    unit = 1,
-    str = 2,
-    bool = 3,
-};
+const EventPayloadKind = engine.EventPayloadKind;
 
 const SignalKind = enum(u64) {
     source = 1,
@@ -176,31 +172,12 @@ const HostScopeStep = engine.HostScopeStep;
 const HostScope = engine.HostScope;
 const deinitHostScopeStep = engine.deinitHostScopeStep;
 
-const HostNodeScopeSiteKind = enum {
-    component,
-    state,
-    when,
-    each,
-};
-
-const HostRenderNodeKind = enum {
-    element,
-    text,
-    signal_text,
-};
-
-const HostRenderNode = struct {
-    elem_id: u64,
-    kind: HostRenderNodeKind,
-};
-
-const HostBinderToken = *u64;
+const HostNodeScopeSiteKind = engine.HostNodeScopeSiteKind;
+const HostRenderNodeKind = engine.HostRenderNodeKind;
+const HostRenderNode = engine.HostRenderNode;
+const HostBinderToken = engine.HostBinderToken;
 const HostSignalToken = engine.HostSignalToken;
-
-const HostBinderBinding = struct {
-    token: HostBinderToken,
-    node_id: u64,
-};
+const HostBinderBinding = engine.HostBinderBinding;
 
 const retainHostCallable = engine.retainHostCallable;
 
@@ -218,127 +195,21 @@ const HostSignalRecord = engine.HostSignalRecord;
 
 const HostSignalBinding = engine.HostSignalBinding;
 
-const HostNodeScopeSiteDesc = struct {
-    node_id: u64,
-    scope_id: u64,
-    ordinal: u64,
-    parent_elem_id: u64,
-    render_insert_index: usize,
-    kind: HostNodeScopeSiteKind,
-    binder_bindings: []HostBinderBinding,
-};
-
-const HostElementDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    tag: []const u8,
-};
-
-const HostNodeTextNodeDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    value: []const u8,
-};
-
-const HostNodeSignalTextNodeDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    signal: HostSignalBinding,
-    read: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostNodeStaticTextAttrDesc = struct {
-    elem_id: u64,
-    field: RenderTextField,
-    value: []const u8,
-};
-
-const HostNodeSignalTextAttrDesc = struct {
-    elem_id: u64,
-    field: RenderTextField,
-    signal: HostSignalBinding,
-    read: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostNodeStaticBoolAttrDesc = struct {
-    elem_id: u64,
-    field: RenderBoolField,
-    value: bool,
-};
-
-const HostNodeSignalBoolAttrDesc = struct {
-    elem_id: u64,
-    field: RenderBoolField,
-    signal: HostSignalBinding,
-    read: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostNodeOnChangeDesc = struct {
-    scope_id: u64,
-    signal: HostSignalBinding,
-    to_cmd: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostNodeCleanupDesc = struct {
-    scope_id: u64,
-    name: []const u8,
-};
-
-const HostNodeEventDesc = struct {
-    elem_id: u64,
-    kind: RenderEventKind,
-    binder_token: HostBinderToken,
-    target_node_id: u64,
-    payload_kind: EventPayloadKind,
-    payload_tag: HostValueTypeTag,
-    payload_drop: abi.RocErasedCallable,
-    transform: abi.RocErasedCallable,
-    owns_payload_tag: bool = true,
-    owns_payload_drop: bool = true,
-    owns_transform: bool = true,
-};
-
-const HostNodeStateDesc = struct {
-    node_id: u64,
-    initial: abi.RocErasedCallable,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-};
-
-const HostNodeWhenDesc = struct {
-    node_id: u64,
-    condition: HostSignalBinding,
-    read: abi.RocErasedCallable,
-    when_false: abi.Elem,
-    when_true: abi.Elem,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostNodeEachDesc = struct {
-    node_id: u64,
-    items: HostSignalBinding,
-    items_to_values: abi.RocErasedCallable,
-    key_hash: abi.RocErasedCallable,
-    key_of: abi.RocErasedCallable,
-    key_eq: abi.RocErasedCallable,
-    key_drop: abi.RocErasedCallable,
-    item_eq: abi.RocErasedCallable,
-    item_drop: abi.RocErasedCallable,
-    row: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-const HostSignalRecordTokenEntry = struct {
-    token: HostSignalToken,
-    record: *HostSignalRecord,
-};
+const HostNodeScopeSiteDesc = engine.HostNodeScopeSiteDesc;
+const HostElementDesc = engine.HostElementDesc;
+const HostNodeTextNodeDesc = engine.HostNodeTextNodeDesc;
+const HostNodeSignalTextNodeDesc = engine.HostNodeSignalTextNodeDesc;
+const HostNodeStaticTextAttrDesc = engine.HostNodeStaticTextAttrDesc;
+const HostNodeSignalTextAttrDesc = engine.HostNodeSignalTextAttrDesc;
+const HostNodeStaticBoolAttrDesc = engine.HostNodeStaticBoolAttrDesc;
+const HostNodeSignalBoolAttrDesc = engine.HostNodeSignalBoolAttrDesc;
+const HostNodeOnChangeDesc = engine.HostNodeOnChangeDesc;
+const HostNodeCleanupDesc = engine.HostNodeCleanupDesc;
+const HostNodeEventDesc = engine.HostNodeEventDesc;
+const HostNodeStateDesc = engine.HostNodeStateDesc;
+const HostNodeWhenDesc = engine.HostNodeWhenDesc;
+const HostNodeEachDesc = engine.HostNodeEachDesc;
+const HostSignalRecordTokenEntry = engine.HostSignalRecordTokenEntry;
 
 const HostActiveSignalGraphNode = signal_graph.Node(HostSignalRecord);
 

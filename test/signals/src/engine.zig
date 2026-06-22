@@ -15,6 +15,11 @@ const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 const scope_tree = @import("scope_tree.zig");
 const erased_calls = @import("erased_calls.zig");
+const render = @import("render_commands.zig");
+
+pub const RenderTextField = render.TextField;
+pub const RenderBoolField = render.BoolField;
+pub const RenderEventKind = render.EventKind;
 
 pub const HostValue = u64;
 
@@ -345,4 +350,168 @@ pub const HostSignalBinding = struct {
         self.record.release(allocator, roc_host, metrics);
         allocator.free(self.source_node_ids);
     }
+};
+
+// --- Descriptor layer ---------------------------------------------------------
+//
+// The host's ingested view of the Roc `Elem` tree: one descriptor per element,
+// text node, attribute, event binding, scope site, state, when, and each.
+// Markup carries no identity of its own; dynamic descriptors reference shared
+// signal records and event reducers by retained thunk.
+
+/// Typed payload a reducer reads off a real DOM event.
+pub const EventPayloadKind = enum(u64) {
+    unit = 1,
+    str = 2,
+    bool = 3,
+};
+
+/// Identity token interned per `Ui.state` binder.
+pub const HostBinderToken = *u64;
+
+/// Binds a state binder token to the node id it resolves to within a scope.
+pub const HostBinderBinding = struct {
+    token: HostBinderToken,
+    node_id: u64,
+};
+
+pub const HostNodeScopeSiteKind = enum {
+    component,
+    state,
+    when,
+    each,
+};
+
+pub const HostRenderNodeKind = enum {
+    element,
+    text,
+    signal_text,
+};
+
+/// A node that occupies a slot in the rendered child order.
+pub const HostRenderNode = struct {
+    elem_id: u64,
+    kind: HostRenderNodeKind,
+};
+
+pub const HostNodeScopeSiteDesc = struct {
+    node_id: u64,
+    scope_id: u64,
+    ordinal: u64,
+    parent_elem_id: u64,
+    render_insert_index: usize,
+    kind: HostNodeScopeSiteKind,
+    binder_bindings: []HostBinderBinding,
+};
+
+pub const HostElementDesc = struct {
+    elem_id: u64,
+    parent_elem_id: u64,
+    scope_id: u64,
+    tag: []const u8,
+};
+
+pub const HostNodeTextNodeDesc = struct {
+    elem_id: u64,
+    parent_elem_id: u64,
+    scope_id: u64,
+    value: []const u8,
+};
+
+pub const HostNodeSignalTextNodeDesc = struct {
+    elem_id: u64,
+    parent_elem_id: u64,
+    scope_id: u64,
+    signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeStaticTextAttrDesc = struct {
+    elem_id: u64,
+    field: RenderTextField,
+    value: []const u8,
+};
+
+pub const HostNodeSignalTextAttrDesc = struct {
+    elem_id: u64,
+    field: RenderTextField,
+    signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeStaticBoolAttrDesc = struct {
+    elem_id: u64,
+    field: RenderBoolField,
+    value: bool,
+};
+
+pub const HostNodeSignalBoolAttrDesc = struct {
+    elem_id: u64,
+    field: RenderBoolField,
+    signal: HostSignalBinding,
+    read: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeOnChangeDesc = struct {
+    scope_id: u64,
+    signal: HostSignalBinding,
+    to_cmd: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeCleanupDesc = struct {
+    scope_id: u64,
+    name: []const u8,
+};
+
+pub const HostNodeEventDesc = struct {
+    elem_id: u64,
+    kind: RenderEventKind,
+    binder_token: HostBinderToken,
+    target_node_id: u64,
+    payload_kind: EventPayloadKind,
+    payload_tag: HostValueTypeTag,
+    payload_drop: abi.RocErasedCallable,
+    transform: abi.RocErasedCallable,
+    owns_payload_tag: bool = true,
+    owns_payload_drop: bool = true,
+    owns_transform: bool = true,
+};
+
+pub const HostNodeStateDesc = struct {
+    node_id: u64,
+    initial: abi.RocErasedCallable,
+    eq: abi.RocErasedCallable,
+    drop: abi.RocErasedCallable,
+};
+
+pub const HostNodeWhenDesc = struct {
+    node_id: u64,
+    condition: HostSignalBinding,
+    read: abi.RocErasedCallable,
+    when_false: abi.Elem,
+    when_true: abi.Elem,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeEachDesc = struct {
+    node_id: u64,
+    items: HostSignalBinding,
+    items_to_values: abi.RocErasedCallable,
+    key_hash: abi.RocErasedCallable,
+    key_of: abi.RocErasedCallable,
+    key_eq: abi.RocErasedCallable,
+    key_drop: abi.RocErasedCallable,
+    item_eq: abi.RocErasedCallable,
+    item_drop: abi.RocErasedCallable,
+    row: abi.RocErasedCallable,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostSignalRecordTokenEntry = struct {
+    token: HostSignalToken,
+    record: *HostSignalRecord,
 };
