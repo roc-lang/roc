@@ -16,7 +16,7 @@ platform ""
         "roc_host_set_mouse": Host.set_mouse!,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },

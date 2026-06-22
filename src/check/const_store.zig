@@ -32,9 +32,15 @@ pub const ConstScalar = union(enum) {
     dec_bits: i128,
 };
 
+/// Identity for a captured value inside a compile-time function value.
+pub const CaptureId = union(enum) {
+    binder: checked_ids.PatternBinderId,
+    generated: u32,
+};
+
 /// Captured checked value inside a compile-time function value.
 pub const ConstCapture = struct {
-    binder: checked_ids.PatternBinderId,
+    id: CaptureId,
     value: ConstNodeId,
 };
 
@@ -63,6 +69,14 @@ pub const FnDef = union(enum) {
     local_hosted: names.ProcTemplate,
     imported_hosted: names.ProcTemplate,
     checked_generated: names.ProcTemplate,
+    parser_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked_ids.CheckedExprId,
+    },
+    encode_to_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked_ids.CheckedExprId,
+    },
 };
 
 /// Stored string value.
@@ -437,7 +451,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const sd = try store.addStrData("hello world");
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
     // A function value with a capture (exercises capture_pool).
-    const caps = try gpa.dupe(ConstCapture, &.{.{ .binder = @enumFromInt(1), .value = a }});
+    const caps = try gpa.dupe(ConstCapture, &.{.{ .id = .{ .binder = @enumFromInt(1) }, .value = a }});
     defer gpa.free(caps);
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
@@ -492,8 +506,8 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             defer store.deinit();
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
             const caps = try allocator.dupe(ConstCapture, &.{
-                .{ .binder = @enumFromInt(1), .value = a },
-                .{ .binder = @enumFromInt(2), .value = a },
+                .{ .id = .{ .binder = @enumFromInt(1) }, .value = a },
+                .{ .id = .{ .binder = @enumFromInt(2) }, .value = a },
             });
             defer allocator.free(caps);
             _ = try store.appendFn(.{

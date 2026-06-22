@@ -141,7 +141,7 @@ fn writePlatform(self: *Self) std.mem.Allocator.Error!void {
     try self.writePlatformSymbol(self.symbols.app_entry);
     try self.writePlatformText("! : {} => I32 }\n    exposes []\n    packages {}\n    provides { \"main\": ");
     try self.writePlatformSymbol(self.symbols.platform_entry);
-    try self.writePlatformText("! }\n    targets: {\n        inputs: \"targets/\",\n");
+    try self.writePlatformText("! }\n    targets: {\n        inputs_dir: \"targets/\",\n");
     for (build_targets) |target| {
         try self.writePlatformText("        ");
         try self.writePlatformText(@tagName(target));

@@ -567,6 +567,7 @@ fn collectAssignCallProcs(
             .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
+            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
             .switch_stmt => |stmt| {
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
@@ -574,6 +575,10 @@ fn collectAssignCallProcs(
                 for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
                     try work.append(allocator, branch.body);
                 }
+            },
+            .switch_initialized_payload => |stmt| {
+                try work.append(allocator, stmt.initialized_branch);
+                try work.append(allocator, stmt.uninitialized_branch);
             },
             .str_match => |stmt| {
                 try work.append(allocator, stmt.on_match);
@@ -677,6 +682,7 @@ fn collectProcShape(
             .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
+            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
             .switch_stmt => |stmt| {
                 shape.switch_count += 1;
@@ -685,6 +691,11 @@ fn collectProcShape(
                 for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
                     try work.append(allocator, branch.body);
                 }
+            },
+            .switch_initialized_payload => |stmt| {
+                shape.switch_count += 1;
+                try work.append(allocator, stmt.initialized_branch);
+                try work.append(allocator, stmt.uninitialized_branch);
             },
             .str_match => |stmt| {
                 try work.append(allocator, stmt.on_match);
@@ -834,6 +845,8 @@ fn markReachableLiftedExpr(
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
         => {},
         .list,
         .tuple,
@@ -847,6 +860,19 @@ fn markReachableLiftedExpr(
         => |child| markReachableLiftedExpr(program, child, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
         .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
+        .if_initialized_payload => |switch_| {
+            markReachableLiftedExpr(program, switch_.cond, reachable);
+            markReachableLiftedExpr(program, switch_.initialized, reachable);
+            markReachableLiftedExpr(program, switch_.uninitialized, reachable);
+        },
+        .try_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
+        .try_record_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
         .let_ => |let_| {
             markReachableLiftedExpr(program, let_.value, reachable);
             markReachableLiftedExpr(program, let_.rest, reachable);
@@ -1882,6 +1908,7 @@ test "LIR statements and procs carry resolved source locations" {
         const has_source = switch (stmt) {
             .incref,
             .decref,
+            .decref_if_initialized,
             .free,
             => false,
 
@@ -1903,6 +1930,7 @@ test "LIR statements and procs carry resolved source locations" {
             .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
             .switch_stmt,
+            .switch_initialized_payload,
             .str_match,
             .str_match_set,
             .loop_continue,

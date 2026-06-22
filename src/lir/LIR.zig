@@ -113,6 +113,22 @@ pub const LocalSpan = extern struct {
     }
 };
 
+/// Span into flat u64 storage.
+pub const U64Span = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty u64 span.
+    pub fn empty() U64Span {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span contains no u64 values.
+    pub fn isEmpty(self: U64Span) bool {
+        return self.len == 0;
+    }
+};
+
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
@@ -392,6 +408,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         proc: LirProcSpecId,
         args: LocalSpan,
+        is_cold: bool = false,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -488,6 +505,18 @@ pub const CFStmt = union(enum) {
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
+    /// Conditionally release a payload that may or may not have been initialized
+    /// on this path. This is an ARC statement, not a user-control-flow
+    /// statement: `cond` is the explicit compiler-produced presence proof, and
+    /// consumers lower the single statement to "if cond then decref value".
+    decref_if_initialized: struct {
+        cond: LocalId,
+        cond_mask: u64 = 1,
+        value: LocalId,
+        rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
+        next: CFStmtId,
+    },
     free: struct {
         value: LocalId,
         rc: layout.RcHelper,
@@ -498,10 +527,27 @@ pub const CFStmt = union(enum) {
         cond: LocalId,
         branches: CFSwitchBranchSpan,
         default_branch: CFStmtId,
+        /// Explicit provenance from lowering: this switch's default branch is
+        /// expected to be cold. Backends may use this for branch weights or
+        /// block placement, but must not infer it from source names or shapes.
+        default_is_cold: bool = false,
         /// Common continuation used by structured branch-result switches, when
         /// the branch bodies flow back to a shared suffix. ARC insertion uses
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
+    },
+    /// Branch on a condition that is compiler-proven to describe whether
+    /// `payload` has been initialized. The initialized branch may read
+    /// `payload`; the uninitialized branch may not. ARC insertion and
+    /// certification consume this explicit relationship instead of inferring it
+    /// from field names, tag shapes, or backend codegen.
+    switch_initialized_payload: struct {
+        cond: LocalId,
+        cond_mask: u64 = 1,
+        payload: LocalId,
+        uninitialized_is_cold: bool = false,
+        initialized_branch: CFStmtId,
+        uninitialized_branch: CFStmtId,
     },
     /// Runtime string-pattern match. On the match edge this initializes every
     /// captured local in `steps` as a borrowed `Str` view into `source`; on the
@@ -528,6 +574,17 @@ pub const CFStmt = union(enum) {
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
+        /// Join params whose initial value is the compiler-only
+        /// uninitialized marker. ARC must not blindly release these outside
+        /// explicit initialized-payload switches.
+        maybe_uninitialized_params: LocalSpan = .empty(),
+        /// Conditions parallel to `maybe_uninitialized_params`. Entry `i`
+        /// proves whether `maybe_uninitialized_params[i]` is initialized.
+        maybe_uninitialized_conditions: LocalSpan = .empty(),
+        /// Presence masks parallel to `maybe_uninitialized_conditions`. This
+        /// lets one condition local be a packed presence word rather than a
+        /// separate Bool local per maybe-initialized payload.
+        maybe_uninitialized_condition_masks: U64Span = .empty(),
         body: CFStmtId,
         remainder: CFStmtId,
     },

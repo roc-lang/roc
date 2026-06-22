@@ -228,7 +228,7 @@ pub const TargetsConfig = struct {
 
         // Extract inputs_dir from string literal token (StringPart token)
         // Dupe the string so we own the memory
-        const inputs_dir: ?[]const u8 = if (targets_section.inputs_path) |tok_idx|
+        const inputs_dir: ?[]const u8 = if (targets_section.inputs_dir) |tok_idx|
             try allocator.dupe(u8, ast.resolve(tok_idx))
         else
             null;
@@ -797,7 +797,7 @@ test "fromAST captures punned wasm identifier config" {
         \\    packages {}
         \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        wasm32: {
         \\            inputs: ["libhost.a", app],
         \\            output: Shared,

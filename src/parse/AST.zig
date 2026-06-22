@@ -2253,7 +2253,7 @@ pub const ExposedItem = union(enum) {
 
 /// A targets section in a platform header
 pub const TargetsSection = struct {
-    inputs_path: ?Token.Idx, // "inputs:" directive string literal
+    inputs_dir: ?Token.Idx, // "inputs_dir:" directive string literal
     entries: TargetEntry.Span, // per-target entries
     region: TokenizedRegion,
 
@@ -2882,7 +2882,19 @@ pub const Expr = union(enum) {
         fields: RecordField.Span,
         region: TokenizedRegion,
     },
+    nominal_record: struct {
+        mapper: Expr.Idx,
+        backing: Expr.Idx,
+        region: TokenizedRegion,
+    },
     ellipsis: struct {
+        region: TokenizedRegion,
+    },
+    @"break": struct {
+        region: TokenizedRegion,
+    },
+    @"return": struct {
+        expr: Expr.Idx,
         region: TokenizedRegion,
     },
     block: Block,
@@ -2953,7 +2965,10 @@ pub const Expr = union(enum) {
             .dbg => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
+            .nominal_record => |e| e.region,
             .ellipsis => |e| e.region,
+            .@"break" => |e| e.region,
+            .@"return" => |e| e.region,
             .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
@@ -3284,10 +3299,45 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .nominal_record => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-nominal-record");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
+                try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
+
+                const backing_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("backing");
+                try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
+                const backing_attrs = tree.beginNode();
+                try tree.endNode(backing_wrapper, backing_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .ellipsis => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-ellipsis");
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"break" => |b| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                try ast.appendRegionInfoToSexprTree(env, tree, b.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"return" => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                try ast.appendRegionInfoToSexprTree(env, tree, ret.region);
+                const attrs = tree.beginNode();
+                try ast.store.getExpr(ret.expr).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .block => |block| {

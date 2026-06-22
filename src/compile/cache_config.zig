@@ -28,8 +28,10 @@ pub const Constants = struct {
     /// 4: numeric suffix metadata was renamed to suffix targets.
     /// 5: nominal record declared-field-order and unnamed padding fields added
     ///    node, diagnostic, and type-annotation payloads.
-    /// 6: ModuleEnv stores source-relative file-import dependency metadata.
-    pub const CACHE_VERSION = 6;
+    /// 6: merge with typed node/static-dispatch payload layout changes.
+    /// 7: field-order layout metadata moved from nominal-only to general field-order.
+    /// 8: ModuleEnv stores source-relative file-import dependency metadata.
+    pub const CACHE_VERSION = 8;
 };
 
 /// Configuration for the Roc cache system.

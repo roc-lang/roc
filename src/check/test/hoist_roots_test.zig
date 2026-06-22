@@ -609,6 +609,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_expect,
             .e_for,
             .e_return,
+            .e_break,
             .e_run_low_level,
             => {},
         }

@@ -15,6 +15,7 @@ const bindings = @import("vendor_llvm_compile_bindings");
 const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
 const collections = @import("collections");
+const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
 
@@ -228,6 +229,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_str_contains", {} },
     .{ "roc_builtins_str_count_utf8_bytes", {} },
     .{ "roc_builtins_str_drop_prefix", {} },
+    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
     .{ "roc_builtins_str_drop_suffix", {} },
     .{ "roc_builtins_str_ends_with", {} },
     .{ "roc_builtins_str_equal", {} },
@@ -689,8 +691,8 @@ fn linkSharedLibrary(
             });
             try args.append(allocator, "-platform_version");
             try args.append(allocator, "macos");
-            try args.append(allocator, "13.0");
-            try args.append(allocator, "13.0");
+            try args.append(allocator, roc_target.macos_deployment.linker_version);
+            try args.append(allocator, roc_target.macos_deployment.linker_version);
             try args.append(allocator, "-syslibroot");
             try args.append(allocator, build_options.darwin_sysroot);
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
