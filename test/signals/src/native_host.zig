@@ -669,6 +669,14 @@ fn failIdentityTableError(err: anyerror) noreturn {
     }
 }
 
+fn failScopeOrIdentityTableError(err: anyerror, unknown_scope_message: []const u8) noreturn {
+    switch (err) {
+        error.UnknownScope, error.InactiveScope, error.InvalidRoot => failScopeTreeError(err, unknown_scope_message),
+        error.OutOfMemory => std.process.exit(1),
+        else => failIdentityTableError(err),
+    }
+}
+
 fn failKeyedRowsError(err: anyerror) noreturn {
     switch (err) {
         error.OutOfMemory => std.process.exit(1),
@@ -1988,33 +1996,27 @@ const HostEnv = struct {
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
-        scope_tree.validate(HostEachRowScopeStep, self.engine.scopes.items, scope_id) catch |err| {
+        self.engine.validateScopeId(scope_id) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
     }
 
     fn internRootScope(self: *HostEnv) u64 {
-        const result = scope_tree.internRoot(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes) catch |err| {
+        return self.engine.internRootScope(self.gpa.allocator()) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.engine.recordScopeCreated();
-        return result.scope_id;
     }
 
     fn internComponentScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64) u64 {
-        const result = scope_tree.internComponent(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes, parent_scope_id, site_ordinal) catch |err| {
+        return self.engine.internComponentScope(self.gpa.allocator(), parent_scope_id, site_ordinal) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.engine.recordScopeCreated();
-        return result.scope_id;
     }
 
     fn internWhenBranchScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) u64 {
-        const result = scope_tree.internWhenBranch(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes, parent_scope_id, site_ordinal, branch) catch |err| {
+        return self.engine.internWhenBranchScope(self.gpa.allocator(), parent_scope_id, site_ordinal, branch) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-        if (result.created) self.engine.recordScopeCreated();
-        return result.scope_id;
     }
 
     fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
@@ -2034,16 +2036,14 @@ const HostEnv = struct {
     }
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
-        self.validateScopeId(scope_id);
-        return identity_table.internNode(self.gpa.allocator(), &self.engine.node_identities, scope_id, ordinal) catch |err| {
-            failIdentityTableError(err);
+        return self.engine.internNodeIdentity(self.gpa.allocator(), scope_id, ordinal) catch |err| {
+            failScopeOrIdentityTableError(err, "scope id has no host scope descriptor");
         };
     }
 
     fn internDomIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
-        self.validateScopeId(scope_id);
-        return identity_table.internDom(self.gpa.allocator(), &self.engine.dom_identities, scope_id, ordinal) catch |err| {
-            failIdentityTableError(err);
+        return self.engine.internDomIdentity(self.gpa.allocator(), scope_id, ordinal) catch |err| {
+            failScopeOrIdentityTableError(err, "scope id has no host scope descriptor");
         };
     }
 
@@ -2099,7 +2099,7 @@ const HostEnv = struct {
     }
 
     fn activeEachRowScopes(self: *HostEnv, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) []u64 {
-        return scope_tree.activeEachRows(HostEachRowScopeStep, allocator, self.engine.scopes.items, parent_scope_id, site_ordinal) catch |err| {
+        return self.engine.activeEachRowScopes(allocator, parent_scope_id, site_ordinal) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
     }
@@ -2799,7 +2799,7 @@ const HostEnv = struct {
     }
 
     fn eachSiteRowAncestorScopeId(self: *HostEnv, scope_id: u64, site: HostEachSite) ?u64 {
-        return scope_tree.eachSiteRowAncestor(HostEachRowScopeStep, self.engine.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal) catch |err| {
+        return self.engine.eachSiteRowAncestorScopeId(scope_id, site) catch |err| {
             failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
         };
     }
@@ -2955,7 +2955,7 @@ const HostEnv = struct {
     }
 
     fn scopeIsDescendantOrSelf(self: *HostEnv, scope_id: u64, root_scope_id: u64) bool {
-        return scope_tree.descendantOrSelf(HostEachRowScopeStep, self.engine.scopes.items, scope_id, root_scope_id) catch |err| {
+        return self.engine.scopeIsDescendantOrSelf(scope_id, root_scope_id) catch |err| {
             failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
         };
     }
@@ -3035,7 +3035,7 @@ const HostEnv = struct {
     }
 
     fn scopeIsEachSiteRowDescendantOrSelf(self: *HostEnv, scope_id: u64, site: HostEachSite) bool {
-        return scope_tree.eachSiteRowDescendantOrSelf(HostEachRowScopeStep, self.engine.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal) catch |err| {
+        return self.engine.scopeIsEachSiteRowDescendantOrSelf(scope_id, site) catch |err| {
             failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
         };
     }

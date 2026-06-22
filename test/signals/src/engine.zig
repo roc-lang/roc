@@ -1516,6 +1516,7 @@ pub fn Engine(comptime Ctx: type) type {
         pub const RegistryOps = Ctx.RegistryOps;
         pub const HostValueRegistry = host_value_registry.Registry(Ctx.HostValueTypeTag, Ctx.host_value_type_tags_enabled);
         pub const ActiveEventDesc = HostActiveEventDesc(Ctx.HostValueTypeTag);
+        pub const IdentityInternError = scope_tree.Error || identity_table.Error;
 
         host_values: HostValueRegistry = .{},
         active_events: std.ArrayListUnmanaged(ActiveEventDesc) = .empty,
@@ -1644,6 +1645,54 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn activeWhenBranchScopeId(self: *Self, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!?u64 {
             return scope_tree.activeWhenBranch(HostEachRowScopeStep, self.scopes.items, parent_scope_id, site_ordinal, branch);
+        }
+
+        pub fn validateScopeId(self: *Self, scope_id: u64) scope_tree.Error!void {
+            return scope_tree.validate(HostEachRowScopeStep, self.scopes.items, scope_id);
+        }
+
+        pub fn internRootScope(self: *Self, allocator: std.mem.Allocator) scope_tree.Error!u64 {
+            const result = try scope_tree.internRoot(HostEachRowScopeStep, allocator, &self.scopes);
+            if (result.created) self.recordScopeCreated();
+            return result.scope_id;
+        }
+
+        pub fn internComponentScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) scope_tree.Error!u64 {
+            const result = try scope_tree.internComponent(HostEachRowScopeStep, allocator, &self.scopes, parent_scope_id, site_ordinal);
+            if (result.created) self.recordScopeCreated();
+            return result.scope_id;
+        }
+
+        pub fn internWhenBranchScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!u64 {
+            const result = try scope_tree.internWhenBranch(HostEachRowScopeStep, allocator, &self.scopes, parent_scope_id, site_ordinal, branch);
+            if (result.created) self.recordScopeCreated();
+            return result.scope_id;
+        }
+
+        pub fn internNodeIdentity(self: *Self, allocator: std.mem.Allocator, scope_id: u64, ordinal: u64) IdentityInternError!u64 {
+            try self.validateScopeId(scope_id);
+            return identity_table.internNode(allocator, &self.node_identities, scope_id, ordinal);
+        }
+
+        pub fn internDomIdentity(self: *Self, allocator: std.mem.Allocator, scope_id: u64, ordinal: u64) IdentityInternError!u64 {
+            try self.validateScopeId(scope_id);
+            return identity_table.internDom(allocator, &self.dom_identities, scope_id, ordinal);
+        }
+
+        pub fn activeEachRowScopes(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) scope_tree.Error![]u64 {
+            return scope_tree.activeEachRows(HostEachRowScopeStep, allocator, self.scopes.items, parent_scope_id, site_ordinal);
+        }
+
+        pub fn eachSiteRowAncestorScopeId(self: *Self, scope_id: u64, site: HostEachSite) scope_tree.Error!?u64 {
+            return scope_tree.eachSiteRowAncestor(HostEachRowScopeStep, self.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal);
+        }
+
+        pub fn scopeIsDescendantOrSelf(self: *Self, scope_id: u64, root_scope_id: u64) scope_tree.Error!bool {
+            return scope_tree.descendantOrSelf(HostEachRowScopeStep, self.scopes.items, scope_id, root_scope_id);
+        }
+
+        pub fn scopeIsEachSiteRowDescendantOrSelf(self: *Self, scope_id: u64, site: HostEachSite) scope_tree.Error!bool {
+            return scope_tree.eachSiteRowDescendantOrSelf(HostEachRowScopeStep, self.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal);
         }
 
         pub fn eachDiffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
