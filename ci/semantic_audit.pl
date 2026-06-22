@@ -28,7 +28,6 @@ my @new_postcheck_roots = qw(
 
 my @postcheck_design_docs = qw(
     design.md
-    plan.md
 );
 
 sub ident {

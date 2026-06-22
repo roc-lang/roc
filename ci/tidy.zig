@@ -115,7 +115,7 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
         try tidyFile(gpa, &counter, source_file, &errors);
     }
 
-    try checkNoMdtodoFiles(gpa, io, &errors);
+    try checkNoCommittedScratchFiles(gpa, io, &errors);
 
     if (errors.count > 0) {
         std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
@@ -125,13 +125,15 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
     std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
 }
 
-/// `.mdtodo` files are working scratch — aspirational snapshots or planning
-/// notes kept on a branch — and must never be committed. Fail the build if any
-/// tracked file anywhere in the repo uses that extension. The pathspec matches
-/// across directories, so it is not limited to tidy's normal file set.
-fn checkNoMdtodoFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
+/// `plan.md` and `*.mdtodo` files are working scratch — planning notes and
+/// aspirational snapshots kept on a branch. They are allowed to exist on the
+/// filesystem, but must never be checked in. Fail the build only if one is
+/// git-tracked; an untracked scratch file in the working tree is fine. The
+/// pathspecs match across directories, so this is not limited to tidy's normal
+/// file set.
+fn checkNoCommittedScratchFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
     const run_result = try std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo" },
+        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo", "*plan.md" },
     });
     defer gpa.free(run_result.stdout);
     defer gpa.free(run_result.stderr);
@@ -142,7 +144,7 @@ fn checkNoMdtodoFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         errors.emit(
-            "{s}: error: .mdtodo files must not be committed (working/planning scratch); delete it\n",
+            "{s}: error: working/planning scratch files (plan.md, *.mdtodo) must not be checked in; keep it on the filesystem but `git rm --cached` it\n",
             .{line},
         );
     }
