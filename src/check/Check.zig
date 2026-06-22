@@ -16097,75 +16097,79 @@ fn ensureCustomInterpolationPartsChecked(
     }
 }
 
-/// Check if a structural type supports is_eq.
-/// A type supports is_eq if:
-/// - It's not a function type
-/// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
-/// - For nominal types, check if their backing type supports is_eq
-fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.typeSupportsIsEqInternal(flat_type, &self.var_set);
-}
-
-fn typeSupportsIsEqInternal(
+/// Whether a structural type supports the structural derivations `is_eq` and
+/// `to_hash`. Both share the same structural admissibility: a type qualifies if
+/// it is not a function, not a `Box`, and all of its components (record fields,
+/// tuple elements, tag payloads, nominal backing) likewise qualify. The two
+/// derivations have identical structural requirements because their per-type
+/// recursion bottoms out at the same builtin leaves (numbers/Str/Bool/List
+/// declare both; functions and Box declare neither).
+fn typeSupportsStructuralDeriveInternal(
     self: *Self,
     flat_type: types_mod.FlatType,
     visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
-        // Function types do not support is_eq
+        // Function types support neither is_eq nor to_hash.
         .fn_pure, .fn_effectful, .fn_unbound => false,
 
-        // Empty types trivially support is_eq
+        // Empty types trivially qualify.
         .empty_record, .empty_tag_union => true,
 
-        // Records support is_eq if all field types support is_eq
+        // Records qualify if all field types qualify.
         .record => |record| {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(field_var, visited)) return false;
             }
             return true;
         },
 
-        // Tuples support is_eq if all element types support is_eq
+        // Tuples qualify if all element types qualify.
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (!try self.varSupportsIsEqInternal(elem_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(elem_var, visited)) return false;
             }
             return true;
         },
 
-        // Tag unions support is_eq if all payload types support is_eq
+        // Tag unions qualify if all payload types qualify.
         .tag_union => |tag_union| {
             const tags_slice = self.types.getTagsSlice(tag_union.tags);
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (!try self.varSupportsIsEqInternal(arg_var, visited)) return false;
+                    if (!try self.varSupportsStructuralDeriveInternal(arg_var, visited)) return false;
                 }
             }
             return true;
         },
 
-        // Nominal types support is_eq if their backing type supports is_eq
+        // Nominal types qualify if their backing type qualifies (builtin
+        // numbers/Str/Bool/List declare both derivations; Box declares neither).
         .nominal_type => |nominal| {
             if (self.nominalIsBoxType(nominal)) return false;
             const backing_var = self.types.getNominalBackingVar(nominal);
-            return try self.varSupportsIsEqInternal(backing_var, visited);
+            return try self.varSupportsStructuralDeriveInternal(backing_var, visited);
         },
 
-        // Unbound records: resolve and check the resolved type
+        // Unbound records: check each field.
         .record_unbound => |fields| {
-            // Check each field in the unbound record
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(field_var, visited)) return false;
             }
             return true;
         },
     };
+}
+
+/// Check if a structural type supports is_eq. See
+/// `typeSupportsStructuralDeriveInternal`.
+fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.typeSupportsStructuralDeriveInternal(flat_type, &self.var_set);
 }
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -16275,92 +16279,18 @@ fn flatTypeContainsUnboxedFunction(
     };
 }
 
-fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
-    if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
-    if (self.nominalIsBoxType(nominal_type)) return false;
-    self.var_set.clearRetainingCapacity();
-    return try self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
-}
-
-/// Check if a structural type supports to_hash.
-/// A type supports to_hash if:
-/// - It's not a function type
-/// - All of its components (record fields, tuple elements, tag payloads) also support to_hash
-/// - For nominal types, the builtin to_hash bindings (Str/Bool/num/List) declare it; others
-///   defer to whether their backing type supports to_hash
+/// Check if a structural type supports to_hash. See
+/// `typeSupportsStructuralDeriveInternal`.
 fn typeSupportsToHash(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.typeSupportsToHashInternal(flat_type, &self.var_set);
+    return try self.typeSupportsStructuralDeriveInternal(flat_type, &self.var_set);
 }
 
-fn typeSupportsToHashInternal(
-    self: *Self,
-    flat_type: types_mod.FlatType,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    return switch (flat_type) {
-        // Function types do not support to_hash
-        .fn_pure, .fn_effectful, .fn_unbound => false,
-
-        // Empty types trivially support to_hash
-        .empty_record, .empty_tag_union => true,
-
-        // Records support to_hash if all field types support to_hash
-        .record => |record| {
-            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsToHashInternal(field_var, visited)) return false;
-            }
-            return true;
-        },
-
-        // Tuples support to_hash if all element types support to_hash
-        .tuple => |tuple| {
-            const elems = self.types.sliceVars(tuple.elems);
-            for (elems) |elem_var| {
-                if (!try self.varSupportsToHashInternal(elem_var, visited)) return false;
-            }
-            return true;
-        },
-
-        // Tag unions support to_hash if all payload types support to_hash
-        .tag_union => |tag_union| {
-            const tags_slice = self.types.getTagsSlice(tag_union.tags);
-            for (tags_slice.items(.args)) |tag_args| {
-                const args = self.types.sliceVars(tag_args);
-                for (args) |arg_var| {
-                    if (!try self.varSupportsToHashInternal(arg_var, visited)) return false;
-                }
-            }
-            return true;
-        },
-
-        // Nominal types support to_hash if their backing type supports to_hash
-        // (builtin numbers/Str/Bool/List declare to_hash; Box does not)
-        .nominal_type => |nominal| {
-            if (self.nominalIsBoxType(nominal)) return false;
-            const backing_var = self.types.getNominalBackingVar(nominal);
-            return try self.varSupportsToHashInternal(backing_var, visited);
-        },
-
-        // Unbound records: check each field
-        .record_unbound => |fields| {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsToHashInternal(field_var, visited)) return false;
-            }
-            return true;
-        },
-    };
-}
-
-/// Check if a type variable supports to_hash by resolving it and checking its content
-fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varSupportsToHashInternal(var_, &self.var_set);
-}
-
-fn varSupportsToHashInternal(
+/// Resolve a type variable and report whether its content supports the
+/// structural derivations is_eq and to_hash. Flex/rigid vars are optimistically
+/// admitted: if later unified with a non-deriving type (a function),
+/// unification fails. Already-visited vars (recursive types) return true.
+fn varSupportsStructuralDeriveInternal(
     self: *Self,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
@@ -16370,21 +16300,43 @@ fn varSupportsToHashInternal(
     try visited.put(resolved.var_, {});
 
     return switch (resolved.desc.content) {
-        .structure => |s| try self.typeSupportsToHashInternal(s, visited),
-        // Flex/rigid vars: optimistically assume they support to_hash.
-        // Sound because if later unified with a type that doesn't (a function),
-        // unification will fail.
+        .structure => |s| try self.typeSupportsStructuralDeriveInternal(s, visited),
         .flex, .rigid => true,
-        .alias => |alias| try self.varSupportsToHashInternal(self.types.getAliasBackingVar(alias), visited),
+        .alias => |alias| try self.varSupportsStructuralDeriveInternal(self.types.getAliasBackingVar(alias), visited),
         .err => true,
     };
 }
 
-fn nominalSupportsDerivedToHash(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+/// Whether a nominal type admits a derived is_eq/to_hash. Builtin numbers
+/// declare both directly; Box declares neither; all other nominals defer to
+/// whether their backing type qualifies structurally.
+fn nominalSupportsStructuralDerive(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
-    return try self.varSupportsToHashInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
+    return try self.varSupportsStructuralDeriveInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
+}
+
+/// Check if a type variable supports is_eq. See
+/// `varSupportsStructuralDeriveInternal`.
+fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varSupportsStructuralDeriveInternal(var_, &self.var_set);
+}
+
+/// Check if a type variable supports to_hash. See
+/// `varSupportsStructuralDeriveInternal`.
+fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varSupportsStructuralDeriveInternal(var_, &self.var_set);
+}
+
+fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+    return try self.nominalSupportsStructuralDerive(nominal_type);
+}
+
+fn nominalSupportsDerivedToHash(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+    return try self.nominalSupportsStructuralDerive(nominal_type);
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
@@ -17818,34 +17770,6 @@ fn validateDerivedEncodeNominal(
         },
     });
     return if (result.isOk()) .ok else .reported_error;
-}
-
-/// Check if a type variable supports is_eq by resolving it and checking its content
-fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varSupportsIsEqInternal(var_, &self.var_set);
-}
-
-fn varSupportsIsEqInternal(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .structure => |s| try self.typeSupportsIsEqInternal(s, visited),
-        // Flex/rigid vars: we optimistically assume they support is_eq.
-        // This is sound because if the variable is later unified with a type
-        // that doesn't support is_eq (like a function), unification will fail.
-        .flex, .rigid => true,
-        // Aliases: check the underlying type
-        .alias => |alias| try self.varSupportsIsEqInternal(self.types.getAliasBackingVar(alias), visited),
-        // Error types: allow them to proceed
-        .err => true,
-    };
 }
 
 /// Check if a flex var has incompatible constraints and report errors.

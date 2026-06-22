@@ -2543,23 +2543,7 @@ const Lowerer = struct {
         primitive: MonoType.Primitive,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const op: LIR.LowLevel = switch (primitive) {
-            .bool => .hasher_write_bool,
-            .str => .hasher_write_str,
-            .u8 => .hasher_write_u8,
-            .i8 => .hasher_write_i8,
-            .u16 => .hasher_write_u16,
-            .i16 => .hasher_write_i16,
-            .u32 => .hasher_write_u32,
-            .i32 => .hasher_write_i32,
-            .u64 => .hasher_write_u64,
-            .i64 => .hasher_write_i64,
-            .u128 => .hasher_write_u128,
-            .i128 => .hasher_write_i128,
-            .f32 => .hasher_write_f32,
-            .f64 => .hasher_write_f64,
-            .dec => .hasher_write_dec,
-        };
+        const op = Common.hasherWriteOp(primitive);
         const args = [_]LIR.LocalId{ hasher, value };
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,

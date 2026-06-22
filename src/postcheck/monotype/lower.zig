@@ -326,23 +326,14 @@ const EqualityDefAddress = struct {
     bool_ty: u32,
 };
 
-const InspectDefEntry = union(enum) {
+/// Tracks a memoized structural-derivation helper def (is_eq / inspect /
+/// to_hash). `reserved` means the def id is allocated but its body has not yet
+/// been filled in (used to break recursion); `ready` means the body is complete.
+const GeneratedHelperDefEntry = union(enum) {
     reserved: Ast.DefId,
     ready: Ast.DefId,
 
-    fn id(self: InspectDefEntry) Ast.DefId {
-        return switch (self) {
-            .reserved => |def_id| def_id,
-            .ready => |def_id| def_id,
-        };
-    }
-};
-
-const EqualityDefEntry = union(enum) {
-    reserved: Ast.DefId,
-    ready: Ast.DefId,
-
-    fn id(self: EqualityDefEntry) Ast.DefId {
+    fn id(self: GeneratedHelperDefEntry) Ast.DefId {
         return switch (self) {
             .reserved => |def_id| def_id,
             .ready => |def_id| def_id,
@@ -353,18 +344,6 @@ const EqualityDefEntry = union(enum) {
 const HashDefAddress = struct {
     value_ty: u32,
     hasher_ty: u32,
-};
-
-const HashDefEntry = union(enum) {
-    reserved: Ast.DefId,
-    ready: Ast.DefId,
-
-    fn id(self: HashDefEntry) Ast.DefId {
-        return switch (self) {
-            .reserved => |def_id| def_id,
-            .ready => |def_id| def_id,
-        };
-    }
 };
 
 const Builder = struct {
@@ -383,9 +362,9 @@ const Builder = struct {
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
-    inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
-    equality_defs: std.AutoHashMap(EqualityDefAddress, EqualityDefEntry),
-    hash_defs: std.AutoHashMap(HashDefAddress, HashDefEntry),
+    inspect_defs: std.AutoHashMap(InspectDefAddress, GeneratedHelperDefEntry),
+    equality_defs: std.AutoHashMap(EqualityDefAddress, GeneratedHelperDefEntry),
+    hash_defs: std.AutoHashMap(HashDefAddress, GeneratedHelperDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -410,9 +389,9 @@ const Builder = struct {
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
-            .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
-            .equality_defs = std.AutoHashMap(EqualityDefAddress, EqualityDefEntry).init(allocator),
-            .hash_defs = std.AutoHashMap(HashDefAddress, HashDefEntry).init(allocator),
+            .inspect_defs = std.AutoHashMap(InspectDefAddress, GeneratedHelperDefEntry).init(allocator),
+            .equality_defs = std.AutoHashMap(EqualityDefAddress, GeneratedHelperDefEntry).init(allocator),
+            .hash_defs = std.AutoHashMap(HashDefAddress, GeneratedHelperDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -11486,6 +11465,18 @@ const BodyContext = struct {
         return operand_ty;
     }
 
+    /// Whether `shape` is a type the structural-derivation ladders (is_eq /
+    /// to_hash) expand a layer at a time, guarding recursion through an
+    /// expansion stack. Aggregates and transparent nominals expand; scalars,
+    /// owned wrappers (List/Box), and opaque nominals bottom out instead.
+    fn structurallyExpands(shape: Type.Content) bool {
+        return switch (shape) {
+            .record, .tuple, .tag_union => true,
+            .named => |named| named.backing != null,
+            else => false,
+        };
+    }
+
     fn lowerEqualityExpr(
         self: *BodyContext,
         ty: Type.TypeId,
@@ -11495,11 +11486,7 @@ const BodyContext = struct {
         bool_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const shape = self.builder.program.types.get(ty);
-        const expands_structurally = switch (shape) {
-            .record, .tuple, .tag_union => true,
-            .named => |named| named.backing != null,
-            else => false,
-        };
+        const expands_structurally = structurallyExpands(shape);
         var remove_active_expansion = false;
         defer if (remove_active_expansion) {
             _ = self.equality_expansion_stack.remove(ty);
@@ -11901,11 +11888,7 @@ const BodyContext = struct {
         hasher_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const shape = self.builder.program.types.get(value_ty);
-        const expands_structurally = switch (shape) {
-            .record, .tuple, .tag_union => true,
-            .named => |named| named.backing != null,
-            else => false,
-        };
+        const expands_structurally = structurallyExpands(shape);
         var remove_active_expansion = false;
         defer if (remove_active_expansion) {
             _ = self.hash_expansion_stack.remove(value_ty);
