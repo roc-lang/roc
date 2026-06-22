@@ -9767,16 +9767,16 @@ const BodyContext = struct {
         }
         // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
         // when the receiver never grounded to a concrete owner and the result mode
-        // has no structural fallback. That is only reachable inside a bare
-        // polymorphic function value never called at a concrete type — e.g.
-        // evaluating `run` itself for `run : a -> a where [a.go : a -> a]`. The
-        // dispatch can never execute (the function is never invoked), so lower it
-        // to a crash rather than failing the invariant. A genuinely reachable
-        // ownerless dispatch is rejected earlier, at check time. The owner is
-        // re-read here because the pre-lowering above may have supplied the
-        // receiver's solved type, and the structural-fallback exceptions mirror
-        // `dispatchTarget` exactly so a structural equality/parser/encode dispatch
-        // keeps its dedicated lowering below.
+        // is not a structural equality/parser/encode dispatch. That is only
+        // reachable inside a bare polymorphic function value never called at a
+        // concrete type — e.g. evaluating `run` itself for
+        // `run : a -> a where [a.go : a -> a]`. The dispatch can never execute
+        // (the function is never invoked), so lower it to a crash rather than
+        // failing the invariant. A genuinely reachable ownerless dispatch is
+        // rejected earlier, at check time. The owner is re-read here because the
+        // pre-lowering above may have supplied the receiver's solved type, and the
+        // structural equality/parser/encode exceptions mirror `dispatchTarget`
+        // exactly so those dispatches keep their dedicated structural lowering below.
         if (plan.resolution == .unresolved_checked_plan and
             methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null and
             !(plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) and
