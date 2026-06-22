@@ -42,6 +42,7 @@ const TestResult = struct {
 const TestOptions = struct {
     assert_alloc_balanced: bool = false,
     min_allocs: usize = 0,
+    max_allocs: ?usize = null,
 };
 
 /// Host import implementations for the WASM module.
@@ -144,15 +145,16 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_
     // Now that memory is available, update host context
     global_host_context.memory = module_instance.store.getMemory(0);
 
-    const reset_alloc_counts_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+    const count_allocs = options.assert_alloc_balanced or options.max_allocs != null;
+    const reset_alloc_counts_handle: ?bytebox.FunctionHandle = if (count_allocs)
         try module_instance.getFunctionHandle("wasm_reset_alloc_counts")
     else
         null;
-    const alloc_count_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+    const alloc_count_handle: ?bytebox.FunctionHandle = if (count_allocs)
         try module_instance.getFunctionHandle("wasm_alloc_count")
     else
         null;
-    const dealloc_count_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+    const dealloc_count_handle: ?bytebox.FunctionHandle = if (count_allocs)
         try module_instance.getFunctionHandle("wasm_dealloc_count")
     else
         null;
@@ -237,7 +239,8 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
     };
     defer wasm.deinit();
 
-    if (options.assert_alloc_balanced) {
+    const count_allocs = options.assert_alloc_balanced or options.max_allocs != null;
+    if (count_allocs) {
         callWasmNoArgVoid(&wasm, wasm.wasm_reset_alloc_counts_handle.?, "wasm_reset_alloc_counts") catch |err| {
             return .{
                 .name = wasm_path,
@@ -263,7 +266,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
         };
     }
 
-    if (options.assert_alloc_balanced) {
+    if (count_allocs) {
         const alloc_count = callWasmNoArgUsize(&wasm, wasm.wasm_alloc_count_handle.?, "wasm_alloc_count") catch |err| {
             return .{
                 .name = wasm_path,
@@ -286,7 +289,16 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
                 .message = std.fmt.allocPrint(arena, "Expected at least {d} allocations, got {d}", .{ options.min_allocs, alloc_count }) catch "Too few allocations",
             };
         }
-        if (alloc_count != dealloc_count) {
+        if (options.max_allocs) |max_allocs| {
+            if (alloc_count > max_allocs) {
+                return .{
+                    .name = wasm_path,
+                    .passed = false,
+                    .message = std.fmt.allocPrint(arena, "Expected at most {d} allocations, got {d}", .{ max_allocs, alloc_count }) catch "Too many allocations",
+                };
+            }
+        }
+        if (options.assert_alloc_balanced and alloc_count != dealloc_count) {
             return .{
                 .name = wasm_path,
                 .passed = false,
@@ -325,7 +337,8 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
             std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
             std.debug.print("  --assert-alloc-balanced  Assert canonical roc_alloc and roc_dealloc counts match\n", .{});
-            std.debug.print("  --min-allocs N       Minimum canonical roc_alloc count when asserting balance\n", .{});
+            std.debug.print("  --min-allocs N       Minimum canonical roc_alloc count when counting allocations\n", .{});
+            std.debug.print("  --max-allocs N       Maximum canonical roc_alloc count when counting allocations\n", .{});
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -347,6 +360,15 @@ pub fn main(init: std.process.Init) anyerror!void {
             };
             options.min_allocs = std.fmt.parseInt(usize, min_allocs_arg, 10) catch |err| {
                 std.debug.print("Error: invalid --min-allocs value '{s}': {}\n", .{ min_allocs_arg, err });
+                return;
+            };
+        } else if (std.mem.eql(u8, arg, "--max-allocs")) {
+            const max_allocs_arg = arg_iter.next() orelse {
+                std.debug.print("Error: --max-allocs requires an argument\n", .{});
+                return;
+            };
+            options.max_allocs = std.fmt.parseInt(usize, max_allocs_arg, 10) catch |err| {
+                std.debug.print("Error: invalid --max-allocs value '{s}': {}\n", .{ max_allocs_arg, err });
                 return;
             };
         }
