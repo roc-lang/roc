@@ -158,12 +158,6 @@ const RocListFields = struct {
     cap: u32,
 };
 
-const RocStrFields = struct {
-    bytes: u32,
-    len: u32,
-    cap: u32,
-};
-
 const StrMatchSourceShape = struct {
     str: u32,
     bytes: u32,
@@ -613,34 +607,6 @@ fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
 }
 
 fn emitRocListFields(self: *Self, fields: RocListFields) Allocator.Error!void {
-    try self.emitLocalGet(fields.bytes);
-    try self.emitLocalGet(fields.len);
-    try self.emitLocalGet(fields.cap);
-}
-
-fn loadRocStrFields(self: *Self, str_ptr: u32) Allocator.Error!RocStrFields {
-    const fields = RocStrFields{
-        .bytes = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-        .len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-        .cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-    };
-
-    try self.emitLocalGet(str_ptr);
-    try self.emitLoadOp(.i32, 0);
-    try self.emitLocalSet(fields.bytes);
-
-    try self.emitLocalGet(str_ptr);
-    try self.emitLoadOp(.i32, 8);
-    try self.emitLocalSet(fields.len);
-
-    try self.emitLocalGet(str_ptr);
-    try self.emitLoadOp(.i32, 4);
-    try self.emitLocalSet(fields.cap);
-
-    return fields;
-}
-
-fn emitRocStrFields(self: *Self, fields: RocStrFields) Allocator.Error!void {
     try self.emitLocalGet(fields.bytes);
     try self.emitLocalGet(fields.len);
     try self.emitLocalGet(fields.cap);

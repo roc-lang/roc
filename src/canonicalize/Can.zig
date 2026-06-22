@@ -15956,7 +15956,15 @@ pub fn canonicalizePattern(
                                 },
                                 .var_reassignment_ok => |existing_pattern_idx| {
                                     self.pattern_reused_existing_var = true;
-                                    try self.scratch_reassign_targets.append(existing_pattern_idx);
+                                    // Only record the reassignment target while inside a block
+                                    // declaration's pattern (where `allow_pattern_var_reuse` is set):
+                                    // that is the only window where `beginDefiningBoundVars` reads and
+                                    // clears these targets to exclude them from the self-reference set.
+                                    // Recording elsewhere (a `var` shadowed by a match/for/lambda
+                                    // binder) would never be consumed or cleared, leaking onto the buffer.
+                                    if (self.allow_pattern_var_reuse) {
+                                        try self.scratch_reassign_targets.append(existing_pattern_idx);
+                                    }
                                     // This is a var reassignment - return the existing pattern
                                     // so the interpreter's upsertBinding will update the existing binding
                                     last_pattern = existing_pattern_idx;
