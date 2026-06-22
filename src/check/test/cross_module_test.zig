@@ -45,7 +45,7 @@ test "cross-module - check type - monomorphic function fails" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertOneTypeError("TYPE MISMATCH");
+    try test_env_b.assertOneTypeError("Type Mismatch");
 }
 
 test "cross-module - check type - polymorphic function passes" {
@@ -161,7 +161,7 @@ test "cross-module - check type - opaque types 1" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("TYPE MISMATCH");
+    try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
 test "cross-module - check type - opaque types 2" {
@@ -178,7 +178,7 @@ test "cross-module - check type - opaque types 2" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("CANNOT USE OPAQUE NOMINAL TYPE");
+    try test_env_b.assertFirstTypeError("Cannot Use Opaque Nominal Type");
 }
 
 test "displayNameIsBetter - shorter names are preferred" {

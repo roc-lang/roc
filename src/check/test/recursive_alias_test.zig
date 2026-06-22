@@ -14,7 +14,7 @@ test "recursive alias - direct self-reference without args" {
     ;
     var test_env = try TestEnv.init("A", source);
     defer test_env.deinit();
-    try test_env.assertFirstTypeError("RECURSIVE ALIAS");
+    try test_env.assertFirstTypeError("Recursive Alias");
 }
 
 test "recursive alias - direct self-reference with args (apply case)" {
@@ -24,7 +24,7 @@ test "recursive alias - direct self-reference with args (apply case)" {
     ;
     var test_env = try TestEnv.init("Node", source);
     defer test_env.deinit();
-    try test_env.assertFirstTypeError("RECURSIVE ALIAS");
+    try test_env.assertFirstTypeError("Recursive Alias");
 }
 
 // Nominal type recursion is allowed

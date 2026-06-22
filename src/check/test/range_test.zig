@@ -97,7 +97,7 @@ test "range bounds must unify with each other" {
     // MISSING METHOD (numeral defaulting can't pick a type). This is the same
     // shared numeral-defaulting cascade `<` exhibits — it is not specific to
     // ranges. Assert on the first (primary) one.
-    try test_env.assertFirstTypeError("TYPE MISMATCH");
+    try test_env.assertFirstTypeError("Type Mismatch");
 }
 
 test "inclusive range bounds must unify with each other" {
@@ -109,7 +109,7 @@ test "inclusive range bounds must unify with each other" {
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertFirstTypeError("TYPE MISMATCH");
+    try test_env.assertFirstTypeError("Type Mismatch");
 }
 
 test "range over a non-numeric nominal reports a missing-constraint error" {
@@ -120,7 +120,7 @@ test "range over a non-numeric nominal reports a missing-constraint error" {
     defer test_env.deinit();
     // Calibrated against the desugared `Iter.exclusive_range` call: Str does not
     // satisfy the constructor's `is_lt` where-constraint.
-    try test_env.assertFirstTypeError("MISSING METHOD");
+    try test_env.assertFirstTypeError("Missing Method");
 }
 
 test "for loop consumes a range" {

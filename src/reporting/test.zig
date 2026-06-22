@@ -18,7 +18,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     defer writer.deinit();
 
     // Create a Report
-    var r = try Report.init(gpa, "SYNTAX PROBLEM", "", .runtime_error);
+    var r = try Report.init(gpa, "Syntax Problem", "", .runtime_error);
     defer r.deinit();
 
     // Add the document which describes the problem
@@ -30,7 +30,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try reporting.renderReportToMarkdown(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
 
     const expected =
-        \\**SYNTAX PROBLEM**
+        \\**Syntax Problem**
         \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
         \\**example.roc:1:10:1:20:**
         \\```roc

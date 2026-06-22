@@ -6,6 +6,7 @@
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
@@ -19,6 +20,59 @@ const truncateUtf8 = @import("config.zig").truncateUtf8;
 
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
+
+/// True if `title` contains the substring "comptime" (case-insensitive).
+fn titleHasComptime(title: []const u8) bool {
+    const needle = "comptime";
+    if (title.len < needle.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= title.len) : (i += 1) {
+        var matches = true;
+        for (needle, 0..) |nc, j| {
+            const tc = title[i + j];
+            const lowered = if (tc >= 'A' and tc <= 'Z') tc + ('a' - 'A') else tc;
+            if (lowered != nc) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+/// In debug builds, enforce the house style for error-report titles. These are
+/// compiled out of release builds.
+///
+/// A title must be:
+///   - all ASCII;
+///   - title case: every word begins with a capital letter (or a non-letter,
+///     e.g. a digit), and the title has at least one lowercase letter (so it
+///     reads as `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout
+///     it back to ALL CAPS, while markdown keeps the authored case);
+///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
+///     must never reach user-facing text.
+fn assertValidTitle(title: []const u8) void {
+    if (builtin.mode != .Debug) return;
+
+    var has_lower = false;
+    var at_word_start = true;
+    for (title) |c| {
+        std.debug.assert(c < 0x80); // titles are ASCII
+        if (c == ' ') {
+            at_word_start = true;
+            continue;
+        }
+        if (at_word_start) {
+            // A word may not begin with a lowercase letter.
+            std.debug.assert(!(c >= 'a' and c <= 'z'));
+        }
+        at_word_start = false;
+        if (c >= 'a' and c <= 'z') has_lower = true;
+    }
+    std.debug.assert(has_lower);
+    std.debug.assert(!titleHasComptime(title));
+}
 
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
@@ -36,6 +90,7 @@ pub const Report = struct {
     owned_strings: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
+        assertValidTitle(title);
         var report = Report{
             .title = title,
             .headline = Document.init(allocator),
@@ -263,7 +318,7 @@ pub const Report = struct {
 const testing = std.testing;
 
 test "Report basic functionality" {
-    var report = try Report.init(testing.allocator, "TEST ERROR", "Something went wrong in the test.", .runtime_error);
+    var report = try Report.init(testing.allocator, "Test Error", "Something went wrong in the test.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

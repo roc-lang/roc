@@ -26,7 +26,7 @@ test "OrderedSink: prefix gating and drain order" {
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
     // Emit Second first; should not emit anything yet due to prefix gating (First not ready).
-    const r2 = try Report.init(gpa, "Second report", "", .runtime_error);
+    const r2 = try Report.init(gpa, "Second Report", "", .runtime_error);
     try sink.emitReport("pkg", "Second", r2);
 
     const drained0 = try sink.drainEmitted(gpa);
@@ -34,7 +34,7 @@ test "OrderedSink: prefix gating and drain order" {
     try std.testing.expectEqual(@as(usize, 0), drained0.len);
 
     // Emit First; now both First and Second should emit (First unlocks the prefix, then Second).
-    const r1 = try Report.init(gpa, "First report", "", .runtime_error);
+    const r1 = try Report.init(gpa, "First Report", "", .runtime_error);
     try sink.emitReport("pkg", "First", r1);
 
     const drained1 = try sink.drainEmitted(gpa);
@@ -103,9 +103,9 @@ test "OrderedSink: case-insensitive sort of fq names at same depth" {
     const depths = [_]u32{ 0, 0 };
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
-    const r_b = try Report.init(gpa, "B", "", .runtime_error);
+    const r_b = try Report.init(gpa, "Beta", "", .runtime_error);
     try sink.emitReport("pkg", "B", r_b);
-    const r_a = try Report.init(gpa, "a", "", .runtime_error);
+    const r_a = try Report.init(gpa, "Alpha", "", .runtime_error);
     try sink.emitReport("pkg", "a", r_a);
 
     const drained = try sink.drainEmitted(gpa);

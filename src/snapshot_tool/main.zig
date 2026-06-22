@@ -320,6 +320,15 @@ fn lastTitleSegment(title: []const u8) []const u8 {
     return std.mem.trim(u8, title, " \t\r\n");
 }
 
+/// Dupe `s` with ASCII letters uppercased. The EXPECTED section shouts titles
+/// in ALL CAPS, matching the box renderer, even though titles are authored in
+/// title case.
+fn asciiUpperDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
+    const out = try allocator.dupe(u8, s);
+    for (out) |*c| c.* = std.ascii.toUpper(c.*);
+    return out;
+}
+
 const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32 };
 
 /// Pull the first source region out of a report for the EXPECTED location.
@@ -369,7 +378,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     for (reports.items) |*report| {
         const loc = reportRegionLoc(report);
         try entries.append(.{
-            .problem_type = try allocator.dupe(u8, lastTitleSegment(report.title)),
+            .problem_type = try asciiUpperDupe(allocator, lastTitleSegment(report.title)),
             .file = try allocator.dupe(u8, loc.file),
             .start_line = loc.sl,
             .start_col = loc.sc,

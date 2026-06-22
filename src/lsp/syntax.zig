@@ -748,7 +748,7 @@ pub const SyntaxChecker = struct {
 
     /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
     fn shouldSuppressReport(_: *SyntaxChecker, rep: reporting.Report) bool {
-        if (!std.mem.startsWith(u8, rep.title, "UNDEFINED VARIABLE")) return false;
+        if (!std.mem.startsWith(u8, rep.title, "Undefined Variable")) return false;
 
         const disallowed = [_][]const u8{ "Stderr", "Stdin", "Stdout" };
         return reportContainsAny(rep, &disallowed);

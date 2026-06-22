@@ -13,5 +13,5 @@ test "issue 9709: typed numeric suffix uses resolved external target for from_nu
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("MISSING METHOD");
+    try test_env.assertOneTypeError("Missing Method");
 }

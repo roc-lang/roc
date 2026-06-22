@@ -5519,7 +5519,7 @@ fn importAliased(
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
-    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    // "Exposed But Not Defined" for re-exported imports.
     _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
@@ -5584,7 +5584,7 @@ fn importUnaliased(
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
-    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    // "Exposed But Not Defined" for re-exported imports.
     _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;

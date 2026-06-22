@@ -476,7 +476,7 @@ pub const ReportBuilder = struct {
         expected_snapshot: SnapshotContentIdx,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(title, self, &report, &report.headline);
 
@@ -548,7 +548,7 @@ pub const ReportBuilder = struct {
         actual_snapshot: SnapshotContentIdx,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(title, self, &report, &report.headline);
 
@@ -584,7 +584,7 @@ pub const ReportBuilder = struct {
         title: []const Doc,
         hints: []const []const Doc,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(title, self, &report, &report.headline);
 
@@ -1453,12 +1453,12 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         const title = blk: {
             if (ctx.expected_args > ctx.actual_args) {
-                break :blk "TOO FEW ARGS";
+                break :blk "Too Few Args";
             } else if (ctx.expected_args < ctx.actual_args) {
-                break :blk "TOO MANY ARGS";
+                break :blk "Too Many Args";
             } else {
                 std.debug.assert(false);
-                break :blk "WRONG NUMBER OF ARGS";
+                break :blk "Wrong Number Of Args";
             }
         };
 
@@ -1577,7 +1577,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         types: TypePair,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NOMINAL TAG", "I'm having trouble with this nominal tag:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Nominal Tag", "I'm having trouble with this nominal tag:", .runtime_error);
         errdefer report.deinit();
 
         // Create actual tag str
@@ -1660,7 +1660,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         types: TypePair,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NOMINAL RECORD", "I'm having trouble with this nominal type that wraps a record:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
@@ -1698,7 +1698,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         types: TypePair,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NOMINAL TUPLE", "I'm having trouble with this nominal type that wraps a tuple:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
@@ -1736,7 +1736,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         types: TypePair,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NOMINAL TYPE", "I'm having trouble with this nominal type:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Nominal Type", "I'm having trouble with this nominal type:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
@@ -1844,11 +1844,11 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         const title = blk: {
             if (data.num_expected_args > data.num_actual_args) {
-                break :blk "TOO FEW ARGS";
+                break :blk "Too Few Args";
             } else if (data.num_expected_args < data.num_actual_args) {
-                break :blk "TOO MANY ARGS";
+                break :blk "Too Many Args";
             } else {
-                break :blk "WRONG NUMBER OF ARGS";
+                break :blk "Wrong Number Of Args";
             }
         };
         // Look up display name in import mapping (handles auto-imported builtin types)
@@ -1896,7 +1896,7 @@ pub const ReportBuilder = struct {
         else
             data.type_name;
 
-        var report = try Report.init(self.gpa, "RECURSIVE ALIAS", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Recursive Alias", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The type alias"),
@@ -1932,7 +1932,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: UnsupportedAliasWhereClause,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "UNSUPPORTED WHERE CLAUSE", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Unsupported Where Clause", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The where clause syntax"),
@@ -1968,7 +1968,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherNotNominal,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This"),
@@ -2035,7 +2035,7 @@ pub const ReportBuilder = struct {
         const is_from_binop = data.origin == .desugared_binop;
         const mb_operator = self.getOperatorForMethod(data.method_name);
 
-        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         if (is_from_binop and mb_operator != null) {
             try D.renderSliceInto(&.{
@@ -2169,7 +2169,7 @@ pub const ReportBuilder = struct {
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
 
-        var report = try Report.init(self.gpa, "MISSING METHOD", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         if (is_equality) {
             const op = if (data.binop_negated) "!=" else operator orelse "==";
@@ -2243,7 +2243,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: RecursiveDispatch,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "RECURSIVE DISPATCH", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Recursive Dispatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This"),
@@ -2289,7 +2289,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "This string literal is being used where a non-string type is needed:", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "This string literal is being used where a non-string type is needed:", .runtime_error);
         errdefer report.deinit();
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
@@ -2322,7 +2322,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "This number is being used where a non-number type is needed:", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "This number is being used where a non-number type is needed:", .runtime_error);
         errdefer report.deinit();
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
@@ -2379,7 +2379,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: InvalidNumericLiteral,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NUMBER", "This number literal does not fit in the inferred type:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Number", "This number literal does not fit in the inferred type:", .runtime_error);
         errdefer report.deinit();
 
         const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
@@ -2418,7 +2418,7 @@ pub const ReportBuilder = struct {
             .quote, .interpolation => "Nothing in this definition's type determines the type of this string literal, so it was given the default type",
         };
 
-        var report = try Report.init(self.gpa, "LITERAL DEFAULTED", "", .warning);
+        var report = try Report.init(self.gpa, "Literal Defaulted", "", .warning);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes(intro),
@@ -2454,7 +2454,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: TypeDoesNotSupportEquality,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "TYPE DOES NOT SUPPORT EQUALITY", "This expression is doing an equality check on a type that doesn't support equality:", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "This expression is doing an equality check on a type that doesn't support equality:", .runtime_error);
         errdefer report.deinit();
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
@@ -2589,7 +2589,7 @@ pub const ReportBuilder = struct {
         const best_suggestion = self.typo_suggestions.items[0];
 
         // Create report directly and render dynamic suggestions inline
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This record does not have a"),
@@ -2850,7 +2850,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: CannotAccessOpaqueNominal,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Cannot Use Opaque Nominal Type", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("You're attempting to create an instance of"),
@@ -2891,7 +2891,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: NominalTypeResolutionFailed,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "COMPILER BUG", "An internal compiler error occurred while checking this nominal type usage:", .runtime_error);
+        var report = try Report.init(self.gpa, "Compiler Bug", "An internal compiler error occurred while checking this nominal type usage:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
@@ -3260,7 +3260,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
     fn buildInfiniteTypeReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INFINITE TYPE", "I am inferring a weird self-referential type:", .runtime_error);
+        var report = try Report.init(self.gpa, "Infinite Type", "I am inferring a weird self-referential type:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
@@ -3292,7 +3292,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
     fn buildAnonymousRecursionReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "ANONYMOUS RECURSION", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Anonymous Recursion", "", .runtime_error);
         errdefer report.deinit();
         if (data.def_name) |def_name| {
             try D.renderSliceInto(&.{
@@ -3343,7 +3343,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPolymorphicValueReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "POLYMORPHIC VALUE", "This top-level value still has an unresolved polymorphic type:", .runtime_error);
+        var report = try Report.init(self.gpa, "Polymorphic Value", "This top-level value still has an unresolved polymorphic type:", .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
@@ -3370,7 +3370,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Platform Required Type", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
@@ -3409,7 +3409,7 @@ pub const ReportBuilder = struct {
 
     fn buildPlatformHostedSection(self: *Self, data: PlatformHostedSection) Allocator.Error!Report {
         const name = self.problems.getExtraString(data.name);
-        var report = try Report.init(self.gpa, "INVALID HOSTED SECTION", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Hosted Section", "", .runtime_error);
         errdefer report.deinit();
         switch (data.reason) {
             .function_not_in_section => try D.renderSliceInto(&.{
@@ -3461,7 +3461,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPlatformDefNotFound(self: *Self, data: PlatformDefNotFound) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "MISSING PLATFORM REQUIRED DEFINITION", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Platform Required Definition", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
@@ -3498,7 +3498,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "HOSTED FUNCTION REQUIRES BOXED LAMBDA", "Hosted functions cannot accept or return unboxed functions.", .runtime_error);
+        var report = try Report.init(self.gpa, "Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3514,7 +3514,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "EFFECTFUL TOP-LEVEL VALUE", "This top-level definition performs an effect while initializing.", .runtime_error);
+        var report = try Report.init(self.gpa, "Effectful Top-level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3528,7 +3528,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "EFFECTFUL EXPECT", "This expect performs an effect while evaluating its condition.", .runtime_error);
+        var report = try Report.init(self.gpa, "Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3542,7 +3542,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "DECLARATION HAS NO VALUE", "This declaration has a type annotation but no implementation.", .runtime_error);
+        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3558,7 +3558,7 @@ pub const ReportBuilder = struct {
     /// Build a report for a mutable `var` whose annotation introduces an unbound
     /// type variable.
     fn buildPolymorphicVarAnnotationReport(self: *Self, data: PolymorphicVarAnnotation) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "POLYMORPHIC VAR", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type:", .runtime_error);
+        var report = try Report.init(self.gpa, "Polymorphic Var", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type:", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3577,7 +3577,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time crash
     fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID NUMBER", "The from_numeral implementation for this number literal's type rejected it:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it:", .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(
@@ -3606,7 +3606,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildComptimeInvalidQuoteReport(self: *Self, data: ComptimeInvalidQuote) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "INVALID STRING", "The from_quote implementation for this string literal's type rejected it:", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid String", "The from_quote implementation for this string literal's type rejected it:", .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(
@@ -3635,7 +3635,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildComptimeCrashReport(self: *Self, data: ComptimeCrash) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "COMPTIME CRASH", "This definition crashed during compile-time evaluation:", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile-Time Crash", "This definition crashed during compile-time evaluation:", .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(
@@ -3667,7 +3667,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time expect failure
     fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "COMPTIME EXPECT FAILED", "This expect failed during compile-time evaluation:", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile-Time Expect Failed", "This expect failed during compile-time evaluation:", .runtime_error);
         errdefer report.deinit();
         const owned_message = try report.addOwnedString(
             self.problems.getExtraString(data.message),
@@ -3698,7 +3698,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time evaluation error
     fn buildComptimeEvalErrorReport(self: *Self, data: ComptimeEvalError) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "COMPTIME EVAL ERROR", "This definition could not be evaluated at compile time:", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile-Time Eval Error", "This definition could not be evaluated at compile time:", .runtime_error);
         errdefer report.deinit();
 
         const owned_error_name = try report.addOwnedString(
@@ -3727,7 +3727,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildNonExhaustiveMatchReport(self: *Self, data: NonExhaustiveMatch) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", "This match expression doesn't cover all possible cases:", .runtime_error);
+        var report = try Report.init(self.gpa, "Non-exhaustive Match", "This match expression doesn't cover all possible cases:", .runtime_error);
         errdefer report.deinit();
 
         // Add source region highlighting
@@ -3785,7 +3785,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildNonExhaustiveDestructureReport(self: *Self, data: NonExhaustiveDestructure) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "NON-EXHAUSTIVE DESTRUCTURE", "This destructuring pattern doesn't cover all possible cases:", .runtime_error);
+        var report = try Report.init(self.gpa, "Non-exhaustive Destructure", "This destructuring pattern doesn't cover all possible cases:", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));
@@ -3826,7 +3826,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "REDUNDANT PATTERN", "", .warning);
+        var report = try Report.init(self.gpa, "Redundant Pattern", "", .warning);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The"),
@@ -3848,7 +3848,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "UNMATCHABLE PATTERN", "", .warning);
+        var report = try Report.init(self.gpa, "Unmatchable Pattern", "", .warning);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The"),
@@ -3870,7 +3870,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildUnreachableCodeReport(self: *Self, data: UnreachableCode) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "UNREACHABLE CODE", "This code is unreachable because an earlier expression always exits:", .warning);
+        var report = try Report.init(self.gpa, "Unreachable Code", "This code is unreachable because an earlier expression always exits:", .warning);
         errdefer report.deinit();
 
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -3890,7 +3890,7 @@ pub const ReportBuilder = struct {
             .match => "match alternative",
             .if_ => "if branch",
         };
-        var report = try Report.init(self.gpa, "UNUSED BRANCH", "", .warning);
+        var report = try Report.init(self.gpa, "Unused Branch", "", .warning);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This"),

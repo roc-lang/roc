@@ -731,7 +731,7 @@ pub fn isLLVMAvailable() bool {
 // --- Error Reporting Helpers ---
 
 fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "LLVM NOT AVAILABLE", "LLVM is not available at compile time.", .fatal);
+    var report = try reporting.Report.init(allocator, "LLVM Not Available", "LLVM is not available at compile time.", .fatal);
     defer report.deinit();
 
     try report.document.addLineBreak();
@@ -749,7 +749,7 @@ fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
 }
 
 fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: anyerror) Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "FILE NOT ACCESSIBLE", "Input bitcode file does not exist or is not accessible:", .fatal);
+    var report = try reporting.Report.init(allocator, "File Not Accessible", "Input bitcode file does not exist or is not accessible:", .fatal);
     defer report.deinit();
 
     try report.document.addLineBreak();
@@ -787,7 +787,7 @@ fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8,
 }
 
 fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "INVALID TARGET", "Failed to get LLVM target for triple:", .fatal);
+    var report = try reporting.Report.init(allocator, "Invalid Target", "Failed to get LLVM target for triple:", .fatal);
     defer report.deinit();
 
     try report.document.addLineBreak();
@@ -808,7 +808,7 @@ fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []c
 }
 
 fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "TARGET MACHINE ERROR", "Failed to create LLVM target machine with configuration:", .fatal);
+    var report = try reporting.Report.init(allocator, "Target Machine Error", "Failed to create LLVM target machine with configuration:", .fatal);
     defer report.deinit();
 
     try report.document.addLineBreak();
@@ -842,7 +842,7 @@ fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []con
 }
 
 fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "OBJECT FILE EMIT ERROR", "Failed to emit object file:", .fatal);
+    var report = try reporting.Report.init(allocator, "Object File Emit Error", "Failed to emit object file:", .fatal);
     defer report.deinit();
 
     try report.document.addLineBreak();

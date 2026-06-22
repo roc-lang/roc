@@ -1969,7 +1969,7 @@ pub const Coordinator = struct {
         const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
         const headline = try std.fmt.allocPrint(self.gpa, "The app does not provide {s}, but the platform requires it.", .{required_name});
         defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "MISSING REQUIRED VALUE", headline, .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Required Value", headline, .runtime_error);
         errdefer report.deinit();
 
         try app_mod.reports.append(self.gpa, report);
@@ -1985,7 +1985,7 @@ pub const Coordinator = struct {
         const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
         const headline = try std.fmt.allocPrint(self.gpa, "The app provides {s} with a type that does not match the platform's requires entry.", .{required_name});
         defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", headline, .runtime_error);
         errdefer report.deinit();
 
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
@@ -3570,7 +3570,7 @@ pub const Coordinator = struct {
         const child = pkg.getModule(child_id).?;
 
         // Create cycle error report
-        const rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
+        const rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
         try mod.reports.append(self.gpa, rep);
 
         // Mark both as done
@@ -3586,7 +3586,7 @@ pub const Coordinator = struct {
             if (self.total_remaining > 0) self.total_remaining -= 1;
 
             // Add report to child too
-            const child_rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle.", .runtime_error);
+            const child_rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle.", .runtime_error);
             try child.reports.append(self.gpa, child_rep);
         }
     }
@@ -3974,7 +3974,7 @@ pub const Coordinator = struct {
             } },
             else => |e| blk: {
                 const title = switch (e) {
-                    error.FileNotFound => "FILE NOT FOUND",
+                    error.FileNotFound => "File Not Found",
                     else => "PARSING FAILED",
                 };
                 break :blk WorkerResult{ .parse_failed = .{

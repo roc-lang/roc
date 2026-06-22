@@ -11,7 +11,7 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-**MISSING METHOD**
+**Missing Method**
 The value before this **>** operator has a type that doesn't have a **is_gt** method:
 **repl:1:1:1:19:**
 ```roc
@@ -25,7 +25,7 @@ The value's type, which does not have a method named **is_gt**, is:
 
 **Hint:** The **>** operator calls a method named **is_gt** on the value preceding it, passing the value after the operator as the one argument.
 ---
-**MISSING METHOD**
+**Missing Method**
 The value before this **<** operator has a type that doesn't have a **is_lt** method:
 **repl:1:1:1:19:**
 ```roc
@@ -39,7 +39,7 @@ The value's type, which does not have a method named **is_lt**, is:
 
 **Hint:** The **<** operator calls a method named **is_lt** on the value preceding it, passing the value after the operator as the one argument.
 ---
-**MISSING METHOD**
+**Missing Method**
 The value before this **>=** operator has a type that doesn't have a **is_gte** method:
 **repl:1:1:1:19:**
 ```roc
@@ -53,7 +53,7 @@ The value's type, which does not have a method named **is_gte**, is:
 
 **Hint:** The **>=** operator calls a method named **is_gte** on the value preceding it, passing the value after the operator as the one argument.
 ---
-**MISSING METHOD**
+**Missing Method**
 The value before this **<=** operator has a type that doesn't have a **is_lte** method:
 **repl:1:1:1:20:**
 ```roc

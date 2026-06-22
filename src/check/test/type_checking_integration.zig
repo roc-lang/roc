@@ -149,7 +149,7 @@ test "check type - str annotation mismatch with number" {
         \\x : I64
         \\x = "hello"
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - number annotation mismatch with string" {
@@ -158,7 +158,7 @@ test "check type - number annotation mismatch with string" {
         \\x = 42
     ;
     // Number literal used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - i64 annotation with fractional literal fails type checking" {
@@ -166,7 +166,7 @@ test "check type - i64 annotation with fractional literal fails type checking" {
         \\x : I64
         \\x = 3.14
     ;
-    try checkTypesModule(source, .fail, "INVALID NUMBER");
+    try checkTypesModule(source, .fail, "Invalid Number");
 }
 
 test "check type - string plus number should fail" {
@@ -176,14 +176,14 @@ test "check type - string plus number should fail" {
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "MISSING METHOD");
+    try checkTypesModule(source, .fail_first, "Missing Method");
 }
 
 test "check type - string plus string should fail (no plus method)" {
     const source =
         \\x = "hello" + "world"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binop operand type unification //
@@ -196,7 +196,7 @@ test "check type - binop operands must have same type - I64 plus I32 should fail
         \\b = 2
         \\x = a + b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - binop operands must have same type - I64 minus I32 should fail" {
@@ -207,7 +207,7 @@ test "check type - binop operands must have same type - I64 minus I32 should fai
         \\b = 2
         \\x = a - b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - binop operands must have same type - I64 times I32 should fail" {
@@ -218,7 +218,7 @@ test "check type - binop operands must have same type - I64 times I32 should fai
         \\b = 2
         \\x = a * b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - binop operands must have same type - F64 divide F32 should fail" {
@@ -229,7 +229,7 @@ test "check type - binop operands must have same type - F64 divide F32 should fa
         \\b = 2.0
         \\x = a / b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - binop operands same type works - I64 plus I64" {
@@ -272,7 +272,7 @@ test "check type - numeric literal through method-call dispatch resolves" {
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
-        .warnings = &.{ "LITERAL DEFAULTED", "LITERAL DEFAULTED" },
+        .warnings = &.{ "Literal Defaulted", "Literal Defaulted" },
     } }, "Dec, Dec -> Dec");
 }
 
@@ -286,7 +286,7 @@ test "check type - literal receiver of method call defaults at generalization bo
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
-        .warnings = &.{"LITERAL DEFAULTED"},
+        .warnings = &.{"Literal Defaulted"},
     } }, "Dec -> Dec");
 }
 
@@ -387,7 +387,7 @@ test "check type - numeral defaulting candidate order - integer-only method comm
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
-        .warnings = &.{"LITERAL DEFAULTED"},
+        .warnings = &.{"Literal Defaulted"},
     } }, "I64 -> I64");
 }
 
@@ -399,7 +399,7 @@ test "check type - is_eq operands must have same type - I64 eq I32 should fail" 
         \\b = 2
         \\x = a == b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - comparison operands must have same type - I64 lt I32 should fail" {
@@ -410,7 +410,7 @@ test "check type - comparison operands must have same type - I64 lt I32 should f
         \\b = 2
         \\x = a < b
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // primitives - lists //
@@ -469,7 +469,7 @@ test "check type - list  - diff elems 1" {
         \\["hello", 10]
     ;
     // Number literal used where Str is expected (first elem determines list type)
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 // number requirements //
@@ -510,7 +510,7 @@ test "check type - record - field typo" {
         \\my_record = { helo : "world" }
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:6:13:6:31:**
         \\```roc
@@ -543,7 +543,7 @@ test "check type - record - field missing" {
         \\my_record = { hello : "world" }
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:6:13:6:32:**
         \\```roc
@@ -575,7 +575,7 @@ test "check type - record - ext - field missing" {
         \\my_record = { hello : "world" }
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:6:13:6:32:**
         \\```roc
@@ -625,7 +625,7 @@ test "check type - record with function field - no is_eq" {
     const source =
         \\{ x: 1, f: |a| a + 1 } == { x: 1, f: |a| a + 1 }
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - tuple with function element - no is_eq" {
@@ -633,7 +633,7 @@ test "check type - tuple with function element - no is_eq" {
     const source =
         \\(1, |a| a) == (1, |a| a)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - nested record equality" {
@@ -657,7 +657,7 @@ test "check type - nested record with function - no is_eq" {
     const source =
         \\{ a: { f: |x| x } } == { a: { f: |x| x } }
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - tag union equality" {
@@ -673,7 +673,7 @@ test "check type - tag union with function payload - no is_eq" {
     const source =
         \\Fn(|x| x) == Fn(|x| x)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - direct lambda equality - no is_eq" {
@@ -681,7 +681,7 @@ test "check type - direct lambda equality - no is_eq" {
     const source =
         \\(|x| x) == (|y| y)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 // anonymous type inequality (desugars to is_eq().not()) //
@@ -735,7 +735,7 @@ test "check type - record inequality - diff records" {
     const source =
         \\{ x: 1, y: 2 } == { x: 1, z: 2 }
     ;
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 test "check type - tuple inequality" {
@@ -750,7 +750,7 @@ test "check type - record with function field - no inequality" {
     const source =
         \\{ x: 1, f: |a| a + 1 } != { x: 1, f: |a| a + 1 }
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - tuple with function element - no inequality" {
@@ -758,7 +758,7 @@ test "check type - tuple with function element - no inequality" {
     const source =
         \\(1, |a| a) != (1, |a| a)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - direct lambda inequality - no is_eq" {
@@ -766,7 +766,7 @@ test "check type - direct lambda inequality - no is_eq" {
     const source =
         \\(|x| x) != (|y| y)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 test "check type - tag union inequality" {
@@ -781,7 +781,7 @@ test "check type - tag union with function payload - no inequality" {
     const source =
         \\Fn(|x| x) != Fn(|x| x)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
 // tags //
@@ -814,7 +814,7 @@ test "check type - tag union - tag typo" {
         \\color = Greeen
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:6:9:6:15:**
         \\```roc
@@ -846,7 +846,7 @@ test "check type - tag - ext - typo" {
         \\color = Greeen
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:6:9:6:15:**
         \\```roc
@@ -980,7 +980,7 @@ test "check type - def - func with annotation 2" {
     // The type annotation says _a is unconstrained, but the implementation returns
     // a numeric literal which requires from_numeral method. This is a type error.
     // Number literal used where unconstrained type is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - def - nested lambda" {
@@ -1024,7 +1024,7 @@ test "check type - def - nested lambda with wrong annotation" {
         \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
         \\curried_add = |a| |b| |c| |d| a + b + c + d
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - def - wrong arg" {
@@ -1039,7 +1039,7 @@ test "check type - def - wrong arg" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:6:22:6:29:**
         \\```roc
@@ -1162,7 +1162,7 @@ test "check type - polymorphic function function param should be constrained" {
     ;
     // The literal arguments force `f`'s parameter to be both a number and a
     // string literal type at once; the conflict is reported per instantiation.
-    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - def - call with wrong fn arity - too many" {
@@ -1175,7 +1175,7 @@ test "check type - def - call with wrong fn arity - too many" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TOO MANY ARGS**
+        \\**Too Many Args**
         \\The `idStr` function expects 1 argument, but it got 2 instead:
         \\**test:4:8:4:29:**
         \\```roc
@@ -1202,7 +1202,7 @@ test "check type - def - call with wrong fn arity - too few" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TOO FEW ARGS**
+        \\**Too Few Args**
         \\The `idStr` function expects 2 arguments, but it got 1 instead:
         \\**test:4:8:4:22:**
         \\```roc
@@ -1231,7 +1231,7 @@ test "check type - def - call with mismatch arg" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:4:23:4:30:**
         \\```roc
@@ -1396,7 +1396,7 @@ test "check type - value restriction - should fail 1" {
         \\  _b = process(1.I64) # Should error: U8 != I64
         \\}
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - value restriction - should fail 2" {
@@ -1415,7 +1415,7 @@ test "check type - value restriction - should fail 2" {
         \\  _b = val.process(1.I64) # Should error: U8 != I64
         \\}
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // type aliases //
@@ -1452,7 +1452,7 @@ test "check type - alias with mismatch arg" {
         \\x = [15]
     ;
     // Number literal 15 used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - alias open tag union" {
@@ -1611,7 +1611,7 @@ test "check type - nominal with with rigid vars mismatch" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(u64val, "Str")
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - nominal recursive type" {
@@ -1633,7 +1633,7 @@ test "check type - nominal recursive type anno mismatch" {
         \\x : ConsList(I64)
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - two nominal types" {
@@ -1669,7 +1669,7 @@ test "check type - nominal recursive type wrong type" {
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
     // Number literal 10 used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -1679,7 +1679,7 @@ test "check type - nominal w/ polymorphic function with bad args" {
         \\mkPairInvalid : a, b -> Pair(a)
         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
     ;
-    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "Invalid Nominal Tag");
 }
 
 test "check type - nominal w/ polymorphic function" {
@@ -1719,7 +1719,7 @@ test "check type - nominal - local record value - fail" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**MISSING METHOD**
+        \\**Missing Method**
         \\This **encode_str** method is being called on a value whose type doesn't have that method:
         \\**test:9:3:9:13:**
         \\```roc
@@ -1752,7 +1752,7 @@ test "check type - nominal - local method type - fail" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The `encode_str` method on `Utf8Format` has an incompatible type:
         \\**test:9:20:9:23:**
         \\```roc
@@ -1824,7 +1824,7 @@ test "check type - if else - invalid condition 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
         \\**test:2:8:2:13:**
         \\```roc
@@ -1849,7 +1849,7 @@ test "check type - if else - invalid condition 2" {
         \\x = if 10 "true" else "false"
     ;
     // Number literal 10 used where Bool is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -1857,7 +1857,7 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - if else - different branch types 1" {
@@ -1867,7 +1867,7 @@ test "check type - if else - different branch types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:1:13:1:19:**
         \\```roc
@@ -1889,7 +1889,7 @@ test "check type - if else - different branch types 2" {
         \\x = if True "true" else if False "false" else 10
     ;
     // Number literal 10 used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - if else - different branch types 3" {
@@ -1897,7 +1897,7 @@ test "check type - if else - different branch types 3" {
         \\x = if True "true" else if False 10 else "last"
     ;
     // Number literal 10 used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // Dual-kind literal var (flex/flex merge): both branches are OPEN literals, so
@@ -1916,7 +1916,7 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:1:20:1:23:**
         \\```roc
@@ -1940,7 +1940,7 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:1:13:1:16:**
         \\```roc
@@ -1983,7 +1983,7 @@ test "check type - tuple access on non-tuple does not cascade" {
         \\z : U64
         \\z = x
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - if else - annotated branch mismatch reports error" {
@@ -1994,7 +1994,7 @@ test "check type - if else - annotated branch mismatch reports error" {
         \\f : Bool -> Str
         \\f = |b| if b "yes" else 42
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - match branch conflicting with rigid return type reports error" {
@@ -2011,7 +2011,7 @@ test "check type - match branch conflicting with rigid return type reports error
         \\    Err(e) => e
         \\}
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // match
@@ -2038,7 +2038,7 @@ test "check type - match - diff cond types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**MISSING METHOD**
+        \\**Missing Method**
         \\This **from_quote** method is being called on a value whose type doesn't have that method:
         \\**test:2:9:2:16:**
         \\```roc
@@ -2064,7 +2064,7 @@ test "check type - match - diff branch types" {
         \\  }
     ;
     // Number literal 100 used where Str is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - match alternative binders unify when compatible" {
@@ -2089,7 +2089,7 @@ test "check type - match alternative binders reject incompatible types" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:1:32:1:35:**
         \\```roc
@@ -2119,7 +2119,7 @@ test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // unary minus
@@ -2141,7 +2141,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binops
@@ -2194,7 +2194,7 @@ test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - binops or" {
@@ -2208,7 +2208,7 @@ test "check type - binops or mismatch" {
     const source =
         \\x = "Hello" or False
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // record access
@@ -2240,7 +2240,7 @@ test "check type - record access - field typo" {
         \\x = r.helo
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This record does not have a `helo` field:
         \\**test:9:6:9:11:**
         \\```roc
@@ -2273,7 +2273,7 @@ test "check type - record - access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // record update
@@ -2328,7 +2328,7 @@ test "check type - record - update - fail - empty record" {
     ;
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The `r` record does not have a `hello` field:
         \\**test:5:7:5:8:**
         \\```roc
@@ -2353,7 +2353,7 @@ test "check type - record - update - fail - missing field" {
     ;
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This record does not have a `hllo` field:
         \\**test:5:7:5:8:**
         \\```roc
@@ -2383,7 +2383,7 @@ test "check type - record - update - fail - field mismatch" {
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:4:16:4:23:**
         \\```roc
@@ -2409,7 +2409,7 @@ test "check type - record - update - fail - field mismatch 2" {
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:4:16:4:23:**
         \\```roc
@@ -2435,7 +2435,7 @@ test "check type - record - update - fail - field mismatch 3" {
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The type of the field `nice` is incompatible:
         \\**test:5:16:5:22:**
         \\```roc
@@ -2465,7 +2465,7 @@ test "check type - record - update - fail 2" {
     ;
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:3:28:3:35:**
         \\```roc
@@ -2516,7 +2516,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    try checkTypesExpr(source, .fail, "Missing Method");
 }
 
 test "check type - patterns tag without payload" {
@@ -2558,7 +2558,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail_first, "MISSING METHOD");
+    try checkTypesExpr(source, .fail_first, "Missing Method");
 }
 
 test "check type - patterns str" {
@@ -2602,7 +2602,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 test "check type - patterns frac 1" {
@@ -2666,7 +2666,7 @@ test "check type - patterns list" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "REDUNDANT PATTERN");
+    try checkTypesExpr(source, .fail, "Redundant Pattern");
 }
 
 test "check type - patterns record" {
@@ -2712,7 +2712,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    try checkTypesExpr(source, .fail, "Missing Method");
 }
 
 // vars + reassignment //
@@ -2768,7 +2768,7 @@ test "check can - uninitialized var - branch-local read before assignment" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+    try test_env.assertOneCanError("Reading Uninitialized Var");
 }
 
 test "check can - uninitialized var - missing branch assignment before final read" {
@@ -2788,7 +2788,7 @@ test "check can - uninitialized var - missing branch assignment before final rea
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+    try test_env.assertOneCanError("Reading Uninitialized Var");
 }
 
 test "check type - uninitialized var - terminal branches do not need assignment" {
@@ -2861,7 +2861,7 @@ test "check can - uninitialized var - ordinary loop assignment does not guarante
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+    try test_env.assertOneCanError("Reading Uninitialized Var");
 }
 
 test "check can - uninitialized var - reports each bad read" {
@@ -2912,7 +2912,7 @@ test "check type - expect not bool" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
         \\**test:3:10:3:11:**
         \\```roc
@@ -2970,7 +2970,7 @@ test "check type - if with all crash branches makes following code unreachable" 
 
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
-        .warnings = &.{"UNREACHABLE CODE"},
+        .warnings = &.{"Unreachable Code"},
     } }, "Bool -> Str");
 }
 
@@ -3070,7 +3070,7 @@ test "check type - for mismatch" {
     try checkTypesModule(
         source,
         .fail_first,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -3142,7 +3142,7 @@ test "check type - static dispatch - concrete - wrong method name" {
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "Missing Method",
     );
 }
 
@@ -3172,7 +3172,7 @@ test "check type - static dispatch - concrete - wrong args" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -3222,7 +3222,7 @@ test "check type - static dispatch - fail if not in type signature" {
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "Missing Method",
     );
 }
 
@@ -3755,7 +3755,7 @@ test "check type - scoped type variables - fail" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -3774,7 +3774,7 @@ test "check type - body w/ anno does not leak to references - top level" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
     try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
 }
 
@@ -3798,7 +3798,7 @@ test "check type - body w/ anno does not leak to references - inline" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
     try test_env.assertDefTypeOptions("test", "Bool", .{ .allow_type_errors = true });
 }
 
@@ -3823,7 +3823,7 @@ test "check type - scoped type variables - bigger example 1" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -3972,7 +3972,7 @@ test "top-level: type annotation followed by body should not create duplicate de
         var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
         defer report.deinit();
 
-        if (std.mem.find(u8, report.title, "DUPLICATE DEFINITION") != null) {
+        if (std.mem.find(u8, report.title, "Duplicate Definition") != null) {
             duplicate_def_found = true;
             break;
         }
@@ -3991,7 +3991,7 @@ test "check type - recursive type - infinite" {
         \\func = |a| func([a])
     ;
     try checkTypesModule(source, .fail_with,
-        \\**INFINITE TYPE**
+        \\**Infinite Type**
         \\I am inferring a weird self-referential type:
         \\**test:1:1:1:21:**
         \\```roc
@@ -4013,7 +4013,7 @@ test "check type - recursive type - recursive alias" {
         \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
     ;
     try checkTypesModule(source, .fail_with,
-        \\**RECURSIVE ALIAS**
+        \\**Recursive Alias**
         \\The type alias _LinkedList_ references itself, which is not allowed:
         \\**test:1:31:1:44:**
         \\```roc
@@ -4036,7 +4036,7 @@ test "check type - recursive type - anonymous recursion" {
         \\  }
     ;
     try checkTypesModule(source, .fail_with,
-        \\**ANONYMOUS RECURSION**
+        \\**Anonymous Recursion**
         \\I am inferring a recursive type that has no name somewhere in `len`:
         \\**test:1:1:5:4:**
         \\```roc
@@ -4262,7 +4262,7 @@ fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usi
         var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
         defer report.deinit();
 
-        try testing.expectEqualStrings("READING UNINITIALIZED VAR", report.title);
+        try testing.expectEqualStrings("Reading Uninitialized Var", report.title);
     }
 }
 
@@ -4558,7 +4558,7 @@ test "check type - record extension - mismatch should fail" {
         \\
         \\result = getName({ age: 30 })
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - record ext - arg inferred as open" {
@@ -4581,7 +4581,7 @@ test "check type - record ext - arg inferred as open" {
     // (thunks are allowed to generalize, but here nothing is left open). Only the
     // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:3:5:**
         \\```roc
@@ -4864,7 +4864,7 @@ test "check type - final breakable loop remains empty record" {
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - final loop with break and return remains empty record" {
@@ -4879,7 +4879,7 @@ test "check type - final loop with break and return remains empty record" {
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - infinite loop branch unifies with sibling branch" {
@@ -4911,7 +4911,7 @@ test "check type - early return - fail" {
     try checkTypesExpr(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:3:12:3:19:**
         \\```roc
@@ -4938,7 +4938,7 @@ test "check type - early return - ? - fail" {
     try checkTypesExpr(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed:
         \\**test:2:18:2:25:**
         \\```roc
@@ -4997,7 +4997,7 @@ test "check type - self recursive function - fibonacci - fail" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The recursive definition `fib` is used in an unexpected way:
         \\**test:5:5:5:8:**
         \\```roc
@@ -5184,7 +5184,7 @@ test "check type - self recursive function - wrong arg type" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -5342,7 +5342,7 @@ test "check type - self recursive static dispatch - wrong arg type" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "Type Mismatch",
     );
 }
 
@@ -5529,7 +5529,7 @@ test "check type - mutually recursive functions - type mismatch error" {
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check can - recursive non-function top-level cycle is rejected before type checking" {
@@ -5544,7 +5544,7 @@ test "check can - recursive non-function top-level cycle is rejected before type
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("CIRCULAR VALUE DEFINITION");
+    try test_env.assertOneCanError("Circular Value Definition");
 }
 
 test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
@@ -5555,7 +5555,7 @@ test "check type - monomorphic top-level numeric constant cannot be used at mult
         \\b : U8
         \\b = x
     ;
-    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
@@ -5566,7 +5566,7 @@ test "check type - monomorphic top-level empty list cannot be used at multiple e
         \\b : List(Str)
         \\b = xs
     ;
-    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - mutually recursive functions - three-way polymorphic" {
@@ -5866,7 +5866,7 @@ test "check type - zulip repro" {
     // (thunks are allowed to generalize, but here nothing is left open). Only the
     // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:3:5:**
         \\```roc
@@ -5979,7 +5979,7 @@ test "check type - annotation with open ext without wildcard is non-exhaustive" 
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail, "NON-EXHAUSTIVE MATCH");
+    try checkTypesModule(source, .fail, "Non-exhaustive Match");
 }
 
 test "check type - exhaustive match with nested payload is inferred as closed" {
@@ -6607,7 +6607,7 @@ test "check type - exhaustive match close with value reuse after match" {
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:17:18:**
         \\```roc
@@ -6651,7 +6651,7 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:15:18:**
         \\```roc
@@ -6790,7 +6790,7 @@ test "check type - annotated open return type still closed by exhaustive match w
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:16:18:**
         \\```roc
@@ -6834,7 +6834,7 @@ test "check type - annotated open arg not closed even with exhaustive match" {
         \\}
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type:
         \\**test:14:3:**
         \\```roc
@@ -6865,7 +6865,7 @@ test "check type - tag union - ext hints 1" {
         \\foo = |tag| bar(tag)
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:5:13:5:21:**
         \\```roc
@@ -6893,7 +6893,7 @@ test "check type - tag union - ext hints 2" {
         \\foo = |a| a
     ;
     try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
+        \\**Type Mismatch**
         \\This expression is used in an unexpected way:
         \\**test:2:11:2:12:**
         \\```roc
@@ -7140,7 +7140,7 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
-        .warnings = &.{"LITERAL DEFAULTED"},
+        .warnings = &.{"Literal Defaulted"},
     } }, "_arg -> I64");
 }
 

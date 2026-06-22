@@ -8,7 +8,7 @@ type=repl
 » lst.map(|_| "zzz ").join_with(" ").trim()
 ~~~
 # OUTPUT
-**UNDEFINED VARIABLE**
+**Undefined Variable**
 Nothing is named `lst` in this scope.
 Is there an `import` or `exposing` missing up-top?
 

@@ -50,7 +50,7 @@ test "non-exhaustive - missing Err case" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "exhaustive - wildcard covers remaining variants" {
@@ -122,7 +122,7 @@ test "non-exhaustive - integer literals need wildcard" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "non-exhaustive - unannotated integer literal match needs wildcard" {
@@ -136,7 +136,7 @@ test "non-exhaustive - unannotated integer literal match needs wildcard" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "exhaustive - integer literals with wildcard" {
@@ -165,7 +165,7 @@ test "non-exhaustive - guarded-only match needs unguarded fallback" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 // Redundancy Checking
@@ -183,7 +183,7 @@ test "redundant - pattern after wildcard" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("Redundant Pattern");
 }
 
 test "redundant - second wildcard" {
@@ -199,7 +199,7 @@ test "redundant - second wildcard" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("Redundant Pattern");
 }
 
 test "redundant - duplicate integer literal" {
@@ -216,7 +216,7 @@ test "redundant - duplicate integer literal" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("Redundant Pattern");
 }
 
 // Record Pattern Exhaustiveness
@@ -283,7 +283,7 @@ test "non-exhaustive - record with literal field missing wildcard" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "exhaustive - record with tag field all cases" {
@@ -317,7 +317,7 @@ test "non-exhaustive - record with tag field missing case" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 // Nested Pattern Exhaustiveness with Try
@@ -353,7 +353,7 @@ test "non-exhaustive - nested Try missing inner Err" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 // Tuple exhaustiveness
@@ -446,7 +446,7 @@ test "non-exhaustive - non-empty error type requires Err case" {
     defer test_env.deinit();
 
     // Str is NOT empty, so Err is required
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "redundant - second wildcard after first on empty error type" {
@@ -465,7 +465,7 @@ test "redundant - second wildcard after first on empty error type" {
     defer test_env.deinit();
 
     // The second Ok pattern is redundant (same constructor already matched)
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("Redundant Pattern");
 }
 
 test "redundant - wildcard after complete coverage on type with empty variant" {
@@ -483,7 +483,7 @@ test "redundant - wildcard after complete coverage on type with empty variant" {
     defer test_env.deinit();
 
     // The wildcard is redundant because Ok already covers all inhabited cases
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("Redundant Pattern");
 }
 
 test "unmatchable - Err pattern first on empty error type is unreachable" {
@@ -501,7 +501,7 @@ test "unmatchable - Err pattern first on empty error type is unreachable" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+    try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
 test "exhaustive - ignored error type means only Ok needed" {
@@ -562,7 +562,7 @@ test "unmatchable - Err pattern first on ignored error type is unreachable" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+    try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
 test "exhaustive - structural tag with ignored payload is not required" {
@@ -593,7 +593,7 @@ test "non-exhaustive - structural tag with ordinary payload is required" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "destructure - Ok on ignored error type is exhaustive" {
@@ -643,7 +643,7 @@ test "non-exhaustive destructure - Ok on concrete error type can miss Err" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("NON-EXHAUSTIVE DESTRUCTURE");
+    try test_env.assertFirstTypeError("Non-exhaustive Destructure");
 }
 
 // Additional Inhabitedness Edge Cases
@@ -754,7 +754,7 @@ test "unmatchable - pattern on tag with direct empty arg" {
     defer test_env.deinit();
 
     // HasEmpty pattern is unreachable because [] is uninhabited
-    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+    try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
 test "non-exhaustive - not all inhabited tags covered with empty arg" {
@@ -771,7 +771,7 @@ test "non-exhaustive - not all inhabited tags covered with empty arg" {
     defer test_env.deinit();
 
     // B is uninhabited but C is still inhabited and needs a pattern
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 // List element inhabitedness tests
@@ -810,7 +810,7 @@ test "unmatchable - second pattern on List of empty type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+    try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
 test "unmatchable - non-empty list pattern on List of empty type" {
@@ -828,7 +828,7 @@ test "unmatchable - non-empty list pattern on List of empty type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+    try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
 // Extension Chain Tests
@@ -881,7 +881,7 @@ test "non-exhaustive - missing tag from union with many tags" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "exhaustive - union with mix of inhabited and uninhabited tags" {
@@ -919,7 +919,7 @@ test "non-exhaustive - missing inhabited tag when uninhabited are present" {
     defer test_env.deinit();
 
     // E is inhabited but not matched
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 test "exhaustive - tags at various positions all uninhabited" {
@@ -984,7 +984,7 @@ test "redundant - record second pattern unreachable with different field order" 
     defer test_env.deinit();
 
     // Second pattern should be redundant - it's the same as the first just reordered
-    try test_env.assertOneTypeError("REDUNDANT PATTERN");
+    try test_env.assertOneTypeError("Redundant Pattern");
 }
 
 test "exhaustive - record patterns with different field subsets" {
@@ -1022,7 +1022,7 @@ test "non-exhaustive - list with only rest pattern missing empty case" {
     defer test_env.deinit();
 
     // The pattern [e, ..] only matches non-empty lists, missing the empty list case
-    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+    try test_env.assertOneTypeError("Non-exhaustive Match");
 }
 
 // Regression test for issue #8935: wrong exhaustiveness error for match on tuple

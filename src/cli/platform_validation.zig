@@ -107,7 +107,7 @@ pub fn validatePlatformHeader(
 
 /// Render a file read error report to stderr.
 fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "FILE READ ERROR", "Failed to read platform source file:", .fatal);
+    var report = try reporting.Report.init(allocator, "File Read Error", "Failed to read platform source file:", .fatal);
     defer report.deinit();
 
     try report.document.addText("    ");
@@ -127,7 +127,7 @@ fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.A
 
 /// Render a parse error report to stderr.
 fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
-    var report = try reporting.Report.init(allocator, "PARSE ERROR", "Failed to parse platform header:", .fatal);
+    var report = try reporting.Report.init(allocator, "Parse Error", "Failed to parse platform header:", .fatal);
     defer report.deinit();
 
     try report.document.addText("    ");
@@ -149,7 +149,7 @@ fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allo
 fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     const headline = try std.fmt.allocPrint(allocator, "Platform at {s} does not have a 'targets:' section.", .{path});
     defer allocator.free(headline);
-    var report = try reporting.Report.init(allocator, "MISSING TARGETS SECTION", headline, .fatal);
+    var report = try reporting.Report.init(allocator, "Missing Targets Section", headline, .fatal);
     defer report.deinit();
 
     try report.document.addText("Platform headers must declare supported targets. Example:");

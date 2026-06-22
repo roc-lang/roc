@@ -1374,7 +1374,7 @@ fn renderElementToLsp(element: DocumentElement, writer: *std.Io.Writer, config: 
 const testing = std.testing;
 
 test "render report to markdown" {
-    var report = try Report.init(testing.allocator, "TEST ERROR", "Something went wrong.", .runtime_error);
+    var report = try Report.init(testing.allocator, "Test Error", "Something went wrong.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");
@@ -1384,7 +1384,7 @@ test "render report to markdown" {
 
     try renderReportToMarkdown(&report, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expect(std.mem.find(u8, writer.written(), "**TEST ERROR**") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "**Test Error**") != null);
     try testing.expect(std.mem.find(u8, writer.written(), "This is a test error message.") != null);
 }
 

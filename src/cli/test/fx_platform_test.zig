@@ -1609,7 +1609,7 @@ test "fx platform issue8943 error message memory corruption" {
 
     // The invalid top-level `?` must not escape checking and become a
     // post-check compile-time crash.
-    const has_comptime_crash = std.mem.find(u8, run_result.stderr, "COMPTIME CRASH") != null;
+    const has_comptime_crash = std.mem.find(u8, run_result.stderr, "COMPILE-TIME CRASH") != null;
     if (has_comptime_crash) {
         std.debug.print("Unexpected 'COMPTIME CRASH' after checking reported the invalid `?` expression:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});

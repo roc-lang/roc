@@ -118,7 +118,7 @@ test "Custom number type without from_numeral: integer literal does not unify" {
     defer test_env.deinit();
 
     // Should fail - MyType doesn't have from_numeral, so number literal can't be used
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "Custom number type with negate: unary minus works" {
@@ -164,7 +164,7 @@ test "Custom number type without negate: unary minus fails" {
     defer test_env.deinit();
 
     // Should fail - MyNum doesn't have negate method
-    try test_env.assertOneTypeError("MISSING METHOD");
+    try test_env.assertOneTypeError("Missing Method");
 }
 
 test "Custom type with from_numeral and heterogeneous plus: literal + literal works" {

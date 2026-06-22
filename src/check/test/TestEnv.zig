@@ -872,8 +872,8 @@ fn assertNoCanProblems(self: *TestEnv) anyerror!void {
 
         try renderReportToMarkdownBuffer(&report_buf, &report);
 
-        // Ignore "MISSING MAIN! FUNCTION" error - it's expected in test modules
-        if (std.mem.find(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
+        // Ignore "Missing Main! Function" error - it's expected in test modules
+        if (std.mem.find(u8, report_buf.items, "Missing Main! Function") != null) {
             continue;
         }
 

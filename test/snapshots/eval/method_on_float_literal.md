@@ -8,7 +8,7 @@ type=repl
 » 12.34.foo()
 ~~~
 # OUTPUT
-**MISSING METHOD**
+**Missing Method**
 This **foo** method is being called on a value whose type doesn't have that method:
 **repl:1:7:1:10:**
 ```roc
