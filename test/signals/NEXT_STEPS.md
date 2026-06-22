@@ -230,9 +230,11 @@ The open questions (O1–O9) referenced below are defined in
   (preferred seam: a render-command sink the engine writes to). Decide how much
   extracts cleanly given the native host's `DomElement`-array coupling.
 - **Guard:** `zig test test/signals/src/native_host.zig` stays green after the
-  extraction (native host now drives the shared engine); the engine module
-  builds for the `wasm32` target. This is a refactor with no behavior change —
-  the existing native specs are the regression guard.
+  extraction (native host now drives the shared engine); the wasm host's
+  existing `comptime` block instantiates the real `Engine(WasmCtx)`, so
+  `build-test-hosts` proves the wasm-specialized engine compiles under wasm32.
+  This is a refactor with no behavior change — the existing native specs are the
+  regression guard.
 - **Status:** first boundary extraction landed: `src/render_commands.zig` owns
   the host-independent render ops, command counts, metrics accumulator, and
   fixed-width command-buffer record. `native_host.zig` consumes those shared
@@ -261,13 +263,80 @@ The open questions (O1–O9) referenced below are defined in
   tiny `store`/`recordKind` host ctx; native keeps its test-kind bookkeeping in
   that ctx, the wasm host makes `recordKind` a no-op. These two land the planned
   PR1 (no behavior change; native 52 tests, wasm build, and the browser tests
-  stay green). The full `Ctx` contract and `verifyCtx`/`verifyRegistryOps` checks
-  are deferred to the engine extraction (Slice 4) where the contract is large
-  enough to warrant them. The current wasm host still has a small non-structural
+  stay green). The `Engine(comptime Ctx)` struct plus the
+  `verifyCtx`/`verifyRegistryOps` contract checks landed in Slice 4b-ii (see the
+  status entry below); the contract is extended incrementally as 4c/4d move the
+  methods that need `allocator()`/`rocHost()`/`recordKind()`/`metrics()`/`sink()`.
+  The current wasm host still has a small non-structural
   runtime path for the counter milestone; it is not the final G-B0 extraction.
-  Remaining G-B0 work is moving the retained engine (signal records, scopes,
-  dirty propagation, keyed diff) behind a shared render-command sink so both
-  hosts drive the same engine — see `linked-wibbling-treehouse` plan Slices 3–5.
+
+- **Status (Slice 4a + 4b data layer done):** the entire descriptor data layer
+  is now in `src/engine.zig` (host-agnostic: `anytype` metrics, explicit
+  `roc_host`, `ctx.cloneHostValue`, `@panic`; compiles for `wasm32`). Moved
+  across seven green commits: the retained value-cell + scope-step adapter
+  (`HostValueCell`, `HostSignalCacheSlot`, `HostScopeStep`/`HostEachRowScopeStep`,
+  `retainHostCallable`, `deinitHostScopeStep`), the signal-record cluster
+  (`HostSignalRecord`, `HostSignalBinding`, `rememberSignalRecordTree`), the
+  descriptor data types, and the full descriptor stream
+  (`HostNodeDescriptorStream` + `append*`). `erased_calls.zig` +
+  `host_values.zig` (PR1) and the `NoMetrics` seam (Slice 3) also landed.
+
+- **Status (Slice 4b-ii done — `Engine(comptime Ctx)` struct):** the engine
+  state now lives on a generic `Engine(comptime Ctx)` (`engine.zig:1540`);
+  `HostEnv` embeds `engine: Engine(NativeCtx)` (`native_host.zig:749`). The
+  `Ctx` contract is enforced by `verifyCtx`/`verifyRegistryOps`
+  (`engine.zig:133`, `:119`) — real `@compileError`-on-missing-decl checks
+  called at every `Engine()` instantiation, not duck typing. A **real**
+  `WasmCtx` (not a stub) is instantiated via `_ = engine.Engine(WasmCtx);` in
+  the existing `comptime` block (`wasm_host.zig:30`, `:75`), so
+  `build-test-hosts -Doptimize=ReleaseSmall` proves the wasm-specialized engine
+  compiles under wasm32 on every build. Seven green commits moved the safe
+  engine-only method batches (lookups, scope/identity ops, descriptor accessors,
+  cleanup/lifecycle). Verified: 53/53 native, `build-test-hosts` green,
+  `run-test-signals` green, browser tests 19/19. `engine.zig` ~1,881 lines;
+  `native_host.zig` ~10,286 (down from 11,821 at the start of the arc). 4c/4d
+  untouched.
+
+- **Status (Slice 4c done — scheduler/dirty/keyed):** the rank-sorted dirty-id
+  scheduler moved into `Engine` (`engine.zig:1781`, `:1858`), dirty propagation
+  with memoized `is_eq` pruning moved into `Engine` (`engine.zig:2018`, `:2127`),
+  and the keyed-row hash/equality plan path now calls `keyed_rows.buildPlan`
+  from `Engine` (`engine.zig:2303`). `verifyCtx` now checks the 4c hooks
+  (`allocator`, `cloneHostValue`, `stateValueByNodeId`, `stateEqCallable`,
+  `stateDropCallable`), and `WasmCtx` implements them (`wasm_host.zig:36`).
+  Native stayed behavior-identical: three 4c commits each passed 53/53 native,
+  `build-test-hosts -Dplatform=signals -Doptimize=ReleaseSmall`,
+  `run-test-signals --summary failures`, and browser tests 19/19 with
+  `--test-force-exit`. The active-graph rebuild canaries for dirty structural
+  paths are present in the host tests and remained green. `engine.zig` ~2,376
+  lines; `native_host.zig` ~9,935.
+
+- **Remaining G-B0 work — 4d (render sink), then 5a/5b.** This is the riskiest
+  restructuring: fused decide+apply render logic, not relocating
+  self-contained methods. The 53-test net guards it but the edits are broad.
+  Plan grounded in the current code:
+
+  - **The 4d render-sink boundary is the natural cleave line.** Methods touching
+    `dom_elements` (only ~7 sites) are almost entirely the render/apply layer, so
+    "move everything that does not touch `dom_elements`/`test_state` into Engine"
+    leaves exactly the 4d render-decision surface on `HostEnv`. 4d introduces
+    `render_sink.zig` (does not exist yet) and relocates the `dom_elements`
+    touch-sites behind `ctx.sink()`.
+  - **Extend the `Ctx` contract incrementally as 4d pulls in methods that need
+    it.** 4c added the checked scheduler/evaluator hooks. The remaining render
+    split should add `sink()` (and any required `rocHost()`/`metrics()` hook) as
+    **checked** decls in `verifyCtx` when the method that needs each hook moves
+    — never as an implicit `anytype` passthrough. `WasmCtx` must grow the same
+    decls in lockstep so the comptime instantiation keeps catching mismatches.
+  - **Triage the browser-test hang before 5b (not a current blocker).** The
+    `node --test test/signals/browser/*.test.mjs` run completes its assertions
+    green but then hangs without `--test-force-exit`, indicating an open handle
+    (timer / `WebAssembly.Memory`-backed resource / unclosed fixture) that is not
+    torn down. Harmless today, but Slice 5 makes wasm drive the engine and G-B7
+    adds async/timer paths, where a lingering handle gets worse. Investigate and
+    fix the teardown before 5b rather than leaving it permanently masked by the
+    force-exit flag.
+
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
@@ -433,6 +502,9 @@ regression is not done.
 
 - Focused Zig host work:
   `zig test test/signals/src/native_host.zig`
+- Shared engine instantiates under wasm32 (from Slice 4b-ii, via the wasm host's
+  existing `comptime _ = Engine(WasmCtx)` block):
+  `zig build build-test-hosts -Dplatform=signals -Doptimize=ReleaseSmall`
 - Platform Roc or ABI changes:
   `./zig-out/bin/roc check test/signals/apps/checkout_wizard.roc`
   `./zig-out/bin/roc check test/signals/apps/component_composition.roc`
