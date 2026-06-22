@@ -2988,7 +2988,7 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		Numeral := [
+		Numeral :: [
 			Literal(
 				{ # TODO get rid of this wrapper once we have nominal records"
 					# True iff there was a minus sign in front of the literal
@@ -3014,6 +3014,21 @@ Builtin :: [].{
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
 				Literal({ is_negative: neg, digits_before_pt: _, digits_after_pt: _, digits_after_pt_count: _ }) => neg
+			}
+
+			digits_before_pt : Numeral -> List(U8)
+			digits_before_pt = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: digits, digits_after_pt: _, digits_after_pt_count: _ }) => digits
+			}
+
+			digits_after_pt : Numeral -> List(U8)
+			digits_after_pt = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: _, digits_after_pt: digits, digits_after_pt_count: _ }) => digits
+			}
+
+			digits_after_pt_count : Numeral -> U64
+			digits_after_pt_count = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: _, digits_after_pt: _, digits_after_pt_count: count }) => count
 			}
 		}
 

@@ -413,14 +413,12 @@ const core_tests = [_]TestCase{
         \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
         \\].{
         \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Value({
-        \\            is_negative: parts.is_negative,
-        \\            before: parts.digits_before_pt,
-        \\            after: parts.digits_after_pt,
-        \\            count: parts.digits_after_pt_count,
-        \\        }))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Value({
+        \\        is_negative: numeral.is_negative(),
+        \\        before: numeral.digits_before_pt(),
+        \\        after: numeral.digits_after_pt(),
+        \\        count: numeral.digits_after_pt_count(),
+        \\    }))
         \\}
         \\
         \\force : Big -> Big
@@ -444,14 +442,12 @@ const core_tests = [_]TestCase{
         \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
         \\].{
         \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Value({
-        \\            is_negative: parts.is_negative,
-        \\            before: parts.digits_before_pt,
-        \\            after: parts.digits_after_pt,
-        \\            count: parts.digits_after_pt_count,
-        \\        }))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Value({
+        \\        is_negative: numeral.is_negative(),
+        \\        before: numeral.digits_before_pt(),
+        \\        after: numeral.digits_after_pt(),
+        \\        count: numeral.digits_after_pt_count(),
+        \\    }))
         \\}
         \\
         \\main = {
@@ -473,14 +469,12 @@ const core_tests = [_]TestCase{
         \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
         \\].{
         \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Value({
-        \\            is_negative: parts.is_negative,
-        \\            before: parts.digits_before_pt,
-        \\            after: parts.digits_after_pt,
-        \\            count: parts.digits_after_pt_count,
-        \\        }))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Value({
+        \\        is_negative: numeral.is_negative(),
+        \\        before: numeral.digits_before_pt(),
+        \\        after: numeral.digits_after_pt(),
+        \\        count: numeral.digits_after_pt_count(),
+        \\    }))
         \\}
         \\
         \\main = {
@@ -499,9 +493,7 @@ const core_tests = [_]TestCase{
         .source =
         \\Code := [Code(List(U8))].{
         \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Code(numeral.digits_before_pt()))
         \\    is_eq : Code, Code -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Code(x), Code(y)) => x == y
@@ -527,9 +519,7 @@ const core_tests = [_]TestCase{
         .source =
         \\Tally := [Tally(U64)].{
         \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Tally(numeral.digits_before_pt().len()))
         \\    is_eq : Tally, Tally -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Tally(x), Tally(y)) => x == y
@@ -558,9 +548,7 @@ const core_tests = [_]TestCase{
         .source =
         \\Code := [Code(List(U8))].{
         \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Code(numeral.digits_before_pt()))
         \\    is_eq : Code, Code -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Code(x), Code(y)) => x == y
@@ -586,9 +574,7 @@ const core_tests = [_]TestCase{
         .source =
         \\Scale := [Scale(U64)].{
         \\    from_numeral : Numeral -> Try(Scale, [InvalidNumeral(Str)])
-        \\    from_numeral = |numeral| match numeral {
-        \\        Literal(parts) => Ok(Scale(parts.digits_after_pt_count))
-        \\    }
+        \\    from_numeral = |numeral| Ok(Scale(numeral.digits_after_pt_count()))
         \\    is_eq : Scale, Scale -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Scale(x), Scale(y)) => x == y
@@ -630,9 +616,7 @@ const core_tests = [_]TestCase{
             .source =
             \\Tally := [Tally(U64)].{
             \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
-            \\    from_numeral = |numeral| match numeral {
-            \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
-            \\    }
+            \\    from_numeral = |numeral| Ok(Tally(numeral.digits_before_pt().len()))
             \\    is_eq : Tally, Tally -> Bool
             \\    is_eq = |a, b| match (a, b) {
             \\        (Tally(x), Tally(y)) => x == y

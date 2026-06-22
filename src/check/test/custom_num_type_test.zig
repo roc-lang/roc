@@ -78,14 +78,12 @@ test "Custom number type with from_numeral: exact huge fractional suffix unifies
         \\      Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
         \\  ].{
         \\      from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
-        \\      from_numeral = |numeral| match numeral {
-        \\          Literal(parts) => Ok(Value({
-        \\              is_negative: parts.is_negative,
-        \\              before: parts.digits_before_pt,
-        \\              after: parts.digits_after_pt,
-        \\              count: parts.digits_after_pt_count,
-        \\          }))
-        \\      }
+        \\      from_numeral = |numeral| Ok(Value({
+        \\          is_negative: numeral.is_negative(),
+        \\          before: numeral.digits_before_pt(),
+        \\          after: numeral.digits_after_pt(),
+        \\          count: numeral.digits_after_pt_count(),
+        \\      }))
         \\  }
         \\
         \\  main = {
