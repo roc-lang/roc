@@ -282,13 +282,13 @@ The open questions (O1–O9) referenced below are defined in
   `host_values.zig` (PR1) and the `NoMetrics` seam (Slice 3) also landed.
 
 - **Status (Slice 4b-ii done — `Engine(comptime Ctx)` struct):** the engine
-  state now lives on a generic `Engine(comptime Ctx)` (`engine.zig:1540`);
-  `HostEnv` embeds `engine: Engine(NativeCtx)` (`native_host.zig:749`). The
+  state now lives on a generic `Engine(comptime Ctx)` (`engine.zig:1630`);
+  `HostEnv` embeds `engine: Engine(NativeCtx)` (`native_host.zig:748`). The
   `Ctx` contract is enforced by `verifyCtx`/`verifyRegistryOps`
-  (`engine.zig:133`, `:119`) — real `@compileError`-on-missing-decl checks
+  (`engine.zig:193`, `:179`) — real `@compileError`-on-missing-decl checks
   called at every `Engine()` instantiation, not duck typing. A **real**
   `WasmCtx` (not a stub) is instantiated via `_ = engine.Engine(WasmCtx);` in
-  the existing `comptime` block (`wasm_host.zig:30`, `:75`), so
+  the existing `comptime` block (`wasm_host.zig:30`, `:81`), so
   `build-test-hosts -Doptimize=ReleaseSmall` proves the wasm-specialized engine
   compiles under wasm32 on every build. Seven green commits moved the safe
   engine-only method batches (lookups, scope/identity ops, descriptor accessors,
@@ -298,12 +298,13 @@ The open questions (O1–O9) referenced below are defined in
   untouched.
 
 - **Status (Slice 4c done — scheduler/dirty/keyed):** the rank-sorted dirty-id
-  scheduler moved into `Engine` (`engine.zig:1781`, `:1858`), dirty propagation
-  with memoized `is_eq` pruning moved into `Engine` (`engine.zig:2018`, `:2127`),
+  scheduler moved into `Engine` (`engine.zig:2183`, `:2225`), dirty propagation
+  with memoized `is_eq` pruning moved into `Engine` (`engine.zig:2507`, `:2529`),
   and the keyed-row hash/equality plan path now calls `keyed_rows.buildPlan`
-  from `Engine` (`engine.zig:2303`). `verifyCtx` now checks the 4c hooks
+  from `Engine` (`engine.zig:2705`). `verifyCtx` now checks the 4c hooks
   (`allocator`, `cloneHostValue`, `stateValueByNodeId`, `stateEqCallable`,
-  `stateDropCallable`), and `WasmCtx` implements them (`wasm_host.zig:36`).
+  `stateDropCallable`), and `WasmCtx` implements them (`wasm_host.zig:36`,
+  `:61`).
   Native stayed behavior-identical: three 4c commits each passed 53/53 native,
   `build-test-hosts -Dplatform=signals -Doptimize=ReleaseSmall`,
   `run-test-signals --summary failures`, and browser tests 19/19 with
@@ -311,23 +312,40 @@ The open questions (O1–O9) referenced below are defined in
   paths are present in the host tests and remained green. `engine.zig` ~2,376
   lines; `native_host.zig` ~9,935.
 
-- **Remaining G-B0 work — 4d (render sink), then 5a/5b.** This is the riskiest
-  restructuring: fused decide+apply render logic, not relocating
-  self-contained methods. The 53-test net guards it but the edits are broad.
-  Plan grounded in the current code:
+- **Status (Slice 4d done — render sink / scalar cache / topology cache):**
+  `src/render_sink.zig` now defines the host-facing `DomSink`
+  (`render_sink.zig:15`), and `verifyCtx` checks `sink()` as an explicit
+  contract decl (`engine.zig:205`). Native exposes a pure simulated-DOM sink
+  (`native_host.zig:767`, `:823`), while render decisions now live in `Engine`:
+  scalar text/bool/metadata diffing uses engine-owned per-element caches
+  (`engine.zig:1687`, `:1984`), and structural topology state
+  (tag/active/parent/child order/bound events) is engine-owned through
+  `resetRenderTree`, `replaceRenderChildren`, and event-binding methods
+  (`engine.zig:1731`, `:1807`, `:1869`). Structural apply paths call the engine
+  and then assert engine-index-to-descriptor-stream and engine-index-to-DOM
+  consistency in Debug (`engine.zig:1923`, `:1967`;
+  `native_host.zig:5558`, `:5809`). Scope disposal no longer mutates DOM active
+  state directly; render removal owns that lifecycle. Verified for each 4d
+  sub-slice: native 53/53, `build-test-hosts -Dplatform=signals
+  -Doptimize=ReleaseSmall`, `run-test-signals --summary failures`, and browser
+  tests 19/19 with `--test-force-exit`. `engine.zig` ~2,778 lines;
+  `native_host.zig` ~9,904; `render_sink.zig` 75.
 
-  - **The 4d render-sink boundary is the natural cleave line.** Methods touching
-    `dom_elements` (only ~7 sites) are almost entirely the render/apply layer, so
-    "move everything that does not touch `dom_elements`/`test_state` into Engine"
-    leaves exactly the 4d render-decision surface on `HostEnv`. 4d introduces
-    `render_sink.zig` (does not exist yet) and relocates the `dom_elements`
-    touch-sites behind `ctx.sink()`.
-  - **Extend the `Ctx` contract incrementally as 4d pulls in methods that need
-    it.** 4c added the checked scheduler/evaluator hooks. The remaining render
-    split should add `sink()` (and any required `rocHost()`/`metrics()` hook) as
-    **checked** decls in `verifyCtx` when the method that needs each hook moves
-    — never as an implicit `anytype` passthrough. `WasmCtx` must grow the same
-    decls in lockstep so the comptime instantiation keeps catching mismatches.
+- **Remaining G-B0 work — 5a/5b.** The shared engine is now factored on the
+  native side and compiled for `WasmCtx`; the remaining behavior-changing work
+  is to point wasm at the shared engine:
+
+  - **5a — non-structural wasm path:** replace wasm's
+    `BoundSignal`/`evalBoundSignal`/`updateSignalSinks` path with
+    `Engine(WasmCtx)` plus a command-buffer sink for scalar text/value/bool
+    updates. Wasm gains the same `is_eq` memoization as native. Rebaseline JS
+    executor/counter assertions deliberately in two commits: first prove the
+    initial render op stream is structurally identical, then reduce redundant
+    update-count assertions for pruned patches.
+  - **5b — structural wasm path:** gate structural support behind a comptime
+    `wasm_structural_enabled` kill switch until the path is green; then enable
+    `Ui.each`, `Ui.when`, `remove_node`, `move_before`, and async in the wasm
+    executor/browser tests.
   - **Triage the browser-test hang before 5b (not a current blocker).** The
     `node --test test/signals/browser/*.test.mjs` run completes its assertions
     green but then hangs without `--test-force-exit`, indicating an open handle
