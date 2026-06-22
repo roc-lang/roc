@@ -5258,6 +5258,7 @@ fn runExprStatementKernel(
                         .min_bp = 0,
                         .scratch_top = self.store.scratchRecordFieldTop(),
                         .ext = null,
+                        .nominal_mapper = null,
                     };
                     continue :expr_kernel .record_fields_next;
                 }
