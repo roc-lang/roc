@@ -60,6 +60,41 @@ function countText(root) {
   return findTextNode(root, "Count: ")?.nodeValue;
 }
 
+function commandSnapshot(runtime) {
+  return runtime.lastCommands.map((record) => {
+    switch (record.op) {
+      case Op.resetDom:
+        return { op: record.op };
+
+      case Op.createElement:
+      case Op.createText:
+      case Op.setText:
+      case Op.setValue:
+      case Op.setRole:
+      case Op.setLabel:
+      case Op.setTestId:
+        return { op: record.op, a: record.a, s: runtime.readString(record.b, record.c) };
+
+      case Op.appendChild:
+      case Op.bindClick:
+      case Op.bindInput:
+      case Op.bindCheck:
+      case Op.setChecked:
+      case Op.setDisabled:
+        return { op: record.op, a: record.a, b: record.b };
+
+      case Op.moveBefore:
+        return { op: record.op, a: record.a, b: record.b, c: record.c };
+
+      case Op.removeNode:
+        return { op: record.op, a: record.a };
+
+      default:
+        throw new Error(`unknown render op ${record.op}`);
+    }
+  });
+}
+
 test("counter.wasm mounts the initial tree with one retained state value", { skip: skipReason }, async () => {
   const { runtime, root } = await mountCounter();
 
@@ -68,12 +103,25 @@ test("counter.wasm mounts the initial tree with one retained state value", { ski
   assert.ok(findByText(root, "button", "Decrement"), "decrement button rendered");
   assert.equal(countText(root), "Count: 0");
 
-  // Mount budget: one DOM reset, two click bindings, the single count text node.
-  const ops = runtime.lastCommands.map((record) => record.op);
-  assert.equal(ops.filter((op) => op === Op.resetDom).length, 1);
-  assert.equal(ops.filter((op) => op === Op.bindClick).length, 2);
-  assert.equal(ops.filter((op) => op === Op.createText).length, 1);
-  assert.equal(runtime.lastCommands.length, 17);
+  assert.deepEqual(commandSnapshot(runtime), [
+    { op: Op.resetDom },
+    { op: Op.createElement, a: 1, s: "div" },
+    { op: Op.appendChild, a: 0, b: 1 },
+    { op: Op.createElement, a: 2, s: "h2" },
+    { op: Op.setRole, a: 2, s: "heading" },
+    { op: Op.setText, a: 2, s: "Signals counter" },
+    { op: Op.appendChild, a: 1, b: 2 },
+    { op: Op.createElement, a: 3, s: "button" },
+    { op: Op.setText, a: 3, s: "Decrement" },
+    { op: Op.bindClick, a: 3, b: 1 },
+    { op: Op.appendChild, a: 1, b: 3 },
+    { op: Op.createText, a: 4, s: "Count: 0" },
+    { op: Op.appendChild, a: 1, b: 4 },
+    { op: Op.createElement, a: 5, s: "button" },
+    { op: Op.setText, a: 5, s: "Increment" },
+    { op: Op.bindClick, a: 5, b: 2 },
+    { op: Op.appendChild, a: 1, b: 5 },
+  ]);
 
   assert.equal(runtime.liveHostValues(), 1);
 });
