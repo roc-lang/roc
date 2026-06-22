@@ -10,6 +10,7 @@ const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
+const keyed_rows = @import("keyed_rows.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
@@ -22,6 +23,7 @@ comptime {
     _ = scope_tree.Branch.false_branch.opposite();
     _ = identity_table.NodeIdentity;
     _ = identity_table.DomIdentity;
+    _ = keyed_rows.RowPlan.create;
 }
 
 const HostValueCell = struct {

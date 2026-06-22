@@ -12,6 +12,7 @@ const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
+const keyed_rows = @import("keyed_rows.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -1896,6 +1897,15 @@ fn failIdentityTableError(err: anyerror) noreturn {
     }
 }
 
+fn failKeyedRowsError(err: anyerror) noreturn {
+    switch (err) {
+        error.OutOfMemory => std.process.exit(1),
+        error.DuplicateKey => failHost("Ui.each keyed scope received duplicate keys"),
+        error.MismatchedExistingHashes => failHost("keyed row diff received mismatched existing ids and hashes"),
+        else => failHost("keyed row diff operation failed"),
+    }
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -3509,22 +3519,6 @@ const HostEnv = struct {
         };
     }
 
-    fn appendIndexToHashBucket(allocator: std.mem.Allocator, buckets: *std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(usize)), hash: u64, index: usize) void {
-        const entry = buckets.getOrPut(allocator, hash) catch std.process.exit(1);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = .empty;
-        }
-        entry.value_ptr.append(allocator, index) catch std.process.exit(1);
-    }
-
-    fn deinitHashBuckets(allocator: std.mem.Allocator, buckets: *std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(usize))) void {
-        var values = buckets.valueIterator();
-        while (values.next()) |bucket| {
-            bucket.deinit(allocator);
-        }
-        buckets.deinit(allocator);
-    }
-
     fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
         self.validateScopeId(parent_scope_id);
         if (keys.len != items.len) failHost("Ui.each keyed scope received mismatched key and item lists");
@@ -3533,103 +3527,97 @@ const HostEnv = struct {
         const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal);
         defer allocator.free(existing_scope_ids);
 
-        const matched_existing = allocator.alloc(bool, existing_scope_ids.len) catch std.process.exit(1);
-        defer allocator.free(matched_existing);
-        @memset(matched_existing, false);
+        const key_hashes = allocator.alloc(u64, keys.len) catch std.process.exit(1);
+        defer allocator.free(key_hashes);
+        for (keys, 0..) |key, key_index| {
+            key_hashes[key_index] = self.hashEachKeyValue(roc_host, key_hash, key);
+        }
+
+        const existing_key_hashes = allocator.alloc(u64, existing_scope_ids.len) catch std.process.exit(1);
+        defer allocator.free(existing_key_hashes);
+        for (existing_scope_ids, 0..) |scope_id, existing_index| {
+            const existing_key = self.eachRowScopeKeyValue(scope_id);
+            existing_key_hashes[existing_index] = self.hashEachKeyValue(roc_host, key_hash, existing_key);
+        }
+
+        const MatchContext = struct {
+            host: *HostEnv,
+            roc_host: *abi.RocHost,
+            existing_scope_ids: []const u64,
+            keys: []const HostValue,
+            key_eq: abi.RocErasedCallable,
+
+            pub fn nextKeysEqual(context: *@This(), left_index: usize, right_index: usize) bool {
+                return context.host.eachKeysEqual(context.roc_host, context.key_eq, context.keys[left_index], context.keys[right_index]);
+            }
+
+            pub fn existingKeyEquals(context: *@This(), existing_index: usize, key_index: usize) bool {
+                const scope_id = context.existing_scope_ids[existing_index];
+                return context.host.eachRowScopeKeyEquals(context.roc_host, scope_id, context.keys[key_index]);
+            }
+        };
+
+        var match_context = MatchContext{
+            .host = self,
+            .roc_host = roc_host,
+            .existing_scope_ids = existing_scope_ids,
+            .keys = keys,
+            .key_eq = key_eq,
+        };
+        const match_plan = keyed_rows.buildPlan(allocator, existing_scope_ids, existing_key_hashes, key_hashes, &match_context) catch |err| {
+            failKeyedRowsError(err);
+        };
+        defer allocator.free(match_plan.rows);
+        errdefer allocator.free(match_plan.removed_scope_ids);
 
         var next_scope_ids = allocator.alloc(u64, keys.len) catch std.process.exit(1);
         errdefer allocator.free(next_scope_ids);
         var row_items_changed = allocator.alloc(bool, keys.len) catch std.process.exit(1);
         errdefer allocator.free(row_items_changed);
-        var removed_scope_ids: std.ArrayListUnmanaged(u64) = .empty;
-        errdefer removed_scope_ids.deinit(allocator);
 
-        var rows_reused: u64 = 0;
-        var rows_created: u64 = 0;
         var row_items_unchanged: u64 = 0;
         var row_items_updated: u64 = 0;
 
-        const key_hashes = allocator.alloc(u64, keys.len) catch std.process.exit(1);
-        defer allocator.free(key_hashes);
-
-        var next_key_indexes_by_hash: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(usize)) = .{};
-        defer HostEnv.deinitHashBuckets(allocator, &next_key_indexes_by_hash);
-        for (keys, 0..) |key, key_index| {
-            const hash = self.hashEachKeyValue(roc_host, key_hash, key);
-            key_hashes[key_index] = hash;
-            if (next_key_indexes_by_hash.getPtr(hash)) |bucket| {
-                for (bucket.items) |previous_index| {
-                    if (self.eachKeysEqual(roc_host, key_eq, keys[previous_index], key)) {
-                        failHost("Ui.each keyed scope received duplicate keys");
+        for (match_plan.rows, keys, items, 0..) |row_plan, key, item, key_index| {
+            switch (row_plan) {
+                .reuse => |reuse| {
+                    const scope_id = reuse.scope_id;
+                    next_scope_ids[key_index] = scope_id;
+                    callErasedHostValueToUnit(roc_host, key_drop, key);
+                    if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
+                        callErasedHostValueToUnit(roc_host, item_drop, item);
+                        row_items_changed[key_index] = false;
+                        row_items_unchanged += 1;
+                    } else {
+                        self.replaceEachRowScopeItem(roc_host, scope_id, item);
+                        row_items_changed[key_index] = true;
+                        row_items_updated += 1;
                     }
-                }
-            }
-            HostEnv.appendIndexToHashBucket(allocator, &next_key_indexes_by_hash, hash, key_index);
-        }
-
-        var existing_scope_indexes_by_hash: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(usize)) = .{};
-        defer HostEnv.deinitHashBuckets(allocator, &existing_scope_indexes_by_hash);
-        for (existing_scope_ids, 0..) |scope_id, existing_index| {
-            const existing_key = self.eachRowScopeKeyValue(scope_id);
-            const hash = self.hashEachKeyValue(roc_host, key_hash, existing_key);
-            HostEnv.appendIndexToHashBucket(allocator, &existing_scope_indexes_by_hash, hash, existing_index);
-        }
-
-        for (keys, items, 0..) |key, item, key_index| {
-            var matched_scope_id: ?u64 = null;
-            if (existing_scope_indexes_by_hash.getPtr(key_hashes[key_index])) |bucket| {
-                for (bucket.items) |existing_index| {
-                    if (matched_existing[existing_index]) continue;
-                    const scope_id = existing_scope_ids[existing_index];
-                    if (self.eachRowScopeKeyEquals(roc_host, scope_id, key)) {
-                        matched_existing[existing_index] = true;
-                        matched_scope_id = scope_id;
-                        break;
-                    }
-                }
-            }
-
-            if (matched_scope_id) |scope_id| {
-                next_scope_ids[key_index] = scope_id;
-                rows_reused += 1;
-                callErasedHostValueToUnit(roc_host, key_drop, key);
-                if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
-                    callErasedHostValueToUnit(roc_host, item_drop, item);
-                    row_items_changed[key_index] = false;
-                    row_items_unchanged += 1;
-                } else {
-                    self.replaceEachRowScopeItem(roc_host, scope_id, item);
+                },
+                .create => {
+                    next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
                     row_items_changed[key_index] = true;
-                    row_items_updated += 1;
-                }
-            } else {
-                next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
-                row_items_changed[key_index] = true;
-                rows_created += 1;
+                },
             }
         }
 
-        var rows_removed: u64 = 0;
-        for (existing_scope_ids, 0..) |scope_id, existing_index| {
-            if (matched_existing[existing_index]) continue;
-            removed_scope_ids.append(allocator, scope_id) catch std.process.exit(1);
+        for (match_plan.removed_scope_ids) |scope_id| {
             self.disposeScopeSubtree(roc_host, scope_id);
-            rows_removed += 1;
         }
 
         var metrics = self.pending_roc_metrics;
-        metrics.rows_reused += rows_reused;
-        metrics.rows_created += rows_created;
-        metrics.rows_removed += rows_removed;
+        metrics.rows_reused += match_plan.rows_reused;
+        metrics.rows_created += match_plan.rows_created;
+        metrics.rows_removed += match_plan.rows_removed;
         self.pending_roc_metrics = metrics;
 
         return .{
             .scope_ids = next_scope_ids,
             .row_items_changed = row_items_changed,
-            .removed_scope_ids = removed_scope_ids.toOwnedSlice(allocator) catch std.process.exit(1),
-            .rows_reused = rows_reused,
-            .rows_created = rows_created,
-            .rows_removed = rows_removed,
+            .removed_scope_ids = match_plan.removed_scope_ids,
+            .rows_reused = match_plan.rows_reused,
+            .rows_created = match_plan.rows_created,
+            .rows_removed = match_plan.rows_removed,
             .row_items_unchanged = row_items_unchanged,
             .row_items_updated = row_items_updated,
         };

@@ -6,8 +6,8 @@
 > Signals Roc app compiled to `wasm32`. It is written against the *actual* code
 > in this directory: `src/native_host.zig`, `src/wasm_host.zig`,
 > `src/render_commands.zig`, `src/signal_graph.zig`, `src/scope_tree.zig`,
-> `src/identity_table.zig`, `src/roc_platform_abi.zig`, `platform/main.roc`, and
-> the authoritative `DESIGN.md`.
+> `src/identity_table.zig`, `src/keyed_rows.zig`, `src/roc_platform_abi.zig`,
+> `platform/main.roc`, and the authoritative `DESIGN.md`.
 
 ## 0. The framing that decides everything
 

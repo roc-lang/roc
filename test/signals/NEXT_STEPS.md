@@ -228,9 +228,13 @@ The open questions (O1–O9) referenced below are defined in
   `src/scope_tree.zig` owns scope branch identity, root/component/when/row scope
   interning, active-row lookup, and ancestry queries; native still owns row
   payload refcounts and disposal. Fourth extraction: `src/identity_table.zig`
-  owns node/DOM identity interning and one-based DOM ids. Remaining G-B0 work is
-  extracting keyed-diff row matching and then having both hosts drive the same
-  engine with different render sinks.
+  owns node/DOM identity interning and one-based DOM ids. Fifth extraction:
+  `src/keyed_rows.zig` owns the host-agnostic keyed-row match plan: duplicate
+  detection, hash-bucket probing, survivor matching, create slots, and removed
+  row ids. Native currently supplies the HostValue/thunk/scope adapter that
+  executes the plan; the wasm host must supply the same adapter surface when it
+  grows row scopes. Remaining G-B0 work is moving that adapter boundary into the
+  shared engine so both hosts drive the same engine with different render sinks.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
