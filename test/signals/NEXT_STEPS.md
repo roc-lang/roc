@@ -358,14 +358,18 @@ The open questions (O1–O9) referenced below are defined in
     `wasm_structural_enabled` kill switch until the path is green; then enable
     `Ui.each`, `Ui.when`, `remove_node`, `move_before`, and async in the wasm
     executor/browser tests.
-  - **Triage the browser-test hang before 5b (not a current blocker).** The
-    `node --test test/signals/browser/*.test.mjs` run completes its assertions
-    green but then hangs without `--test-force-exit`, indicating an open handle
-    (timer / `WebAssembly.Memory`-backed resource / unclosed fixture) that is not
-    torn down. Harmless today, but Slice 5 makes wasm drive the engine and G-B7
-    adds async/timer paths, where a lingering handle gets worse. Investigate and
-    fix the teardown before 5b rather than leaving it permanently masked by the
-    force-exit flag.
+  - **Pre-5b browser-hang triage:** as of Slice 5a,
+    `node --test test/signals/browser/*.test.mjs` exits cleanly with 20/20 tests
+    passing and no `--test-force-exit`; the earlier open-handle hang is not
+    currently reproducible.
+  - **5b blocker found during sizing:** the structural algorithms needed by wasm
+    still live in `native_host.zig`: active branch/row descriptor collection,
+    scope-subtree copying, active-stream splicing, structural event rebinding,
+    and effect-source dispatch. Implementing 5b directly in `wasm_host.zig`
+    would either duplicate those algorithms or rebuild the whole tree, both
+    forbidden here. The next green slice must first move the remaining
+    host-agnostic structural collection/apply batch behind `Engine(WasmCtx)` and
+    `Ctx.sink()`; only then should the wasm structural flag be enabled.
 
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
