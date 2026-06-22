@@ -178,7 +178,7 @@ its locking assertion together; a fix without the counter/spec that would catch 
 regression is not done.
 
 - Focused Zig host work:
-  `zig test test/signals/platform/host.zig`
+  `zig test test/signals/src/native_host.zig`
 - Platform Roc or ABI changes:
   `./zig-out/bin/roc check test/signals/apps/checkout_wizard.roc`
   `./zig-out/bin/roc check test/signals/apps/component_composition.roc`

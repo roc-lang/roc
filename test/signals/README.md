@@ -57,7 +57,7 @@ skip the case or silently build it in dev mode.
 Regenerate glue after changing exposed platform types or provided entrypoints:
 
 ```sh
-./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc
+./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/src test/signals/platform/main.roc
 ```
 
 ## Spec Language

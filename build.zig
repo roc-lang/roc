@@ -78,6 +78,16 @@ fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
         std.mem.eql(u8, platform_dir, "signals");
 }
 
+fn testPlatformHostSourcePath(b: *std.Build, platform_dir: []const u8) []const u8 {
+    if (std.mem.eql(u8, platform_dir, "signals")) return "test/signals/src/native_host.zig";
+    return b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" });
+}
+
+fn testPlatformTargetsDir(b: *std.Build, platform_dir: []const u8) []const u8 {
+    if (std.mem.eql(u8, platform_dir, "signals")) return "test/signals/targets";
+    return b.pathJoin(&.{ "test", platform_dir, "platform/targets" });
+}
+
 fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
     if (!options.uses_stack_handler) return false;
 
@@ -1773,7 +1783,7 @@ fn buildAndCopyTestPlatformHostLib(
     const lib = createTestPlatformHostLib(
         b,
         b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
-        b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+        testPlatformHostSourcePath(b, platform_dir),
         target,
         optimize,
         roc_modules,
@@ -1784,7 +1794,7 @@ fn buildAndCopyTestPlatformHostLib(
 
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    const archive_path = b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename });
+    const archive_path = b.pathJoin(&.{ testPlatformTargetsDir(b, platform_dir), target_name, host_filename });
 
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(lib.getEmittedBin(), archive_path);
@@ -1860,6 +1870,35 @@ fn buildAndCopyWasmHostObject(
     const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
+
+    return &copy_step.step;
+}
+
+/// Build the signals browser host as a relocatable .wasm object.
+fn buildAndCopySignalsWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "signals_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/signals/src/wasm_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
+
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(obj.getEmittedBin(), "test/signals/targets/wasm32/host.wasm");
 
     return &copy_step.step;
 }
@@ -2168,6 +2207,17 @@ fn setupTestPlatforms(
         omit_frame_pointer,
     );
     clear_cache_step.dependOn(wasm_host_step);
+
+    if (platform_filter == null or std.mem.eql(u8, platform_filter.?, "signals")) {
+        const signals_wasm_host_step = buildAndCopySignalsWasmHostObject(
+            b,
+            wasm_target,
+            optimize,
+            strip,
+            omit_frame_pointer,
+        );
+        clear_cache_step.dependOn(signals_wasm_host_step);
+    }
 
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
@@ -3983,7 +4033,7 @@ pub fn build(b: *std.Build) void {
     const signals_host_test = b.addTest(.{
         .name = "signals_host",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("test/signals/platform/host.zig"),
+            .root_source_file = b.path("test/signals/src/native_host.zig"),
             .target = target,
             .optimize = optimize,
         }),
