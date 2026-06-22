@@ -237,7 +237,6 @@ const CliMainError =
         FormattingFailed,
         HandleInheritanceFailed,
         HashMismatch,
-        HotReloadSlotsExhausted,
         Internal,
         InvalidArguments,
         InvalidDependency,
@@ -3663,17 +3662,30 @@ const HotReloadSourceRewrite = struct {
     source_dir_override: []const u8,
 };
 
-const HotReloadImageSlot = struct {
-    index: u32,
+const HotReloadFreeRegion = struct {
     start: usize,
     end: usize,
+
+    fn len(self: HotReloadFreeRegion) usize {
+        return self.end - self.start;
+    }
 };
 
-const HotReloadSlotChoice = struct {
-    slot_index: u32,
-    slot_start: usize,
-    slot_end: usize,
+const HotReloadImageAllocation = struct {
+    generation: u64,
+    region_start: usize,
+    region_end: usize,
     append_offset: usize,
+};
+
+const HotReloadDescriptorTracker = struct {
+    descriptors: std.ArrayList(usize) = .empty,
+    free_regions: std.ArrayList(HotReloadFreeRegion) = .empty,
+
+    fn deinit(self: *HotReloadDescriptorTracker, gpa: Allocator) void {
+        self.descriptors.deinit(gpa);
+        self.free_regions.deinit(gpa);
+    }
 };
 
 fn buildHotReloadChildArgv(
@@ -3684,7 +3696,7 @@ fn buildHotReloadChildArgv(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    slot_choice: HotReloadSlotChoice,
+    allocation: HotReloadImageAllocation,
     inputs_path: []const u8,
     source_rewrite: ?HotReloadSourceRewrite,
 ) Allocator.Error!WatchChildArgv {
@@ -3703,10 +3715,9 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-index={}", .{slot_choice.slot_index});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-start={}", .{slot_choice.slot_start});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--slot-end={}", .{slot_choice.slot_end});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{slot_choice.append_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-start={}", .{allocation.region_start});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-end={}", .{allocation.region_end});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{allocation.append_offset});
     if (comptime is_windows) {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
     } else {
@@ -3737,7 +3748,7 @@ fn spawnHotReloadRebuild(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    slot_choice: HotReloadSlotChoice,
+    allocation: HotReloadImageAllocation,
     source_rewrite: ?HotReloadSourceRewrite,
 ) CliMainError!HotReloadRebuild {
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
@@ -3746,7 +3757,7 @@ fn spawnHotReloadRebuild(
     errdefer ctx.gpa.free(inputs_path);
     errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
 
-    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, slot_choice, inputs_path, source_rewrite);
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, allocation, inputs_path, source_rewrite);
     errdefer argv.deinit(ctx.gpa);
 
     const child = try spawnWatchChild(ctx, argv.argv);
@@ -3819,100 +3830,229 @@ fn reportHotReloadAcknowledgement(
     return generation;
 }
 
-fn hotReloadSweepImageSlots(
+fn hotReloadBasePtr(shm_handle: SharedMemoryHandle) [*]align(1) u8 {
+    return @ptrCast(@alignCast(shm_handle.ptr));
+}
+
+fn hotReloadTrackDescriptor(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    descriptor_offset: usize,
+) Allocator.Error!void {
+    if (descriptor_offset == ipc.hot_reload.invalid_descriptor_offset) return;
+    for (tracker.descriptors.items) |tracked_offset| {
+        if (tracked_offset == descriptor_offset) return;
+    }
+    try tracker.descriptors.append(gpa, descriptor_offset);
+}
+
+fn hotReloadDescriptor(
+    shm_handle: SharedMemoryHandle,
+    descriptor_offset: usize,
+) error{InvalidSharedMemory}!*ipc.hot_reload.ImageDescriptor {
+    return ipc.hot_reload.descriptorFromOffset(
+        hotReloadBasePtr(shm_handle),
+        shm_handle.mapped_size,
+        descriptor_offset,
+    ) orelse error.InvalidSharedMemory;
+}
+
+fn hotReloadValidAllocation(
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) bool {
+    if (snapshot.allocation_start < reusable_boundary) return false;
+    if (snapshot.allocation_end <= snapshot.allocation_start) return false;
+    if (snapshot.allocation_end > shm_handle.mapped_size) return false;
+    if (snapshot.image_offset < snapshot.allocation_start) return false;
+    if (snapshot.image_offset >= snapshot.allocation_end) return false;
+    if (snapshot.image_size <= snapshot.image_offset) return false;
+    if (snapshot.image_size > snapshot.allocation_end) return false;
+    return true;
+}
+
+fn hotReloadFreeRegionLessThan(_: void, a: HotReloadFreeRegion, b: HotReloadFreeRegion) bool {
+    return a.start < b.start or (a.start == b.start and a.end < b.end);
+}
+
+fn hotReloadCoalesceFreeRegions(tracker: *HotReloadDescriptorTracker) void {
+    std.mem.sort(HotReloadFreeRegion, tracker.free_regions.items, {}, hotReloadFreeRegionLessThan);
+
+    var write_index: usize = 0;
+    for (tracker.free_regions.items) |region| {
+        if (region.end <= region.start) continue;
+        if (write_index > 0 and region.start <= tracker.free_regions.items[write_index - 1].end) {
+            tracker.free_regions.items[write_index - 1].end = @max(tracker.free_regions.items[write_index - 1].end, region.end);
+        } else {
+            tracker.free_regions.items[write_index] = region;
+            write_index += 1;
+        }
+    }
+    tracker.free_regions.items.len = write_index;
+}
+
+fn hotReloadAddFreeRegion(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    start: usize,
+    end: usize,
+) CliMainError!void {
+    if (start < reusable_boundary or end <= start or end > shm_handle.mapped_size) return error.InvalidSharedMemory;
+    try tracker.free_regions.append(gpa, .{ .start = start, .end = end });
+    hotReloadCoalesceFreeRegions(tracker);
+}
+
+fn hotReloadSubtractFreeRegion(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    start: usize,
+    end: usize,
+) Allocator.Error!void {
+    if (end <= start) return;
+
+    var i: usize = 0;
+    while (i < tracker.free_regions.items.len) {
+        const region = tracker.free_regions.items[i];
+        if (end <= region.start or start >= region.end) {
+            i += 1;
+            continue;
+        }
+
+        const has_left = start > region.start;
+        const has_right = end < region.end;
+
+        if (has_left and has_right) {
+            tracker.free_regions.items[i].end = start;
+            try tracker.free_regions.append(gpa, .{ .start = end, .end = region.end });
+            i += 1;
+        } else if (has_left) {
+            tracker.free_regions.items[i].end = start;
+            i += 1;
+        } else if (has_right) {
+            tracker.free_regions.items[i].start = end;
+            i += 1;
+        } else {
+            _ = tracker.free_regions.swapRemove(i);
+        }
+    }
+
+    hotReloadCoalesceFreeRegions(tracker);
+}
+
+fn hotReloadDropFreeRegionsAboveUsedSize(tracker: *HotReloadDescriptorTracker, used_size: usize) void {
+    var i: usize = 0;
+    while (i < tracker.free_regions.items.len) {
+        if (tracker.free_regions.items[i].start >= used_size) {
+            _ = tracker.free_regions.swapRemove(i);
+        } else {
+            if (tracker.free_regions.items[i].end > used_size) {
+                tracker.free_regions.items[i].end = used_size;
+            }
+            i += 1;
+        }
+    }
+    hotReloadCoalesceFreeRegions(tracker);
+}
+
+fn hotReloadSweepImageDescriptors(
+    gpa: Allocator,
     control: *ipc.hot_reload.Control,
     shm_handle: SharedMemoryHandle,
     reusable_boundary: usize,
-) error{InvalidSharedMemory}!void {
+    tracker: *HotReloadDescriptorTracker,
+) CliMainError!void {
     const current = ipc.hot_reload.publishedImage(control);
-
-    var i: u32 = 0;
-    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
-        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
-        switch (snapshot.state) {
-            .published => {
-                const is_current = current != null and
-                    current.?.slot_index == i and
-                    current.?.generation == snapshot.generation;
-                if (!is_current) {
-                    ipc.hot_reload.markSlotRetired(control, i);
-                }
-            },
-            .writing => {
-                if (snapshot.refs == 0) ipc.hot_reload.markSlotFree(control, i);
-            },
-            .retired, .free => {},
-        }
-    }
+    if (current) |image| try hotReloadTrackDescriptor(gpa, tracker, image.descriptor_offset);
 
     var used_size = reusable_boundary;
-    i = 0;
-    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
-        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
-        if (snapshot.state == .retired and snapshot.refs == 0) {
-            ipc.hot_reload.markSlotFree(control, i);
+    var i: usize = 0;
+    while (i < tracker.descriptors.items.len) {
+        const descriptor_offset = tracker.descriptors.items[i];
+        const descriptor = try hotReloadDescriptor(shm_handle, descriptor_offset);
+        const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+        if (!hotReloadValidAllocation(shm_handle, reusable_boundary, snapshot)) {
+            return error.InvalidSharedMemory;
+        }
+
+        const is_current = current != null and
+            current.?.descriptor_offset == descriptor_offset and
+            current.?.generation == snapshot.generation and
+            current.?.image_offset == snapshot.image_offset and
+            current.?.image_size == snapshot.image_size;
+
+        if (is_current) {
+            if (snapshot.state != .published) return error.InvalidSharedMemory;
+            used_size = @max(used_size, snapshot.allocation_end);
+            try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
+            i += 1;
             continue;
         }
-        if (snapshot.state != .free) {
-            used_size = @max(used_size, snapshot.slot_end);
+
+        if (snapshot.refs == 0) {
+            ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            try hotReloadAddFreeRegion(
+                gpa,
+                tracker,
+                shm_handle,
+                reusable_boundary,
+                snapshot.allocation_start,
+                snapshot.allocation_end,
+            );
+            _ = tracker.descriptors.swapRemove(i);
+        } else {
+            ipc.hot_reload.markDescriptorRetired(descriptor);
+            used_size = @max(used_size, snapshot.allocation_end);
+            try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
+            i += 1;
         }
     }
 
+    hotReloadDropFreeRegionsAboveUsedSize(tracker, used_size);
     try SharedMemoryAllocator.rewindMappedHeader(
-        @ptrCast(@alignCast(shm_handle.ptr)),
+        hotReloadBasePtr(shm_handle),
         shm_handle.mapped_size,
         used_size,
     );
 }
 
-fn hotReloadChooseImageSlot(
+fn hotReloadChooseImageAllocation(
+    gpa: Allocator,
     control: *ipc.hot_reload.Control,
     shm_handle: SharedMemoryHandle,
     reusable_boundary: usize,
-) CliMainError!HotReloadSlotChoice {
-    try hotReloadSweepImageSlots(control, shm_handle, reusable_boundary);
+    tracker: *HotReloadDescriptorTracker,
+    generation: u64,
+) CliMainError!HotReloadImageAllocation {
+    try hotReloadSweepImageDescriptors(gpa, control, shm_handle, reusable_boundary, tracker);
 
     const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
-        @ptrCast(@alignCast(shm_handle.ptr)),
+        hotReloadBasePtr(shm_handle),
         shm_handle.mapped_size,
     );
 
-    var first_free_index: ?u32 = null;
-    var best_reusable: ?HotReloadImageSlot = null;
-
-    var i: u32 = 1;
-    while (i < ipc.hot_reload.max_image_slots) : (i += 1) {
-        const snapshot = ipc.hot_reload.slotSnapshot(control, i) orelse continue;
-        if (snapshot.state != .free or snapshot.refs != 0) continue;
-        if (first_free_index == null) first_free_index = i;
-
-        if (snapshot.image_offset >= reusable_boundary and snapshot.slot_end > snapshot.image_offset) {
-            const candidate = HotReloadImageSlot{
-                .index = i,
-                .start = snapshot.image_offset,
-                .end = snapshot.slot_end,
-            };
-            if (best_reusable == null or
-                candidate.end - candidate.start > best_reusable.?.end - best_reusable.?.start)
-            {
-                best_reusable = candidate;
-            }
+    var best_region: ?HotReloadFreeRegion = null;
+    for (tracker.free_regions.items) |region| {
+        if (best_region == null or region.len() > best_region.?.len()) {
+            best_region = region;
         }
     }
 
-    if (best_reusable) |slot| {
+    if (best_region) |region| {
         return .{
-            .slot_index = slot.index,
-            .slot_start = slot.start,
-            .slot_end = slot.end,
+            .generation = generation,
+            .region_start = region.start,
+            .region_end = region.end,
             .append_offset = append_offset,
         };
     }
 
     return .{
-        .slot_index = first_free_index orelse return error.HotReloadSlotsExhausted,
-        .slot_start = 0,
-        .slot_end = 0,
+        .generation = generation,
+        .region_start = 0,
+        .region_end = 0,
         .append_offset = append_offset,
     };
 }
@@ -3954,7 +4094,10 @@ fn runHotReloadDevShim(
     var next_generation: u64 = 2;
     const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
     const initial_image = ipc.hot_reload.publishedImage(hot_reload_control) orelse return error.InvalidSharedMemory;
-    const hot_reload_reclaim_boundary = initial_image.image_size;
+    const hot_reload_reclaim_boundary = @sizeOf(SharedMemoryAllocator.Header);
+    var hot_reload_tracker = HotReloadDescriptorTracker{};
+    defer hot_reload_tracker.deinit(ctx.gpa);
+    try hotReloadTrackDescriptor(ctx.gpa, &hot_reload_tracker, initial_image.descriptor_offset);
     var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
     var active_rebuild: ?HotReloadRebuild = null;
     defer {
@@ -3967,10 +4110,12 @@ fn runHotReloadDevShim(
     while (!host_child.done.load(.seq_cst)) {
         if (try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack)) |_| {
             if (active_rebuild == null) {
-                try hotReloadSweepImageSlots(
+                try hotReloadSweepImageDescriptors(
+                    ctx.gpa,
                     hot_reload_control,
                     shm_handle,
                     hot_reload_reclaim_boundary,
+                    &hot_reload_tracker,
                 );
             }
         }
@@ -3980,10 +4125,12 @@ fn runHotReloadDevShim(
                 pending_rebuild = (try finishHotReloadRebuild(ctx, &state, &signal, rebuild)) or pending_rebuild;
                 rebuild.deinit(ctx);
                 active_rebuild = null;
-                try hotReloadSweepImageSlots(
+                try hotReloadSweepImageDescriptors(
+                    ctx.gpa,
                     hot_reload_control,
                     shm_handle,
                     hot_reload_reclaim_boundary,
+                    &hot_reload_tracker,
                 );
             }
         }
@@ -3998,10 +4145,13 @@ fn runHotReloadDevShim(
         }
 
         if (pending_rebuild and active_rebuild == null) {
-            const slot_choice = try hotReloadChooseImageSlot(
+            const allocation = try hotReloadChooseImageAllocation(
+                ctx.gpa,
                 hot_reload_control,
                 shm_handle,
                 hot_reload_reclaim_boundary,
+                &hot_reload_tracker,
+                next_generation,
             );
             active_rebuild = try spawnHotReloadRebuild(
                 ctx,
@@ -4011,7 +4161,7 @@ fn runHotReloadDevShim(
                 shm_handle,
                 expected_host_identity,
                 next_generation,
-                slot_choice,
+                allocation,
                 source_rewrite,
             );
             next_generation += 1;
@@ -4098,9 +4248,8 @@ test "hot reload worker args require append offset" {
         "--path=app.roc",
         "--target=x64linux",
         "--generation=2",
-        "--slot-index=1",
-        "--slot-start=1024",
-        "--slot-end=3072",
+        "--region-start=1024",
+        "--region-end=3072",
         "--append-offset=4096",
         "--shm-handle=3",
         "--shm-size=8192",
@@ -4109,9 +4258,8 @@ test "hot reload worker args require append offset" {
     });
 
     try std.testing.expectEqual(@as(u64, 2), parsed.generation);
-    try std.testing.expectEqual(@as(u32, 1), parsed.slot_index);
-    try std.testing.expectEqual(@as(usize, 1024), parsed.slot_start);
-    try std.testing.expectEqual(@as(usize, 3072), parsed.slot_end);
+    try std.testing.expectEqual(@as(usize, 1024), parsed.region_start);
+    try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4133,83 +4281,135 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-test "hot reload slot choice reuses retired unretained slot without waiting for latest acknowledgement" {
+fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
+    return @ptrCast(@alignCast(shm.base_ptr + offset));
+}
+
+fn testingPrepareHotReloadDescriptor(
+    shm: *SharedMemoryAllocator,
+    generation: u64,
+    descriptor_offset: usize,
+    image_offset: usize,
+    image_bound: usize,
+    allocation_start: usize,
+    allocation_end: usize,
+) *ipc.hot_reload.ImageDescriptor {
+    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+    ipc.hot_reload.prepareDescriptor(
+        descriptor,
+        generation,
+        image_offset,
+        image_bound,
+        allocation_start,
+        allocation_end,
+        true,
+    );
+    return descriptor;
+}
+
+test "hot reload allocation reuses retired unretained descriptor without waiting for latest acknowledgement" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    ipc.hot_reload.init(control, 512, 2048);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, 512, 1024, 2048, 512, 2048);
+    ipc.hot_reload.init(control, 512, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, 2048, 2560, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, 2048, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
-    ipc.hot_reload.publishSlot(control, 3, 2, 4096, 8192, 8192);
+
+    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, 4096, 4608, 8192, 4096, 8192);
+    ipc.hot_reload.publishDescriptor(control, 3, 4096, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
     const handle = testingSharedMemoryHandle(&shm);
-    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 512);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 2048);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 4096);
 
-    try std.testing.expectEqual(@as(u32, 1), choice.slot_index);
-    try std.testing.expectEqual(@as(usize, 2048), choice.slot_start);
-    try std.testing.expectEqual(@as(usize, 4096), choice.slot_end);
-    try std.testing.expectEqual(@as(usize, 8192), choice.append_offset);
-    try std.testing.expectEqual(ipc.hot_reload.SlotState.free, ipc.hot_reload.slotSnapshot(control, 1).?.state);
-    try std.testing.expectEqual(ipc.hot_reload.SlotState.published, ipc.hot_reload.slotSnapshot(control, 2).?.state);
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
+
+    try std.testing.expectEqual(@as(u64, 4), allocation.generation);
+    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc2).state);
     try std.testing.expectEqual(@as(usize, 8192), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 }
 
-test "hot reload sweep keeps acknowledged current slot live" {
+test "hot reload sweep keeps acknowledged current descriptor live" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    ipc.hot_reload.init(control, 512, 2048);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, 512, 1024, 2048, 512, 2048);
+    ipc.hot_reload.init(control, 512, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, 2048, 2560, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, 2048, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.acknowledge(control, 2, .accepted);
 
     const handle = testingSharedMemoryHandle(&shm);
-    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 512);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 2048);
 
-    try std.testing.expectEqual(@as(u32, 2), choice.slot_index);
-    try std.testing.expectEqual(@as(usize, 0), choice.slot_start);
-    try std.testing.expectEqual(@as(usize, 0), choice.slot_end);
-    try std.testing.expectEqual(@as(usize, 4096), choice.append_offset);
-    try std.testing.expectEqual(ipc.hot_reload.SlotState.published, ipc.hot_reload.slotSnapshot(control, 1).?.state);
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 3);
+
+    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 2048), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc1).state);
     try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 }
 
-test "hot reload slot choice skips retired retained slot" {
+test "hot reload allocation skips retired retained descriptors" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    ipc.hot_reload.init(control, 512, 2048);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, 512, 1024, 2048, 512, 2048);
+    ipc.hot_reload.init(control, 512, desc0);
+    ipc.hot_reload.retainDescriptor(desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    ipc.hot_reload.publishSlot(control, 2, 1, 2048, 4096, 4096);
-    ipc.hot_reload.retainSlot(control, 1);
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, 2048, 2560, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, 2048, desc1);
+    ipc.hot_reload.retainDescriptor(desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    ipc.hot_reload.publishSlot(control, 3, 2, 4096, 8192, 8192);
+    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, 4096, 4608, 8192, 4096, 8192);
+    ipc.hot_reload.publishDescriptor(control, 3, 4096, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
     const handle = testingSharedMemoryHandle(&shm);
-    const choice = try hotReloadChooseImageSlot(control, handle, 2048);
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 512);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 2048);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, 4096);
 
-    try std.testing.expectEqual(@as(u32, 3), choice.slot_index);
-    try std.testing.expectEqual(@as(usize, 0), choice.slot_start);
-    try std.testing.expectEqual(@as(usize, 0), choice.slot_end);
-    try std.testing.expectEqual(@as(usize, 8192), choice.append_offset);
-    try std.testing.expectEqual(ipc.hot_reload.SlotState.retired, ipc.hot_reload.slotSnapshot(control, 1).?.state);
-    try std.testing.expectEqual(@as(u32, 1), ipc.hot_reload.slotSnapshot(control, 1).?.refs);
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
 
-    ipc.hot_reload.releaseSlot(control, 1);
+    try std.testing.expectEqual(@as(usize, 0), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 0), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.retired, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(u32, 1), ipc.hot_reload.descriptorSnapshot(desc1).refs);
+
+    ipc.hot_reload.releaseDescriptor(desc0);
+    ipc.hot_reload.releaseDescriptor(desc1);
 }
 
 /// Result of setting up shared memory with type checking information.
@@ -4367,10 +4567,8 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
 }
 
 const DevRunImagePublication = struct {
-    header: *backend.RunImage.Header,
-    image_offset: usize,
-    image_bound: usize,
-    slot_end: usize,
+    descriptor: ?*ipc.hot_reload.ImageDescriptor,
+    descriptor_offset: usize,
 };
 
 const hot_reload_dev_command = "__roc_hot_reload_dev";
@@ -4379,9 +4577,8 @@ const HotReloadDevWorkerArgs = struct {
     path: []const u8,
     target: []const u8,
     generation: u64,
-    slot_index: u32,
-    slot_start: usize,
-    slot_end: usize,
+    region_start: usize,
+    region_end: usize,
     append_offset: usize,
     shm_handle: []const u8,
     shm_size: usize,
@@ -4416,9 +4613,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var path: ?[]const u8 = null;
     var target: ?[]const u8 = null;
     var generation: ?u64 = null;
-    var slot_index: ?u32 = null;
-    var slot_start: ?usize = null;
-    var slot_end: ?usize = null;
+    var region_start: ?usize = null;
+    var region_end: ?usize = null;
     var append_offset: ?usize = null;
     var shm_handle: ?[]const u8 = null;
     var shm_size: ?usize = null;
@@ -4437,12 +4633,10 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             target = value;
         } else if (hotReloadFlagValue(arg, "--generation")) |value| {
             generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
-        } else if (hotReloadFlagValue(arg, "--slot-index")) |value| {
-            slot_index = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
-        } else if (hotReloadFlagValue(arg, "--slot-start")) |value| {
-            slot_start = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
-        } else if (hotReloadFlagValue(arg, "--slot-end")) |value| {
-            slot_end = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--region-start")) |value| {
+            region_start = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--region-end")) |value| {
+            region_end = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--append-offset")) |value| {
             append_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
@@ -4474,9 +4668,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .path = path orelse return error.InvalidArguments,
         .target = target orelse return error.InvalidArguments,
         .generation = generation orelse return error.InvalidArguments,
-        .slot_index = slot_index orelse return error.InvalidArguments,
-        .slot_start = slot_start orelse return error.InvalidArguments,
-        .slot_end = slot_end orelse return error.InvalidArguments,
+        .region_start = region_start orelse return error.InvalidArguments,
+        .region_end = region_end orelse return error.InvalidArguments,
         .append_offset = append_offset orelse return error.InvalidArguments,
         .shm_handle = shm_handle orelse return error.InvalidArguments,
         .shm_size = shm_size orelse return error.InvalidArguments,
@@ -4563,14 +4756,19 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         lowered_result.entrypoint_names,
         lowered,
         .{
-            .slot_index = args.slot_index,
-            .slot_start = args.slot_start,
-            .slot_end = args.slot_end,
+            .generation = args.generation,
+            .region_start = args.region_start,
+            .region_end = args.region_end,
             .append_offset = args.append_offset,
         },
     );
     shm.updateHeader();
-    ipc.hot_reload.publishSlot(control, args.generation, args.slot_index, publication.image_offset, publication.image_bound, publication.slot_end);
+    ipc.hot_reload.publishDescriptor(
+        control,
+        args.generation,
+        publication.descriptor_offset,
+        publication.descriptor orelse return error.InvalidSharedMemory,
+    );
 }
 
 fn writeDevRunImageToSharedMemory(
@@ -4579,7 +4777,7 @@ fn writeDevRunImageToSharedMemory(
     selected_target: RocTarget,
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-    hot_reload_slot: ?HotReloadSlotChoice,
+    hot_reload_allocation: ?HotReloadImageAllocation,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
         try ctx.io.stderr().print(
@@ -4645,18 +4843,24 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
-        var empty_slot_buffer: [0]u8 = .{};
-        var fixed_slot_buffer = std.heap.FixedBufferAllocator.init(&empty_slot_buffer);
+        var empty_region_buffer: [0]u8 = .{};
+        var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
         var image_allocator = shm.allocator();
-        var slot_end: usize = 0;
+        var descriptor: ?*ipc.hot_reload.ImageDescriptor = null;
+        var descriptor_offset: usize = ipc.hot_reload.invalid_descriptor_offset;
+        var allocation_start: usize = 0;
+        var allocation_end: usize = 0;
+        var reset_descriptor_refs = true;
 
-        if (hot_reload_slot) |slot| {
-            const reusable_capacity = if (slot.slot_end > slot.slot_start)
-                slot.slot_end - slot.slot_start
+        if (hot_reload_allocation) |allocation| {
+            const descriptor_capacity = hotReloadDescriptorReservedCapacity();
+            const reusable_capacity = if (allocation.region_end > allocation.region_start)
+                allocation.region_end - allocation.region_start
             else
                 0;
-            const required_capacity = try backend.RunImage.requiredCapacity(
+            const required_capacity = try backend.RunImage.requiredCapacityFromOffset(
                 shm.page_size,
+                descriptor_capacity,
                 generated_code,
                 entrypoints,
                 relocations,
@@ -4664,13 +4868,18 @@ fn writeDevRunImageToSharedMemory(
             );
 
             if (reusable_capacity >= required_capacity) {
-                const slot_bytes = shm.base_ptr[slot.slot_start..slot.slot_end];
-                fixed_slot_buffer = std.heap.FixedBufferAllocator.init(slot_bytes);
-                image_allocator = fixed_slot_buffer.allocator();
-                slot_end = slot.slot_end;
+                const region_bytes = shm.base_ptr[allocation.region_start..allocation.region_end];
+                fixed_region_buffer = std.heap.FixedBufferAllocator.init(region_bytes);
+                image_allocator = fixed_region_buffer.allocator();
+                allocation_start = allocation.region_start;
+                reset_descriptor_refs = false;
             } else {
-                try shm.resetToUsedSize(slot.append_offset);
+                try shm.resetToUsedSize(allocation.append_offset);
+                allocation_start = allocation.append_offset;
             }
+
+            descriptor = try image_allocator.create(ipc.hot_reload.ImageDescriptor);
+            descriptor_offset = @intFromPtr(descriptor.?) - @intFromPtr(shm.base_ptr);
         }
 
         const header = try backend.RunImage.writeToSharedMemory(
@@ -4685,17 +4894,28 @@ fn writeDevRunImageToSharedMemory(
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
-        if (slot_end == 0) slot_end = image_bound;
-        if (hot_reload_slot) |slot| {
-            try shm.resetToUsedSize(@max(slot.append_offset, slot_end));
+        if (hot_reload_allocation) |allocation| {
+            allocation_end = image_bound;
+            ipc.hot_reload.prepareDescriptor(
+                descriptor.?,
+                allocation.generation,
+                image_offset,
+                image_bound,
+                allocation_start,
+                allocation_end,
+                reset_descriptor_refs,
+            );
+            try shm.resetToUsedSize(@max(allocation.append_offset, allocation_end));
         }
         return .{
-            .header = header,
-            .image_offset = image_offset,
-            .image_bound = image_bound,
-            .slot_end = slot_end,
+            .descriptor = descriptor,
+            .descriptor_offset = descriptor_offset,
         };
     }
+}
+
+fn hotReloadDescriptorReservedCapacity() usize {
+    return std.mem.alignForward(usize, 0, @alignOf(ipc.hot_reload.ImageDescriptor)) + @sizeOf(ipc.hot_reload.ImageDescriptor);
 }
 
 fn publishDevRunImage(
@@ -4709,9 +4929,22 @@ fn publishDevRunImage(
     var shm = try createSharedMemory(ctx.io.std_io, page_size);
     errdefer shm.deinit(ctx.gpa);
 
-    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered, null);
+    const hot_reload_allocation: ?HotReloadImageAllocation = if (enable_hot_reload)
+        .{
+            .generation = 1,
+            .region_start = 0,
+            .region_end = 0,
+            .append_offset = @sizeOf(SharedMemoryAllocator.Header),
+        }
+    else
+        null;
+    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered, hot_reload_allocation);
     if (enable_hot_reload) {
-        ipc.hot_reload.init(ipc.hot_reload.controlFromBase(shm.base_ptr), publication.image_offset, publication.image_bound);
+        ipc.hot_reload.init(
+            ipc.hot_reload.controlFromBase(shm.base_ptr),
+            publication.descriptor_offset,
+            publication.descriptor orelse return error.InvalidSharedMemory,
+        );
     }
     shm.updateHeader();
     return .{

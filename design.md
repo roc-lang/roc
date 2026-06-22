@@ -4057,8 +4057,13 @@ The initial compile lowers checked modules to LIR in the compiler process, then
 serializes only the dev backend `RunImage` bytes into shared memory. LIR and
 compiler IR are never allocated into the shared-memory allocator on this path.
 The shared memory contains `RunImage` code section bytes, readonly data bytes,
-entrypoint metadata, relocation records, symbol names, and a small hot-load
-control block in the existing shared-memory header padding.
+entrypoint metadata, relocation records, symbol names, and hot-load metadata.
+The fixed shared-memory header padding stores only the small atomic hot-load
+control block: magic/version fields, the latest descriptor offset, the latest
+generation, and host acknowledgement state. It must not contain a fixed table of
+loaded-image slots. Loaded images are described by per-image descriptors stored
+in the shared-memory allocation region alongside the image bytes, so the number
+of retained old generations is limited only by shared-memory capacity.
 
 The compiler launches the host shim first, then installs directory watches for
 the exact file input set reported by the coordinator. Coordinator watch inputs
@@ -4078,24 +4083,43 @@ matches the already-linked host shim. If the interface changes, the rebuild
 reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
-Successful rebuild workers append a new dev `RunImage` to the same shared-memory
-mapping and write its generation, header offset, and image bound through the
-hot-load control block with release/acquire atomics. The host shim checks that
-control block at Roc entrypoint boundaries. If a newer generation is available,
-the shim validates and loads the replacement `RunImage` into host-callable
-memory, swaps the active entrypoint reference to the new image under the
-runtime-state mutex, and acknowledges the generation as accepted. If validation
-or loading fails, it acknowledges rejection and keeps using the previous
-`RunImage`.
+Successful rebuild workers write a fresh shared-memory image descriptor plus a
+new dev `RunImage` into either a compiler-selected free region or the append
+position of the same mapping. The descriptor records the generation, `RunImage`
+header offset, image bound, allocation start/end, lifecycle state, and atomic
+reference count. The worker commits the descriptor offset through the hot-load
+control block with release/acquire atomics. The host shim checks that control
+block at Roc entrypoint boundaries. If a newer generation is available, the shim
+retains the latest descriptor, validates and relocates the replacement
+`RunImage` in place, marks its code pages read/execute in the shared mapping,
+swaps the active entrypoint reference to the new image under the runtime-state
+mutex, and acknowledges the generation as accepted. If validation or loading
+fails, it acknowledges rejection and keeps using the previous `RunImage`.
 
 Loaded machine-code images are reference-counted by the host shim. Each active
 image starts with one reference owned by the active entrypoint table. Entering a
 host-callable Roc function increments that image's atomic live count, and
 returning from that function decrements it. Swapping to a new image drops the
-old image's active-entrypoint reference and moves the old image to a retired
-list. A retired image is unmapped only after its live count reaches zero, so
-calls that entered old code before the swap keep executing old code safely while
-new entrypoint calls use the new image.
+old image's active-entrypoint reference and moves the old process-local program
+descriptor to a retired list. The shim never frees shared-memory image bytes; it
+only retains and releases descriptor references. Calls that entered old code
+before the swap keep executing old code safely while new entrypoint calls use
+the new image.
+
+The compiler parent process is the sole owner of shared-memory image-byte
+reclamation. It keeps unbounded process-local lists of descriptor
+offsets and reclaimed free regions. After a rebuild commits a descriptor, after the host
+acknowledges, and before choosing storage for another rebuild, the parent sweeps
+all known descriptors. The current descriptor remains live regardless
+of its reference count. A non-current descriptor with a nonzero reference count
+is marked retired and left in place. A non-current descriptor whose reference
+count is zero is marked reclaimed, removed from the descriptor list, and its
+allocation range is added to the free-region list. The parent coalesces free
+regions and rewinds the shared-memory header's used-size high-water mark to the
+highest still-live allocation. New rebuilds prefer suitably sized reclaimed
+regions and otherwise append. If filesystem changes arrive faster than the host
+can enter the shim, the newest rebuild can still commit a descriptor as long as shared
+memory has capacity; there is no small fixed "loaded slot" cap.
 
 This lifetime rule also covers boxed Roc closures that cross the host boundary.
 The dev backend generates real erased-callable procedures; it does not insert

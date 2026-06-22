@@ -37,8 +37,8 @@ const DevProgram = struct {
     executable: []const u8,
     data: []const u8,
     generation: u64,
-    control: ?*hot_reload.Control,
-    slot_index: ?u32,
+    descriptor: ?*hot_reload.ImageDescriptor,
+    descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
 
     fn deinit(self: *DevProgram) void {
@@ -53,7 +53,7 @@ const RuntimeState = struct {
     shm: SharedMemoryAllocator,
     program: *DevProgram,
     /// Loaded generations that are no longer the active entrypoint target. The
-    /// compiler parent reclaims shared-memory bytes after the slot refcount
+    /// compiler parent reclaims shared-memory bytes after the descriptor refcount
     /// reaches zero; the shim only frees these small process-local descriptors.
     retired_programs: std.ArrayList(*DevProgram),
     control: ?*hot_reload.Control,
@@ -120,10 +120,10 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const control = hot_reload.controlFromBase(shm.base_ptr);
     const has_hot_reload = hot_reload.initialized(control);
     const retained_image = if (has_hot_reload)
-        hot_reload.acquirePublishedImage(control) orelse return error.InvalidDevRunImage
+        hot_reload.acquirePublishedImage(control, shm.base_ptr, shm.total_size) orelse return error.InvalidDevRunImage
     else
         null;
-    errdefer if (retained_image) |image| hot_reload.releaseSlot(control, image.slot_index);
+    errdefer if (retained_image) |image| hot_reload.releaseDescriptor(image.descriptor);
 
     const generation = if (retained_image) |image| image.generation else 0;
     const image_offset = if (retained_image) |image| image.image_offset else header_offset;
@@ -134,8 +134,8 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
         gpa,
         &view,
         generation,
-        if (retained_image) |image| image.slot_index else null,
-        if (has_hot_reload) control else null,
+        if (retained_image) |image| image.descriptor_offset else hot_reload.invalid_descriptor_offset,
+        if (retained_image) |image| image.descriptor else null,
     );
     errdefer destroyDevProgram(gpa, program);
 
@@ -200,8 +200,8 @@ fn loadDevProgram(
     gpa: Allocator,
     view: *const RunImage.ProgramView,
     generation: u64,
-    slot_index: ?u32,
-    control: ?*hot_reload.Control,
+    descriptor_offset: usize,
+    descriptor: ?*hot_reload.ImageDescriptor,
 ) LoadDevProgramError!DevProgram {
     if (view.code.len == 0) return error.EmptyCode;
     try validateDirectImageLayout(view);
@@ -302,8 +302,8 @@ fn loadDevProgram(
         .executable = view.executable,
         .data = view.data,
         .generation = generation,
-        .control = control,
-        .slot_index = slot_index,
+        .descriptor = descriptor,
+        .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
     };
 }
@@ -312,13 +312,13 @@ fn createDevProgram(
     gpa: Allocator,
     view: *const RunImage.ProgramView,
     generation: u64,
-    slot_index: ?u32,
-    control: ?*hot_reload.Control,
+    descriptor_offset: usize,
+    descriptor: ?*hot_reload.ImageDescriptor,
 ) LoadDevProgramError!*DevProgram {
     const program = try gpa.create(DevProgram);
     errdefer gpa.destroy(program);
 
-    program.* = try loadDevProgram(gpa, view, generation, slot_index, control);
+    program.* = try loadDevProgram(gpa, view, generation, descriptor_offset, descriptor);
     return program;
 }
 
@@ -516,14 +516,14 @@ fn findDevProgramByCodeAddressLocked(state: *RuntimeState, address: usize) ?*Dev
 }
 
 fn acquireDevProgramRef(program: *DevProgram) void {
-    if (program.control) |control| {
-        hot_reload.retainSlot(control, program.slot_index orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
-            }
-            unreachable;
-        });
+    if (program.descriptor) |descriptor| {
+        hot_reload.retainDescriptor(descriptor);
         return;
+    } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        }
+        unreachable;
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
@@ -533,13 +533,13 @@ fn acquireDevProgramRef(program: *DevProgram) void {
 }
 
 fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
-    if (program.control) |control| {
-        hot_reload.releaseSlot(control, program.slot_index orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
-            }
-            unreachable;
-        });
+    if (program.descriptor) |descriptor| {
+        hot_reload.releaseDescriptor(descriptor);
+    } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        }
+        unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .Debug and previous == 0) {
@@ -553,13 +553,13 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
 
-    if (program.control) |control| {
-        hot_reload.releaseSlot(control, program.slot_index orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("machine-code shim invariant violated: hot reload program has no slot index", .{});
-            }
-            unreachable;
-        });
+    if (program.descriptor) |descriptor| {
+        hot_reload.releaseDescriptor(descriptor);
+    } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("machine-code shim invariant violated: hot reload program has no descriptor", .{});
+        }
+        unreachable;
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .Debug and previous == 0) {
@@ -586,9 +586,8 @@ fn reclaimRetiredProgramsLocked(state: *RuntimeState) void {
 }
 
 fn devProgramRefCount(program: *const DevProgram) usize {
-    if (program.control) |control| {
-        const slot_index = program.slot_index orelse return 0;
-        const snapshot = hot_reload.slotSnapshot(control, slot_index) orelse return 0;
+    if (program.descriptor) |descriptor| {
+        const snapshot = hot_reload.descriptorSnapshot(descriptor);
         return snapshot.refs;
     }
     return program.local_refs.load(.acquire);
@@ -603,9 +602,9 @@ fn refreshRuntimeProgramIfNeeded(
         const published_image = hot_reload.publishedImage(control) orelse return;
         if (published_image.generation <= state.program.generation) return;
 
-        const retained_image = hot_reload.acquirePublishedImage(control) orelse return;
+        const retained_image = hot_reload.acquirePublishedImage(control, state.shm.base_ptr, state.shm.total_size) orelse return;
         if (retained_image.generation <= state.program.generation) {
-            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.releaseDescriptor(retained_image.descriptor);
             return;
         }
 
@@ -614,7 +613,7 @@ fn refreshRuntimeProgramIfNeeded(
             retained_image.image_offset,
             retained_image.image_size,
         ) catch {
-            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.releaseDescriptor(retained_image.descriptor);
             hot_reload.acknowledge(control, retained_image.generation, .rejected);
             return;
         };
@@ -624,10 +623,10 @@ fn refreshRuntimeProgramIfNeeded(
             gpa,
             &view,
             retained_image.generation,
-            retained_image.slot_index,
-            control,
+            retained_image.descriptor_offset,
+            retained_image.descriptor,
         ) catch {
-            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.releaseDescriptor(retained_image.descriptor);
             hot_reload.acknowledge(control, retained_image.generation, .rejected);
             return;
         };
@@ -635,16 +634,16 @@ fn refreshRuntimeProgramIfNeeded(
         const current = hot_reload.publishedImage(control);
         if (current != null and
             current.?.generation > retained_image.generation and
-            (current.?.slot_index != retained_image.slot_index or current.?.image_offset != retained_image.image_offset))
+            (current.?.descriptor_offset != retained_image.descriptor_offset or current.?.image_offset != retained_image.image_offset))
         {
             destroyDevProgram(gpa, next_program);
-            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.releaseDescriptor(retained_image.descriptor);
             continue;
         }
 
         state.retired_programs.ensureUnusedCapacity(gpa, 1) catch {
             destroyDevProgram(gpa, next_program);
-            hot_reload.releaseSlot(control, retained_image.slot_index);
+            hot_reload.releaseDescriptor(retained_image.descriptor);
             hot_reload.acknowledge(control, retained_image.generation, .rejected);
             return;
         };
@@ -765,7 +764,7 @@ test "loaded dev program borrows direct shared image metadata" {
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 
-    var program = try loadDevProgram(std.testing.allocator, &view, 0, null, null);
+    var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
     defer program.deinit();
 
     try std.testing.expect(program.entrypoints.ptr == view.entrypoints.ptr);

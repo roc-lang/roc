@@ -5,14 +5,15 @@ const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 
 /// Magic number identifying a hot-load control block ("ROCH" little-endian).
 pub const MAGIC: u32 = 0x4843_4F52;
+/// Magic number identifying a hot-load image descriptor ("ROCD" little-endian).
+pub const DESCRIPTOR_MAGIC: u32 = 0x4443_4F52;
 
 /// Version of the control block layout stored in shared-memory header padding.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
-/// Number of shared-memory image slots tracked by the hot-reload control block.
-pub const max_image_slots = 8;
-/// Sentinel used before any image slot has been published.
-pub const invalid_image_slot: u32 = std.math.maxInt(u32);
+/// Sentinel used before any image descriptor has been published. Offset zero is
+/// the shared-memory header, so a valid image descriptor is never stored there.
+pub const invalid_descriptor_offset: usize = 0;
 
 /// Host-shim acknowledgement status for a published hot-load generation.
 pub const Status = enum(u32) {
@@ -21,22 +22,28 @@ pub const Status = enum(u32) {
     rejected = 2,
 };
 
-/// Lifecycle state for one shared-memory image slot.
-pub const SlotState = enum(u32) {
-    free = 0,
+/// Lifecycle state for one shared-memory image descriptor.
+pub const DescriptorState = enum(u32) {
     writing = 1,
     published = 2,
     retired = 3,
+    reclaimed = 4,
 };
 
-/// Metadata for one shared-memory image region and its active shim references.
-pub const ImageSlot = extern struct {
-    state: u32 = @intFromEnum(SlotState.free),
+/// Metadata for one shared-memory image allocation and its active shim refs.
+///
+/// This lives in the shared-memory allocation region, not in the fixed control
+/// block. The compiler parent owns byte reclamation; the shim only updates refs.
+pub const ImageDescriptor = extern struct {
+    magic: u32 = DESCRIPTOR_MAGIC,
+    state: u32 = @intFromEnum(DescriptorState.reclaimed),
     refs: u32 = 0,
+    _padding: u32 = 0,
     generation: u64 = 0,
     image_offset: u64 = 0,
     image_size: u64 = 0,
-    slot_end: u64 = 0,
+    allocation_start: u64 = 0,
+    allocation_end: u64 = 0,
 };
 
 /// Shared-memory control block used to publish replacement executable images.
@@ -45,15 +52,13 @@ pub const Control = extern struct {
     format_version: u32 = FORMAT_VERSION,
     publish_sequence: u64 = 0,
     published_generation: u64 = 0,
+    published_descriptor_offset: u64 = invalid_descriptor_offset,
     image_offset: u64 = 0,
     image_size: u64 = 0,
-    published_slot_index: u32 = invalid_image_slot,
-    _publish_padding: u32 = 0,
     ack_sequence: u64 = 0,
     acknowledged_generation: u64 = 0,
     status: u32 = @intFromEnum(Status.none),
     _ack_padding: u32 = 0,
-    image_slots: [max_image_slots]ImageSlot = [_]ImageSlot{.{}} ** max_image_slots,
 };
 
 comptime {
@@ -90,10 +95,9 @@ pub fn initialized(control: *const Control) bool {
 }
 
 /// Initialize the control block with generation 1 pointing at the initial image.
-pub fn init(control: *Control, image_offset: usize, image_size: usize) void {
+pub fn init(control: *Control, descriptor_offset: usize, descriptor: *ImageDescriptor) void {
     control.* = .{};
-    setSlotWriting(control, 0, 1, image_offset, image_size, image_size);
-    publishSlot(control, 1, 0, image_offset, image_size, image_size);
+    publishDescriptor(control, 1, descriptor_offset, descriptor);
 }
 
 /// 64-bit atomic load that also compiles on targets without lock-free 64-bit atomics.
@@ -122,69 +126,6 @@ inline fn storeU32(ptr: *u32, value: u32, comptime order: std.builtin.AtomicOrde
     @atomicStore(u32, ptr, value, order);
 }
 
-/// Publish a replacement image for the host shim to load at the next safe point.
-pub fn publish(control: *Control, generation: u64, image_offset: usize, image_size: usize) void {
-    setSlotWriting(control, 0, generation, image_offset, image_size, image_size);
-    publishSlot(control, generation, 0, image_offset, image_size, image_size);
-}
-
-/// Return whether an index can address the fixed slot table.
-pub fn validSlotIndex(slot_index: u32) bool {
-    return slot_index < max_image_slots;
-}
-
-/// Mark a slot as being written by the compiler before it is published.
-pub fn setSlotWriting(
-    control: *Control,
-    slot_index: u32,
-    generation: u64,
-    image_offset: usize,
-    image_size: usize,
-    slot_end: usize,
-) void {
-    if (builtinModeDebug() and !validSlotIndex(slot_index)) {
-        std.debug.panic("hot reload invariant violated: invalid image slot {d}", .{slot_index});
-    }
-    if (!validSlotIndex(slot_index)) return;
-
-    const slot = &control.image_slots[slot_index];
-    storeU32(&slot.state, @intFromEnum(SlotState.writing), .release);
-    storeU64(&slot.generation, generation, .release);
-    storeU64(&slot.image_offset, @intCast(image_offset), .release);
-    storeU64(&slot.image_size, @intCast(image_size), .release);
-    storeU64(&slot.slot_end, @intCast(slot_end), .release);
-}
-
-/// Publish a replacement image from a specific shared-memory slot.
-pub fn publishSlot(
-    control: *Control,
-    generation: u64,
-    slot_index: u32,
-    image_offset: usize,
-    image_size: usize,
-    slot_end: usize,
-) void {
-    if (builtinModeDebug() and !validSlotIndex(slot_index)) {
-        std.debug.panic("hot reload invariant violated: invalid published image slot {d}", .{slot_index});
-    }
-    if (!validSlotIndex(slot_index)) return;
-
-    const slot = &control.image_slots[slot_index];
-    storeU64(&slot.generation, generation, .release);
-    storeU64(&slot.image_offset, @intCast(image_offset), .release);
-    storeU64(&slot.image_size, @intCast(image_size), .release);
-    storeU64(&slot.slot_end, @intCast(slot_end), .release);
-    storeU32(&slot.state, @intFromEnum(SlotState.published), .release);
-
-    const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
-    storeU64(&control.publish_sequence, start, .release);
-    storeU64(&control.image_offset, @intCast(image_offset), .release);
-    storeU64(&control.image_size, @intCast(image_size), .release);
-    storeU64(&control.published_generation, generation, .release);
-    storeU32(&control.published_slot_index, slot_index, .release);
-    storeU64(&control.publish_sequence, start +% 1, .release);
-}
-
 fn builtinModeDebug() bool {
     return @import("builtin").mode == .Debug;
 }
@@ -197,12 +138,72 @@ fn stableSequence(sequence: u64) bool {
     return sequence & 1 == 0;
 }
 
-/// Coherent snapshot of a published executable image.
-pub const PublishedImage = struct {
+/// Prepare a descriptor before its image is published.
+///
+/// `reset_refs` must be false when reusing memory that previously contained a
+/// published descriptor. A stale host can transiently retain that descriptor
+/// after the compiler has selected it for reuse; preserving the count keeps that
+/// stale retain/release balanced while validation rejects the old generation.
+pub fn prepareDescriptor(
+    descriptor: *ImageDescriptor,
     generation: u64,
     image_offset: usize,
     image_size: usize,
-    slot_index: u32,
+    allocation_start: usize,
+    allocation_end: usize,
+    reset_refs: bool,
+) void {
+    descriptor.magic = DESCRIPTOR_MAGIC;
+    storeU32(&descriptor.state, @intFromEnum(DescriptorState.writing), .release);
+    if (reset_refs) storeU32(&descriptor.refs, 0, .release);
+    descriptor._padding = 0;
+    storeU64(&descriptor.generation, generation, .release);
+    storeU64(&descriptor.image_offset, @intCast(image_offset), .release);
+    storeU64(&descriptor.image_size, @intCast(image_size), .release);
+    storeU64(&descriptor.allocation_start, @intCast(allocation_start), .release);
+    storeU64(&descriptor.allocation_end, @intCast(allocation_end), .release);
+}
+
+/// Publish a prepared descriptor for the host shim to load at the next safe point.
+pub fn publishDescriptor(control: *Control, generation: u64, descriptor_offset: usize, descriptor: *ImageDescriptor) void {
+    if (builtinModeDebug()) {
+        if (descriptor_offset == invalid_descriptor_offset) {
+            std.debug.panic("hot reload invariant violated: invalid descriptor offset", .{});
+        }
+        if (descriptor.magic != DESCRIPTOR_MAGIC) {
+            std.debug.panic("hot reload invariant violated: published descriptor missing magic", .{});
+        }
+    }
+
+    const image_offset = loadU64(&descriptor.image_offset, .acquire);
+    const image_size = loadU64(&descriptor.image_size, .acquire);
+    storeU64(&descriptor.generation, generation, .release);
+    storeU32(&descriptor.state, @intFromEnum(DescriptorState.published), .release);
+
+    const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
+    storeU64(&control.publish_sequence, start, .release);
+    storeU64(&control.published_descriptor_offset, @intCast(descriptor_offset), .release);
+    storeU64(&control.image_offset, image_offset, .release);
+    storeU64(&control.image_size, image_size, .release);
+    storeU64(&control.published_generation, generation, .release);
+    storeU64(&control.publish_sequence, start +% 1, .release);
+}
+
+/// Coherent snapshot of a published executable image.
+pub const PublishedImage = struct {
+    generation: u64,
+    descriptor_offset: usize,
+    image_offset: usize,
+    image_size: usize,
+};
+
+/// Coherent snapshot of a published image with a retained descriptor pointer.
+pub const RetainedImage = struct {
+    generation: u64,
+    descriptor_offset: usize,
+    descriptor: *ImageDescriptor,
+    image_offset: usize,
+    image_size: usize,
 };
 
 /// Return a coherent snapshot of the latest published image, if one is stable.
@@ -214,17 +215,18 @@ pub fn publishedImage(control: *const Control) ?PublishedImage {
         if (!stableSequence(start)) continue;
 
         const generation = loadU64(&control.published_generation, .acquire);
+        const descriptor_offset = loadU64(&control.published_descriptor_offset, .acquire);
         const image_offset = loadU64(&control.image_offset, .acquire);
         const image_size = loadU64(&control.image_size, .acquire);
-        const slot_index = loadU32(&control.published_slot_index, .acquire);
 
         const end = loadU64(&control.publish_sequence, .acquire);
         if (start == end and stableSequence(end)) {
+            if (descriptor_offset == invalid_descriptor_offset) return null;
             return .{
                 .generation = generation,
+                .descriptor_offset = @intCast(descriptor_offset),
                 .image_offset = @intCast(image_offset),
                 .image_size = @intCast(image_size),
-                .slot_index = slot_index,
             };
         }
     }
@@ -247,97 +249,122 @@ pub fn imageSize(control: *const Control) usize {
     return @intCast(loadU64(&control.image_size, .acquire));
 }
 
-/// Coherent snapshot of one image slot's reclamation metadata.
-pub const ImageSlotSnapshot = struct {
-    state: SlotState,
+fn validDescriptorRange(total_size: usize, descriptor_offset: usize) bool {
+    if (descriptor_offset == invalid_descriptor_offset) return false;
+    if (descriptor_offset > total_size) return false;
+    if (total_size - descriptor_offset < @sizeOf(ImageDescriptor)) return false;
+    return true;
+}
+
+/// Locate an image descriptor by shared-memory byte offset.
+pub fn descriptorFromOffset(base_ptr: [*]align(1) u8, total_size: usize, descriptor_offset: usize) ?*ImageDescriptor {
+    if (!validDescriptorRange(total_size, descriptor_offset)) return null;
+    const ptr = base_ptr + descriptor_offset;
+    if (@intFromPtr(ptr) % @alignOf(ImageDescriptor) != 0) return null;
+    const descriptor: *ImageDescriptor = @ptrCast(@alignCast(ptr));
+    if (descriptor.magic != DESCRIPTOR_MAGIC) return null;
+    return descriptor;
+}
+
+/// Locate a const image descriptor by shared-memory byte offset.
+pub fn descriptorFromConstOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?*const ImageDescriptor {
+    if (!validDescriptorRange(total_size, descriptor_offset)) return null;
+    const ptr = base_ptr + descriptor_offset;
+    if (@intFromPtr(ptr) % @alignOf(ImageDescriptor) != 0) return null;
+    const descriptor: *const ImageDescriptor = @ptrCast(@alignCast(ptr));
+    if (descriptor.magic != DESCRIPTOR_MAGIC) return null;
+    return descriptor;
+}
+
+/// Coherent snapshot of one image descriptor's reclamation metadata.
+pub const ImageDescriptorSnapshot = struct {
+    state: DescriptorState,
     refs: u32,
     generation: u64,
     image_offset: usize,
     image_size: usize,
-    slot_end: usize,
+    allocation_start: usize,
+    allocation_end: usize,
 };
 
-/// Return the current state of a shared-memory image slot.
-pub fn slotSnapshot(control: *const Control, slot_index: u32) ?ImageSlotSnapshot {
-    if (!validSlotIndex(slot_index)) return null;
-    const slot = &control.image_slots[slot_index];
+/// Return the current state of a shared-memory image descriptor.
+pub fn descriptorSnapshot(descriptor: *const ImageDescriptor) ImageDescriptorSnapshot {
     return .{
-        .state = slotStateFromRaw(loadU32(&slot.state, .acquire)),
-        .refs = loadU32(&slot.refs, .acquire),
-        .generation = loadU64(&slot.generation, .acquire),
-        .image_offset = @intCast(loadU64(&slot.image_offset, .acquire)),
-        .image_size = @intCast(loadU64(&slot.image_size, .acquire)),
-        .slot_end = @intCast(loadU64(&slot.slot_end, .acquire)),
+        .state = descriptorStateFromRaw(loadU32(&descriptor.state, .acquire)),
+        .refs = loadU32(&descriptor.refs, .acquire),
+        .generation = loadU64(&descriptor.generation, .acquire),
+        .image_offset = @intCast(loadU64(&descriptor.image_offset, .acquire)),
+        .image_size = @intCast(loadU64(&descriptor.image_size, .acquire)),
+        .allocation_start = @intCast(loadU64(&descriptor.allocation_start, .acquire)),
+        .allocation_end = @intCast(loadU64(&descriptor.allocation_end, .acquire)),
     };
 }
 
-/// Mark a slot as no longer published but not yet known reusable.
-pub fn markSlotRetired(control: *Control, slot_index: u32) void {
-    if (!validSlotIndex(slot_index)) return;
-    storeU32(&control.image_slots[slot_index].state, @intFromEnum(SlotState.retired), .release);
+/// Return the current state of a descriptor addressed by offset.
+pub fn descriptorSnapshotFromOffset(base_ptr: [*]align(1) const u8, total_size: usize, descriptor_offset: usize) ?ImageDescriptorSnapshot {
+    const descriptor = descriptorFromConstOffset(base_ptr, total_size, descriptor_offset) orelse return null;
+    return descriptorSnapshot(descriptor);
 }
 
-/// Mark a slot reusable by a future compiler rebuild.
-pub fn markSlotFree(control: *Control, slot_index: u32) void {
-    if (!validSlotIndex(slot_index)) return;
-    storeU32(&control.image_slots[slot_index].state, @intFromEnum(SlotState.free), .release);
+/// Mark a descriptor as no longer published but not yet known reusable.
+pub fn markDescriptorRetired(descriptor: *ImageDescriptor) void {
+    storeU32(&descriptor.state, @intFromEnum(DescriptorState.retired), .release);
+}
+
+/// Mark a descriptor reusable by a future compiler rebuild.
+pub fn markDescriptorReclaimed(descriptor: *ImageDescriptor) void {
+    storeU32(&descriptor.state, @intFromEnum(DescriptorState.reclaimed), .release);
 }
 
 /// Retain the latest published image while the shim installs it for direct execution.
-pub fn acquirePublishedImage(control: *Control) ?PublishedImage {
+pub fn acquirePublishedImage(control: *Control, base_ptr: [*]align(1) u8, total_size: usize) ?RetainedImage {
     for (0..16) |_| {
         const image = publishedImage(control) orelse return null;
-        if (!validSlotIndex(image.slot_index)) return null;
+        const descriptor = descriptorFromOffset(base_ptr, total_size, image.descriptor_offset) orelse return null;
+        retainDescriptor(descriptor);
 
-        const slot = &control.image_slots[image.slot_index];
-        retainSlot(control, image.slot_index);
-
-        const slot_state = slotStateFromRaw(loadU32(&slot.state, .acquire));
-        const slot_generation = loadU64(&slot.generation, .acquire);
-        const slot_offset = loadU64(&slot.image_offset, .acquire);
-        const slot_size = loadU64(&slot.image_size, .acquire);
+        const snapshot = descriptorSnapshot(descriptor);
         const current = publishedImage(control);
 
-        if (slot_state == .published and
-            slot_generation == image.generation and
-            slot_offset == image.image_offset and
-            slot_size == image.image_size and
+        if (snapshot.state == .published and
+            snapshot.generation == image.generation and
+            snapshot.image_offset == image.image_offset and
+            snapshot.image_size == image.image_size and
             current != null and
             current.?.generation == image.generation and
-            current.?.slot_index == image.slot_index and
+            current.?.descriptor_offset == image.descriptor_offset and
             current.?.image_offset == image.image_offset and
             current.?.image_size == image.image_size)
         {
-            return image;
+            return .{
+                .generation = image.generation,
+                .descriptor_offset = image.descriptor_offset,
+                .descriptor = descriptor,
+                .image_offset = image.image_offset,
+                .image_size = image.image_size,
+            };
         }
 
-        releaseSlot(control, image.slot_index);
+        releaseDescriptor(descriptor);
     }
 
     return null;
 }
 
-/// Retain a slot already known to contain a live installed image.
-pub fn retainSlot(control: *Control, slot_index: u32) void {
-    if (!validSlotIndex(slot_index)) return;
-    const previous_refs = @atomicRmw(u32, &control.image_slots[slot_index].refs, .Add, 1, .acquire);
+/// Retain a descriptor already known to contain a live installed image.
+pub fn retainDescriptor(descriptor: *ImageDescriptor) void {
+    const previous_refs = @atomicRmw(u32, &descriptor.refs, .Add, 1, .acquire);
     if (builtinModeDebug() and previous_refs == std.math.maxInt(u32)) {
-        std.debug.panic("hot reload invariant violated: image slot refcount overflowed", .{});
+        std.debug.panic("hot reload invariant violated: image descriptor refcount overflowed", .{});
     }
 }
 
-/// Release a retained direct-execution image slot.
-pub fn releaseSlot(control: *Control, slot_index: u32) void {
-    if (!validSlotIndex(slot_index)) return;
-    const previous = @atomicRmw(u32, &control.image_slots[slot_index].refs, .Sub, 1, .acq_rel);
+/// Release a retained direct-execution image descriptor.
+pub fn releaseDescriptor(descriptor: *ImageDescriptor) void {
+    const previous = @atomicRmw(u32, &descriptor.refs, .Sub, 1, .acq_rel);
     if (builtinModeDebug() and previous == 0) {
-        std.debug.panic("hot reload invariant violated: released an unreferenced image slot", .{});
+        std.debug.panic("hot reload invariant violated: released an unreferenced image descriptor", .{});
     }
-}
-
-/// Release a ref returned by `acquirePublishedImage`.
-pub fn releaseImage(control: *Control, slot_index: u32) void {
-    releaseSlot(control, slot_index);
 }
 
 /// Publish the host shim's acknowledgement for a generation.
@@ -386,12 +413,12 @@ fn statusFromRaw(raw: u32) Status {
     };
 }
 
-fn slotStateFromRaw(raw: u32) SlotState {
+fn descriptorStateFromRaw(raw: u32) DescriptorState {
     return switch (raw) {
-        @intFromEnum(SlotState.writing) => .writing,
-        @intFromEnum(SlotState.published) => .published,
-        @intFromEnum(SlotState.retired) => .retired,
-        else => .free,
+        @intFromEnum(DescriptorState.writing) => .writing,
+        @intFromEnum(DescriptorState.published) => .published,
+        @intFromEnum(DescriptorState.retired) => .retired,
+        else => .reclaimed,
     };
 }
 
@@ -405,20 +432,32 @@ pub fn acknowledgedStatus(control: *const Control) Status {
     return if (acknowledgement(control)) |ack| ack.status else .none;
 }
 
+fn testDescriptor(base_ptr: [*]align(1) u8, offset: usize) *ImageDescriptor {
+    return @ptrCast(@alignCast(base_ptr + offset));
+}
+
 test "hot reload control publishes and acknowledges generations" {
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
     try std.testing.expect(!initialized(&control));
 
-    init(&control, 512, 4096);
+    const desc0_offset: usize = 512;
+    const desc0 = testDescriptor(base, desc0_offset);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, true);
+    init(&control, desc0_offset, desc0);
     try std.testing.expect(initialized(&control));
     try std.testing.expectEqual(@as(u64, 1), publishedGeneration(&control));
-    try std.testing.expectEqual(@as(usize, 512), imageOffset(&control));
+    try std.testing.expectEqual(@as(usize, 1024), imageOffset(&control));
     try std.testing.expectEqual(@as(usize, 4096), imageSize(&control));
-    try std.testing.expectEqual(@as(u32, 0), publishedImage(&control).?.slot_index);
+    try std.testing.expectEqual(desc0_offset, publishedImage(&control).?.descriptor_offset);
     try std.testing.expectEqual(Status.none, acknowledgedStatus(&control));
 
-    publish(&control, 2, 8192, 2048);
+    const desc1_offset: usize = 2048;
+    const desc1 = testDescriptor(base, desc1_offset);
+    prepareDescriptor(desc1, 2, 8192, 2048, 2048, 12288, true);
+    publishDescriptor(&control, 2, desc1_offset, desc1);
     try std.testing.expectEqual(@as(u64, 2), publishedGeneration(&control));
     try std.testing.expectEqual(@as(usize, 8192), imageOffset(&control));
     try std.testing.expectEqual(@as(usize, 2048), imageSize(&control));
@@ -430,9 +469,11 @@ test "hot reload control publishes and acknowledges generations" {
 
 test "hot reload publication snapshots reject in-progress writes" {
     var control = std.mem.zeroes(Control);
-    init(&control, 512, 4096);
+    control.magic = MAGIC;
+    control.format_version = FORMAT_VERSION;
 
     storeU64(&control.publish_sequence, 3, .release);
+    storeU64(&control.published_descriptor_offset, 512, .release);
     storeU64(&control.image_offset, 8192, .release);
     storeU64(&control.image_size, 16384, .release);
     storeU64(&control.published_generation, 2, .release);
@@ -441,14 +482,15 @@ test "hot reload publication snapshots reject in-progress writes" {
     storeU64(&control.publish_sequence, 4, .release);
     const image = publishedImage(&control).?;
     try std.testing.expectEqual(@as(u64, 2), image.generation);
+    try std.testing.expectEqual(@as(usize, 512), image.descriptor_offset);
     try std.testing.expectEqual(@as(usize, 8192), image.image_offset);
     try std.testing.expectEqual(@as(usize, 16384), image.image_size);
-    try std.testing.expectEqual(@as(u32, 0), image.slot_index);
 }
 
 test "hot reload acknowledgement snapshots reject in-progress writes" {
     var control = std.mem.zeroes(Control);
-    init(&control, 512, 4096);
+    control.magic = MAGIC;
+    control.format_version = FORMAT_VERSION;
 
     storeU64(&control.ack_sequence, 5, .release);
     @atomicStore(u32, &control.status, @intFromEnum(Status.accepted), .release);
@@ -465,31 +507,45 @@ test "hot reload control block fits in shared memory reserved header bytes" {
     try std.testing.expect(@sizeOf(Control) <= @sizeOf(@FieldType(SharedMemoryAllocator.Header, "reserved")));
 }
 
-test "hot reload image slots can be retained and released" {
+test "hot reload image descriptors can be retained and released" {
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
-    init(&control, 512, 4096);
 
-    const retained = acquirePublishedImage(&control).?;
+    const desc0_offset: usize = 512;
+    const desc0 = testDescriptor(base, desc0_offset);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, true);
+    init(&control, desc0_offset, desc0);
+
+    const retained = acquirePublishedImage(&control, base, bytes.len).?;
     try std.testing.expectEqual(@as(u64, 1), retained.generation);
-    try std.testing.expectEqual(@as(u32, 0), retained.slot_index);
-    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 0).?.refs);
+    try std.testing.expectEqual(desc0_offset, retained.descriptor_offset);
+    try std.testing.expectEqual(@as(u32, 1), descriptorSnapshot(desc0).refs);
 
-    releaseImage(&control, retained.slot_index);
-    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.refs);
+    releaseDescriptor(retained.descriptor);
+    try std.testing.expectEqual(@as(u32, 0), descriptorSnapshot(desc0).refs);
 }
 
-test "hot reload image retain rejects slots that stopped being current" {
+test "hot reload image retain rejects descriptors that stopped being current" {
+    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 8192;
+    const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
-    init(&control, 512, 4096);
 
-    setSlotWriting(&control, 1, 2, 4096, 8192, 8192);
-    publishSlot(&control, 2, 1, 4096, 8192, 8192);
-    markSlotRetired(&control, 0);
+    const desc0_offset: usize = 512;
+    const desc0 = testDescriptor(base, desc0_offset);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 4096, true);
+    init(&control, desc0_offset, desc0);
 
-    const retained = acquirePublishedImage(&control).?;
+    const desc1_offset: usize = 4096;
+    const desc1 = testDescriptor(base, desc1_offset);
+    prepareDescriptor(desc1, 2, 4608, 8192, 4096, 8192, true);
+    publishDescriptor(&control, 2, desc1_offset, desc1);
+    markDescriptorRetired(desc0);
+
+    const retained = acquirePublishedImage(&control, base, bytes.len).?;
     try std.testing.expectEqual(@as(u64, 2), retained.generation);
-    try std.testing.expectEqual(@as(u32, 1), retained.slot_index);
-    try std.testing.expectEqual(@as(u32, 0), slotSnapshot(&control, 0).?.refs);
-    try std.testing.expectEqual(@as(u32, 1), slotSnapshot(&control, 1).?.refs);
-    releaseImage(&control, retained.slot_index);
+    try std.testing.expectEqual(desc1_offset, retained.descriptor_offset);
+    try std.testing.expectEqual(@as(u32, 0), descriptorSnapshot(desc0).refs);
+    try std.testing.expectEqual(@as(u32, 1), descriptorSnapshot(desc1).refs);
+    releaseDescriptor(retained.descriptor);
 }

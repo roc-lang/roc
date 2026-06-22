@@ -296,6 +296,19 @@ pub fn requiredCapacity(
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
 ) WriteError!usize {
+    return requiredCapacityFromOffset(page_size, 0, code, entrypoint_inputs, relocations, data_exports);
+}
+
+/// Return the exact allocator offset after serializing this run image starting
+/// from an existing allocation cursor.
+pub fn requiredCapacityFromOffset(
+    page_size: usize,
+    initial_offset: usize,
+    code: []const u8,
+    entrypoint_inputs: []const EntrypointInput,
+    relocations: []const Relocation,
+    data_exports: []const StaticDataExport,
+) WriteError!usize {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
 
     var symbol_names_len: usize = 0;
@@ -329,7 +342,7 @@ pub fn requiredCapacity(
     const function_stub_count = try countReservedFunctionStubsNoAlloc(relocations, data_exports);
     const function_stub_len = try mulNoOverflow(function_stub_count, max_jump_stub_size);
 
-    var capacity: usize = 0;
+    var capacity: usize = initial_offset;
     capacity = try addAllocationCapacity(capacity, @alignOf(Header), @sizeOf(Header));
     capacity = try addAllocationCapacity(capacity, @alignOf(Entrypoint), try mulNoOverflow(entrypoint_inputs.len, @sizeOf(Entrypoint)));
     capacity = try addAllocationCapacity(capacity, @alignOf(RelocationRecord), try mulNoOverflow(relocation_count, @sizeOf(RelocationRecord)));
