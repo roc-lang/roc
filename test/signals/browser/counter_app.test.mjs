@@ -42,6 +42,7 @@ const counter = resolveCounterWasm();
 // node:test treats a non-`false`/`undefined` `skip` (including `null`) as a
 // skip directive, so collapse "no reason" to `false`.
 const skipReason = counter.skip ?? false;
+const retainedCounterHostValues = 3;
 
 async function mountCounter() {
   const { instance } = await WebAssembly.instantiate(counter.bytes, {});
@@ -95,7 +96,7 @@ function commandSnapshot(runtime) {
   });
 }
 
-test("counter.wasm mounts the initial tree with one retained state value", { skip: skipReason }, async () => {
+test("counter.wasm mounts the initial tree with retained signal caches", { skip: skipReason }, async () => {
   const { runtime, root } = await mountCounter();
 
   assert.ok(findByText(root, "h2", "Signals counter"), "heading rendered");
@@ -123,7 +124,7 @@ test("counter.wasm mounts the initial tree with one retained state value", { ski
     { op: Op.appendChild, a: 1, b: 5 },
   ]);
 
-  assert.equal(runtime.liveHostValues(), 1);
+  assert.equal(runtime.liveHostValues(), retainedCounterHostValues);
 });
 
 test("clicking changes the count with exactly one set_text patch", { skip: skipReason }, async () => {
@@ -135,7 +136,7 @@ test("clicking changes the count with exactly one set_text patch", { skip: skipR
   assert.equal(countText(root), "Count: 1");
   assert.equal(runtime.lastCommands.length, 1);
   assert.equal(runtime.lastCommands[0].op, Op.setText);
-  assert.equal(runtime.liveHostValues(), 1);
+  assert.equal(runtime.liveHostValues(), retainedCounterHostValues);
 
   fireEvent(decrement, "click");
   fireEvent(decrement, "click");
@@ -144,13 +145,13 @@ test("clicking changes the count with exactly one set_text patch", { skip: skipR
   assert.equal(runtime.lastCommands[0].op, Op.setText);
 
   // Repeated dispatch never grows the retained host-value gauge.
-  assert.equal(runtime.liveHostValues(), 1);
+  assert.equal(runtime.liveHostValues(), retainedCounterHostValues);
 });
 
 test("unmount clears the DOM and drops every retained host value", { skip: skipReason }, async () => {
   const { runtime, root } = await mountCounter();
   fireEvent(findByText(root, "button", "Increment"), "click");
-  assert.equal(runtime.liveHostValues(), 1);
+  assert.equal(runtime.liveHostValues(), retainedCounterHostValues);
 
   runtime.unmount();
   assert.equal(root.childNodes.length, 0);
@@ -159,5 +160,5 @@ test("unmount clears the DOM and drops every retained host value", { skip: skipR
   // A clean teardown re-mounts without tripping the host's leak assertion.
   runtime.mount();
   assert.equal(countText(root), "Count: 0");
-  assert.equal(runtime.liveHostValues(), 1);
+  assert.equal(runtime.liveHostValues(), retainedCounterHostValues);
 });

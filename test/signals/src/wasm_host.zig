@@ -26,6 +26,14 @@ const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
+const SharedEngine = engine.Engine(WasmCtx);
+const HostSignalCacheSlot = engine.HostSignalCacheSlot;
+const HostSignalBinding = engine.HostSignalBinding;
+const HostSignalRecord = engine.HostSignalRecord;
+const HostSignalRecordPayload = engine.HostSignalRecordPayload;
+const HostSignalToken = engine.HostSignalToken;
+const HostNodeDescriptorStream = engine.HostNodeDescriptorStream;
+const HostSignalEvalResult = engine.HostSignalEvalResult;
 
 const WasmCtx = struct {
     pub const HostValueTypeTag = WasmHostValueTypeTag;
@@ -62,12 +70,86 @@ const WasmCtx = struct {
         return stateByNodeId(node_id).drop;
     }
 
-    pub fn sink(_: anytype) WasmSink {
-        return .{};
+    pub fn sink(ctx: anytype) WasmSink {
+        return .{ .emit = ctx.emit };
     }
 };
 
-const WasmSink = struct {};
+const WasmRenderCtx = struct {
+    emit: bool,
+};
+
+const WasmSink = struct {
+    emit: bool,
+
+    pub fn reset(self: WasmSink) void {
+        if (!self.emit) return;
+        appendCommand(.reset_dom, 0, 0, 0, 0, 0);
+    }
+
+    pub fn appendNode(self: WasmSink, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+        if (!self.emit) return;
+        if (std.mem.eql(u8, tag, "text")) {
+            appendStringCommand(.create_text, toU32(elem_id), "");
+        } else {
+            appendStringCommand(.create_element, toU32(elem_id), tag);
+        }
+        appendCommand(.append_child, toU32(parent_elem_id), toU32(elem_id), 0, 0, 0);
+    }
+
+    pub fn ensureNode(self: WasmSink, elem_id: u64, tag: []const u8) void {
+        if (!self.emit) return;
+        if (std.mem.eql(u8, tag, "text")) {
+            appendStringCommand(.create_text, toU32(elem_id), "");
+        } else {
+            appendStringCommand(.create_element, toU32(elem_id), tag);
+        }
+    }
+
+    pub fn removeNode(self: WasmSink, elem_id: u64) void {
+        if (!self.emit) return;
+        appendCommand(.remove_node, toU32(elem_id), 0, 0, 0, 0);
+    }
+
+    pub fn replaceChildren(self: WasmSink, _: u64, _: []const u64) void {
+        if (self.emit) failHost();
+    }
+
+    pub fn replaceChildrenForMoves(self: WasmSink, _: u64, _: []const u64) void {
+        if (self.emit) failHost();
+    }
+
+    pub fn applyTextField(self: WasmSink, elem_id: u64, field: RenderTextField, value: []const u8) void {
+        if (!self.emit) return;
+        appendStringCommand(field.setOp(), toU32(elem_id), value);
+    }
+
+    pub fn applyBoolField(self: WasmSink, elem_id: u64, field: RenderBoolField, value: bool) void {
+        if (!self.emit) return;
+        appendBoolFieldCommand(field, toU32(elem_id), value);
+    }
+
+    pub fn clearTextField(self: WasmSink, elem_id: u64, field: RenderTextField) void {
+        if (!self.emit) return;
+        appendStringCommand(field.setOp(), toU32(elem_id), "");
+    }
+
+    pub fn clearBoolField(self: WasmSink, elem_id: u64, field: RenderBoolField) void {
+        if (!self.emit) return;
+        appendBoolFieldCommand(field, toU32(elem_id), false);
+    }
+
+    pub fn bindEventKind(self: WasmSink, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
+        if (!self.emit) return;
+        appendCommand(kind.bindOp(), toU32(elem_id), toU32(event_id), 0, 0, 0);
+    }
+
+    pub fn clearEvent(self: WasmSink, _: u64, _: RenderEventKind) void {
+        if (self.emit) failHost();
+    }
+
+    pub fn debugAssertNode(_: WasmSink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64) void {}
+};
 
 comptime {
     const BuildRecord = struct { id: u64 };
@@ -78,9 +160,10 @@ comptime {
     _ = identity_table.NodeIdentity;
     _ = identity_table.DomIdentity;
     _ = keyed_rows.RowPlan.create;
-    _ = engine.Engine(WasmCtx);
+    _ = SharedEngine;
 }
 
+var shared_engine: SharedEngine = .init();
 var host_values: HostValueRegistry = .{};
 var command_buffer: render.Buffer = .{};
 var string_buffer: std.ArrayListUnmanaged(u8) = .empty;
@@ -97,9 +180,6 @@ var roc_host = abi.RocHost{
 var root_elem: ?abi.Elem = null;
 var states: std.ArrayListUnmanaged(HostState) = .empty;
 var active_events: std.ArrayListUnmanaged(ActiveEvent) = .empty;
-var active_text_sinks: std.ArrayListUnmanaged(TextSink) = .empty;
-var active_text_attr_sinks: std.ArrayListUnmanaged(TextAttrSink) = .empty;
-var active_bool_attr_sinks: std.ArrayListUnmanaged(BoolAttrSink) = .empty;
 var next_dom_id: u32 = 1;
 var next_node_id: u64 = 1;
 
@@ -134,77 +214,6 @@ const ActiveEvent = struct {
     payload_tag: HostValueTypeTag,
     payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
-};
-
-const BoundSignalConst = struct {
-    init: abi.RocErasedCallable,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-};
-
-const BoundSignalMap = struct {
-    input: *BoundSignal,
-    transform: abi.RocErasedCallable,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-};
-
-const BoundSignalMap2 = struct {
-    left: *BoundSignal,
-    right: *BoundSignal,
-    transform: abi.RocErasedCallable,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-};
-
-const BoundSignalCombine = struct {
-    children: []*BoundSignal,
-    transform: abi.RocErasedCallable,
-    eq: abi.RocErasedCallable,
-    drop: abi.RocErasedCallable,
-};
-
-const BoundSignal = union(enum) {
-    ref: u64,
-    const_value: BoundSignalConst,
-    map: BoundSignalMap,
-    map2: BoundSignalMap2,
-    combine: BoundSignalCombine,
-};
-
-const TextSink = struct {
-    elem_id: u32,
-    signal: *BoundSignal,
-    read: abi.RocErasedCallable,
-
-    fn deinit(self: *TextSink) void {
-        deinitBoundSignal(self.signal);
-        self.* = undefined;
-    }
-};
-
-const TextAttrSink = struct {
-    elem_id: u32,
-    field: RenderTextField,
-    signal: *BoundSignal,
-    read: abi.RocErasedCallable,
-
-    fn deinit(self: *TextAttrSink) void {
-        deinitBoundSignal(self.signal);
-        self.* = undefined;
-    }
-};
-
-const BoolAttrSink = struct {
-    elem_id: u32,
-    field: RenderBoolField,
-    signal: *BoundSignal,
-    read: abi.RocErasedCallable,
-
-    fn deinit(self: *BoolAttrSink) void {
-        deinitBoundSignal(self.signal);
-        self.* = undefined;
-    }
 };
 
 const ErasedUnitArgs = erased_calls.ErasedUnitArgs;
@@ -393,127 +402,286 @@ const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
 const callErasedHostValueToStr = erased_calls.callErasedHostValueToStr;
 const callErasedHostValueToBool = erased_calls.callErasedHostValueToBool;
 
-fn bindNodeSignal(expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *BoundSignal {
-    const signal = allocator().create(BoundSignal) catch failHost();
-    signal.* = switch (expr.tag) {
-        .Ref => .{ .ref = resolveNodeBinderRef(binder_stack, expr.payload_ref()) },
-        .ConstValue => .{ .const_value = .{
-            .init = expr.payload_const_value()._1,
-            .eq = expr.payload_const_value()._2,
-            .drop = expr.payload_const_value()._3,
-        } },
-        .Map => map: {
-            const payload = expr.payload_map();
-            const input = bindNodeSignal(payload._1.*, binder_stack);
-            break :map .{ .map = .{
-                .input = input,
-                .transform = payload._2,
-                .eq = payload._3,
-                .drop = payload._4,
-            } };
-        },
-        .Map2 => map2: {
-            const payload = expr.payload_map2();
-            const left = bindNodeSignal(payload._1.*, binder_stack);
-            const right = bindNodeSignal(payload._2.*, binder_stack);
-            break :map2 .{ .map2 = .{
-                .left = left,
-                .right = right,
-                .transform = payload._3,
-                .eq = payload._4,
-                .drop = payload._5,
-            } };
-        },
-        .Combine => combine: {
-            const payload = expr.payload_combine();
-            const source_children = payload._1.items();
-            const children = allocator().alloc(*BoundSignal, source_children.len) catch failHost();
-            for (source_children, children) |child, *dest| {
-                dest.* = bindNodeSignal(child, binder_stack);
-            }
-            break :combine .{ .combine = .{
-                .children = children,
-                .transform = payload._2,
-                .eq = payload._3,
-                .drop = payload._4,
-            } };
-        },
-        .IntervalSource, .TaskSource => failHost(),
-    };
-    return signal;
+fn u64SliceContains(items: []const u64, target: u64) bool {
+    for (items) |item| {
+        if (item == target) return true;
+    }
+    return false;
 }
 
-fn deinitBoundSignal(signal: *BoundSignal) void {
-    switch (signal.*) {
-        .ref, .const_value => {},
-        .map => |payload| deinitBoundSignal(payload.input),
+fn validateExistingSignalRecord(record: *HostSignalRecord, expected_tag: std.meta.Tag(HostSignalRecordPayload)) void {
+    if (std.meta.activeTag(record.payload) != expected_tag) failHost();
+}
+
+fn bindNodeSignalExpr(stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *HostSignalRecord {
+    return switch (expr.tag) {
+        .Ref => blk: {
+            const node_id = resolveNodeBinderRef(binder_stack, expr.payload_ref());
+            break :blk HostSignalRecord.init(allocator(), .{ .ref = node_id });
+        },
+        .ConstValue => blk: {
+            const payload = expr.payload_const_value();
+            const token: HostSignalToken = payload._0;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .const_value);
+                break :blk record.retain();
+            }
+
+            const record = HostSignalRecord.init(allocator(), .{ .const_value = .{
+                .token = engine.retainHostSignalToken(token),
+                .init = engine.retainHostCallable(payload._1, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload._2, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload._3, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+        .Map => blk: {
+            const payload = expr.payload_map();
+            const token: HostSignalToken = payload._0;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .map);
+                break :blk record.retain();
+            }
+
+            const input = bindNodeSignalExpr(stream, payload._1.*, binder_stack);
+            const record = HostSignalRecord.init(allocator(), .{ .map = .{
+                .token = engine.retainHostSignalToken(token),
+                .input = input,
+                .transform = engine.retainHostCallable(payload._2, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload._3, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload._4, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+        .Map2 => blk: {
+            const payload = expr.payload_map2();
+            const token: HostSignalToken = payload._0;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .map2);
+                break :blk record.retain();
+            }
+
+            const left = bindNodeSignalExpr(stream, payload._1.*, binder_stack);
+            const right = bindNodeSignalExpr(stream, payload._2.*, binder_stack);
+            const record = HostSignalRecord.init(allocator(), .{ .map2 = .{
+                .token = engine.retainHostSignalToken(token),
+                .left = left,
+                .right = right,
+                .transform = engine.retainHostCallable(payload._3, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload._4, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload._5, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+        .Combine => blk: {
+            const payload = expr.payload_combine();
+            const token: HostSignalToken = payload._0;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .combine);
+                break :blk record.retain();
+            }
+
+            const source_children = payload._1.items();
+            const children = allocator().alloc(*HostSignalRecord, source_children.len) catch failHost();
+            for (source_children, children) |child, *dest| {
+                dest.* = bindNodeSignalExpr(stream, child, binder_stack);
+            }
+            const record = HostSignalRecord.init(allocator(), .{ .combine = .{
+                .token = engine.retainHostSignalToken(token),
+                .children = children,
+                .transform = engine.retainHostCallable(payload._2, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload._3, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload._4, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+        .TaskSource => blk: {
+            const payload = expr.payload_task_source();
+            const token: HostSignalToken = payload.token;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .task_source);
+                break :blk record.retain();
+            }
+
+            abi.increfBox(@ptrCast(payload.payload_tag), 1);
+            const record = HostSignalRecord.init(allocator(), .{ .task_source = .{
+                .token = engine.retainHostSignalToken(token),
+                .name = allocator().dupe(u8, payload.name.asSlice()) catch failHost(),
+                .payload_tag = @ptrCast(payload.payload_tag),
+                .payload_drop = engine.retainHostCallable(payload.payload_drop, &shared_engine.pending_roc_metrics),
+                .initial = engine.retainHostCallable(payload.initial, &shared_engine.pending_roc_metrics),
+                .done = engine.retainHostCallable(payload.done, &shared_engine.pending_roc_metrics),
+                .failed = engine.retainHostCallable(payload.failed, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload.eq, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload.drop, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+        .IntervalSource => blk: {
+            const payload = expr.payload_interval_source();
+            const token: HostSignalToken = payload.token;
+            if (stream.signalRecordByToken(token)) |record| {
+                validateExistingSignalRecord(record, .interval_source);
+                break :blk record.retain();
+            }
+
+            const record = HostSignalRecord.init(allocator(), .{ .interval_source = .{
+                .token = engine.retainHostSignalToken(token),
+                .period_ms = payload.period_ms,
+                .initial = engine.retainHostCallable(payload.initial, &shared_engine.pending_roc_metrics),
+                .tick = engine.retainHostCallable(payload.tick, &shared_engine.pending_roc_metrics),
+                .eq = engine.retainHostCallable(payload.eq, &shared_engine.pending_roc_metrics),
+                .drop = engine.retainHostCallable(payload.drop, &shared_engine.pending_roc_metrics),
+            } });
+            stream.rememberSignalRecord(allocator(), record);
+            break :blk record;
+        },
+    };
+}
+
+fn appendSignalRecordSourceNodeIds(source_node_ids: *std.ArrayListUnmanaged(u64), record: *HostSignalRecord) void {
+    switch (record.payload) {
+        .ref => |node_id| {
+            if (!u64SliceContains(source_node_ids.items, node_id)) {
+                source_node_ids.append(allocator(), node_id) catch failHost();
+            }
+        },
+        .const_value => {},
+        .map => |payload| appendSignalRecordSourceNodeIds(source_node_ids, payload.input),
         .map2 => |payload| {
-            deinitBoundSignal(payload.left);
-            deinitBoundSignal(payload.right);
+            appendSignalRecordSourceNodeIds(source_node_ids, payload.left);
+            appendSignalRecordSourceNodeIds(source_node_ids, payload.right);
         },
         .combine => |payload| {
             for (payload.children) |child| {
-                deinitBoundSignal(child);
+                appendSignalRecordSourceNodeIds(source_node_ids, child);
             }
-            allocator().free(payload.children);
         },
+        .task_source, .interval_source => {},
     }
-    allocator().destroy(signal);
 }
 
-fn boundSignalDropCallable(signal: *const BoundSignal) abi.RocErasedCallable {
-    return switch (signal.*) {
-        .ref => |node_id| stateByNodeId(node_id).drop,
-        .const_value => |payload| payload.drop,
-        .map => |payload| payload.drop,
-        .map2 => |payload| payload.drop,
-        .combine => |payload| payload.drop,
+fn bindNodeSignal(stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
+    const record = bindNodeSignalExpr(stream, expr, binder_stack);
+    var source_node_ids: std.ArrayListUnmanaged(u64) = .empty;
+    appendSignalRecordSourceNodeIds(&source_node_ids, record);
+    return .{
+        .record = record,
+        .source_node_ids = source_node_ids.toOwnedSlice(allocator()) catch failHost(),
     };
 }
 
-fn dropBoundSignalValue(signal: *const BoundSignal, value: HostValue) void {
-    callErasedHostValueToUnit(&roc_host, boundSignalDropCallable(signal), value);
+fn recordDerivedCall() void {
+    shared_engine.recordDerivedCall();
 }
 
-fn evalBoundSignal(signal: *BoundSignal) HostValue {
-    return switch (signal.*) {
-        .ref => |node_id| cloneHostValue(stateByNodeId(node_id).value),
-        .const_value => |payload| callValueInitThunk(&roc_host, payload.init),
-        .map => |payload| blk: {
-            const input = evalBoundSignal(payload.input);
-            defer dropBoundSignalValue(payload.input, input);
-            break :blk callErasedHostValueToHostValue(&roc_host, payload.transform, input);
+fn cloneCachedSignalValue(cache_slot: *const HostSignalCacheSlot) HostValue {
+    return shared_engine.cloneCachedSignalValue(WasmRenderCtx{ .emit = false }, cache_slot);
+}
+
+fn replaceSignalExprCacheAndClone(cache_slot: *HostSignalCacheSlot, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
+    cache_slot.replace(&roc_host, &shared_engine.pending_roc_metrics, value, eq, drop);
+    return cloneCachedSignalValue(cache_slot);
+}
+
+fn hostSignalRecordDropCallable(record: *const HostSignalRecord) abi.RocErasedCallable {
+    return shared_engine.hostSignalRecordDropCallable(WasmRenderCtx{ .emit = false }, record);
+}
+
+fn dropHostSignalRecordValue(record: *const HostSignalRecord, value: HostValue) void {
+    shared_engine.dropHostSignalRecordValue(WasmRenderCtx{ .emit = false }, &roc_host, record, value);
+}
+
+fn evalHostSignalRecord(record: *HostSignalRecord) HostValue {
+    switch (record.payload) {
+        .ref => |node_id| return cloneHostValue(stateByNodeId(node_id).value),
+        .const_value => |*payload| {
+            const value = callValueInitThunk(&roc_host, payload.init);
+            return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
         },
-        .map2 => |payload| blk: {
-            const left = evalBoundSignal(payload.left);
-            defer dropBoundSignalValue(payload.left, left);
-            const right = evalBoundSignal(payload.right);
-            defer dropBoundSignalValue(payload.right, right);
-            break :blk callErasedHostValueHostValueToHostValue(&roc_host, payload.transform, left, right);
+        .map => |*payload| {
+            const input = evalHostSignalRecord(payload.input);
+            defer dropHostSignalRecordValue(payload.input, input);
+            recordDerivedCall();
+            const value = callErasedHostValueToHostValue(&roc_host, payload.transform, input);
+            return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
         },
-        .combine => |payload| blk: {
+        .map2 => |*payload| {
+            const left = evalHostSignalRecord(payload.left);
+            defer dropHostSignalRecordValue(payload.left, left);
+            const right = evalHostSignalRecord(payload.right);
+            defer dropHostSignalRecordValue(payload.right, right);
+            recordDerivedCall();
+            const value = callErasedHostValueHostValueToHostValue(&roc_host, payload.transform, left, right);
+            return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
+        },
+        .combine => |*payload| {
             var values: std.ArrayListUnmanaged(HostValue) = .empty;
             errdefer {
                 for (payload.children[0..values.items.len], values.items) |child, value| {
-                    dropBoundSignalValue(child, value);
+                    dropHostSignalRecordValue(child, value);
                 }
                 values.deinit(allocator());
             }
 
             for (payload.children) |child| {
-                values.append(allocator(), evalBoundSignal(child)) catch failHost();
+                values.append(allocator(), evalHostSignalRecord(child)) catch failHost();
             }
 
             const list = HostValueList.fromSlice(values.items, &roc_host);
             defer list.decref(&roc_host);
+            recordDerivedCall();
             const value = callErasedHostValueListToHostValue(&roc_host, payload.transform, list);
             for (payload.children, values.items) |child, child_value| {
-                dropBoundSignalValue(child, child_value);
+                dropHostSignalRecordValue(child, child_value);
             }
             values.deinit(allocator());
-            break :blk value;
+            return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
         },
-    };
+        .task_source => |*payload| {
+            switch (payload.cached_value) {
+                .present => return cloneCachedSignalValue(&payload.cached_value),
+                .absent => {
+                    const value = callValueInitThunk(&roc_host, payload.initial);
+                    return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
+                },
+            }
+        },
+        .interval_source => |*payload| {
+            switch (payload.cached_value) {
+                .present => return cloneCachedSignalValue(&payload.cached_value),
+                .absent => {
+                    const value = callValueInitThunk(&roc_host, payload.initial);
+                    return replaceSignalExprCacheAndClone(&payload.cached_value, value, payload.eq, payload.drop);
+                },
+            }
+        },
+    }
+}
+
+fn evalHostSignalBinding(signal: *HostSignalBinding) HostValue {
+    return evalHostSignalRecord(signal.record);
+}
+
+fn evalDirtyHostSignalBinding(signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+    return shared_engine.evalDirtyHostSignalBinding(WasmRenderCtx{ .emit = true }, &roc_host, signal, dirty_source_node_ids, dirty_generation);
+}
+
+fn hostSignalBindingEqCallable(signal: *const HostSignalBinding) abi.RocErasedCallable {
+    return shared_engine.hostSignalBindingEqCallable(WasmRenderCtx{ .emit = false }, signal);
+}
+
+fn hostSignalBindingDropCallable(signal: *const HostSignalBinding) abi.RocErasedCallable {
+    return shared_engine.hostSignalBindingDropCallable(WasmRenderCtx{ .emit = false }, signal);
+}
+
+fn updateDirtySignalCache(cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
+    return shared_engine.updateDirtySignalCache(&roc_host, cache_slot, value);
 }
 
 fn appendState(node_id: u64, state: abi.__AnonStruct77) void {
@@ -525,27 +693,62 @@ fn appendState(node_id: u64, state: abi.__AnonStruct77) void {
     }) catch failHost();
 }
 
-fn collectNodeAttr(elem_id: u32, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
+fn emitInitialSignalTextAttr(desc: *engine.HostNodeSignalTextAttrDesc) void {
+    const value = evalHostSignalBinding(&desc.signal);
+    const text = callErasedHostValueToStr(&roc_host, desc.read, value);
+    defer text.decref(&roc_host);
+    _ = shared_engine.applyRenderTextField(WasmRenderCtx{ .emit = false }, desc.elem_id, desc.field, text.asSlice());
+    appendStringCommand(desc.field.setOp(), toU32(desc.elem_id), text.asSlice());
+    desc.cached_value.replace(&roc_host, &shared_engine.pending_roc_metrics, value, hostSignalBindingEqCallable(&desc.signal), hostSignalBindingDropCallable(&desc.signal));
+}
+
+fn emitInitialSignalBoolAttr(desc: *engine.HostNodeSignalBoolAttrDesc) void {
+    const value = evalHostSignalBinding(&desc.signal);
+    const bool_value = callErasedHostValueToBool(&roc_host, desc.read, value);
+    _ = shared_engine.applyRenderBoolField(WasmRenderCtx{ .emit = false }, desc.elem_id, desc.field, bool_value);
+    appendBoolFieldCommand(desc.field, toU32(desc.elem_id), bool_value);
+    desc.cached_value.replace(&roc_host, &shared_engine.pending_roc_metrics, value, hostSignalBindingEqCallable(&desc.signal), hostSignalBindingDropCallable(&desc.signal));
+}
+
+fn emitInitialSignalTextNode(desc: *engine.HostNodeSignalTextNodeDesc) void {
+    const value = evalHostSignalBinding(&desc.signal);
+    const text = callErasedHostValueToStr(&roc_host, desc.read, value);
+    defer text.decref(&roc_host);
+    _ = shared_engine.applyRenderTextField(WasmRenderCtx{ .emit = false }, desc.elem_id, .text, text.asSlice());
+    appendStringCommand(.create_text, toU32(desc.elem_id), text.asSlice());
+    appendCommand(.append_child, toU32(desc.parent_elem_id), toU32(desc.elem_id), 0, 0, 0);
+    desc.cached_value.replace(&roc_host, &shared_engine.pending_roc_metrics, value, hostSignalBindingEqCallable(&desc.signal), hostSignalBindingDropCallable(&desc.signal));
+}
+
+fn collectNodeAttr(stream: *HostNodeDescriptorStream, elem_id: u32, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
     switch (attr.tag) {
         .StaticText => {
             const payload = attr.payload_static_text();
-            appendStringCommand(renderTextFieldFromAbi(payload.field).setOp(), elem_id, payload.value.asSlice());
+            const field = renderTextFieldFromAbi(payload.field);
+            stream.appendStaticTextAttr(allocator(), elem_id, field, payload.value.asSlice());
+            _ = shared_engine.applyRenderTextField(WasmRenderCtx{ .emit = false }, elem_id, field, payload.value.asSlice());
+            appendStringCommand(field.setOp(), elem_id, payload.value.asSlice());
         },
         .SignalText => {
             const payload = attr.payload_signal_text();
-            const signal = bindNodeSignal(payload.signal.*, binder_stack);
             const field = renderTextFieldFromAbi(payload.field);
-            emitTextAttrSink(elem_id, field, signal, payload.read);
+            const signal = bindNodeSignal(stream, payload.signal.*, binder_stack);
+            stream.appendSignalTextAttr(allocator(), &roc_host, &shared_engine.pending_roc_metrics, elem_id, field, signal, payload.read);
+            emitInitialSignalTextAttr(&stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1]);
         },
         .StaticBool => {
             const payload = attr.payload_static_bool();
-            appendBoolFieldCommand(renderBoolFieldFromAbi(payload.field), elem_id, payload.value);
+            const field = renderBoolFieldFromAbi(payload.field);
+            stream.appendStaticBoolAttr(allocator(), elem_id, field, payload.value);
+            _ = shared_engine.applyRenderBoolField(WasmRenderCtx{ .emit = false }, elem_id, field, payload.value);
+            appendBoolFieldCommand(field, elem_id, payload.value);
         },
         .SignalBool => {
             const payload = attr.payload_signal_bool();
-            const signal = bindNodeSignal(payload.signal.*, binder_stack);
             const field = renderBoolFieldFromAbi(payload.field);
-            emitBoolAttrSink(elem_id, field, signal, payload.read);
+            const signal = bindNodeSignal(stream, payload.signal.*, binder_stack);
+            stream.appendSignalBoolAttr(allocator(), &roc_host, &shared_engine.pending_roc_metrics, elem_id, field, signal, payload.read);
+            emitInitialSignalBoolAttr(&stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1]);
         },
         .OnEvent => {
             const payload = attr.payload_on_event();
@@ -569,104 +772,79 @@ fn collectNodeAttr(elem_id: u32, attr: abi.NodeAttr, binder_stack: []const HostB
     }
 }
 
-fn emitTextAttrSink(elem_id: u32, field: RenderTextField, signal: *BoundSignal, read: abi.RocErasedCallable) void {
-    const value = evalBoundSignal(signal);
-    defer dropBoundSignalValue(signal, value);
-    const text = callErasedHostValueToStr(&roc_host, read, value);
+fn updateSignalTextField(elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) void {
+    const result = evalDirtyHostSignalBinding(signal, dirty_source_node_ids, dirty_generation);
+    if (!result.changed) {
+        callErasedHostValueToUnit(&roc_host, hostSignalBindingDropCallable(signal), result.value);
+        return;
+    }
+    if (!updateDirtySignalCache(cache_slot, result.value)) return;
+    const text = callErasedHostValueToStr(&roc_host, read, result.value);
     defer text.decref(&roc_host);
-    appendStringCommand(field.setOp(), elem_id, text.asSlice());
-    active_text_attr_sinks.append(allocator(), .{
-        .elem_id = elem_id,
-        .field = field,
-        .signal = signal,
-        .read = read,
-    }) catch failHost();
+    _ = shared_engine.applyRenderTextField(WasmRenderCtx{ .emit = true }, elem_id, field, text.asSlice());
 }
 
-fn emitBoolAttrSink(elem_id: u32, field: RenderBoolField, signal: *BoundSignal, read: abi.RocErasedCallable) void {
-    const value = evalBoundSignal(signal);
-    defer dropBoundSignalValue(signal, value);
-    appendBoolFieldCommand(field, elem_id, callErasedHostValueToBool(&roc_host, read, value));
-    active_bool_attr_sinks.append(allocator(), .{
-        .elem_id = elem_id,
-        .field = field,
-        .signal = signal,
-        .read = read,
-    }) catch failHost();
+fn updateSignalBoolField(elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) void {
+    const result = evalDirtyHostSignalBinding(signal, dirty_source_node_ids, dirty_generation);
+    if (!result.changed) {
+        callErasedHostValueToUnit(&roc_host, hostSignalBindingDropCallable(signal), result.value);
+        return;
+    }
+    if (!updateDirtySignalCache(cache_slot, result.value)) return;
+    _ = shared_engine.applyRenderBoolField(WasmRenderCtx{ .emit = true }, elem_id, field, callErasedHostValueToBool(&roc_host, read, result.value));
 }
 
-fn emitTextSink(parent_elem_id: u32, signal: *BoundSignal, read: abi.RocErasedCallable) void {
-    const elem_id = nextDomId();
-    const value = evalBoundSignal(signal);
-    defer dropBoundSignalValue(signal, value);
-    const text = callErasedHostValueToStr(&roc_host, read, value);
-    defer text.decref(&roc_host);
-    appendStringCommand(.create_text, elem_id, text.asSlice());
-    appendCommand(.append_child, parent_elem_id, elem_id, 0, 0, 0);
-    active_text_sinks.append(allocator(), .{
-        .elem_id = elem_id,
-        .signal = signal,
-        .read = read,
-    }) catch failHost();
+fn updateSignalSinks(dirty_source_node_ids: []const u64, dirty_generation: u64) void {
+    for (shared_engine.active_stream.signal_text_nodes.items) |*desc| {
+        updateSignalTextField(desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation);
+    }
+    for (shared_engine.active_stream.signal_text_attrs.items) |*desc| {
+        updateSignalTextField(desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation);
+    }
+    for (shared_engine.active_stream.signal_bool_attrs.items) |*desc| {
+        updateSignalBoolField(desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation);
+    }
 }
 
-fn updateTextSink(sink: *TextSink) void {
-    const value = evalBoundSignal(sink.signal);
-    defer dropBoundSignalValue(sink.signal, value);
-    const text = callErasedHostValueToStr(&roc_host, sink.read, value);
-    defer text.decref(&roc_host);
-    appendStringCommand(.set_text, sink.elem_id, text.asSlice());
-}
-
-fn updateTextAttrSink(sink: *TextAttrSink) void {
-    const value = evalBoundSignal(sink.signal);
-    defer dropBoundSignalValue(sink.signal, value);
-    const text = callErasedHostValueToStr(&roc_host, sink.read, value);
-    defer text.decref(&roc_host);
-    appendStringCommand(sink.field.setOp(), sink.elem_id, text.asSlice());
-}
-
-fn updateBoolAttrSink(sink: *BoolAttrSink) void {
-    const value = evalBoundSignal(sink.signal);
-    defer dropBoundSignalValue(sink.signal, value);
-    appendBoolFieldCommand(sink.field, sink.elem_id, callErasedHostValueToBool(&roc_host, sink.read, value));
-}
-
-fn updateSignalSinks() void {
-    for (active_text_sinks.items) |*sink| updateTextSink(sink);
-    for (active_text_attr_sinks.items) |*sink| updateTextAttrSink(sink);
-    for (active_bool_attr_sinks.items) |*sink| updateBoolAttrSink(sink);
-}
-
-fn collectElem(elem: abi.Elem, parent_elem_id: u32, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
+fn collectElem(stream: *HostNodeDescriptorStream, elem: abi.Elem, parent_elem_id: u32, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
     switch (elem.tag) {
         .Element => {
             const payload = elem.payload_element();
             const elem_id = nextDomId();
+            _ = stream.appendElement(allocator(), elem_id, parent_elem_id, 0, payload.tag.asSlice());
+            shared_engine.appendRenderNode(WasmRenderCtx{ .emit = false }, elem_id, parent_elem_id, payload.tag.asSlice());
             appendStringCommand(.create_element, elem_id, payload.tag.asSlice());
             for (payload.attrs.items()) |attr| {
-                collectNodeAttr(elem_id, attr, binder_stack.items);
+                collectNodeAttr(stream, elem_id, attr, binder_stack.items);
             }
             appendCommand(.append_child, parent_elem_id, elem_id, 0, 0, 0);
             for (payload.children.items()) |child| {
-                collectElem(child, elem_id, binder_stack);
+                collectElem(stream, child, elem_id, binder_stack);
             }
         },
         .Text => {
             const elem_id = nextDomId();
-            appendStringCommand(.create_text, elem_id, elem.payload_text().asSlice());
+            const text = elem.payload_text().asSlice();
+            stream.appendTextNode(allocator(), elem_id, parent_elem_id, 0, text);
+            shared_engine.appendRenderNode(WasmRenderCtx{ .emit = false }, elem_id, parent_elem_id, "text");
+            _ = shared_engine.applyRenderTextField(WasmRenderCtx{ .emit = false }, elem_id, .text, text);
+            appendStringCommand(.create_text, elem_id, text);
             appendCommand(.append_child, parent_elem_id, elem_id, 0, 0, 0);
         },
         .TextSignal => {
             const payload = elem.payload_text_signal();
-            emitTextSink(parent_elem_id, bindNodeSignal(payload.signal.*, binder_stack.items), payload.read);
+            const elem_id = nextDomId();
+            const signal = bindNodeSignal(stream, payload.signal.*, binder_stack.items);
+            stream.appendSignalTextNode(allocator(), &roc_host, &shared_engine.pending_roc_metrics, elem_id, parent_elem_id, 0, signal, payload.read);
+            shared_engine.appendRenderNode(WasmRenderCtx{ .emit = false }, elem_id, parent_elem_id, "text");
+            emitInitialSignalTextNode(&stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1]);
         },
         .State => {
             const payload = elem.payload_state();
             const node_id = nextNodeId();
             appendState(node_id, payload);
             binder_stack.append(allocator(), .{ .token = payload.binder, .node_id = node_id }) catch failHost();
-            collectElem(payload.child.*, parent_elem_id, binder_stack);
+            collectElem(stream, payload.child.*, parent_elem_id, binder_stack);
             _ = binder_stack.pop() orelse failHost();
         },
         .Cleanup, .Component, .Each, .OnChange, .When => failHost(),
@@ -674,12 +852,8 @@ fn collectElem(elem: abi.Elem, parent_elem_id: u32, binder_stack: *std.ArrayList
 }
 
 fn clearActiveRuntime() void {
-    for (active_text_sinks.items) |*sink| sink.deinit();
-    active_text_sinks.clearRetainingCapacity();
-    for (active_text_attr_sinks.items) |*sink| sink.deinit();
-    active_text_attr_sinks.clearRetainingCapacity();
-    for (active_bool_attr_sinks.items) |*sink| sink.deinit();
-    active_bool_attr_sinks.clearRetainingCapacity();
+    shared_engine.active_stream.deinit(allocator(), &roc_host, &shared_engine.pending_roc_metrics);
+    shared_engine.deinitRenderCache(WasmRenderCtx{ .emit = false });
     active_events.clearRetainingCapacity();
 
     for (states.items) |*state| state.deinit();
@@ -711,7 +885,8 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
     defer callErasedHostValueToUnit(&roc_host, state.drop, current);
     const next = callErasedHostValueHostValueToHostValue(&roc_host, event.transform, current, payload);
     if (updateStateValue(state, next)) {
-        updateSignalSinks();
+        const dirty_generation = shared_engine.nextDirtySignalGeneration();
+        updateSignalSinks(&.{event.target_node_id}, dirty_generation);
     }
 }
 
@@ -795,10 +970,11 @@ export fn roc_ui_mount() callconv(.c) void {
     root_elem = root_box.*;
     abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), &dropMovedElemPayload, &roc_host);
 
+    shared_engine.resetRenderTree(WasmRenderCtx{ .emit = false });
     appendCommand(.reset_dom, 0, 0, 0, 0, 0);
     var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
     defer binder_stack.deinit(allocator());
-    collectElem(root_elem.?, 0, &binder_stack);
+    collectElem(&shared_engine.active_stream, root_elem.?, 0, &binder_stack);
 }
 
 export fn roc_ui_event(event_id: u32, payload_kind_id: u32, payload_ptr: usize, payload_len: usize, bool_value: u32) callconv(.c) void {
