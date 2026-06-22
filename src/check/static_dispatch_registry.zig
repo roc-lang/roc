@@ -1113,9 +1113,13 @@ fn sourceCallableHasHashShape(
     const resolved = store.resolveVar(fn_var);
     const func = resolved.desc.content.unwrapFunc() orelse return false;
     const args = store.sliceVars(func.args);
-    // `to_hash : self, Hasher -> Hasher` always has two arguments. The method
-    // name has already been matched, so arity is the distinguishing shape: the
-    // second argument and the return are both the threaded Hasher.
+    // `to_hash : self, Hasher -> Hasher` always has two arguments. Arity is the
+    // only check needed here: the `to_hash` method name has already been matched
+    // and this is only reached for an anonymous-structural dispatcher with no
+    // method owner, so the constraint is the derived to_hash signature. (Unlike
+    // the equality-shape check we cannot tie the second arg to the return — the
+    // two `Hasher` occurrences are distinct vars, not a shared one like is_eq's
+    // `self`, and there is no builtin-Hasher owner to match against.)
     return args.len == 2;
 }
 
