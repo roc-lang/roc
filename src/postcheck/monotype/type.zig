@@ -282,18 +282,12 @@ pub const Store = struct {
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
                     writeBytes(hasher, @tagName(owner));
-                    if (owner == .fields) {
-                        writeBytes(hasher, "fields-backing");
-                        if (named.backing) |backing| {
-                            self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
-                        } else {
-                            writeBytes(hasher, "none");
-                        }
-                    }
                 } else {
                     writeBytes(hasher, "not-builtin");
                 }
                 self.writeTypeSpanDigest(name_store, hasher, named.args, visiting);
+                self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
+                self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
             },
             .record => |fields| {
                 writeBytes(hasher, "record");
@@ -349,6 +343,46 @@ pub const Store = struct {
         writeU32(hasher, @intCast(values.len));
         for (values) |child| {
             self.writeTypeDigest(name_store, hasher, child, visiting);
+        }
+    }
+
+    fn writeNamedBackingDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        backing: ?NamedBacking,
+        visiting: *DigestVisiting,
+    ) void {
+        writeBytes(hasher, "backing");
+        if (backing) |named_backing| {
+            writeBytes(hasher, @tagName(named_backing.use));
+            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting);
+        } else {
+            writeBytes(hasher, "none");
+        }
+    }
+
+    fn writeDeclaredOrderDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        declared_order: Span,
+        visiting: *DigestVisiting,
+    ) void {
+        writeBytes(hasher, "declared_order");
+        const entries = self.declaredFieldSpan(declared_order);
+        writeU32(hasher, @intCast(entries.len));
+        for (entries) |entry| {
+            switch (entry) {
+                .named => |field_name| {
+                    writeBytes(hasher, "named");
+                    writeBytes(hasher, name_store.recordFieldLabelText(field_name));
+                },
+                .padding => |padding_ty| {
+                    writeBytes(hasher, "padding");
+                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting);
+                },
+            }
         }
     }
 };
@@ -541,4 +575,86 @@ test "monotype digest treats aliases as their backing" {
     const nominal_digest = store.typeDigest(&name_store, nominal);
     try std.testing.expect(std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
     try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], nominal_digest.bytes[0..]));
+}
+
+test "monotype named type digest includes backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Wrap");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+
+    const named_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const named_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .inspectable },
+    } });
+
+    const i64_digest = store.typeDigest(&name_store, named_i64);
+    const str_digest = store.typeDigest(&name_store, named_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "monotype named type digest includes declared field order" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Pair");
+    const field_a = try name_store.internRecordFieldLabel("a");
+    const field_b = try name_store.internRecordFieldLabel("b");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const fields = try store.addFields(&.{
+        .{ .name = field_a, .ty = i64_ty },
+        .{ .name = field_b, .ty = i64_ty },
+    });
+    const backing = try store.add(.{ .record = fields });
+    const order_ab = try store.addDeclaredFields(&.{
+        .{ .named = field_a },
+        .{ .named = field_b },
+    });
+    const order_ba = try store.addDeclaredFields(&.{
+        .{ .named = field_b },
+        .{ .named = field_a },
+    });
+
+    const named_ab = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = backing, .use = .inspectable },
+        .declared_order = order_ab,
+    } });
+    const named_ba = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = backing, .use = .inspectable },
+        .declared_order = order_ba,
+    } });
+
+    const ab_digest = store.typeDigest(&name_store, named_ab);
+    const ba_digest = store.typeDigest(&name_store, named_ba);
+    try std.testing.expect(!std.mem.eql(u8, ab_digest.bytes[0..], ba_digest.bytes[0..]));
 }

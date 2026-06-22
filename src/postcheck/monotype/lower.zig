@@ -8100,7 +8100,16 @@ const BodyContext = struct {
     }
 
     fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
-        if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call)) |lowered| return lowered;
+        return try self.lowerCallAtType(checked_ret_ty, call, null);
+    }
+
+    fn lowerCallAtType(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: anytype,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!LoweredCall {
+        if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_ty)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
@@ -8109,11 +8118,16 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(source_fn_ty, self, checked_ret_ty, call.args);
+            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
             const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
             const callee = try self.fnTemplateForDirectCallWithMono(target, source_fn_ty, source_fn_key, mono_fn_ty);
             const fn_data = self.builder.functionShape(mono_fn_ty, "checked direct call target had a non-function type");
             try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
+            if (expected_ret_ty) |expected| {
+                if (!self.sameType(expected, fn_data.ret)) {
+                    Common.invariant("checked direct call result type differed from its expected Monotype type");
+                }
+            }
             return .{
                 .ret_ty = fn_data.ret,
                 .data = .{ .call_proc = .{
@@ -8129,9 +8143,15 @@ const BodyContext = struct {
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
-            break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
+            break :fn_ty try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
         };
         const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, fn_data.ret)) {
+                Common.invariant("checked indirect call result type differed from its expected Monotype type");
+            }
+            try self.constrainTypeToMono(checked_ret_ty, expected);
+        }
         return .{
             .ret_ty = fn_data.ret,
             .data = .{ .call_value = .{
@@ -8186,13 +8206,14 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
+        expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LoweredCall {
         if (self.checkedExprDiverges(call.func)) {
-            return try self.lowerDivergentCallOperand(checked_ret_ty, call.func);
+            return try self.lowerDivergentCallOperand(checked_ret_ty, call.func, expected_ret_ty);
         }
         for (call.args) |arg| {
             if (self.checkedExprDiverges(arg)) {
-                return try self.lowerDivergentCallOperand(checked_ret_ty, arg);
+                return try self.lowerDivergentCallOperand(checked_ret_ty, arg, expected_ret_ty);
             }
         }
         return null;
@@ -8202,8 +8223,10 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         operand: checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
-        const ret_ty = try self.lowerType(checked_ret_ty);
+        const ret_ty = expected_ret_ty orelse try self.lowerType(checked_ret_ty);
+        if (expected_ret_ty != null) try self.constrainTypeToMono(checked_ret_ty, ret_ty);
         return .{
             .ret_ty = ret_ty,
             .data = try self.lowerDivergentExprDataAtType(operand, ret_ty),
@@ -9460,7 +9483,7 @@ const BodyContext = struct {
             .call => |call| {
                 if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| return lowered;
                 try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerCall(expr.ty, call);
+                const lowered = try self.lowerCallAtType(expr.ty, call, ty);
                 if (!self.sameType(ty, lowered.ret_ty)) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
@@ -9578,7 +9601,38 @@ const BodyContext = struct {
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
         if (expected.kind != actual.kind) return false;
         if (expected.builtin_owner != actual.builtin_owner) return false;
-        return self.sameTypeSpans(expected.args, actual.args, depth);
+        if (!self.sameTypeSpans(expected.args, actual.args, depth)) return false;
+        if (!self.sameNamedBacking(expected.backing, actual.backing, depth)) return false;
+        return self.sameDeclaredOrder(expected.declared_order, actual.declared_order, depth);
+    }
+
+    fn sameNamedBacking(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+        if (expected == null and actual == null) return true;
+        if (expected == null or actual == null) return false;
+
+        const expected_backing = expected.?;
+        const actual_backing = actual.?;
+        if (expected_backing.use != actual_backing.use) return false;
+        return self.sameTypeInner(expected_backing.ty, actual_backing.ty, depth);
+    }
+
+    fn sameDeclaredOrder(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_entries = self.builder.program.types.declaredFieldSpan(expected);
+        const actual_entries = self.builder.program.types.declaredFieldSpan(actual);
+        if (expected_entries.len != actual_entries.len) return false;
+        for (expected_entries, actual_entries) |expected_entry, actual_entry| {
+            switch (expected_entry) {
+                .named => |expected_name| switch (actual_entry) {
+                    .named => |actual_name| if (expected_name != actual_name) return false,
+                    .padding => return false,
+                },
+                .padding => |expected_ty| switch (actual_entry) {
+                    .named => return false,
+                    .padding => |actual_ty| if (!self.sameTypeInner(expected_ty, actual_ty, depth)) return false,
+                },
+            }
+        }
+        return true;
     }
 
     fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
