@@ -77,6 +77,9 @@ history.
   updates moved indexes after `swapRemove`, so allocation free/realloc removal is
   O(1). Runtime metrics expose `allocs_this_event` and
   `deallocs_this_event` through specs and the benchmark CSV.
+- `run-signals-bench` includes all six representative signal apps:
+  `ops_dashboard`, `checkout_wizard`, `kanban_board`, `identity_stress`,
+  `component_composition`, and `async_effects`.
 
 ## Foundation Gaps (the current frontier)
 
@@ -133,20 +136,19 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   whole-site path and should get a named moves-plus-local-splices path before it
   is treated as complete.
 
-### G-F5 — Telemetry and benchmark-gate coverage (High)
+### G-F5 — Telemetry and benchmark-gate coverage (High, representative gate done)
 
-- **Problem:** the current counters measure emitted patches and recomputed nodes
-  but not scanned nodes or key compares;
-  the benchmark gate (`run-signals-bench`) excludes `identity_stress`,
-  `component_composition`, and `async_effects` — the apps that exercise structural
-  churn, reorder, and async lifecycle.
-- **Fix:** land the remaining new counters (G-F2, G-F3) and the CSV columns for
-  them; flip `bench = true` for the three excluded apps with explicit
-  regression thresholds. Keep timing as corroborating CSV evidence only — never
-  a gate, since a timing-only check can pass while real work grows.
+- **Status:** `stream_nodes_scanned`, `each_key_compares`, per-event allocation
+  counters, and render command counters are spec-visible runtime metrics and are
+  present in the benchmark CSV. `run-signals-bench` now builds and replays all
+  six representative apps, including `identity_stress`, `component_composition`,
+  and `async_effects`.
 - **Spec-vs-CSV split:** scaling invariants go in `expect_metric_delta`
   assertions; timing/aggregate evidence stays CSV-only (see `DESIGN.md` →
   Metrics).
+- **Remaining:** the generated large-N app and long-session leak experiment
+  still need to extend the benchmark/spec surface beyond the six representative
+  fixtures.
 
 ### G-F6 — Foundation coverage apps and assertions (Medium, lands alongside the fixes)
 

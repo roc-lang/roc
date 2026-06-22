@@ -2670,19 +2670,19 @@ pub fn build(b: *std.Build) void {
             .exe_name = "signals-identity-stress",
             .source = "test/signals/apps/identity_stress.roc",
             .spec = "test/signals/apps/identity_stress.txt",
-            .bench = false,
+            .bench = true,
         },
         .{
             .exe_name = "signals-component-composition",
             .source = "test/signals/apps/component_composition.roc",
             .spec = "test/signals/apps/component_composition.txt",
-            .bench = false,
+            .bench = true,
         },
         .{
             .exe_name = "signals-async-effects",
             .source = "test/signals/apps/async_effects.roc",
             .spec = "test/signals/apps/async_effects.txt",
-            .bench = false,
+            .bench = true,
         },
     };
 
