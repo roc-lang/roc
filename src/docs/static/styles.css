@@ -374,6 +374,39 @@ section p {
 padding: 0px 16px;
 }
 
+/* Language reference articles reuse the module-page chrome and layout. These
+   rules give the converted Markdown block elements (headings, lists, tables,
+   code blocks) the same horizontal rhythm as the surrounding paragraphs. */
+.langref-article h5,
+.langref-article h6 {
+  padding: 0px 16px;
+}
+
+.langref-article ul,
+.langref-article ol {
+  margin: 12px 0;
+  padding-left: 40px;
+}
+
+.langref-article li {
+  margin: 4px 0;
+}
+
+.langref-article li > ul,
+.langref-article li > ol {
+  margin: 4px 0;
+}
+
+.langref-article pre {
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.langref-article table {
+  border-collapse: collapse;
+  margin: 16px;
+}
+
 #sidebar-nav {
     grid-column-start: sidebar;
     grid-column-end: main-content;

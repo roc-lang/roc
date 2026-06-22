@@ -7,8 +7,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const DocModel = @import("DocModel.zig");
+const render_markdown = @import("render_markdown.zig");
 const collections = @import("collections");
 const DocType = DocModel.DocType;
+
+/// Synthetic `data-module-name` used for the Language Reference sidebar entry,
+/// chosen so it cannot collide with a real module name.
+const langref_sidebar_id = "__lang_ref__";
 
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
@@ -125,6 +130,10 @@ const RenderContext = struct {
     /// `current_source_path`. Used to translate a byte offset within
     /// the doc into a 1-based source line for broken-link diagnostics.
     active_doc: *ActiveDoc,
+    /// The loaded language-reference articles, when `--with-lang-ref` is used.
+    /// When set, a "Language Reference" section is added to the sidebar and the
+    /// articles are rendered as additional pages under `langref/`.
+    langref: ?*const render_markdown.LangRef = null,
 
     pub const ActiveDoc = struct {
         /// Full doc-comment string currently being walked.
@@ -387,6 +396,7 @@ pub fn renderPackageDocs(
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
+    langref: ?*const render_markdown.LangRef,
 ) anyerror!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
@@ -401,6 +411,7 @@ pub fn renderPackageDocs(
     defer ctx.deinit(gpa);
     ctx.broken_links = broken_links_out;
     ctx.broken_links_gpa = if (broken_links_out != null) gpa else null;
+    ctx.langref = langref;
 
     // Write static assets
     try writeStaticAssets(io, output_dir);
@@ -422,6 +433,70 @@ pub fn renderPackageDocs(
         }
         ctx.leaveModule();
     }
+
+    // Language Reference articles (rendered into a `langref/` subdirectory).
+    if (langref) |lr| {
+        try writeLangRefPages(&ctx, gpa, io, output_dir, lr);
+    }
+}
+
+/// Writes each langref article as a page under `langref/`: the README becomes
+/// `langref/index.html` (the section landing page) and every other article
+/// becomes `langref/<slug>.html`. All pages share the same `../` asset base.
+fn writeLangRefPages(
+    ctx: *const RenderContext,
+    gpa: Allocator,
+    io: std.Io,
+    dir: std.Io.Dir,
+    langref: *const render_markdown.LangRef,
+) anyerror!void {
+    dir.createDirPath(io, "langref") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    var sub_dir = try dir.openDir(io, "langref", .{});
+    defer sub_dir.close(io);
+
+    for (langref.articles) |*article| {
+        const file_name = if (article.is_index) "index.html" else try std.fmt.allocPrint(gpa, "{s}.html", .{article.slug});
+        defer if (!article.is_index) gpa.free(file_name);
+        try writeLangRefArticlePage(ctx, gpa, io, sub_dir, langref, article, file_name);
+    }
+}
+
+fn writeLangRefArticlePage(
+    ctx: *const RenderContext,
+    gpa: Allocator,
+    io: std.Io,
+    dir: std.Io.Dir,
+    langref: *const render_markdown.LangRef,
+    article: *const render_markdown.Article,
+    file_name: []const u8,
+) anyerror!void {
+    const file = try dir.createFile(io, file_name, .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var bw = file.writer(io, &buf);
+    const w = &bw.interface;
+
+    // Page title comes from the article's first heading; fall back to its slug.
+    var title_buf: [256]u8 = undefined;
+    const plain_title = render_markdown.titlePlainText(gpa, article) catch null;
+    defer if (plain_title) |t| gpa.free(t);
+    const title = std.fmt.bufPrint(&title_buf, "{s} Docs", .{plain_title orelse article.slug}) catch (plain_title orelse article.slug);
+
+    // All langref pages live one level deep (langref/…), so assets are at "../".
+    const base = "../";
+    try writeHtmlHead(w, title, base);
+    try writeBodyOpen(w);
+    try renderSidebar(w, ctx, gpa, base);
+
+    try writeMainOpen(w, ctx, gpa, base);
+    try render_markdown.renderArticleBody(w, gpa, langref.articles, article);
+    try writeFooter(w);
+    try w.writeAll("    </main>\n");
+    try writeBodyClose(w);
+    try bw.interface.flush();
 }
 
 fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) anyerror!void {
@@ -1113,9 +1188,53 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll("                </li>\n");
     }
 
+    if (ctx.langref) |lr| {
+        try renderLangRefSidebar(w, gpa, lr, base);
+    }
+
     try w.writeAll("            </ul>\n");
     try w.writeAll("        </div>\n");
     try w.writeAll("    </nav>\n");
+}
+
+/// Renders the "Language Reference" sidebar section: an expandable entry (open
+/// by default) whose landing link points at `langref/` (the README) and whose
+/// sub-entries link to each article page.
+fn renderLangRefSidebar(
+    w: Writer,
+    gpa: Allocator,
+    langref: *const render_markdown.LangRef,
+    base: []const u8,
+) (Allocator.Error || error{WriteFailed})!void {
+    // Links to langref pages are always `<base>langref/…`, because `base`
+    // resolves to the site root from the current page and every langref page
+    // lives directly under `langref/`.
+    try w.writeAll("                <li class=\"sidebar-entry\">\n");
+    try w.writeAll("                    <a class=\"sidebar-module-link active\" data-module-name=\"");
+    try w.writeAll(langref_sidebar_id);
+    try w.writeAll("\" href=\"");
+    try writeHtmlEscaped(w, base);
+    try w.writeAll("langref/\">");
+    try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+    try w.writeAll("<span>Language Reference</span></a>\n");
+
+    try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+    for (langref.articles) |*article| {
+        if (article.is_index) continue; // the README is the section landing page
+        const plain_title = render_markdown.titlePlainText(gpa, article) catch null;
+        defer if (plain_title) |t| gpa.free(t);
+
+        try w.writeAll("                        <li><a href=\"");
+        try writeHtmlEscaped(w, base);
+        try w.writeAll("langref/");
+        // Slugs contain only filename-safe characters, but escape defensively.
+        try writeHtmlEscaped(w, article.slug);
+        try w.writeAll(".html\">");
+        try writeHtmlEscaped(w, plain_title orelse article.slug);
+        try w.writeAll("</a></li>\n");
+    }
+    try w.writeAll("                    </ul>\n");
+    try w.writeAll("                </li>\n");
 }
 
 fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
@@ -2006,7 +2125,7 @@ test "writeDocRefHref reports broken shorthand refs" {
         broken_links.deinit(gpa);
     }
 
-    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links);
+    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links, null);
 
     // Exactly the `[div_by]` ref should be flagged. It sits on the third
     // line of the doc, which started at source line 41 → expected line 43.

@@ -8,12 +8,14 @@
 pub const DocModel = @import("DocModel.zig");
 pub const extract = @import("extract.zig");
 pub const render_html = @import("render_html.zig");
+pub const render_markdown = @import("render_markdown.zig");
 pub const render_type = @import("render_type.zig");
 
 test "docs tests" {
     std.testing.refAllDecls(@import("DocModel.zig"));
     std.testing.refAllDecls(@import("extract.zig"));
     std.testing.refAllDecls(@import("render_html.zig"));
+    std.testing.refAllDecls(@import("render_markdown.zig"));
     std.testing.refAllDecls(@import("render_type.zig"));
 }
 
