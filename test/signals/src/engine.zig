@@ -27,6 +27,7 @@ pub const RenderBoolField = render.BoolField;
 pub const RenderEventKind = render.EventKind;
 
 pub const HostValue = u64;
+pub const HostValueList = abi.RocListWith(HostValue, false);
 
 pub const RuntimeMetrics = struct {
     active_graph_records_rebuilt: u64,
@@ -135,6 +136,11 @@ pub fn verifyCtx(comptime Ctx: type) void {
         "RegistryOps",
         "Metrics",
         "zeroMetrics",
+        "allocator",
+        "cloneHostValue",
+        "stateValueByNodeId",
+        "stateEqCallable",
+        "stateDropCallable",
     }) |decl_name| {
         if (!@hasDecl(Ctx, decl_name)) {
             @compileError("engine Ctx is missing " ++ decl_name);
@@ -151,6 +157,26 @@ pub const NativeCtx = struct {
 
     pub fn zeroMetrics() Metrics {
         return zeroRuntimeMetrics();
+    }
+
+    pub fn allocator(ctx: anytype) std.mem.Allocator {
+        return ctx.gpa.allocator();
+    }
+
+    pub fn cloneHostValue(ctx: anytype, value: HostValue) HostValue {
+        return ctx.cloneHostValue(value);
+    }
+
+    pub fn stateValueByNodeId(ctx: anytype, node_id: u64) HostValue {
+        return ctx.stateValueByNodeId(node_id);
+    }
+
+    pub fn stateEqCallable(ctx: anytype, node_id: u64) abi.RocErasedCallable {
+        return ctx.stateEqCallable(node_id);
+    }
+
+    pub fn stateDropCallable(ctx: anytype, node_id: u64) abi.RocErasedCallable {
+        return ctx.stateDropCallable(node_id);
     }
 };
 
@@ -281,6 +307,11 @@ pub const HostSignalCacheSlot = union(enum) {
             .present => |cached| .{ .present = cached.cloneRetained(ctx, metrics) },
         };
     }
+};
+
+pub const HostSignalEvalResult = struct {
+    value: HostValue,
+    changed: bool,
 };
 
 pub const HostSignalConstRecord = struct {
@@ -1853,6 +1884,290 @@ pub fn Engine(comptime Ctx: type) type {
             const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
             self.sortActiveSignalRecordIdsByRank(record_ids);
             return record_ids;
+        }
+
+        pub fn recordDerivedCall(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.derived_calls_into_roc, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordSignalPrune(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.propagation_prunes, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn cloneCachedSignalValue(self: *Self, ctx: anytype, cache_slot: *const HostSignalCacheSlot) HostValue {
+            _ = self;
+            return switch (cache_slot.*) {
+                .absent => @panic("cached signal expression value was requested before initialization"),
+                .present => |cached| Ctx.cloneHostValue(ctx, cached.value),
+            };
+        }
+
+        pub fn updateDirtySignalExprCache(self: *Self, ctx: anytype, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) HostSignalEvalResult {
+            switch (cache_slot.*) {
+                .absent => @panic("dirty signal expression was evaluated before its initial value was cached"),
+                .present => |*cached| {
+                    const values_equal = cached.valueEquals(roc_host, value);
+                    if (values_equal) {
+                        cached.dropIncoming(roc_host, value);
+                        self.recordSignalPrune();
+                        return .{ .value = Ctx.cloneHostValue(ctx, cached.value), .changed = false };
+                    }
+
+                    cached.replaceValue(roc_host, value);
+                    return .{ .value = Ctx.cloneHostValue(ctx, cached.value), .changed = true };
+                },
+            }
+        }
+
+        pub fn updateDirtySignalCache(self: *Self, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
+            switch (cache_slot.*) {
+                .absent => @panic("dirty signal expression was evaluated before its initial value was cached"),
+                .present => |*cached| {
+                    const values_equal = cached.valueEquals(roc_host, value);
+                    if (values_equal) {
+                        cached.dropIncoming(roc_host, value);
+                        self.recordSignalPrune();
+                        return false;
+                    }
+
+                    cache_slot.replaceValue(roc_host, value);
+                    return true;
+                },
+            }
+        }
+
+        pub fn cloneMemoizedDirtySignalResult(self: *Self, ctx: anytype, record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
+            if (record.last_dirty_generation != dirty_generation) return null;
+
+            return switch (record.payload) {
+                .ref => null,
+                .const_value => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+                .map => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+                .map2 => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+                .combine => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+                .task_source => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+                .interval_source => |*payload| .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_changed,
+                },
+            };
+        }
+
+        pub fn rememberDirtySignalResult(_: *Self, record: *HostSignalRecord, dirty_generation: u64, result: HostSignalEvalResult) HostSignalEvalResult {
+            record.last_dirty_generation = dirty_generation;
+            record.last_dirty_changed = result.changed;
+            return result;
+        }
+
+        pub fn hostSignalRecordEqCallable(_: *Self, ctx: anytype, record: *const HostSignalRecord) abi.RocErasedCallable {
+            return switch (record.payload) {
+                .ref => |node_id| Ctx.stateEqCallable(ctx, node_id),
+                .const_value => |payload| payload.eq,
+                .map => |payload| payload.eq,
+                .map2 => |payload| payload.eq,
+                .combine => |payload| payload.eq,
+                .task_source => |payload| payload.eq,
+                .interval_source => |payload| payload.eq,
+            };
+        }
+
+        pub fn hostSignalBindingEqCallable(self: *Self, ctx: anytype, signal: *const HostSignalBinding) abi.RocErasedCallable {
+            return self.hostSignalRecordEqCallable(ctx, signal.record);
+        }
+
+        pub fn hostSignalRecordDropCallable(_: *Self, ctx: anytype, record: *const HostSignalRecord) abi.RocErasedCallable {
+            return switch (record.payload) {
+                .ref => |node_id| Ctx.stateDropCallable(ctx, node_id),
+                .const_value => |payload| payload.drop,
+                .map => |payload| payload.drop,
+                .map2 => |payload| payload.drop,
+                .combine => |payload| payload.drop,
+                .task_source => |payload| payload.drop,
+                .interval_source => |payload| payload.drop,
+            };
+        }
+
+        pub fn hostSignalBindingDropCallable(self: *Self, ctx: anytype, signal: *const HostSignalBinding) abi.RocErasedCallable {
+            return self.hostSignalRecordDropCallable(ctx, signal.record);
+        }
+
+        pub fn dropHostSignalRecordValue(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
+            erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalRecordDropCallable(ctx, record), value);
+        }
+
+        pub fn evalDirtyHostSignalRecord(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+            if (dirty_generation == 0) @panic("dirty signal evaluation used generation 0");
+            if (self.cloneMemoizedDirtySignalResult(ctx, record, dirty_generation)) |result| return result;
+
+            switch (record.payload) {
+                .ref => |node_id| return .{
+                    .value = Ctx.stateValueByNodeId(ctx, node_id),
+                    .changed = u64SliceContains(dirty_source_node_ids, node_id),
+                },
+                .const_value => |*payload| return self.rememberDirtySignalResult(record, dirty_generation, .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = false,
+                }),
+                .map => |*payload| {
+                    const input = self.evalDirtyHostSignalRecord(ctx, roc_host, payload.input, dirty_source_node_ids, dirty_generation);
+                    defer self.dropHostSignalRecordValue(ctx, roc_host, payload.input, input.value);
+                    if (!input.changed) {
+                        return self.rememberDirtySignalResult(record, dirty_generation, .{ .value = self.cloneCachedSignalValue(ctx, &payload.cached_value), .changed = false });
+                    }
+
+                    self.recordDerivedCall();
+                    const value = erased_calls.callErasedHostValueToHostValue(roc_host, payload.transform, input.value);
+                    return self.rememberDirtySignalResult(record, dirty_generation, self.updateDirtySignalExprCache(ctx, roc_host, &payload.cached_value, value));
+                },
+                .map2 => |*payload| {
+                    const left = self.evalDirtyHostSignalRecord(ctx, roc_host, payload.left, dirty_source_node_ids, dirty_generation);
+                    defer self.dropHostSignalRecordValue(ctx, roc_host, payload.left, left.value);
+                    const right = self.evalDirtyHostSignalRecord(ctx, roc_host, payload.right, dirty_source_node_ids, dirty_generation);
+                    defer self.dropHostSignalRecordValue(ctx, roc_host, payload.right, right.value);
+                    if (!left.changed and !right.changed) {
+                        return self.rememberDirtySignalResult(record, dirty_generation, .{ .value = self.cloneCachedSignalValue(ctx, &payload.cached_value), .changed = false });
+                    }
+
+                    self.recordDerivedCall();
+                    const value = erased_calls.callErasedHostValueHostValueToHostValue(roc_host, payload.transform, left.value, right.value);
+                    return self.rememberDirtySignalResult(record, dirty_generation, self.updateDirtySignalExprCache(ctx, roc_host, &payload.cached_value, value));
+                },
+                .combine => |*payload| {
+                    const allocator = Ctx.allocator(ctx);
+                    var values: std.ArrayListUnmanaged(HostValue) = .empty;
+                    errdefer {
+                        for (payload.children[0..values.items.len], values.items) |child, value| {
+                            self.dropHostSignalRecordValue(ctx, roc_host, child, value);
+                        }
+                        values.deinit(allocator);
+                    }
+
+                    var any_changed = false;
+                    for (payload.children) |child| {
+                        const child_result = self.evalDirtyHostSignalRecord(ctx, roc_host, child, dirty_source_node_ids, dirty_generation);
+                        any_changed = any_changed or child_result.changed;
+                        values.append(allocator, child_result.value) catch @panic("out of memory");
+                    }
+
+                    if (!any_changed) {
+                        for (payload.children, values.items) |child, value| {
+                            self.dropHostSignalRecordValue(ctx, roc_host, child, value);
+                        }
+                        values.deinit(allocator);
+                        return self.rememberDirtySignalResult(record, dirty_generation, .{ .value = self.cloneCachedSignalValue(ctx, &payload.cached_value), .changed = false });
+                    }
+
+                    const list = HostValueList.fromSlice(values.items, roc_host);
+                    defer list.decref(roc_host);
+                    self.recordDerivedCall();
+                    const value = erased_calls.callErasedHostValueListToHostValue(roc_host, payload.transform, list);
+                    for (payload.children, values.items) |child, child_value| {
+                        self.dropHostSignalRecordValue(ctx, roc_host, child, child_value);
+                    }
+                    values.deinit(allocator);
+                    return self.rememberDirtySignalResult(record, dirty_generation, self.updateDirtySignalExprCache(ctx, roc_host, &payload.cached_value, value));
+                },
+                .task_source => |*payload| return self.rememberDirtySignalResult(record, dirty_generation, .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_generation == dirty_generation and record.last_dirty_changed,
+                }),
+                .interval_source => |*payload| return self.rememberDirtySignalResult(record, dirty_generation, .{
+                    .value = self.cloneCachedSignalValue(ctx, &payload.cached_value),
+                    .changed = record.last_dirty_generation == dirty_generation and record.last_dirty_changed,
+                }),
+            }
+        }
+
+        pub fn evalDirtyHostSignalBinding(self: *Self, ctx: anytype, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+            return self.evalDirtyHostSignalRecord(ctx, roc_host, signal.record, dirty_source_node_ids, dirty_generation);
+        }
+
+        pub fn propagateDirtyActiveSignals(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
+            const dirty_record_ids = self.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
+            defer allocator.free(dirty_record_ids);
+            return self.propagateDirtyActiveSignalRecordIds(ctx, roc_host, allocator, dirty_record_ids, dirty_source_node_ids, dirty_generation);
+        }
+
+        pub fn propagateDirtyActiveSignalRecordIds(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_record_ids: []const u64, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
+            var changed_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer changed_record_ids.deinit(allocator);
+
+            for (dirty_record_ids) |record_id| {
+                const record = self.active_signal_graph.items[@intCast(record_id)].record;
+                const result = self.evalDirtyHostSignalRecord(ctx, roc_host, record, dirty_source_node_ids, dirty_generation);
+                if (result.changed) {
+                    changed_record_ids.append(allocator, record_id) catch @panic("out of memory");
+                }
+                self.dropHostSignalRecordValue(ctx, roc_host, record, result.value);
+            }
+
+            return changed_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
+        }
+
+        pub fn collectDirtyStructuralSignals(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) []HostDirtyStructuralSignal {
+            var dirty_structural_signals: std.ArrayListUnmanaged(HostDirtyStructuralSignal) = .empty;
+            errdefer dirty_structural_signals.deinit(allocator);
+
+            for (changed_record_ids) |record_id| {
+                const route_index: usize = @intCast(record_id);
+                if (route_index >= self.active_structural_signal_routes.items.len) continue;
+
+                for (self.active_structural_signal_routes.items[route_index].items) |route| {
+                    switch (route.kind) {
+                        .when => {
+                            const desc = &self.active_stream.whens.items[route.index];
+                            const result = self.evalDirtyHostSignalBinding(ctx, roc_host, &desc.condition, dirty_source_node_ids, dirty_generation);
+                            if (!result.changed) {
+                                erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, &desc.condition), result.value);
+                                continue;
+                            }
+                            const active_branch: HostScopeBranch = if (erased_calls.callErasedHostValueToBool(roc_host, desc.read, result.value)) .true_branch else .false_branch;
+                            if (self.updateDirtySignalCache(roc_host, &desc.cached_value, result.value)) {
+                                dirty_structural_signals.append(allocator, .{
+                                    .kind = .when,
+                                    .node_id = desc.node_id,
+                                    .branch = active_branch,
+                                }) catch @panic("out of memory");
+                            }
+                        },
+                        .each => {
+                            const desc = &self.active_stream.eaches.items[route.index];
+                            const result = self.evalDirtyHostSignalBinding(ctx, roc_host, &desc.items, dirty_source_node_ids, dirty_generation);
+                            if (!result.changed) {
+                                erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, &desc.items), result.value);
+                                continue;
+                            }
+                            if (self.updateDirtySignalCache(roc_host, &desc.cached_value, result.value)) {
+                                dirty_structural_signals.append(allocator, .{
+                                    .kind = .each,
+                                    .node_id = desc.node_id,
+                                }) catch @panic("out of memory");
+                            }
+                        },
+                    }
+                }
+            }
+
+            return dirty_structural_signals.toOwnedSlice(allocator) catch @panic("out of memory");
         }
 
         pub fn stateIndexByNodeId(self: *Self, node_id: u64) ?usize {

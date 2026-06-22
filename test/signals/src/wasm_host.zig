@@ -36,6 +36,31 @@ const WasmCtx = struct {
     pub fn zeroMetrics() Metrics {
         return .{};
     }
+
+    pub fn allocator(_: anytype) std.mem.Allocator {
+        return std.heap.wasm_allocator;
+    }
+
+    pub fn cloneHostValue(_: anytype, value: HostValue) HostValue {
+        return host_values.clone(std.heap.wasm_allocator, value, registryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    pub fn stateValueByNodeId(_: anytype, node_id: u64) HostValue {
+        const state = stateByNodeId(node_id);
+        return host_values.clone(std.heap.wasm_allocator, state.value, registryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    pub fn stateEqCallable(_: anytype, node_id: u64) abi.RocErasedCallable {
+        return stateByNodeId(node_id).eq;
+    }
+
+    pub fn stateDropCallable(_: anytype, node_id: u64) abi.RocErasedCallable {
+        return stateByNodeId(node_id).drop;
+    }
 };
 
 comptime {
