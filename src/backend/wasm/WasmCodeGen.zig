@@ -805,10 +805,21 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitProcLocal(args[1]);
             const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(str_ptr);
-            const fields = try self.loadRocStrFields(str_ptr);
+            // Decode the string SSO-aware: a small string stores its bytes inline
+            // and its length in the high bits of the last byte, so a flat field
+            // load would read garbage. emitExtractStrPtrLen yields the correct
+            // (ptr, len) for both small and heap strings, matching every other
+            // backend's str hashing/equality and keeping cross-backend hashes equal.
+            const str_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const str_len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitExtractStrPtrLen(str_ptr, str_ptr_local, str_len_local);
 
             try self.emitHasherState(args[0]);
-            try self.emitRocStrFields(fields);
+            try self.emitLocalGet(str_ptr_local);
+            try self.emitLocalGet(str_len_local);
+            // The host import ignores capacity; pass the decoded length as a filler
+            // so the call shape stays (hasher, ptr, len, cap).
+            try self.emitLocalGet(str_len_local);
             try self.emitBuiltinCall(.hasher_write_str, self.hasher_write_str_import);
             try self.emitHasherRecordFromI64();
         },

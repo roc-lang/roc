@@ -18098,7 +18098,6 @@ pub const CompileTimeRootTable = struct {
         checked_types: *const CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
-        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CompileTimeRootTable {
         const checked_bodies = checked_body_builder.storePtr();
         var roots = std.ArrayList(CompileTimeRoot).empty;
@@ -18219,20 +18218,18 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
-        for (source_nodes.statements, 0..) |reached, raw| {
-            if (!reached) continue;
-            const statement_idx: CIR.Statement.Idx = @enumFromInt(@as(u32, @intCast(raw)));
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const stmt = module_env.store.getStatement(statement_idx);
             if (stmt != .s_expect) continue;
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .expect,
-                .source = .{ .statement = statement_idx },
-                .pattern = null,
-                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
-                .payload = .expect,
-            });
+            try collectExpectRoot(
+                &roots,
+                allocator,
+                module,
+                checked_types,
+                checked_bodies,
+                statement_idx,
+                stmt.s_expect.body,
+            );
         }
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
@@ -18306,6 +18303,49 @@ pub const CompileTimeRootTable = struct {
         checked_type: CheckedTypeId,
         payload: CompileTimeRootPayload,
     };
+
+    /// Collect a single `expect` statement as a standalone compile-time root, then
+    /// recurse into its body when that body is a block: nested `expect` statements
+    /// that appear directly in an enclosing `expect`'s block body are themselves
+    /// standalone test roots (issue #9733). Crucially, we never descend into lambda
+    /// bodies or into ordinary value blocks that are not an `expect`'s body, so inline
+    /// assertions that close over enclosing local bindings are not over-collected.
+    fn collectExpectRoot(
+        roots: *std.ArrayList(CompileTimeRoot),
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypePublication,
+        checked_bodies: *const CheckedBodyStore,
+        statement_idx: CIR.Statement.Idx,
+        body_expr: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        try appendCompileTimeRoot(roots, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .expect,
+            .source = .{ .statement = statement_idx },
+            .pattern = null,
+            .expr = checkedExprIdForSource(checked_bodies, body_expr),
+            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(body_expr)),
+            .payload = .expect,
+        });
+
+        const module_env = module.moduleEnvConst();
+        const body = module_env.store.getExpr(body_expr);
+        if (body != .e_block) return;
+        for (module_env.store.sliceStatements(body.e_block.stmts)) |nested_idx| {
+            const nested_stmt = module_env.store.getStatement(nested_idx);
+            if (nested_stmt != .s_expect) continue;
+            try collectExpectRoot(
+                roots,
+                allocator,
+                module,
+                checked_types,
+                checked_bodies,
+                nested_idx,
+                nested_stmt.s_expect.body,
+            );
+        }
+    }
 
     fn appendCompileTimeRoot(
         roots: *std.ArrayList(CompileTimeRoot),
@@ -24789,7 +24829,6 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
-        &source_nodes,
     );
     errdefer compile_time_roots.deinit(allocator);
 
@@ -25310,7 +25349,6 @@ fn expectProvidedExportKind(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
-        &source_nodes,
     );
     defer compile_time_roots.deinit(allocator);
 

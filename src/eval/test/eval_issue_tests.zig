@@ -277,6 +277,18 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(99.0)" },
     },
     .{
+        // A small (SSO) string key exercises the wasm backend's str hashing path
+        // (hasher_write_str), which must decode small-string inline storage the
+        // same way every other backend does, so cross-backend hashes stay equal
+        // and the key round-trips on every backend (incl. wasm).
+        .name = "issue 9725: small-string Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert("ab", 99).get("ab")
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
         // The structural `to_hash` derivation generalizes beyond records: a tuple
         // key must work the same way, hashing each element in order.
         .name = "issue 9725: tuple as a Dict key round-trips",
