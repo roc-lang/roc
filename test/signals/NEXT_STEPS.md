@@ -221,9 +221,12 @@ The open questions (O1–O9) referenced below are defined in
   the host-independent render ops, command counts, metrics accumulator, and
   fixed-width command-buffer record. `native_host.zig` consumes those shared
   types, and `wasm_host.zig` exposes an empty command-buffer surface for the
-  future browser sink. Remaining G-B0 work is the actual engine extraction
-  (scheduler/scope/node-table/keyed-diff logic) out of the native simulated-DOM
-  coupling.
+  future browser sink. Second extraction: `src/signal_graph.zig` owns active
+  signal graph node shape, dependent-edge mutation, reachable-dependent
+  traversal, and rank sorting; `native_host.zig` consumes it and `wasm_host.zig`
+  instantiates it during build so wasm32 breakage is caught. Remaining G-B0 work
+  is extracting the scope/node-table/keyed-diff logic and then having both hosts
+  drive the same engine with different render sinks.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 

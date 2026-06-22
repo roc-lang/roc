@@ -48,8 +48,14 @@ rollup, metrics accumulator, and fixed-width command-buffer record shape. The
 native host consumes the shared counters; the wasm host exposes an empty command
 buffer surface that the future browser render sink will fill.
 
+`../src/signal_graph.zig` owns the active graph node shape, dependent-edge
+mutation, reachable-dependent traversal, and rank sorting. The native host
+drives it today; the wasm host instantiates it at build time so the shared graph
+primitive stays wasm-safe while the rest of the engine is extracted.
+
 Run the guard with:
 
 ```sh
 zig test test/signals/src/render_commands.zig
+zig test test/signals/src/signal_graph.zig
 ```

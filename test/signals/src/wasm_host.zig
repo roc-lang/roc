@@ -7,9 +7,15 @@
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
+const signal_graph = @import("signal_graph.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
+
+comptime {
+    const BuildRecord = struct { id: u64 };
+    _ = signal_graph.Node(BuildRecord);
+}
 
 const HostValueCell = struct {
     box: abi.RocBox,

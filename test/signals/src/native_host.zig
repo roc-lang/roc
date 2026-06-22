@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
+const signal_graph = @import("signal_graph.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -624,11 +625,7 @@ const HostSignalRecordTokenEntry = struct {
     record: *HostSignalRecord,
 };
 
-const HostActiveSignalGraphNode = struct {
-    record: *HostSignalRecord,
-    rank: u64 = 0,
-    dependents: []u64 = &.{},
-};
+const HostActiveSignalGraphNode = signal_graph.Node(HostSignalRecord);
 
 const HostTextFieldDescriptorIndexes = struct {
     text: ?usize = null,
@@ -1914,6 +1911,15 @@ fn u64SliceContains(items: []const u64, target: u64) bool {
     return false;
 }
 
+fn failSignalGraphError(err: anyerror, unknown_node_message: []const u8, missing_dependent_message: []const u8) noreturn {
+    switch (err) {
+        error.OutOfMemory => std.process.exit(1),
+        error.UnknownNode => failHost(unknown_node_message),
+        error.MissingDependent => failHost(missing_dependent_message),
+        else => failHost("signal graph operation failed"),
+    }
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -2523,40 +2529,21 @@ const HostEnv = struct {
     }
 
     fn appendActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
-        const allocator = self.gpa.allocator();
-        const input_index: usize = @intCast(input_record_id);
-        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent referenced an unknown input record");
-        const dependents = &self.active_signal_graph.items[input_index].dependents;
-        if (!u64SliceContains(dependents.*, dependent_record_id)) {
-            const previous_len = dependents.*.len;
-            dependents.* = allocator.realloc(dependents.*, previous_len + 1) catch std.process.exit(1);
-            dependents.*[previous_len] = dependent_record_id;
-        }
+        signal_graph.appendDependent(HostSignalRecord, self.gpa.allocator(), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| {
+            failSignalGraphError(err, "active signal dependent referenced an unknown input record", "active signal dependent insertion missed its edge");
+        };
     }
 
     fn removeActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
-        const input_index: usize = @intCast(input_record_id);
-        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent removal referenced an unknown input record");
-        const dependents = &self.active_signal_graph.items[input_index].dependents;
-        for (dependents.*, 0..) |existing_id, index| {
-            if (existing_id != dependent_record_id) continue;
-            std.mem.copyForwards(u64, dependents.*[index..], dependents.*[index + 1 ..]);
-            dependents.* = self.gpa.allocator().realloc(dependents.*, dependents.*.len - 1) catch std.process.exit(1);
-            return;
-        }
-        failHost("active signal dependent removal missed its edge");
+        signal_graph.removeDependent(HostSignalRecord, self.gpa.allocator(), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| {
+            failSignalGraphError(err, "active signal dependent removal referenced an unknown input record", "active signal dependent removal missed its edge");
+        };
     }
 
     fn replaceActiveSignalDependentId(self: *HostEnv, input_record_id: u64, old_dependent_id: u64, new_dependent_id: u64) void {
-        const input_index: usize = @intCast(input_record_id);
-        if (input_index >= self.active_signal_graph.items.len) failHost("active signal dependent rewrite referenced an unknown input record");
-        const dependents = self.active_signal_graph.items[input_index].dependents;
-        for (dependents) |*existing_id| {
-            if (existing_id.* != old_dependent_id) continue;
-            existing_id.* = new_dependent_id;
-            return;
-        }
-        failHost("active signal dependent rewrite missed its edge");
+        signal_graph.replaceDependent(HostSignalRecord, self.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id) catch |err| {
+            failSignalGraphError(err, "active signal dependent rewrite referenced an unknown input record", "active signal dependent rewrite missed its edge");
+        };
     }
 
     fn appendActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64, record_id: u64) void {
@@ -3065,46 +3052,27 @@ const HostEnv = struct {
     }
 
     fn activeSignalRank(self: *HostEnv, record_id: u64) u64 {
-        if (record_id >= self.active_signal_graph.items.len) failHost("active signal record id has no graph node");
-        return self.active_signal_graph.items[@intCast(record_id)].rank;
+        return signal_graph.rank(HostSignalRecord, self.active_signal_graph.items, record_id) catch |err| {
+            failSignalGraphError(err, "active signal record id has no graph node", "active signal rank read missed a dependent edge");
+        };
     }
 
     fn dependentActiveSignalRecordIds(self: *HostEnv, record_id: u64) []const u64 {
-        if (record_id >= self.active_signal_graph.items.len) failHost("active signal record id has no dependent table");
-        return self.active_signal_graph.items[@intCast(record_id)].dependents;
+        return signal_graph.dependentIds(HostSignalRecord, self.active_signal_graph.items, record_id) catch |err| {
+            failSignalGraphError(err, "active signal record id has no dependent table", "active signal dependent table read missed a dependent edge");
+        };
     }
 
     fn appendActiveSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
-        if (!u64SliceContains(record_ids.items, record_id)) {
-            record_ids.append(allocator, record_id) catch std.process.exit(1);
-        }
-
-        var index: usize = 0;
-        while (index < record_ids.items.len) : (index += 1) {
-            const current_record_id = record_ids.items[index];
-            for (self.dependentActiveSignalRecordIds(current_record_id)) |dependent_record_id| {
-                if (!u64SliceContains(record_ids.items, dependent_record_id)) {
-                    record_ids.append(allocator, dependent_record_id) catch std.process.exit(1);
-                }
-            }
-        }
+        signal_graph.appendReachableDependents(HostSignalRecord, allocator, self.active_signal_graph.items, record_ids, record_id) catch |err| {
+            failSignalGraphError(err, "active signal dependent traversal referenced an unknown record", "active signal dependent traversal missed an edge");
+        };
     }
 
     fn sortActiveSignalRecordIdsByRank(self: *HostEnv, record_ids: []u64) void {
-        var index: usize = 1;
-        while (index < record_ids.len) : (index += 1) {
-            const value = record_ids[index];
-            const value_rank = self.activeSignalRank(value);
-            var insert_index = index;
-            while (insert_index > 0) {
-                const previous = record_ids[insert_index - 1];
-                const previous_rank = self.activeSignalRank(previous);
-                if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
-                record_ids[insert_index] = previous;
-                insert_index -= 1;
-            }
-            record_ids[insert_index] = value;
-        }
+        signal_graph.sortIdsByRank(HostSignalRecord, self.active_signal_graph.items, record_ids) catch |err| {
+            failSignalGraphError(err, "active signal rank sort referenced an unknown record", "active signal rank sort missed an edge");
+        };
     }
 
     fn dirtyActiveSignalRecordIdsForSources(self: *HostEnv, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
