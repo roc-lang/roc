@@ -5703,7 +5703,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // use: an unpinnable instantiated receiver can never gain the owner the
         // contract requires, so its dispatch is a genuine dead end. A phantom
         // where-clause (the body never dispatches it) still needs an in-module
-        // dispatch use to be a dead end, so it stays valid here exactly as before.
+        // dispatch use to be a dead end; without one it is not reported.
         const body_forced = is_instantiated_where_clause and constraint.origin.where_clause.body_required;
         const where_dispatch_use = if (is_instantiated_where_clause)
             try self.findStaticDispatchUseForConstraint(constraint.fn_name, constraint.fn_var)
@@ -5717,11 +5717,17 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
         // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
         // is a fresh instantiated var that unifies with nothing concrete, so it is
-        // absent from the set and reported. Instantiated where-clause contracts
-        // are stricter: lambda parameters inside the already-instantiated call do
-        // not count, because that call is exactly what must satisfy the copied
-        // contract. Only external function arguments can still pin it later.
-        const active_pinnable = if (is_instantiated_where_clause) external_pinnable else pinnable;
+        // A where-clause with an IN-MODULE dispatch use is stricter
+        // (`external_pinnable`): the method is dispatched on this receiver here, so
+        // this call must satisfy the copied contract now — lambda parameters inside
+        // the already-instantiated call do not count, only external arguments can
+        // still pin it. This catches a receiver pinned to a type that lacks the
+        // method (issue 9657). A where-clause with NO in-module use (the body-forced
+        // hole, issue 9644) uses the broader `pinnable` set: its dispatch lives in
+        // another body, so a still-generalizable helper whose receiver is an (even
+        // nested) lambda parameter an enclosing caller can pin is not a dead end —
+        // only a receiver in neither set (a genuine hole) is reported.
+        const active_pinnable = if (is_instantiated_where_clause and where_dispatch_use != null) external_pinnable else pinnable;
         if (active_pinnable.contains(resolved.var_)) continue;
 
         // Locate the call site that left this receiver undetermined. Instantiated

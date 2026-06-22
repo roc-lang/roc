@@ -238,7 +238,7 @@ sub is_new_postcheck_path {
 
 sub postcheck_jargon_allowed {
     my ($path, $line) = @_;
-    if ($path eq 'design.md' || $path eq 'plan.md') {
+    if ($path eq 'design.md') {
         return 1 if $line =~ /\bbanned\b/;
         return 1 if $line =~ /The word `/;
         return 1 if $line =~ /The words `/;

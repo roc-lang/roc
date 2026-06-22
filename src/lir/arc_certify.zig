@@ -1775,12 +1775,13 @@ const Certifier = struct {
                         // (leaving it unverified) rather than aborting the build or claiming a bug:
                         // a verification tool must only block on a positive finding, never on its
                         // own incompleteness (issue 9658 was a valid 203-state scanner). Findings
-                        // on any path actually walked (leak / use-after-free / balance mismatch)
-                        // still `fail` → `error.Certification` → abort before the cap. The one case
-                        // the cap can mask is a real leak whose *only* symptom is an owned balance
-                        // that grows every iteration (balance is part of the per-join summary
-                        // digest), so the distinct-state count climbs without converging — that
-                        // proc is skipped rather than reported. The algorithmically-ideal fix is a
+                        // (leak / use-after-free / balance mismatch) on the first ≤4096 distinct
+                        // entry-states still `fail` → `error.Certification` → abort. The cap can
+                        // mask only a finding whose sole manifesting path is reached past the
+                        // 4096th distinct entry-state — most plausibly a real leak whose owned
+                        // balance grows every iteration (balance is part of the per-join summary
+                        // digest), so the state count climbs without converging; that proc is then
+                        // skipped rather than reported. The algorithmically-ideal fix is a
                         // converging dataflow fixpoint that joins entry states over a finite-height
                         // semilattice (bounding re-walks by lattice height rather than enumerating
                         // summaries); it remains future work because a correct join must preserve
