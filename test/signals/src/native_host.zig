@@ -10,6 +10,7 @@ const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
+const scope_tree = @import("scope_tree.zig");
 
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
@@ -21,6 +22,7 @@ const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
+const HostScopeBranch = scope_tree.Branch;
 
 const host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -199,56 +201,24 @@ const HostSignalCacheSlot = union(enum) {
     }
 };
 
-const HostScopeBranch = enum(u8) {
-    false_branch,
-    true_branch,
-
-    fn opposite(self: HostScopeBranch) HostScopeBranch {
-        return switch (self) {
-            .false_branch => .true_branch,
-            .true_branch => .false_branch,
-        };
-    }
-};
-
-const HostWhenBranchScopeStep = struct {
-    site_ordinal: u64,
-    branch: HostScopeBranch,
-};
-
-const HostComponentScopeStep = struct {
-    site_ordinal: u64,
-};
-
 const HostEachRowScopeStep = struct {
     site_ordinal: u64,
     key: HostValueCell,
     item: HostValueCell,
 };
 
-const HostScopeStep = union(enum) {
-    root,
-    component: HostComponentScopeStep,
-    when_branch: HostWhenBranchScopeStep,
-    each_row: HostEachRowScopeStep,
+const HostScopeStep = scope_tree.Step(HostEachRowScopeStep);
+const HostScope = scope_tree.Scope(HostEachRowScopeStep);
 
-    fn deinit(self: *HostScopeStep, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
-        switch (self.*) {
-            .each_row => |*row| {
-                row.key.deinit(roc_host, metrics);
-                row.item.deinit(roc_host, metrics);
-            },
-            .root, .component, .when_branch => {},
-        }
+fn deinitHostScopeStep(step: *HostScopeStep, roc_host: *abi.RocHost, metrics: *RuntimeMetrics) void {
+    switch (step.*) {
+        .each_row => |*row| {
+            row.key.deinit(roc_host, metrics);
+            row.item.deinit(roc_host, metrics);
+        },
+        .root, .component, .when_branch => {},
     }
-};
-
-const HostScope = struct {
-    scope_id: u64,
-    parent_scope_id: ?u64,
-    step: HostScopeStep,
-    active: bool,
-};
+}
 
 const HostNodeIdentity = struct {
     node_id: u64,
@@ -1920,6 +1890,16 @@ fn failSignalGraphError(err: anyerror, unknown_node_message: []const u8, missing
     }
 }
 
+fn failScopeTreeError(err: anyerror, unknown_scope_message: []const u8) noreturn {
+    switch (err) {
+        error.OutOfMemory => std.process.exit(1),
+        error.UnknownScope => failHost(unknown_scope_message),
+        error.InactiveScope => failHost("scope id references a disposed host scope"),
+        error.InvalidRoot => failHost("host root scope descriptor is not indexed by scope id"),
+        else => failHost("scope tree operation failed"),
+    }
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -3347,96 +3327,39 @@ const HostEnv = struct {
     }
 
     fn validateScopeId(self: *HostEnv, scope_id: u64) void {
-        if (scope_id >= self.scopes.items.len) {
-            failHost("scope id has no host scope descriptor");
-        }
-        const scope = self.scopes.items[@intCast(scope_id)];
-        if (scope.scope_id != scope_id) {
-            failHost("host scope table is not indexed by scope id");
-        }
-        if (!scope.active) {
-            failHost("scope id references a disposed host scope");
-        }
+        scope_tree.validate(HostEachRowScopeStep, self.scopes.items, scope_id) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
     }
 
     fn internRootScope(self: *HostEnv) u64 {
-        const allocator = self.gpa.allocator();
-        if (self.scopes.items.len == 0) {
-            self.scopes.append(allocator, .{
-                .scope_id = 0,
-                .parent_scope_id = null,
-                .step = .root,
-                .active = true,
-            }) catch std.process.exit(1);
-            var metrics = self.pending_roc_metrics;
-            metrics.scopes_created += 1;
-            self.pending_roc_metrics = metrics;
-            return 0;
-        }
-
-        const root = self.scopes.items[0];
-        if (root.scope_id != 0 or root.parent_scope_id != null or root.step != .root or !root.active) {
-            failHost("host root scope descriptor is not indexed by scope id");
-        }
-        return 0;
+        const result = scope_tree.internRoot(HostEachRowScopeStep, self.gpa.allocator(), &self.scopes) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
+        if (result.created) self.recordScopeCreated();
+        return result.scope_id;
     }
 
     fn internComponentScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64) u64 {
-        self.validateScopeId(parent_scope_id);
-
-        for (self.scopes.items) |scope| {
-            if (!scope.active) continue;
-            if (scope.parent_scope_id != parent_scope_id) continue;
-            switch (scope.step) {
-                .component => |step| {
-                    if (step.site_ordinal == site_ordinal) {
-                        return scope.scope_id;
-                    }
-                },
-                .root, .when_branch, .each_row => {},
-            }
-        }
-
-        const scope_id: u64 = @intCast(self.scopes.items.len);
-        self.scopes.append(self.gpa.allocator(), .{
-            .scope_id = scope_id,
-            .parent_scope_id = parent_scope_id,
-            .step = .{ .component = .{ .site_ordinal = site_ordinal } },
-            .active = true,
-        }) catch std.process.exit(1);
-        var metrics = self.pending_roc_metrics;
-        metrics.scopes_created += 1;
-        self.pending_roc_metrics = metrics;
-        return scope_id;
+        const result = scope_tree.internComponent(HostEachRowScopeStep, self.gpa.allocator(), &self.scopes, parent_scope_id, site_ordinal) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
+        if (result.created) self.recordScopeCreated();
+        return result.scope_id;
     }
 
     fn internWhenBranchScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) u64 {
-        self.validateScopeId(parent_scope_id);
+        const result = scope_tree.internWhenBranch(HostEachRowScopeStep, self.gpa.allocator(), &self.scopes, parent_scope_id, site_ordinal, branch) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
+        if (result.created) self.recordScopeCreated();
+        return result.scope_id;
+    }
 
-        for (self.scopes.items) |scope| {
-            if (!scope.active) continue;
-            if (scope.parent_scope_id != parent_scope_id) continue;
-            switch (scope.step) {
-                .when_branch => |step| {
-                    if (step.site_ordinal == site_ordinal and step.branch == branch) {
-                        return scope.scope_id;
-                    }
-                },
-                .root, .component, .each_row => {},
-            }
-        }
-
-        const scope_id: u64 = @intCast(self.scopes.items.len);
-        self.scopes.append(self.gpa.allocator(), .{
-            .scope_id = scope_id,
-            .parent_scope_id = parent_scope_id,
-            .step = .{ .when_branch = .{ .site_ordinal = site_ordinal, .branch = branch } },
-            .active = true,
-        }) catch std.process.exit(1);
+    fn recordScopeCreated(self: *HostEnv) void {
         var metrics = self.pending_roc_metrics;
         metrics.scopes_created += 1;
         self.pending_roc_metrics = metrics;
-        return scope_id;
     }
 
     fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
@@ -3444,18 +3367,15 @@ const HostEnv = struct {
 
         const key_cell = HostValueCell.initRetained(key, key_eq, key_drop, &self.pending_roc_metrics);
         const item_cell = HostValueCell.initRetained(item, item_eq, item_drop, &self.pending_roc_metrics);
-
-        const scope_id: u64 = @intCast(self.scopes.items.len);
-        self.scopes.append(self.gpa.allocator(), .{
-            .scope_id = scope_id,
-            .parent_scope_id = parent_scope_id,
-            .step = .{ .each_row = .{ .site_ordinal = site_ordinal, .key = key_cell, .item = item_cell } },
-            .active = true,
-        }) catch std.process.exit(1);
-        var metrics = self.pending_roc_metrics;
-        metrics.scopes_created += 1;
-        self.pending_roc_metrics = metrics;
-        return scope_id;
+        const result = scope_tree.appendEachRow(HostEachRowScopeStep, self.gpa.allocator(), &self.scopes, parent_scope_id, .{
+            .site_ordinal = site_ordinal,
+            .key = key_cell,
+            .item = item_cell,
+        }) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
+        self.recordScopeCreated();
+        return result.scope_id;
     }
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
@@ -3542,7 +3462,7 @@ const HostEnv = struct {
         }
 
         const scope = &self.scopes.items[@intCast(scope_id)];
-        scope.step.deinit(roc_host, &self.pending_roc_metrics);
+        deinitHostScopeStep(&scope.step, roc_host, &self.pending_roc_metrics);
         scope.active = false;
         var metrics = self.pending_roc_metrics;
         metrics.scopes_disposed += 1;
@@ -3550,23 +3470,9 @@ const HostEnv = struct {
     }
 
     fn activeEachRowScopes(self: *HostEnv, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) []u64 {
-        var ids: std.ArrayListUnmanaged(u64) = .empty;
-        errdefer ids.deinit(allocator);
-
-        for (self.scopes.items) |scope| {
-            if (!scope.active) continue;
-            if (scope.parent_scope_id != parent_scope_id) continue;
-            switch (scope.step) {
-                .each_row => |row| {
-                    if (row.site_ordinal == site_ordinal) {
-                        ids.append(allocator, scope.scope_id) catch std.process.exit(1);
-                    }
-                },
-                .root, .component, .when_branch => {},
-            }
-        }
-
-        return ids.toOwnedSlice(allocator) catch std.process.exit(1);
+        return scope_tree.activeEachRows(HostEachRowScopeStep, allocator, self.scopes.items, parent_scope_id, site_ordinal) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
     }
 
     fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
@@ -4138,22 +4044,9 @@ const HostEnv = struct {
     }
 
     fn activeWhenBranchScopeId(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) ?u64 {
-        self.validateScopeId(parent_scope_id);
-
-        for (self.scopes.items) |scope| {
-            if (!scope.active) continue;
-            if (scope.parent_scope_id != parent_scope_id) continue;
-            switch (scope.step) {
-                .when_branch => |step| {
-                    if (step.site_ordinal == site_ordinal and step.branch == branch) {
-                        return scope.scope_id;
-                    }
-                },
-                .root, .component, .each_row => {},
-            }
-        }
-
-        return null;
+        return scope_tree.activeWhenBranch(HostEachRowScopeStep, self.scopes.items, parent_scope_id, site_ordinal, branch) catch |err| {
+            failScopeTreeError(err, "scope id has no host scope descriptor");
+        };
     }
 
     fn collectElemActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, elem: abi.Elem) u64 {
@@ -4305,19 +4198,9 @@ const HostEnv = struct {
     }
 
     fn eachSiteRowAncestorScopeId(self: *HostEnv, scope_id: u64, site: HostEachSite) ?u64 {
-        var current: ?u64 = scope_id;
-        while (current) |id| {
-            if (id >= self.scopes.items.len) failHost("scope descriptor referenced an unknown parent scope");
-            const scope = self.scopes.items[@intCast(id)];
-            switch (scope.step) {
-                .each_row => |row| {
-                    if (scope.parent_scope_id == site.parent_scope_id and row.site_ordinal == site.site_ordinal) return id;
-                },
-                .root, .component, .when_branch => {},
-            }
-            current = scope.parent_scope_id;
-        }
-        return null;
+        return scope_tree.eachSiteRowAncestor(HostEachRowScopeStep, self.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal) catch |err| {
+            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
+        };
     }
 
     fn activeEachRowScopesInRenderOrder(self: *HostEnv, allocator: std.mem.Allocator, site: HostEachSite) []u64 {
@@ -4485,13 +4368,9 @@ const HostEnv = struct {
     }
 
     fn scopeIsDescendantOrSelf(self: *HostEnv, scope_id: u64, root_scope_id: u64) bool {
-        var current: ?u64 = scope_id;
-        while (current) |id| {
-            if (id == root_scope_id) return true;
-            if (id >= self.scopes.items.len) failHost("scope descriptor referenced an unknown parent scope");
-            current = self.scopes.items[@intCast(id)].parent_scope_id;
-        }
-        return false;
+        return scope_tree.descendantOrSelf(HostEachRowScopeStep, self.scopes.items, scope_id, root_scope_id) catch |err| {
+            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
+        };
     }
 
     fn renderNodeScopeId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
@@ -4590,19 +4469,9 @@ const HostEnv = struct {
     }
 
     fn scopeIsEachSiteRowDescendantOrSelf(self: *HostEnv, scope_id: u64, site: HostEachSite) bool {
-        var current: ?u64 = scope_id;
-        while (current) |id| {
-            if (id >= self.scopes.items.len) failHost("scope descriptor referenced an unknown parent scope");
-            const scope = self.scopes.items[@intCast(id)];
-            switch (scope.step) {
-                .each_row => |row| {
-                    if (scope.parent_scope_id == site.parent_scope_id and row.site_ordinal == site.site_ordinal) return true;
-                },
-                .root, .component, .when_branch => {},
-            }
-            current = scope.parent_scope_id;
-        }
-        return false;
+        return scope_tree.eachSiteRowDescendantOrSelf(HostEachRowScopeStep, self.scopes.items, scope_id, site.parent_scope_id, site.site_ordinal) catch |err| {
+            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
+        };
     }
 
     fn scopeIsInReplacementTarget(self: *HostEnv, scope_id: u64, target: HostStructuralReplacementTarget) bool {
@@ -5726,7 +5595,7 @@ const HostEnv = struct {
         if (self.roc_host) |roc_host| {
             for (self.scopes.items) |*scope| {
                 if (!scope.active) continue;
-                scope.step.deinit(roc_host, &self.pending_roc_metrics);
+                deinitHostScopeStep(&scope.step, roc_host, &self.pending_roc_metrics);
             }
         } else if (self.scopes.items.len != 0) {
             failHost("host scope table cannot release keys without a Roc host");

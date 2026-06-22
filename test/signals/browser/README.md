@@ -53,9 +53,14 @@ mutation, reachable-dependent traversal, and rank sorting. The native host
 drives it today; the wasm host instantiates it at build time so the shared graph
 primitive stays wasm-safe while the rest of the engine is extracted.
 
+`../src/scope_tree.zig` owns scope branch identity, root/component/when/row
+scope interning, active row lookup, and ancestry queries. Native still owns row
+payload refcounts and disposal until keyed-row matching is extracted.
+
 Run the guard with:
 
 ```sh
 zig test test/signals/src/render_commands.zig
 zig test test/signals/src/signal_graph.zig
+zig test test/signals/src/scope_tree.zig
 ```

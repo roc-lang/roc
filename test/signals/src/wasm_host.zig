@@ -8,13 +8,17 @@ const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 const signal_graph = @import("signal_graph.zig");
+const scope_tree = @import("scope_tree.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
 
 comptime {
     const BuildRecord = struct { id: u64 };
+    const BuildRow = struct { site_ordinal: u64 };
     _ = signal_graph.Node(BuildRecord);
+    _ = scope_tree.Scope(BuildRow);
+    _ = scope_tree.Branch.false_branch.opposite();
 }
 
 const HostValueCell = struct {
