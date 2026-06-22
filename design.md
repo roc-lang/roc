@@ -3310,9 +3310,11 @@ runs print a separator before their output instead of clearing the terminal.
 
 ## Hot Loading For Default Dev-Shim Runs
 
-`roc --watch` enables hot loading for the default `roc` dev backend execution
-path. It does not introduce a run subcommand. Non-watch default `roc` execution
-keeps the existing one-shot behavior.
+The default `roc` command hot loads automatically on the dev backend execution
+path: running `roc app.roc` watches the app's source inputs and reloads on
+change, with no `--watch` flag and no run subcommand. Non-dev `--opt` levels keep
+the existing one-shot behavior, as do apps that cannot use the shared-memory shim
+(see below).
 
 The initial compile lowers checked modules to LIR in the compiler process, then
 serializes only the dev backend `RunImage` bytes into shared memory. LIR and
@@ -3370,11 +3372,12 @@ with the adjusted capture pointer, then releases the payload's retained image
 reference. That retained reference keeps an old image alive while a host stores
 a boxed Roc closure and later calls it after one or more hot reloads.
 
-Headerless default apps compile through synthetic temporary source files. Watch
-input collection rewrites those synthetic app paths back to the user's original
-source file, and rebuild workers rewrite the synthetic source from the original
-file before lowering a replacement image. Windows uses explicit shared-memory
-handle inheritance for both the host shim child and the internal rebuild worker.
+Headerless default apps never hot reload. They compile through synthetic
+temporary source files that are discarded after each run, so there is nothing
+stable to reload; they always run once, even where the shared-memory shim is
+available. Hot loading therefore applies only to apps with a real platform
+header. Windows uses explicit shared-memory handle inheritance for both the host
+shim child and the internal rebuild worker.
 
 ## Relationship To Cor LSS
 

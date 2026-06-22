@@ -69,6 +69,22 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
+/// The watch module uses real macOS FSEvents (CoreFoundation/CoreServices) when building
+/// natively for macOS, and kernel32 for directory-change notifications on Windows. Any step
+/// that compiles the watch module (the roc exe and the tests that import it) must link these.
+fn linkWatchPlatformLibs(step: *Step.Compile, target: ResolvedTarget) void {
+    if (target.result.os.tag == .macos and
+        builtin.target.os.tag == .macos and
+        target.result.cpu.arch == builtin.target.cpu.arch and
+        target.result.abi == builtin.target.abi)
+    {
+        step.root_module.linkFramework("CoreFoundation", .{});
+        step.root_module.linkFramework("CoreServices", .{});
+    } else if (target.result.os.tag == .windows) {
+        step.root_module.linkSystemLibrary("kernel32", .{});
+    }
+}
+
 const TestHostOptions = struct {
     uses_stack_handler: bool = false,
 };
@@ -4071,6 +4087,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
         roc_modules.addAll(cli_test);
+        linkWatchPlatformLibs(cli_test, target);
         cli_test.root_module.linkLibrary(zstd.artifact("zstd"));
         try addLlvmSupportToStep(
             b,
@@ -4123,12 +4140,7 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
         // Link platform-specific libraries for file watching
-        if (target.result.os.tag == .macos and target_is_native) {
-            watch_test.root_module.linkFramework("CoreFoundation", .{});
-            watch_test.root_module.linkFramework("CoreServices", .{});
-        } else if (target.result.os.tag == .windows) {
-            watch_test.root_module.linkSystemLibrary("kernel32", .{});
-        }
+        linkWatchPlatformLibs(watch_test, target);
 
         build_test_zig_step.dependOn(&watch_test.step);
 
@@ -4828,6 +4840,7 @@ fn addMainExe(
     exe.stack_size = 64 * 1024 * 1024;
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
+    linkWatchPlatformLibs(exe, target);
 
     // Build str and int test platform host libraries for native target
     // (fx and fx-open are only built by build-test-hosts for CLI platform tests)

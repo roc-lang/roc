@@ -1110,7 +1110,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             };
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args) catch |err| switch (err) {
+        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
             error.CliError => {
                 // Problems already recorded in context, render them below
             },
@@ -2134,7 +2134,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!v
 
     return switch (args.opt) {
         .interpreter, .dev => rocRunSharedMemoryShim(ctx, args, arg0),
-        .size, .speed => rocRunBuildAndExec(ctx, args),
+        .size, .speed => rocRunBuildAndExec(ctx, args, arg0),
     };
 }
 
@@ -2145,14 +2145,17 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
-        if (args.watch or useDefaultAppSharedMemoryShim(args)) {
-            return rocRunDefaultAppSharedMemoryShim(ctx, args, arg0, source);
+        // Headerless default apps never hot reload; they just run once. The shared-memory
+        // shim is the run mechanism where the default platform runtime exists (Linux native,
+        // or any cross-target run); elsewhere we use the plain run-once path.
+        if (useDefaultAppSharedMemoryShim(args)) {
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
         }
         return rocRunDefaultApp(ctx, args, source);
     }
 
     if (args.opt == .dev and args.no_cache and !args.watch) {
-        return rocRunBuildAndExec(ctx, args);
+        return rocRunBuildAndExec(ctx, args, arg0);
     }
 
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
@@ -2662,7 +2665,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     }
 }
 
-fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2701,7 +2704,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
         .resolve_limits = args.resolve_limits,
         .synthetic_default_platform = false,
         .source_dir_override = null,
-    });
+    }, arg0);
 
     const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
 
@@ -2963,7 +2966,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     if (echo_env.inline_expect_failed) std.process.exit(1);
 }
 
-fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8, original_source: []const u8) CliMainError!void {
+fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     const native_target = RocTarget.detectNative();
@@ -3182,35 +3185,12 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: 
         };
     }
 
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, args.watch);
+    // Headerless default apps never hot reload — they compile through throwaway synthetic
+    // source files, so there is nothing stable to reload. They just run once.
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, false);
     defer closeSharedMemoryHandle(shm_handle);
 
-    if (args.watch) {
-        const hot_reload_checked_host_identity = lowered_result.checked_host_identity orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("default app hot reload invariant violated: missing checked host identity", .{});
-            }
-            unreachable;
-        };
-        var hot_args = args;
-        hot_args.path = app_path;
-        try runHotReloadDevShim(
-            ctx,
-            arg0,
-            exe_path,
-            shm_handle,
-            hot_args,
-            selected_target,
-            hot_reload_checked_host_identity,
-            lowered_result.watch_inputs,
-            .{
-                .source_path = args.path,
-                .synthetic_app_path = app_path,
-                .source_dir_override = original_source_dir,
-            },
-            lowered_result.counts.warnings,
-        );
-    } else if (comptime is_windows) {
+    if (comptime is_windows) {
         try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
     } else {
         try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
@@ -5743,7 +5723,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
     // Handle the --z-bench-tokenize flag
     if (args.z_bench_tokenize) |file_path| {
         try benchTokenizer(ctx.gpa, ctx.io.std_io, file_path);
@@ -5754,6 +5734,13 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     if (args.z_bench_parse) |directory_path| {
         try benchParse(ctx.gpa, ctx.io.std_io, directory_path);
         return;
+    }
+
+    // `roc build --watch` rebuilds on every change. The watch loop reruns this same
+    // command (minus --watch) per change; the child writes its discovered inputs to
+    // the --watch-inputs-file so the next iteration watches the right files.
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .build = args });
     }
 
     // Headerless apps build through a synthetic default platform.
@@ -7127,6 +7114,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputs(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -7469,6 +7459,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputs(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -7821,6 +7814,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputs(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -8866,6 +8862,7 @@ const watch_separator = "\n--- roc watch: change detected; rerunning ---\n\n";
 const WatchCommand = union(enum) {
     check: cli_args.CheckArgs,
     test_cmd: cli_args.TestArgs,
+    build: cli_args.BuildArgs,
 };
 
 const WatchPathError = Allocator.Error || std.Io.Dir.RealPathFileAllocError;
@@ -9012,6 +9009,7 @@ fn watchCommandPath(command: WatchCommand) []const u8 {
     return switch (command) {
         .check => |args| args.path,
         .test_cmd => |args| args.path,
+        .build => |args| args.path,
     };
 }
 
@@ -9019,6 +9017,7 @@ fn watchCommandMain(command: WatchCommand) ?[]const u8 {
     return switch (command) {
         .check => |args| args.main,
         .test_cmd => |args| args.main,
+        .build => null,
     };
 }
 
@@ -9311,6 +9310,25 @@ fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildE
     try writeWatchInputSetFile(ctx, file_path, &input_set);
 }
 
+/// For `roc build --watch`, the build child records its discovered source inputs so the
+/// parent watch loop knows which files to watch. The root path is always included, which
+/// also covers the synthetic-default-platform case where the discovered inputs live in a
+/// temporary directory. Best-effort: a failed write just leaves the parent to fall back to
+/// the root path it already watches.
+fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) void {
+    const file_path = args.watch_inputs_file orelse return;
+    // Synthetic default-platform builds compile through throwaway temp files that are
+    // deleted as soon as the build finishes. Recording those as watch inputs would make
+    // them perpetually "changed" (their hash becomes "missing"), so the parent watch loop
+    // would rebuild forever. The parent already watches the real root path it was given,
+    // so write an empty discovered-input set in that case.
+    if (args.synthetic_default_platform) {
+        writeWatchInputsFile(ctx, file_path, null, &.{}) catch {};
+        return;
+    }
+    writeWatchInputsFile(ctx, file_path, build_env, &[_][]const u8{args.path}) catch {};
+}
+
 fn writeHotReloadWatchPathsFile(
     ctx: *CliCtx,
     file_path: []const u8,
@@ -9600,6 +9618,23 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+        .build => |args| {
+            try argv.append(ctx.gpa, "build");
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
+            if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
+            if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
+            if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.allow_errors) try argv.append(ctx.gpa, "--allow-errors");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            if (args.wasm_memory) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-memory={}", .{bytes});
+            if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);

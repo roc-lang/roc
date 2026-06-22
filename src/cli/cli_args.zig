@@ -121,7 +121,7 @@ pub const RunArgs = struct {
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
-    watch: bool = false, // hot reload when source inputs change
+    watch: bool = true, // hot reload when source inputs change (always on for the dev backend)
     timings: bool = false, // always show the per-phase timing breakdown
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
@@ -152,6 +152,8 @@ pub const BuildArgs = struct {
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
+    watch: bool = false, // rebuild when source inputs change
+    watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
@@ -290,7 +292,6 @@ const main_help =
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
-    \\      --watch                        Hot reload when source inputs change
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
@@ -414,6 +415,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
     var z_dump_linker: bool = false;
+    var watch: bool = false;
+    var watch_inputs_file: ?[]const u8 = null;
     var resolve_limits: ResolveLimitArgs = .{};
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -434,6 +437,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
+            \\      --watch                        Rebuild when source inputs change
             \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
@@ -510,6 +514,14 @@ fn parseBuild(args: []const []const u8) CliArgs {
             timings = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
+        } else if (mem.eql(u8, arg, "--watch")) {
+            watch = true;
+        } else if (mem.startsWith(u8, arg, "--watch-inputs-file")) {
+            if (getFlagValue(arg)) |value| {
+                watch_inputs_file = value;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--watch-inputs-file" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {
@@ -535,7 +547,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -1163,7 +1175,10 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    // The default `roc` command hot reloads automatically on the dev backend, so
+    // `--watch` is implied there and only needs to be requested explicitly to surface
+    // the "watch is dev-only" error when paired with a non-dev `--opt`.
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch or (opt == .dev), .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -1205,6 +1220,20 @@ test "default roc command" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expect(result.run.watch);
+    }
+    {
+        // The default `roc` command watches automatically on the dev backend.
+        const result = try parse(gpa, testing.io, &[_][]const u8{"foo.roc"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expect(result.run.watch);
+    }
+    {
+        // Non-dev backends don't support watch, so it stays off unless requested.
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--opt=speed", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expect(!result.run.watch);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{"-v"});
@@ -1316,6 +1345,22 @@ test "roc build" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.build.path);
         try testing.expectEqual(true, result.build.timings);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"build"});
+        defer result.deinit(gpa);
+        try testing.expect(!result.build.watch);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--watch", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.build.path);
+        try testing.expect(result.build.watch);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--watch-inputs-file=/tmp/roc-watch-inputs", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("/tmp/roc-watch-inputs", result.build.watch_inputs_file.?);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--opt=size" });
