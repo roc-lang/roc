@@ -12,6 +12,8 @@ const scope_tree = @import("scope_tree.zig");
 const identity_table = @import("identity_table.zig");
 const keyed_rows = @import("keyed_rows.zig");
 const host_value_registry = @import("host_value_registry.zig");
+const erased_calls = @import("erased_calls.zig");
+const hv = @import("host_values.zig");
 
 const HostValue = u64;
 const HostValueTypeTag = *u64;
@@ -160,20 +162,10 @@ const BoolAttrSink = struct {
     }
 };
 
-const ErasedUnitArgs = extern struct {};
-
-const ErasedHostValueUnaryArgs = extern struct {
-    arg0: HostValue,
-};
-
-const ErasedHostValueBinaryArgs = extern struct {
-    arg0: HostValue,
-    arg1: HostValue,
-};
-
-const ErasedHostValueListUnaryArgs = extern struct {
-    arg0: HostValueList,
-};
+const ErasedUnitArgs = erased_calls.ErasedUnitArgs;
+const ErasedHostValueUnaryArgs = erased_calls.ErasedHostValueUnaryArgs;
+const ErasedHostValueBinaryArgs = erased_calls.ErasedHostValueBinaryArgs;
+const ErasedHostValueListUnaryArgs = erased_calls.ErasedHostValueListUnaryArgs;
 
 fn failHost() noreturn {
     @trap();
@@ -311,27 +303,28 @@ fn setHostValueTypeTag(value: HostValue, tag: HostValueTypeTag) void {
     };
 }
 
+// `ctx` surface consumed by the shared `host_values` box constructors. The
+// browser host has no test-kind bookkeeping, so `recordKind` is a no-op.
+const HostValueOpsCtx = struct {
+    pub fn store(_: HostValueOpsCtx, box: abi.RocBox) HostValue {
+        return host_values.storeOwnedTag(allocator(), box, null, registryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    pub fn recordKind(_: HostValueOpsCtx, _: HostValue, _: hv.ValueKind) void {}
+};
+
 fn hostValueUnit() HostValue {
-    const payload = abi.allocateBox(0, @alignOf(u8), false, &roc_host);
-    return host_values.storeOwnedTag(allocator(), @ptrCast(payload), null, registryOps()) catch |err| {
-        failHostValueRegistryError(err);
-    };
+    return hv.makeUnit(HostValueOpsCtx{}, &roc_host);
 }
 
 fn hostValueStr(bytes: []const u8) HostValue {
-    const payload: *RocStr = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(RocStr), @alignOf(RocStr), true, &roc_host)));
-    payload.* = RocStr.fromSlice(bytes, &roc_host);
-    return host_values.storeOwnedTag(allocator(), @ptrCast(payload), null, registryOps()) catch |err| {
-        failHostValueRegistryError(err);
-    };
+    return hv.makeStr(HostValueOpsCtx{}, &roc_host, bytes);
 }
 
 fn hostValueBool(value: bool) HostValue {
-    const payload: *bool = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(bool), @alignOf(bool), false, &roc_host)));
-    payload.* = value;
-    return host_values.storeOwnedTag(allocator(), @ptrCast(payload), null, registryOps()) catch |err| {
-        failHostValueRegistryError(err);
-    };
+    return hv.makeBool(HostValueOpsCtx{}, &roc_host, value);
 }
 
 fn updateStateValue(state: *HostState, value: HostValue) bool {
@@ -345,114 +338,15 @@ fn updateStateValue(state: *HostState, value: HostValue) bool {
     return true;
 }
 
-fn erasedCallablePayload(callable: abi.RocErasedCallable) *abi.RocErasedCallablePayload {
-    if (callable == null) failHost();
-    return abi.rocErasedCallablePayloadPtr(callable);
-}
-
-fn callValueInitThunk(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable) HostValue {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedUnitArgs{};
-    var result: HostValue = undefined;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return result;
-}
-
-fn callErasedHostValueToHostValue(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) HostValue {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
-    var result: HostValue = undefined;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return result;
-}
-
-fn callErasedHostValueHostValueToHostValue(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) HostValue {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
-    var result: HostValue = undefined;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return result;
-}
-
-fn callErasedHostValueListToHostValue(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValueList) HostValue {
-    const payload = erasedCallablePayload(callable);
-    arg0.incref(1);
-    var call_args = ErasedHostValueListUnaryArgs{ .arg0 = arg0 };
-    var result: HostValue = undefined;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return result;
-}
-
-fn callErasedHostValueHostValueToBool(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) bool {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };
-    var result: usize = 0;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return (result & 0xff) != 0;
-}
-
-fn callErasedHostValueToUnit(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) void {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
-    var result: usize = 0;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-}
-
-fn callErasedHostValueToStr(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) RocStr {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
-    var result: RocStr = undefined;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return result;
-}
-
-fn callErasedHostValueToBool(roc_host_ptr: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue) bool {
-    const payload = erasedCallablePayload(callable);
-    var call_args = ErasedHostValueUnaryArgs{ .arg0 = arg0 };
-    var result: usize = 0;
-    payload.callable_fn_ptr(
-        roc_host_ptr,
-        @ptrCast(&result),
-        @ptrCast(&call_args),
-        abi.rocErasedCallableCapturePtr(callable),
-    );
-    return (result & 0xff) != 0;
-}
+const erasedCallablePayload = erased_calls.erasedCallablePayload;
+const callValueInitThunk = erased_calls.callValueInitThunk;
+const callErasedHostValueToHostValue = erased_calls.callErasedHostValueToHostValue;
+const callErasedHostValueHostValueToHostValue = erased_calls.callErasedHostValueHostValueToHostValue;
+const callErasedHostValueListToHostValue = erased_calls.callErasedHostValueListToHostValue;
+const callErasedHostValueHostValueToBool = erased_calls.callErasedHostValueHostValueToBool;
+const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
+const callErasedHostValueToStr = erased_calls.callErasedHostValueToStr;
+const callErasedHostValueToBool = erased_calls.callErasedHostValueToBool;
 
 fn bindNodeSignal(expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *BoundSignal {
     const signal = allocator().create(BoundSignal) catch failHost();
@@ -920,34 +814,12 @@ fn tagFromBox(box: abi.RocBox) ?HostValueTypeTag {
     return @ptrCast(@alignCast(ptr));
 }
 
-const HostValueRegistryOps = struct {
-    pub fn retainBox(_: @This(), box: abi.RocBox) void {
-        abi.increfBox(box, 1);
-    }
-
-    pub fn releaseBox(_: @This(), box: abi.RocBox) void {
-        abi.decrefBox(box, &roc_host);
-    }
-
-    pub fn retainTag(_: @This(), tag: HostValueTypeTag) void {
-        abi.increfBox(@ptrCast(tag), 1);
-    }
-
-    pub fn releaseTag(_: @This(), tag: HostValueTypeTag) void {
-        abi.decrefBox(@ptrCast(tag), &roc_host);
-    }
-
-    pub fn tagId(_: @This(), tag: HostValueTypeTag) u64 {
-        return tag.*;
-    }
-};
-
 fn failHostValueRegistryError(_: host_value_registry.Error) noreturn {
     failHost();
 }
 
-fn registryOps() HostValueRegistryOps {
-    return .{};
+fn registryOps() hv.RegistryOps {
+    return .{ .roc_host = &roc_host };
 }
 
 export fn roc_host_value_clone(value: HostValue) callconv(.c) HostValue {

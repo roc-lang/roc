@@ -252,10 +252,22 @@ The open questions (O1–O9) referenced below are defined in
   grows row scopes. Sixth extraction: `src/host_value_registry.zig` owns the
   shared HostValue handle table used by the `roc_host_value_*` ABI in both
   hosts: one-based handles, vacant-slot reuse, clone/get/take, and debug type
-  tags. The current wasm host has a small non-structural runtime path for the
-  counter milestone; it is not the final G-B0 extraction. Remaining G-B0 work is
-  moving the retained HostValue/thunk/scope adapter boundary into the shared
-  engine so both hosts drive the same engine with different render sinks.
+  tags. Seventh extraction: `src/erased_calls.zig` owns the pure-ABI Roc
+  erased-callable invocation adapter (the `Erased*Args` packed-arg structs and
+  the `callErased*` thunk family); both hosts deleted their byte-identical
+  copies and alias it. Eighth extraction: `src/host_values.zig` owns the shared
+  `RegistryOps` adapter (refcounting boxes/tags through one `roc_host`) and the
+  boxed-value constructors (`makeUnit`/`makeStr`/`makeBool`/`makeI64`) behind a
+  tiny `store`/`recordKind` host ctx; native keeps its test-kind bookkeeping in
+  that ctx, the wasm host makes `recordKind` a no-op. These two land the planned
+  PR1 (no behavior change; native 52 tests, wasm build, and the browser tests
+  stay green). The full `Ctx` contract and `verifyCtx`/`verifyRegistryOps` checks
+  are deferred to the engine extraction (Slice 4) where the contract is large
+  enough to warrant them. The current wasm host still has a small non-structural
+  runtime path for the counter milestone; it is not the final G-B0 extraction.
+  Remaining G-B0 work is moving the retained engine (signal records, scopes,
+  dirty propagation, keyed diff) behind a shared render-command sink so both
+  hosts drive the same engine — see `linked-wibbling-treehouse` plan Slices 3–5.
 
 ### G-B1 — Controlled-input / focus / IME spike (Critical, initial guard landed)
 
