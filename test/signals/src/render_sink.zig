@@ -40,12 +40,20 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkReplaceChildrenForMoves(parent_elem_id, next_child_ids, counts);
         }
 
-        pub fn applyTextField(self: @This(), elem_id: u64, field: TextField, value: []const u8) bool {
-            return self.host.sinkApplyTextField(elem_id, field, value);
+        pub fn applyTextField(self: @This(), elem_id: u64, field: TextField, value: []const u8) void {
+            self.host.sinkApplyTextField(elem_id, field, value);
         }
 
-        pub fn applyBoolField(self: @This(), elem_id: u64, field: BoolField, value: bool) bool {
-            return self.host.sinkApplyBoolField(elem_id, field, value);
+        pub fn applyBoolField(self: @This(), elem_id: u64, field: BoolField, value: bool) void {
+            self.host.sinkApplyBoolField(elem_id, field, value);
+        }
+
+        pub fn clearTextField(self: @This(), elem_id: u64, field: TextField) void {
+            self.host.sinkClearTextField(elem_id, field);
+        }
+
+        pub fn clearBoolField(self: @This(), elem_id: u64, field: BoolField) void {
+            self.host.sinkClearBoolField(elem_id, field);
         }
 
         pub fn bindEvent(self: @This(), desc: anytype, event_id: u64) void {

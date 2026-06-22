@@ -769,19 +769,23 @@ const HostEnv = struct {
     }
 
     pub fn sinkReset(self: *HostEnv) void {
+        self.engine.resetRenderScalarCache(self);
         resetSimulatedDom(self);
     }
 
     pub fn sinkAppendNode(self: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+        self.engine.ensureRenderScalarNode(self, elem_id);
         appendDomNode(self, elem_id, parent_elem_id, tag);
     }
 
     pub fn sinkEnsureNode(self: *HostEnv, elem_id: u64, tag: []const u8, counts: *CommandCounts) void {
+        self.engine.ensureRenderScalarNode(self, elem_id);
         ensureDomNode(self, elem_id, tag, counts);
     }
 
     pub fn sinkRemoveNode(self: *HostEnv, elem_id: u64, counts: *CommandCounts) void {
         removeDomNode(self, elem_id, counts);
+        self.engine.tombstoneRenderScalarNode(self, elem_id);
     }
 
     pub fn sinkReplaceChildren(self: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
@@ -792,12 +796,20 @@ const HostEnv = struct {
         replaceDomChildrenForStructuralParentMoves(self, parent_elem_id, next_child_ids, counts);
     }
 
-    pub fn sinkApplyTextField(self: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) bool {
-        return applyRenderTextField(self, elem_id, field, value);
+    pub fn sinkApplyTextField(self: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) void {
+        setRenderTextField(self, elem_id, field, value);
     }
 
-    pub fn sinkApplyBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) bool {
-        return applyRenderBoolField(self, elem_id, field, value);
+    pub fn sinkApplyBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
+        setRenderBoolField(self, elem_id, field, value);
+    }
+
+    pub fn sinkClearTextField(self: *HostEnv, elem_id: u64, field: RenderTextField) void {
+        clearRenderTextField(self, elem_id, field);
+    }
+
+    pub fn sinkClearBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField) void {
+        clearRenderBoolField(self, elem_id, field);
     }
 
     pub fn sinkBindEvent(self: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
@@ -4136,6 +4148,7 @@ const HostEnv = struct {
         self.engine.scopes.deinit(allocator);
         self.engine.node_identities.deinit(allocator);
         self.engine.dom_identities.deinit(allocator);
+        self.engine.deinitRenderScalarCache(self);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -4515,6 +4528,20 @@ fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: 
     return true;
 }
 
+fn setOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) void {
+    if (field.*) |existing| {
+        allocator.free(existing);
+    }
+    field.* = allocator.dupe(u8, value) catch std.process.exit(1);
+}
+
+fn clearOwnedString(allocator: std.mem.Allocator, field: *?[]const u8) void {
+    if (field.*) |existing| {
+        allocator.free(existing);
+    }
+    field.* = null;
+}
+
 const BenchmarkStats = struct {
     init_roc_ns: u64 = 0,
     init_apply_ns: u64 = 0,
@@ -4609,6 +4636,11 @@ fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) 
     return false;
 }
 
+fn setElementText(host: *HostEnv, elem: *DomElement, text: []const u8) void {
+    setOwnedString(host.gpa.allocator(), &elem.text, text);
+    elem.text_update_count += 1;
+}
+
 fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8) bool {
     if (replaceOwnedString(host.gpa.allocator(), &elem.value, value)) {
         elem.value_update_count += 1;
@@ -4617,29 +4649,19 @@ fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8
     return false;
 }
 
-fn clearOwnedStringIfPresent(allocator: std.mem.Allocator, field: *?[]const u8) bool {
-    if (field.*) |existing| {
-        allocator.free(existing);
-        field.* = null;
-        return true;
-    }
-    return false;
+fn setElementValue(host: *HostEnv, elem: *DomElement, value: []const u8) void {
+    setOwnedString(host.gpa.allocator(), &elem.value, value);
+    elem.value_update_count += 1;
 }
 
-fn clearElementTextIfPresent(host: *HostEnv, elem: *DomElement) bool {
-    if (clearOwnedStringIfPresent(host.gpa.allocator(), &elem.text)) {
-        elem.text_update_count += 1;
-        return true;
-    }
-    return false;
+fn clearElementText(host: *HostEnv, elem: *DomElement) void {
+    clearOwnedString(host.gpa.allocator(), &elem.text);
+    elem.text_update_count += 1;
 }
 
-fn clearElementValueIfPresent(host: *HostEnv, elem: *DomElement) bool {
-    if (clearOwnedStringIfPresent(host.gpa.allocator(), &elem.value)) {
-        elem.value_update_count += 1;
-        return true;
-    }
-    return false;
+fn clearElementValue(host: *HostEnv, elem: *DomElement) void {
+    clearOwnedString(host.gpa.allocator(), &elem.value);
+    elem.value_update_count += 1;
 }
 
 fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
@@ -4651,6 +4673,11 @@ fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
     return false;
 }
 
+fn setElementChecked(elem: *DomElement, checked: bool) void {
+    elem.checked = checked;
+    elem.checked_update_count += 1;
+}
+
 fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) bool {
     if (elem.disabled != disabled) {
         elem.disabled = disabled;
@@ -4658,6 +4685,11 @@ fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) bool {
         return true;
     }
     return false;
+}
+
+fn setElementDisabled(elem: *DomElement, disabled: bool) void {
+    elem.disabled = disabled;
+    elem.disabled_update_count += 1;
 }
 
 fn resetSimulatedDom(host: *HostEnv) void {
@@ -4686,40 +4718,42 @@ fn domElementById(host: *HostEnv, id: u64) *DomElement {
     return elem;
 }
 
-fn applyRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) bool {
+fn setRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) void {
     const elem = domElementById(host, elem_id);
-    return switch (field) {
-        .text => setElementTextIfChanged(host, elem, value),
-        .role => replaceOwnedString(host.gpa.allocator(), &elem.role, value),
-        .label => replaceOwnedString(host.gpa.allocator(), &elem.label, value),
-        .test_id => replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
-        .value => setElementValueIfChanged(host, elem, value),
-    };
+    switch (field) {
+        .text => setElementText(host, elem, value),
+        .role => setOwnedString(host.gpa.allocator(), &elem.role, value),
+        .label => setOwnedString(host.gpa.allocator(), &elem.label, value),
+        .test_id => setOwnedString(host.gpa.allocator(), &elem.test_id, value),
+        .value => setElementValue(host, elem, value),
+    }
 }
 
-fn applyRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) bool {
+fn setRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
     const elem = domElementById(host, elem_id);
-    return switch (field) {
-        .checked => setElementCheckedIfChanged(elem, value),
-        .disabled => setElementDisabledIfChanged(elem, value),
-    };
+    switch (field) {
+        .checked => setElementChecked(elem, value),
+        .disabled => setElementDisabled(elem, value),
+    }
 }
 
-fn clearRenderTextField(host: *HostEnv, elem: *DomElement, field: RenderTextField) bool {
-    return switch (field) {
-        .text => clearElementTextIfPresent(host, elem),
-        .role => clearOwnedStringIfPresent(host.gpa.allocator(), &elem.role),
-        .label => clearOwnedStringIfPresent(host.gpa.allocator(), &elem.label),
-        .test_id => clearOwnedStringIfPresent(host.gpa.allocator(), &elem.test_id),
-        .value => clearElementValueIfPresent(host, elem),
-    };
+fn clearRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField) void {
+    const elem = domElementById(host, elem_id);
+    switch (field) {
+        .text => clearElementText(host, elem),
+        .role => clearOwnedString(host.gpa.allocator(), &elem.role),
+        .label => clearOwnedString(host.gpa.allocator(), &elem.label),
+        .test_id => clearOwnedString(host.gpa.allocator(), &elem.test_id),
+        .value => clearElementValue(host, elem),
+    }
 }
 
-fn clearRenderBoolField(elem: *DomElement, field: RenderBoolField) bool {
-    return switch (field) {
-        .checked => setElementCheckedIfChanged(elem, false),
-        .disabled => setElementDisabledIfChanged(elem, false),
-    };
+fn clearRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField) void {
+    const elem = domElementById(host, elem_id);
+    switch (field) {
+        .checked => setElementChecked(elem, false),
+        .disabled => setElementDisabled(elem, false),
+    }
 }
 
 fn appendDetachedDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
@@ -5025,7 +5059,7 @@ fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
     const value = evalHostSignalBinding(host, roc_host, signal);
     const text = callErasedHostValueToStr(roc_host, read, value);
     defer text.decref(roc_host);
-    const changed = host.sink().applyTextField(elem_id, field, text.asSlice());
+    const changed = host.engine.applyRenderTextField(host, elem_id, field, text.asSlice());
     cache_slot.replace(roc_host, &host.engine.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
@@ -5033,7 +5067,7 @@ fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, fie
 fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
     const value = evalHostSignalBinding(host, roc_host, signal);
     const bool_value = callErasedHostValueToBool(roc_host, read, value);
-    const changed = host.sink().applyBoolField(elem_id, field, bool_value);
+    const changed = host.engine.applyRenderBoolField(host, elem_id, field, bool_value);
     cache_slot.replace(roc_host, &host.engine.pending_roc_metrics, value, hostSignalBindingEqCallable(host, signal), hostSignalBindingDropCallable(host, signal));
     return changed;
 }
@@ -5047,7 +5081,7 @@ fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
     const text = callErasedHostValueToStr(roc_host, read, result.value);
     defer text.decref(roc_host);
-    return host.sink().applyTextField(elem_id, field, text.asSlice());
+    return host.engine.applyRenderTextField(host, elem_id, field, text.asSlice());
 }
 
 fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
@@ -5057,7 +5091,7 @@ fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
         return false;
     }
     if (!updateDirtySignalCache(host, roc_host, cache_slot, result.value)) return false;
-    return host.sink().applyBoolField(elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
+    return host.engine.applyRenderBoolField(host, elem_id, field, callErasedHostValueToBool(roc_host, read, result.value));
 }
 
 fn updateEffectSourceCacheSlot(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) bool {
@@ -5517,7 +5551,7 @@ fn applyActiveStreamTextAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem
         if (attr_index >= host.engine.active_stream.static_text_attrs.items.len) failHost("active static text attr index exceeded descriptor table");
         const desc = host.engine.active_stream.static_text_attrs.items[attr_index];
         if (desc.elem_id != elem_id or desc.field != field) failHost("active static text attr index pointed at the wrong field");
-        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5537,7 +5571,7 @@ fn applyActiveStreamBoolAttrForElem(host: *HostEnv, roc_host: *abi.RocHost, elem
         if (attr_index >= host.engine.active_stream.static_bool_attrs.items.len) failHost("active static bool attr index exceeded descriptor table");
         const desc = host.engine.active_stream.static_bool_attrs.items[attr_index];
         if (desc.elem_id != elem_id or desc.field != field) failHost("active static bool attr index pointed at the wrong field");
-        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5559,12 +5593,12 @@ fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_i
     const bool_fields = [_]RenderBoolField{ .checked, .disabled };
 
     for (text_fields) |field| {
-        if (!streamHasTextField(&host.engine.active_stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
+        if (!streamHasTextField(&host.engine.active_stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
             counts.addTextField(field);
         }
     }
     for (bool_fields) |field| {
-        if (!streamHasBoolField(&host.engine.active_stream, elem.id, field) and clearRenderBoolField(elem, field)) {
+        if (!streamHasBoolField(&host.engine.active_stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
             counts.addBoolField(field);
         }
     }
@@ -5573,7 +5607,7 @@ fn applyActiveStreamFieldsForElem(host: *HostEnv, roc_host: *abi.RocHost, elem_i
         if (text_index >= host.engine.active_stream.text_nodes.items.len) failHost("active text node index exceeded descriptor table");
         const desc = host.engine.active_stream.text_nodes.items[text_index];
         if (desc.elem_id != elem_id) failHost("active text node index pointed at the wrong elem id");
-        if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
+        if (host.engine.applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5645,12 +5679,12 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
         if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
 
         for (text_fields) |field| {
-            if (!streamHasTextField(stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
+            if (!streamHasTextField(stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
                 counts.addTextField(field);
             }
         }
         for (bool_fields) |field| {
-            if (!streamHasBoolField(stream, elem.id, field) and clearRenderBoolField(elem, field)) {
+            if (!streamHasBoolField(stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
                 counts.addBoolField(field);
             }
         }
@@ -5658,7 +5692,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
 
     host.engine.recordStreamNodesScanned(stream.text_nodes.items.len);
     for (stream.text_nodes.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.engine.applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5670,7 +5704,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
     host.engine.recordStreamNodesScanned(stream.static_text_attrs.items.len);
     for (stream.static_text_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.engine.applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5682,7 +5716,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     }
     host.engine.recordStreamNodesScanned(stream.static_bool_attrs.items.len);
     for (stream.static_bool_attrs.items) |desc| {
-        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
+        if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and host.engine.applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5724,7 +5758,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
                 host.sink().appendNode(desc.elem_id, desc.parent_elem_id, "text");
                 counts.addCreateElement();
                 counts.addAppendChild();
-                if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
+                if (host.engine.applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
                     counts.addTextField(.text);
                 }
             },
@@ -5741,7 +5775,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
     }
 
     for (stream.static_text_attrs.items) |desc| {
-        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5751,7 +5785,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
         }
     }
     for (stream.static_bool_attrs.items) |desc| {
-        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }
@@ -5935,19 +5969,19 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         if (index == 0 or index >= seen.len or !seen[index] or !elem.active) continue;
 
         for (text_fields) |field| {
-            if (!streamHasTextField(stream, elem.id, field) and clearRenderTextField(host, elem, field)) {
+            if (!streamHasTextField(stream, elem.id, field) and host.engine.clearRenderTextField(host, elem.id, field)) {
                 counts.addTextField(field);
             }
         }
         for (bool_fields) |field| {
-            if (!streamHasBoolField(stream, elem.id, field) and clearRenderBoolField(elem, field)) {
+            if (!streamHasBoolField(stream, elem.id, field) and host.engine.clearRenderBoolField(host, elem.id, field)) {
                 counts.addBoolField(field);
             }
         }
     }
 
     for (stream.text_nodes.items) |desc| {
-        if (host.sink().applyTextField(desc.elem_id, .text, desc.value)) {
+        if (host.engine.applyRenderTextField(host, desc.elem_id, .text, desc.value)) {
             counts.addTextField(.text);
         }
     }
@@ -5957,7 +5991,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.static_text_attrs.items) |desc| {
-        if (host.sink().applyTextField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderTextField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addTextField(desc.field);
         }
     }
@@ -5967,7 +6001,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
         }
     }
     for (stream.static_bool_attrs.items) |desc| {
-        if (host.sink().applyBoolField(desc.elem_id, desc.field, desc.value)) {
+        if (host.engine.applyRenderBoolField(host, desc.elem_id, desc.field, desc.value)) {
             counts.addBoolField(desc.field);
         }
     }

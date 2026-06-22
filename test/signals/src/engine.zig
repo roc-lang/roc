@@ -30,6 +30,43 @@ pub const RenderEventKind = render.EventKind;
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
 
+const RenderScalarNodeCache = struct {
+    active: bool = false,
+    text: ?[]const u8 = null,
+    role: ?[]const u8 = null,
+    label: ?[]const u8 = null,
+    test_id: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+    checked: ?bool = null,
+    disabled: ?bool = null,
+
+    fn deinit(self: *RenderScalarNodeCache, allocator: std.mem.Allocator) void {
+        if (self.text) |text| allocator.free(text);
+        if (self.role) |role| allocator.free(role);
+        if (self.label) |label| allocator.free(label);
+        if (self.test_id) |test_id| allocator.free(test_id);
+        if (self.value) |value| allocator.free(value);
+        self.* = .{};
+    }
+
+    fn textSlot(self: *RenderScalarNodeCache, field: RenderTextField) *?[]const u8 {
+        return switch (field) {
+            .text => &self.text,
+            .role => &self.role,
+            .label => &self.label,
+            .test_id => &self.test_id,
+            .value => &self.value,
+        };
+    }
+
+    fn boolSlot(self: *RenderScalarNodeCache, field: RenderBoolField) *?bool {
+        return switch (field) {
+            .checked => &self.checked,
+            .disabled => &self.disabled,
+        };
+    }
+};
+
 pub const RuntimeMetrics = struct {
     active_graph_records_rebuilt: u64,
     append_child: u64,
@@ -1598,6 +1635,7 @@ pub fn Engine(comptime Ctx: type) type {
         active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
         active_change_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveChangeSignalSink)) = .empty,
         active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
+        render_scalar_nodes: std.ArrayListUnmanaged(RenderScalarNodeCache) = .empty,
         pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
         cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
         next_task_request_id: u64 = 1,
@@ -1626,6 +1664,100 @@ pub fn Engine(comptime Ctx: type) type {
             var metrics = self.pending_roc_metrics;
             metrics.bump(.each_key_compares, 1);
             self.pending_roc_metrics = metrics;
+        }
+
+        pub fn deinitRenderScalarCache(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            for (self.render_scalar_nodes.items) |*node| {
+                node.deinit(allocator);
+            }
+            self.render_scalar_nodes.deinit(allocator);
+            self.render_scalar_nodes = .empty;
+        }
+
+        pub fn resetRenderScalarCache(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            for (self.render_scalar_nodes.items) |*node| {
+                node.deinit(allocator);
+            }
+            self.render_scalar_nodes.items.len = 0;
+            self.ensureRenderScalarNode(ctx, 0);
+        }
+
+        pub fn ensureRenderScalarNode(self: *Self, ctx: anytype, elem_id: u64) void {
+            const allocator = Ctx.allocator(ctx);
+            const index: usize = @intCast(elem_id);
+            if (index > self.render_scalar_nodes.items.len) {
+                @panic("render scalar cache node ids must be dense and ordered by elem id");
+            }
+            if (index == self.render_scalar_nodes.items.len) {
+                self.render_scalar_nodes.append(allocator, .{ .active = true }) catch @panic("out of memory");
+                return;
+            }
+            if (!self.render_scalar_nodes.items[index].active) {
+                @panic("render descriptor referenced an inactive render scalar cache identity");
+            }
+        }
+
+        pub fn tombstoneRenderScalarNode(self: *Self, ctx: anytype, elem_id: u64) void {
+            const allocator = Ctx.allocator(ctx);
+            const index: usize = @intCast(elem_id);
+            if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
+                @panic("render scalar cache tombstoned a missing element");
+            }
+            self.render_scalar_nodes.items[index].deinit(allocator);
+        }
+
+        fn activeRenderScalarNode(self: *Self, elem_id: u64) *RenderScalarNodeCache {
+            const index: usize = @intCast(elem_id);
+            if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
+                @panic("render scalar command referenced missing element cache");
+            }
+            return &self.render_scalar_nodes.items[index];
+        }
+
+        pub fn applyRenderTextField(self: *Self, ctx: anytype, elem_id: u64, field: RenderTextField, value: []const u8) bool {
+            const allocator = Ctx.allocator(ctx);
+            const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
+            if (slot.*) |existing| {
+                if (std.mem.eql(u8, existing, value)) return false;
+            }
+
+            const value_copy = allocator.dupe(u8, value) catch @panic("out of memory");
+            if (slot.*) |existing| allocator.free(existing);
+            slot.* = value_copy;
+            Ctx.sink(ctx).applyTextField(elem_id, field, value);
+            return true;
+        }
+
+        pub fn applyRenderBoolField(self: *Self, ctx: anytype, elem_id: u64, field: RenderBoolField, value: bool) bool {
+            const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
+            if (slot.*) |existing| {
+                if (existing == value) return false;
+            }
+
+            slot.* = value;
+            Ctx.sink(ctx).applyBoolField(elem_id, field, value);
+            return true;
+        }
+
+        pub fn clearRenderTextField(self: *Self, ctx: anytype, elem_id: u64, field: RenderTextField) bool {
+            const allocator = Ctx.allocator(ctx);
+            const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
+            const existing = slot.* orelse return false;
+            allocator.free(existing);
+            slot.* = null;
+            Ctx.sink(ctx).clearTextField(elem_id, field);
+            return true;
+        }
+
+        pub fn clearRenderBoolField(self: *Self, ctx: anytype, elem_id: u64, field: RenderBoolField) bool {
+            const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
+            const existing = slot.* orelse return false;
+            slot.* = null;
+            if (!existing) return false;
+            Ctx.sink(ctx).clearBoolField(elem_id, field);
+            return true;
         }
 
         pub fn clearEventDescriptors(self: *Self) void {
