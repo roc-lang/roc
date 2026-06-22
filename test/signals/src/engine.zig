@@ -1746,6 +1746,115 @@ pub fn Engine(comptime Ctx: type) type {
             return descriptor.rank;
         }
 
+        pub fn nextDirtySignalGeneration(self: *Self) u64 {
+            if (self.dirty_signal_generation == std.math.maxInt(u64)) {
+                @panic("host dirty signal generation overflowed");
+            }
+            self.dirty_signal_generation += 1;
+            return self.dirty_signal_generation;
+        }
+
+        pub fn appendSignalAndDependents(self: *Self, allocator: std.mem.Allocator, signal_ids: *std.ArrayListUnmanaged(u64), signal_id: u64) void {
+            if (!u64SliceContains(signal_ids.items, signal_id)) {
+                signal_ids.append(allocator, signal_id) catch @panic("out of memory");
+            }
+
+            var index: usize = 0;
+            while (index < signal_ids.items.len) : (index += 1) {
+                const current_signal_id = signal_ids.items[index];
+                const dependents = self.dependentSignalIdsForSignal(current_signal_id) catch @panic("host signal dependent route table is invalid");
+                for (dependents) |dependent_signal_id| {
+                    if (!u64SliceContains(signal_ids.items, dependent_signal_id)) {
+                        signal_ids.append(allocator, dependent_signal_id) catch @panic("out of memory");
+                    }
+                }
+            }
+        }
+
+        pub fn sortSignalIdsByRank(self: *Self, signal_ids: []u64) void {
+            var index: usize = 1;
+            while (index < signal_ids.len) : (index += 1) {
+                const value = signal_ids[index];
+                const value_rank = self.signalRank(value) catch @panic("host signal rank table is invalid");
+                var insert_index = index;
+                while (insert_index > 0) {
+                    const previous = signal_ids[insert_index - 1];
+                    const previous_rank = self.signalRank(previous) catch @panic("host signal rank table is invalid");
+                    if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
+                    signal_ids[insert_index] = previous;
+                    insert_index -= 1;
+                }
+                signal_ids[insert_index] = value;
+            }
+        }
+
+        pub fn dirtySignalIdsForEvent(self: *Self, allocator: std.mem.Allocator, event_id: u64) []u64 {
+            var dirty_signal_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer dirty_signal_ids.deinit(allocator);
+
+            const source_signal_ids = self.sourceSignalIdsForEvent(event_id) catch @panic("event id has no host source signal route descriptor");
+            for (source_signal_ids) |signal_id| {
+                self.appendSignalAndDependents(allocator, &dirty_signal_ids, signal_id);
+            }
+
+            const signal_ids = dirty_signal_ids.toOwnedSlice(allocator) catch @panic("out of memory");
+            self.sortSignalIdsByRank(signal_ids);
+            return signal_ids;
+        }
+
+        pub fn activeSignalRank(self: *Self, record_id: u64) u64 {
+            return signal_graph.rank(HostSignalRecord, self.active_signal_graph.items, record_id) catch @panic("active signal record id has no graph node");
+        }
+
+        pub fn dependentActiveSignalRecordIds(self: *Self, record_id: u64) []const u64 {
+            return signal_graph.dependentIds(HostSignalRecord, self.active_signal_graph.items, record_id) catch @panic("active signal record id has no dependent table");
+        }
+
+        pub fn appendActiveSignalAndDependents(self: *Self, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
+            signal_graph.appendReachableDependents(HostSignalRecord, allocator, self.active_signal_graph.items, record_ids, record_id) catch |err| switch (err) {
+                error.OutOfMemory => @panic("out of memory"),
+                else => @panic("active signal dependent traversal referenced an unknown record"),
+            };
+        }
+
+        pub fn sortActiveSignalRecordIdsByRank(self: *Self, record_ids: []u64) void {
+            signal_graph.sortIdsByRank(HostSignalRecord, self.active_signal_graph.items, record_ids) catch {
+                @panic("active signal rank sort referenced an unknown record");
+            };
+        }
+
+        pub fn dirtyActiveSignalRecordIdsForSources(self: *Self, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
+            var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer dirty_record_ids.deinit(allocator);
+
+            for (dirty_source_node_ids) |source_node_id| {
+                const route_index: usize = @intCast(source_node_id);
+                if (route_index >= self.active_source_signal_routes.items.len) continue;
+
+                for (self.active_source_signal_routes.items[route_index].items) |record_id| {
+                    self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
+                }
+            }
+
+            const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
+            self.sortActiveSignalRecordIdsByRank(record_ids);
+            return record_ids;
+        }
+
+        pub fn dirtyActiveSignalRecordIdsForRoots(self: *Self, allocator: std.mem.Allocator, root_record_ids: []const u64) []u64 {
+            var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer dirty_record_ids.deinit(allocator);
+
+            for (root_record_ids) |record_id| {
+                if (record_id >= self.active_signal_graph.items.len) @panic("dirty active signal root referenced an unknown record");
+                self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
+            }
+
+            const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
+            self.sortActiveSignalRecordIdsByRank(record_ids);
+            return record_ids;
+        }
+
         pub fn stateIndexByNodeId(self: *Self, node_id: u64) ?usize {
             for (self.states.items, 0..) |state, index| {
                 if (state.active and state.state_id == node_id) return index;

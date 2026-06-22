@@ -919,11 +919,7 @@ const HostEnv = struct {
     }
 
     fn nextDirtySignalGeneration(self: *HostEnv) u64 {
-        if (self.engine.dirty_signal_generation == std.math.maxInt(u64)) {
-            failHost("host dirty signal generation overflowed");
-        }
-        self.engine.dirty_signal_generation += 1;
-        return self.engine.dirty_signal_generation;
+        return self.engine.nextDirtySignalGeneration();
     }
 
     fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
@@ -1707,19 +1703,7 @@ const HostEnv = struct {
     }
 
     fn appendSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, signal_ids: *std.ArrayListUnmanaged(u64), signal_id: u64) void {
-        if (!u64SliceContains(signal_ids.items, signal_id)) {
-            signal_ids.append(allocator, signal_id) catch std.process.exit(1);
-        }
-
-        var index: usize = 0;
-        while (index < signal_ids.items.len) : (index += 1) {
-            const current_signal_id = signal_ids.items[index];
-            for (self.dependentSignalIdsForSignal(current_signal_id)) |dependent_signal_id| {
-                if (!u64SliceContains(signal_ids.items, dependent_signal_id)) {
-                    signal_ids.append(allocator, dependent_signal_id) catch std.process.exit(1);
-                }
-            }
-        }
+        self.engine.appendSignalAndDependents(allocator, signal_ids, signal_id);
     }
 
     fn signalRank(self: *HostEnv, signal_id: u64) u64 {
@@ -1729,89 +1713,35 @@ const HostEnv = struct {
     }
 
     fn sortSignalIdsByRank(self: *HostEnv, signal_ids: []u64) void {
-        var index: usize = 1;
-        while (index < signal_ids.len) : (index += 1) {
-            const value = signal_ids[index];
-            const value_rank = self.signalRank(value);
-            var insert_index = index;
-            while (insert_index > 0) {
-                const previous = signal_ids[insert_index - 1];
-                const previous_rank = self.signalRank(previous);
-                if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
-                signal_ids[insert_index] = previous;
-                insert_index -= 1;
-            }
-            signal_ids[insert_index] = value;
-        }
+        self.engine.sortSignalIdsByRank(signal_ids);
     }
 
     fn dirtySignalIdsForEvent(self: *HostEnv, allocator: std.mem.Allocator, event_id: u64) []u64 {
-        var dirty_signal_ids: std.ArrayListUnmanaged(u64) = .empty;
-        errdefer dirty_signal_ids.deinit(allocator);
-
-        for (self.sourceSignalIdsForEvent(event_id)) |signal_id| {
-            self.appendSignalAndDependents(allocator, &dirty_signal_ids, signal_id);
-        }
-
-        const signal_ids = dirty_signal_ids.toOwnedSlice(allocator) catch std.process.exit(1);
-        self.sortSignalIdsByRank(signal_ids);
-        return signal_ids;
+        return self.engine.dirtySignalIdsForEvent(allocator, event_id);
     }
 
     fn activeSignalRank(self: *HostEnv, record_id: u64) u64 {
-        return signal_graph.rank(HostSignalRecord, self.engine.active_signal_graph.items, record_id) catch |err| {
-            failSignalGraphError(err, "active signal record id has no graph node", "active signal rank read missed a dependent edge");
-        };
+        return self.engine.activeSignalRank(record_id);
     }
 
     fn dependentActiveSignalRecordIds(self: *HostEnv, record_id: u64) []const u64 {
-        return signal_graph.dependentIds(HostSignalRecord, self.engine.active_signal_graph.items, record_id) catch |err| {
-            failSignalGraphError(err, "active signal record id has no dependent table", "active signal dependent table read missed a dependent edge");
-        };
+        return self.engine.dependentActiveSignalRecordIds(record_id);
     }
 
     fn appendActiveSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
-        signal_graph.appendReachableDependents(HostSignalRecord, allocator, self.engine.active_signal_graph.items, record_ids, record_id) catch |err| {
-            failSignalGraphError(err, "active signal dependent traversal referenced an unknown record", "active signal dependent traversal missed an edge");
-        };
+        self.engine.appendActiveSignalAndDependents(allocator, record_ids, record_id);
     }
 
     fn sortActiveSignalRecordIdsByRank(self: *HostEnv, record_ids: []u64) void {
-        signal_graph.sortIdsByRank(HostSignalRecord, self.engine.active_signal_graph.items, record_ids) catch |err| {
-            failSignalGraphError(err, "active signal rank sort referenced an unknown record", "active signal rank sort missed an edge");
-        };
+        self.engine.sortActiveSignalRecordIdsByRank(record_ids);
     }
 
     fn dirtyActiveSignalRecordIdsForSources(self: *HostEnv, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
-        var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
-        errdefer dirty_record_ids.deinit(allocator);
-
-        for (dirty_source_node_ids) |source_node_id| {
-            const route_index: usize = @intCast(source_node_id);
-            if (route_index >= self.engine.active_source_signal_routes.items.len) continue;
-
-            for (self.engine.active_source_signal_routes.items[route_index].items) |record_id| {
-                self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
-            }
-        }
-
-        const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch std.process.exit(1);
-        self.sortActiveSignalRecordIdsByRank(record_ids);
-        return record_ids;
+        return self.engine.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
     }
 
     fn dirtyActiveSignalRecordIdsForRoots(self: *HostEnv, allocator: std.mem.Allocator, root_record_ids: []const u64) []u64 {
-        var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
-        errdefer dirty_record_ids.deinit(allocator);
-
-        for (root_record_ids) |record_id| {
-            if (record_id >= self.engine.active_signal_graph.items.len) failHost("dirty active signal root referenced an unknown record");
-            self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
-        }
-
-        const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch std.process.exit(1);
-        self.sortActiveSignalRecordIdsByRank(record_ids);
-        return record_ids;
+        return self.engine.dirtyActiveSignalRecordIdsForRoots(allocator, root_record_ids);
     }
 
     fn recordDispatch(self: *HostEnv) void {
