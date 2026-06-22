@@ -72,6 +72,12 @@ pub fn init(control: *Control, image_offset: usize, image_size: usize) void {
     publish(control, 1, image_offset, image_size);
 }
 
+/// Mark publication as in progress before overwriting shared executable bytes.
+pub fn beginPublish(control: *Control) void {
+    const start = nextOddSequence(@atomicLoad(u64, &control.publish_sequence, .acquire));
+    @atomicStore(u64, &control.publish_sequence, start, .release);
+}
+
 /// Publish a replacement image for the host shim to load at the next safe point.
 pub fn publish(control: *Control, generation: u64, image_offset: usize, image_size: usize) void {
     const start = nextOddSequence(@atomicLoad(u64, &control.publish_sequence, .acquire));
@@ -219,7 +225,7 @@ test "hot reload publication snapshots reject in-progress writes" {
     var control = std.mem.zeroes(Control);
     init(&control, 512, 4096);
 
-    @atomicStore(u64, &control.publish_sequence, 3, .release);
+    beginPublish(&control);
     @atomicStore(u64, &control.image_offset, 8192, .release);
     @atomicStore(u64, &control.image_size, 16384, .release);
     @atomicStore(u64, &control.published_generation, 2, .release);

@@ -550,6 +550,10 @@ pub const PackageState = struct {
     name: []const u8,
     /// Root directory for the package
     root_dir: []const u8,
+    /// Exact package root file read during dependency discovery.
+    root_file: ?[]const u8,
+    /// Source state consumed for `root_file` during dependency discovery.
+    root_file_state: ?watch_inputs.State,
     /// Source URL data when this package came from a URL bundle.
     url: ?package_source.UrlSource,
     /// All modules in this package
@@ -567,6 +571,8 @@ pub const PackageState = struct {
         return .{
             .name = name,
             .root_dir = root_dir,
+            .root_file = null,
+            .root_file_state = null,
             .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
@@ -606,11 +612,19 @@ pub const PackageState = struct {
             std.debug.print("[PKG DEINIT] {s}: freeing name and root_dir\n", .{self.name});
         }
         if (self.url) |*url| url.deinit(gpa);
+        if (self.root_file) |root_file| gpa.free(root_file);
         gpa.free(self.name);
         gpa.free(self.root_dir);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] done\n", .{});
         }
+    }
+
+    pub fn setRootInput(self: *PackageState, gpa: Allocator, root_file: []const u8, state: watch_inputs.State) Allocator.Error!void {
+        const owned_root_file = try gpa.dupe(u8, root_file);
+        if (self.root_file) |old_root_file| gpa.free(old_root_file);
+        self.root_file = owned_root_file;
+        self.root_file_state = state;
     }
 
     pub fn urlId(self: *const PackageState) ?[]const u8 {
@@ -1360,6 +1374,10 @@ pub const Coordinator = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
 
+            if (pkg.root_file) |root_file| {
+                try self.appendWatchInput(&paths, &seen, root_file);
+            }
+
             for (pkg.modules.items) |*mod| {
                 try self.appendWatchInput(&paths, &seen, mod.path);
 
@@ -1388,6 +1406,16 @@ pub const Coordinator = struct {
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
+
+            if (pkg.root_file) |root_file| {
+                const state = pkg.root_file_state orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("coordinator package {s} has root_file without root_file_state", .{pkg.name});
+                    }
+                    unreachable;
+                };
+                try self.appendWatchInputState(&inputs, &seen, root_file, state);
+            }
 
             for (pkg.modules.items) |*mod| {
                 const env = mod.moduleEnv() orelse continue;
@@ -4924,6 +4952,36 @@ test "Coordinator package creation" {
     const retrieved = coord.packages.get("app");
     try std.testing.expect(retrieved != null);
     try std.testing.expectEqualStrings("app", retrieved.?.name);
+}
+
+test "Coordinator collectWatchInputStates includes package root state" {
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+
+    const root_hash = [_]u8{11} ** 32;
+    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
+    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
+
+    const inputs = try coord.collectWatchInputStates();
+    defer coord.freeWatchInputStates(inputs);
+
+    try std.testing.expectEqual(@as(usize, 1), inputs.len);
+    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    switch (inputs[0].state) {
+        .hash => |hash| try std.testing.expectEqualSlices(u8, &root_hash, &hash),
+        .missing, .unreadable => try std.testing.expect(false),
+    }
 }
 
 test "Coordinator module creation" {

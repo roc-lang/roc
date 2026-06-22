@@ -3659,6 +3659,7 @@ fn buildHotReloadChildArgv(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
+    reclaim_offset: usize,
     inputs_path: []const u8,
     source_rewrite: ?HotReloadSourceRewrite,
 ) Allocator.Error!WatchChildArgv {
@@ -3677,6 +3678,7 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--reclaim-offset={}", .{reclaim_offset});
     if (comptime is_windows) {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
     } else {
@@ -3707,6 +3709,7 @@ fn spawnHotReloadRebuild(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
+    reclaim_offset: usize,
     source_rewrite: ?HotReloadSourceRewrite,
 ) CliMainError!HotReloadRebuild {
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
@@ -3715,7 +3718,7 @@ fn spawnHotReloadRebuild(
     errdefer ctx.gpa.free(inputs_path);
     errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
 
-    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, inputs_path, source_rewrite);
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, reclaim_offset, inputs_path, source_rewrite);
     errdefer argv.deinit(ctx.gpa);
 
     const child = try spawnWatchChild(ctx, argv.argv);
@@ -3891,6 +3894,7 @@ fn runHotReloadDevShim(
                 shm_handle,
                 expected_host_identity,
                 next_generation,
+                hot_reload_reclaim_offset,
                 source_rewrite,
             );
             next_generation += 1;
@@ -3968,6 +3972,33 @@ test "hot reload host child maps the full shared-memory reservation" {
     try std.testing.expectEqual(original.ptr, child.ptr);
     try std.testing.expectEqual(@as(usize, 8192), child.size);
     try std.testing.expectEqual(@as(usize, 8192), child.mapped_size);
+}
+
+test "hot reload worker args require reclaim offset" {
+    const zero_host = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    const parsed = try parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--reclaim-offset=4096",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    });
+
+    try std.testing.expectEqual(@as(u64, 2), parsed.generation);
+    try std.testing.expectEqual(@as(usize, 4096), parsed.reclaim_offset);
+    try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    }));
 }
 
 /// Result of setting up shared memory with type checking information.
@@ -4136,6 +4167,7 @@ const HotReloadDevWorkerArgs = struct {
     path: []const u8,
     target: []const u8,
     generation: u64,
+    reclaim_offset: usize,
     shm_handle: []const u8,
     shm_size: usize,
     expected_host_identity: [32]u8,
@@ -4169,6 +4201,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var path: ?[]const u8 = null;
     var target: ?[]const u8 = null;
     var generation: ?u64 = null;
+    var reclaim_offset: ?usize = null;
     var shm_handle: ?[]const u8 = null;
     var shm_size: ?usize = null;
     var expected_host_identity: ?[32]u8 = null;
@@ -4186,6 +4219,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             target = value;
         } else if (hotReloadFlagValue(arg, "--generation")) |value| {
             generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--reclaim-offset")) |value| {
+            reclaim_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
             shm_handle = value;
         } else if (hotReloadFlagValue(arg, "--shm-size")) |value| {
@@ -4215,6 +4250,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .path = path orelse return error.InvalidArguments,
         .target = target orelse return error.InvalidArguments,
         .generation = generation orelse return error.InvalidArguments,
+        .reclaim_offset = reclaim_offset orelse return error.InvalidArguments,
         .shm_handle = shm_handle orelse return error.InvalidArguments,
         .shm_size = shm_size orelse return error.InvalidArguments,
         .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
@@ -4293,6 +4329,8 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
+    try shm.resetToUsedSize(args.reclaim_offset);
+    ipc.hot_reload.beginPublish(control);
     const publication = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
@@ -4536,6 +4574,8 @@ fn lowerLirWithCoordinator(
     try coord.start();
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
+    const root_package = resolved.packages[compile.package_resolution.Resolved.root_index];
+    try app_pkg.setRootInput(ctx.gpa, root_package.root_file, .{ .hash = root_package.root_source_hash });
     const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
     if (source_dir_override) |source_dir| {
@@ -4554,7 +4594,8 @@ fn lowerLirWithCoordinator(
             .url = url.url,
             .url_id = url.url_id,
         } else null;
-        _ = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+        const pkg = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+        try pkg.setRootInput(ctx.gpa, package.root_file, .{ .hash = package.root_source_hash });
     }
 
     {
@@ -7385,10 +7426,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
@@ -7734,10 +7772,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
@@ -8001,10 +8036,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
 
 // Test cache blob format
@@ -8705,7 +8737,7 @@ const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
 const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
 const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
 const WatchDirectoryError = Allocator.Error;
-const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode };
+const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
 const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
 const WatchChangeError = WatchSnapshotError;
 const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
@@ -9173,6 +9205,13 @@ fn writeBuildWatchInputsOnExit(ctx: *CliCtx, args: cli_args.BuildArgs, build_env
     };
 }
 
+fn exitBuildOnWarningsIfRequested(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv, total_warning_count: usize) void {
+    if (!args.exit_on_warnings or total_warning_count == 0) return;
+    writeBuildWatchInputsOnExit(ctx, args, build_env);
+    ctx.io.flush();
+    std.process.exit(2);
+}
+
 fn writeHotReloadWatchPathsFile(
     ctx: *CliCtx,
     file_path: []const u8,
@@ -9377,7 +9416,14 @@ fn refreshWatchState(
     if (watch_dirs.len > 0) {
         new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
         errdefer if (new_watcher) |watcher| watcher.deinit();
-        try new_watcher.?.start();
+        new_watcher.?.start() catch |err| switch (err) {
+            error.WatchBackendFailed => {
+                ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
+                ctx.io.flush();
+                return err;
+            },
+            else => return err,
+        };
     }
 
     const current_snapshot = try computeWatchSnapshot(ctx, owned_input_set.inputs);

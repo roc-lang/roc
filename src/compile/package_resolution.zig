@@ -92,6 +92,8 @@ pub const FetchedPackage = struct {
     root_file: []const u8,
     /// Absolute path of the directory containing the root file.
     root_dir: []const u8,
+    /// Hash of the normalized root source bytes consumed while scanning the header.
+    root_source_hash: [32]u8,
     /// Combined size of the bundle's extracted files in bytes (0 for local
     /// packages, which are not downloaded and not size-limited).
     content_bytes: u64,
@@ -165,6 +167,7 @@ pub const Resolved = struct {
         identity: []const u8,
         root_file: []const u8,
         root_dir: []const u8,
+        root_source_hash: [32]u8,
         /// Present iff this package came from a URL.
         url: ?UrlInfo,
         deps: []Dep,
@@ -239,6 +242,8 @@ pub const Sidecar = struct {
     /// tally. Derivable from the extracted bundle alone, so cache deletion
     /// can never change the tally.
     content_bytes: u64,
+    /// Hash of the normalized root source bytes consumed while scanning this bundle.
+    root_source_hash: [32]u8,
     deps: []const SidecarDep,
 
     pub const SidecarDep = struct {
@@ -247,7 +252,7 @@ pub const Sidecar = struct {
         is_platform: bool,
     };
 
-    pub const current_format: u32 = 1;
+    pub const current_format: u32 = 2;
 };
 
 const GroupChoice = struct {
@@ -954,6 +959,7 @@ pub const Resolver = struct {
             .identity = try out.dupe(u8, root_path),
             .root_file = try out.dupe(u8, root_node.root_file),
             .root_dir = try out.dupe(u8, root_node.root_dir),
+            .root_source_hash = root_node.root_source_hash,
             .url = null,
             .deps = &.{},
         });
@@ -973,6 +979,7 @@ pub const Resolver = struct {
                     .identity = try out.dupe(u8, abs),
                     .root_file = try out.dupe(u8, node.root_file),
                     .root_dir = try out.dupe(u8, node.root_dir),
+                    .root_source_hash = node.root_source_hash,
                     .url = null,
                     .deps = &.{},
                 });
@@ -985,6 +992,7 @@ pub const Resolver = struct {
                     .identity = try out.dupe(u8, choice.url),
                     .root_file = try out.dupe(u8, node.root_file),
                     .root_dir = try out.dupe(u8, node.root_dir),
+                    .root_source_hash = node.root_source_hash,
                     .url = .{
                         .url = try out.dupe(u8, choice.url),
                         .url_id = parsed.url_id,
@@ -1203,6 +1211,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
         .kind = fetched.kind,
         .root_file = try allocator.dupe(u8, fetched.root_file),
         .root_dir = try allocator.dupe(u8, fetched.root_dir),
+        .root_source_hash = fetched.root_source_hash,
         .content_bytes = fetched.content_bytes,
         .deps = deps,
     };
@@ -1278,9 +1287,16 @@ pub fn scanHeaderSource(
         .kind = kind,
         .root_file = root_file,
         .root_dir = root_dir,
+        .root_source_hash = sha256Bytes(src),
         .content_bytes = 0,
         .deps = deps.items,
     };
+}
+
+fn sha256Bytes(bytes: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return hasher.finalResult();
 }
 
 fn headerEndOffset(ast: *const parse.AST, header: parse.AST.Header) u32 {
@@ -1483,6 +1499,7 @@ pub const CtxFetcher = struct {
                 .kind = kind,
                 .root_file = root_file,
                 .root_dir = allocator.dupe(u8, package_dir) catch return null,
+                .root_source_hash = parsed.value.root_source_hash,
                 .content_bytes = parsed.value.content_bytes,
                 .deps = deps,
             },
@@ -1506,6 +1523,7 @@ pub const CtxFetcher = struct {
             .kind = @tagName(scanned.kind),
             .expanded_bytes = expanded_bytes,
             .content_bytes = scanned.content_bytes,
+            .root_source_hash = scanned.root_source_hash,
             .deps = deps,
         };
 
@@ -1619,6 +1637,7 @@ const TestRegistry = struct {
             .kind = package.kind,
             .root_file = try allocator.dupe(u8, root_file),
             .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
+            .root_source_hash = sha256Bytes(root_file),
             .content_bytes = package.content_bytes,
             .deps = deps,
         };

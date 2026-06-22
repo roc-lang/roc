@@ -512,6 +512,7 @@ pub const BuildEnv = struct {
 
         freeSlice(self.gpa, pkg.root_file);
         pkg.root_file = root_abs;
+        pkg.root_file_state = .{ .hash = header_info.source_hash };
         pkg.kind = header_info.kind;
 
         for (pkg.provides_entries.items) |entry| {
@@ -596,6 +597,7 @@ pub const BuildEnv = struct {
             .name = try self.gpa.dupe(u8, pkg_name),
             .kind = header_info.kind,
             .root_file = pkg_root_file,
+            .root_file_state = .{ .hash = header_info.source_hash },
             .root_dir = pkg_root_dir,
         });
 
@@ -661,6 +663,7 @@ pub const BuildEnv = struct {
                 try coord.ensurePackageWithUrl(entry.key_ptr.*, pkg.root_dir, url.view())
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
+            try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
 
             // Copy shorthands to coordinator package
             // Only copy shorthands that map to real packages, not module-as-package entries
@@ -1099,6 +1102,7 @@ pub const BuildEnv = struct {
         name: []u8,
         kind: PackageKind,
         root_file: []u8,
+        root_file_state: watch_inputs.State,
         root_dir: []u8,
         url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
@@ -1135,6 +1139,7 @@ pub const BuildEnv = struct {
 
     const HeaderInfo = struct {
         kind: PackageKind,
+        source_hash: [32]u8,
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -1257,7 +1262,7 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
-        var info = HeaderInfo{ .kind = .package };
+        var info = HeaderInfo{ .kind = .package, .source_hash = watch_inputs.hashBytes(src) };
         errdefer info.deinit(self.gpa);
 
         switch (header) {
@@ -1484,6 +1489,21 @@ pub const BuildEnv = struct {
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
+    fn currentFileWatchState(self: *BuildEnv, path: []const u8) Allocator.Error!watch_inputs.State {
+        var data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return .missing,
+            error.AccessDenied, error.StreamTooLong, error.IoError => return .unreadable,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        data = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
+            self.gpa.free(data);
+            return err;
+        };
+        defer self.gpa.free(data);
+
+        return .{ .hash = watch_inputs.hashBytes(data) };
+    }
+
     /// Cross-platform environment variable lookup.
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
@@ -1556,6 +1576,7 @@ pub const BuildEnv = struct {
         name: []const u8,
         kind: PackageKind,
         root_file_abs: []const u8,
+        root_file_state: watch_inputs.State,
         url: ?package_source.UrlSourceView,
     ) (Allocator.Error || error{PathOutsideWorkspace})!void {
         if (self.packages.getPtr(name)) |pkg| {
@@ -1595,6 +1616,7 @@ pub const BuildEnv = struct {
             .name = name_owned,
             .kind = kind,
             .root_file = file_owned,
+            .root_file_state = root_file_state,
             .root_dir = dir,
             .url = package_url,
         });
@@ -1764,7 +1786,7 @@ pub const BuildEnv = struct {
                 .url = url.url,
                 .url_id = url.url_id,
             } else null;
-            try self.ensurePackage(names[i], kind, package.root_file, url_view);
+            try self.ensurePackage(names[i], kind, package.root_file, .{ .hash = package.root_source_hash }, url_view);
         }
 
         // Wire every package's shorthand aliases.
@@ -1840,7 +1862,7 @@ pub const BuildEnv = struct {
             // Register this module as a package
             // Only allocate if package doesn't exist (ensurePackage makes its own copy)
             if (!self.packages.contains(module_name)) {
-                try self.ensurePackage(module_name, .module, module_path, null);
+                try self.ensurePackage(module_name, .module, module_path, try self.currentFileWatchState(module_path), null);
             }
 
             const pack = self.packages.getPtr(root_pkg_name) orelse return error.Internal;
@@ -2260,6 +2282,8 @@ pub const BuildEnv = struct {
             const pkg_name = entry.key_ptr.*;
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
+
+            try self.appendWatchInputState(&inputs, &seen, pkg.root_file, pkg.root_file_state);
 
             if (self.schedulers.get(pkg_name)) |sched| {
                 for (sched.modules.items) |*sched_mod| {
@@ -2754,6 +2778,46 @@ pub const BuildEnv = struct {
         }
     };
 };
+
+test "BuildEnv collectWatchInputStates includes package root state" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const cwd = try std.fs.path.resolve(allocator, &.{"."});
+    defer allocator.free(cwd);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        cwd,
+        testing.io,
+    );
+    defer env.deinit();
+
+    const root_hash = [_]u8{7} ** 32;
+    const key = try allocator.dupe(u8, "pkg");
+    errdefer allocator.free(key);
+
+    try env.packages.put(allocator, key, .{
+        .name = try allocator.dupe(u8, "pkg"),
+        .kind = .package,
+        .root_file = try allocator.dupe(u8, "/test/pkg/main.roc"),
+        .root_file_state = .{ .hash = root_hash },
+        .root_dir = try allocator.dupe(u8, "/test/pkg"),
+    });
+
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+
+    try testing.expectEqual(@as(usize, 1), inputs.len);
+    try testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    switch (inputs[0].state) {
+        .hash => |hash| try testing.expectEqualSlices(u8, &root_hash, &hash),
+        .missing, .unreadable => try testing.expect(false),
+    }
+}
 
 // OrderedSink buffers reports and emits them in a deterministic global order.
 // - Sorting key: (min dependency depth from root app, then package and module names for internal sorting only)
