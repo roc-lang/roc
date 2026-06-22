@@ -712,13 +712,15 @@ The host retains a metrics record for benchmarking. The meaningful counters
 are: `events_processed`, `nodes_recomputed` (should track changed nodes, not
 graph size), `propagation_prunes` (`is_eq` short-circuits), `derived_calls_into_roc`
 (direct retained-thunk invocations per event), `recompute_batches`,
-`patches_emitted`, `scopes_created`, `scopes_disposed`, `rows_reused`,
-`rows_created`, `rows_removed`, `closure_retains`, `closure_releases`, and
-`retained_alloc_delta`. `rows_reused` must count actual subtree reuse — a row is
-only counted as reused when its scope (and local state) is preserved across the
-update. These counters are what the simulated host buys us: they let a spec
-assert *exactly* how much work an event caused, which is the property we most
-need to prove and which a real browser would not expose.
+`patches_emitted`, render command counters (`reset_dom`, `create_element`,
+`append_child`, `set_text`, `set_value`, `set_checked`, `set_disabled`,
+`set_metadata`, `bind_event`), `scopes_created`, `scopes_disposed`,
+`rows_reused`, `rows_created`, `rows_removed`, `closure_retains`,
+`closure_releases`, and `retained_alloc_delta`. `rows_reused` must count actual
+subtree reuse — a row is only counted as reused when its scope (and local state)
+is preserved across the update. These counters are what the simulated host buys
+us: they let a spec assert *exactly* how much work an event caused, which is the
+property we most need to prove and which a real browser would not expose.
 
 Counters that measure update amplification (`patches_emitted`,
 `nodes_recomputed`) are necessary but not sufficient: they count *emitted* and
@@ -747,7 +749,7 @@ Telemetry placement is deliberate:
 
 - **Spec assertions (`expect_metric_delta`)** carry the scaling *invariants* that
   must hold regardless of timing: `nodes_recomputed`, `patches_emitted`,
-  `derived_calls_into_roc`, `rows_reused/created/removed`,
+  render command counters, `derived_calls_into_roc`, `rows_reused/created/removed`,
   `active_graph_records_rebuilt`, `stream_nodes_scanned`, `each_key_compares`,
   and per-event allocation deltas. These fail the build when a path does O(N)
   work where the budget allows only O(changed).

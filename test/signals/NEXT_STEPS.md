@@ -54,8 +54,13 @@ history.
   replacement descriptors into retained active descriptors without re-entering
   the root `Elem` or materializing a full next active descriptor stream.
   Preserved-order `Ui.each` churn splices only removed/changed/new row scopes
-  before applying one DOM patch to the affected each site; reorder churn uses an
-  explicit whole-site replacement because row order actually changed.
+  before applying one DOM patch to the affected each site. Pure row permutations
+  reorder existing active render-row segments in place, update nested scope-site
+  insertion points, and patch the parent child list with moves counted by the
+  longest stable subsequence; they do not re-run row bodies, rebuild the active
+  signal graph, or rebind row events. Mixed set-change plus reorder churn still
+  uses the explicit whole-site replacement path until it gets its own
+  moves-plus-splices implementation.
 - `Ui.component` introduces reusable local scopes for helper-owned state. The
   component app proves multiple stateful instances keep separate construction
   identities across keyed row movement and dispose state when the owning row
@@ -113,19 +118,20 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   as `Hasher.finish : Hasher -> U64`. The generated large-N proof remains part
   of G-F6.
 
-### G-F4 — Moves-only reorder (High)
+### G-F4 — Moves-only reorder (High, pure-permutation slice done)
 
-- **Problem:** a pure permutation of surviving rows re-collects and re-splices
-  every row at the site (whole-site replacement) instead of emitting only the
-  displaced moves.
-- **Fix:** compute a longest-stable-subsequence keep set and emit DOM moves only
-  for displaced rows; do not re-collect descriptors or rebuild the site graph for
-  a permutation. Whole-site replacement stays reserved for genuine set changes
-  that cannot be expressed as moves-plus-local-splices, named explicitly and
-  asserted, never reached by fallthrough.
-- **Counter + assertion:** the large-N reorder spec asserts `create_element 0`,
-  bounded `append_child` proportional to displaced rows, and bounded
-  `active_graph_records_rebuilt`.
+- **Status:** pure `Ui.each` permutations no longer re-collect row descriptors
+  or whole-site splice. The dirty path reorders existing active render-row
+  segments, updates descendant scope-site insertion indexes, and patches the
+  parent DOM child list using a longest-stable-subsequence move count.
+- **Counter + assertion:** host coverage asserts a `3 -> 1 -> 2` dirty reorder
+  emits one `append_child`, creates no elements, makes no row-body calls, and
+  rebuilds no active graph records. `kanban_board` now asserts the same
+  zero-create/one-move/no-rebuild budget for its real reorder action.
+- **Remaining:** the generated large-N app still needs to pin the same invariant
+  across N. Mixed set-change plus reorder churn still uses the explicit
+  whole-site path and should get a named moves-plus-local-splices path before it
+  is treated as complete.
 
 ### G-F5 — Telemetry and benchmark-gate coverage (High)
 
@@ -150,7 +156,7 @@ result. Each slice lands its fix *and* the assertion that locks it in.
   reorder using the new counters. This extends the G-F1 active-graph canary from
   host unit coverage to a generated app, and is the primary proof for G-F2..G-F4
   plus the allocation-flatness part of the success metrics.
-- **`kanban_board`** reorder and filter steps gain `mark_metrics` /
+- **`kanban_board`** reorder and filter steps now carry `mark_metrics` /
   `expect_metric_delta` blocks bounding work.
 - **`async_effects`** gains a `retained_alloc_delta` / closure-balance assertion
   after the open/close cancel cycle to prove no lifecycle leak.

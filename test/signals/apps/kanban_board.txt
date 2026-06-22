@@ -16,11 +16,29 @@ expect_text text:"Design signal graph progress: 0 / notes: 0" "Design signal gra
 click role:button name:"Advance Design signal graph"
 expect_text text:"Design signal graph progress: 1 / notes: 0" "Design signal graph progress: 1 / notes: 0"
 
+mark_metrics
 click role:button name:"Reorder cards"
 expect_visible role:region name:"Tune keyed diff"
 expect_text text:"Design signal graph progress: 1 / notes: 0" "Design signal graph progress: 1 / notes: 0"
+expect_metric_delta create_element 0
+expect_metric_delta append_child 1
+expect_metric_delta bind_event 0
+expect_metric_delta active_graph_records_rebuilt 0
+expect_metric_delta rows_reused 3
+expect_metric_delta rows_created 0
+expect_metric_delta rows_removed 0
+expect_metric_delta each_key_compares 9
 
+mark_metrics
 click role:button name:"Toggle focus filter"
 expect_text text:"Focus filter on" "Focus filter on"
 expect_visible role:region name:"Tune keyed diff"
 expect_text text:"Tune keyed diff progress: 0 / notes: 0" "Tune keyed diff progress: 0 / notes: 0"
+expect_metric_delta create_element 0
+expect_metric_delta append_child 1
+expect_metric_delta set_text 1
+expect_metric_delta active_graph_records_rebuilt 0
+expect_metric_delta rows_reused 1
+expect_metric_delta rows_created 0
+expect_metric_delta rows_removed 2
+expect_metric_delta each_key_compares 5

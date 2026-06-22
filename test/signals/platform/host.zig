@@ -23,9 +23,12 @@ const host_value_type_tags_enabled = switch (builtin.mode) {
 
 const RuntimeMetrics = struct {
     active_graph_records_rebuilt: u64,
+    append_child: u64,
     allocs_this_event: u64,
+    bind_event: u64,
     closure_releases: u64,
     closure_retains: u64,
+    create_element: u64,
     deallocs_this_event: u64,
     derived_calls_into_roc: u64,
     each_key_compares: u64,
@@ -35,11 +38,17 @@ const RuntimeMetrics = struct {
     propagation_prunes: u64,
     recompute_batches: u64,
     retained_alloc_delta: i64,
+    reset_dom: u64,
     rows_created: u64,
     rows_removed: u64,
     rows_reused: u64,
     scopes_created: u64,
     scopes_disposed: u64,
+    set_checked: u64,
+    set_disabled: u64,
+    set_metadata: u64,
+    set_text: u64,
+    set_value: u64,
     stream_nodes_scanned: u64,
 };
 
@@ -1399,8 +1408,42 @@ const HostKeyedRowDiffResult = struct {
     }
 };
 
+const HostEachRowRenderSegment = struct {
+    scope_id: u64,
+    start: usize,
+    len: usize,
+};
+
+const HostEachRowRenderMove = struct {
+    old_start: usize,
+    new_start: usize,
+    len: usize,
+};
+
 const HostRenderMetrics = struct {
     patches_emitted: u64 = 0,
+    reset_dom: u64 = 0,
+    create_element: u64 = 0,
+    append_child: u64 = 0,
+    set_text: u64 = 0,
+    set_value: u64 = 0,
+    set_checked: u64 = 0,
+    set_disabled: u64 = 0,
+    set_metadata: u64 = 0,
+    bind_event: u64 = 0,
+
+    fn addCommandCounts(self: *HostRenderMetrics, counts: CommandCounts) void {
+        self.patches_emitted += counts.total;
+        self.reset_dom += counts.reset_dom;
+        self.create_element += counts.create_element;
+        self.append_child += counts.append_child;
+        self.set_text += counts.set_text;
+        self.set_value += counts.set_value;
+        self.set_checked += counts.set_checked;
+        self.set_disabled += counts.set_disabled;
+        self.set_metadata += counts.set_metadata;
+        self.bind_event += counts.bind_event;
+    }
 };
 
 const HostDispatchMetrics = struct {
@@ -4370,6 +4413,106 @@ const HostEnv = struct {
         return true;
     }
 
+    fn eachDiffIsPurePermutation(self: *HostEnv, old_render_rows: []const u64, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) bool {
+        if (diff.rows_created != 0 or diff.rows_removed != 0) return false;
+        if (diff.scope_ids.len != old_render_rows.len) return false;
+        for (diff.scope_ids, diff.row_items_changed) |scope_id, row_item_changed| {
+            if (row_item_changed) return false;
+            if (!u64SliceContains(old_render_rows, scope_id)) return false;
+            if (self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, scope_id, dirty_source_node_ids)) return false;
+        }
+        return true;
+    }
+
+    fn applyDirtyEachPermutationMoves(self: *HostEnv, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64) CommandCounts {
+        if (site.kind != .each) failHost("dirty each permutation move received a non-each site");
+
+        const allocator = self.gpa.allocator();
+        const each_site = HostEachSite{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal };
+        var segments: std.ArrayListUnmanaged(HostEachRowRenderSegment) = .empty;
+        defer segments.deinit(allocator);
+        var segment_indexes_by_scope: std.AutoHashMapUnmanaged(u64, usize) = .{};
+        defer segment_indexes_by_scope.deinit(allocator);
+
+        var render_index: usize = 0;
+        while (render_index < self.active_stream.render_nodes.items.len) {
+            const node = self.active_stream.render_nodes.items[render_index];
+            const scope_id = HostEnv.renderNodeScopeId(&self.active_stream, node);
+            const row_scope_id = self.eachSiteRowAncestorScopeId(scope_id, each_site) orelse {
+                render_index += 1;
+                continue;
+            };
+            const start = render_index;
+            render_index += 1;
+            while (render_index < self.active_stream.render_nodes.items.len) : (render_index += 1) {
+                const next_node = self.active_stream.render_nodes.items[render_index];
+                const next_scope_id = HostEnv.renderNodeScopeId(&self.active_stream, next_node);
+                const next_row_scope_id = self.eachSiteRowAncestorScopeId(next_scope_id, each_site);
+                if (next_row_scope_id == null or next_row_scope_id.? != row_scope_id) break;
+            }
+
+            const segment_index = segments.items.len;
+            segments.append(allocator, .{
+                .scope_id = row_scope_id,
+                .start = start,
+                .len = render_index - start,
+            }) catch std.process.exit(1);
+            const entry = segment_indexes_by_scope.getOrPut(allocator, row_scope_id) catch std.process.exit(1);
+            if (entry.found_existing) failHost("each row render nodes were split across multiple segments");
+            entry.value_ptr.* = segment_index;
+        }
+
+        if (segments.items.len != next_scope_ids.len) failHost("pure each permutation did not cover every rendered row");
+        if (segments.items.len == 0) return .{};
+
+        const region_start = segments.items[0].start;
+        var expected_start = region_start;
+        var total_len: usize = 0;
+        for (segments.items) |segment| {
+            if (segment.start != expected_start) failHost("each row render segments were not contiguous");
+            expected_start += segment.len;
+            total_len += segment.len;
+        }
+
+        var moves_by_scope: std.AutoHashMapUnmanaged(u64, HostEachRowRenderMove) = .{};
+        defer moves_by_scope.deinit(allocator);
+        const reordered_nodes = allocator.alloc(HostRenderNode, total_len) catch std.process.exit(1);
+        defer allocator.free(reordered_nodes);
+
+        var write_index: usize = 0;
+        for (next_scope_ids) |scope_id| {
+            const segment_index = segment_indexes_by_scope.get(scope_id) orelse failHost("pure each permutation referenced a row without render nodes");
+            const segment = segments.items[segment_index];
+            const next_start = region_start + write_index;
+            @memcpy(reordered_nodes[write_index..][0..segment.len], self.active_stream.render_nodes.items[segment.start..][0..segment.len]);
+            moves_by_scope.put(allocator, scope_id, .{
+                .old_start = segment.start,
+                .new_start = next_start,
+                .len = segment.len,
+            }) catch std.process.exit(1);
+            write_index += segment.len;
+        }
+
+        if (write_index != total_len) failHost("pure each permutation wrote the wrong render-node count");
+        @memcpy(self.active_stream.render_nodes.items[region_start..][0..total_len], reordered_nodes);
+
+        for (self.active_stream.scope_sites.items) |*scope_site| {
+            const row_scope_id = self.eachSiteRowAncestorScopeId(scope_site.scope_id, each_site) orelse continue;
+            const move = moves_by_scope.get(row_scope_id) orelse failHost("scope site referenced a row missing from pure each permutation");
+            if (scope_site.render_insert_index < move.old_start) failHost("scope site insertion point preceded its row render segment");
+            const offset = scope_site.render_insert_index - move.old_start;
+            if (offset > move.len) failHost("scope site insertion point exceeded its row render segment");
+            scope_site.render_insert_index = move.new_start + offset;
+        }
+
+        var counts: CommandCounts = .{};
+        const children = streamDirectChildren(allocator, &self.active_stream, site.parent_elem_id);
+        defer allocator.free(children);
+        replaceDomChildrenForStructuralParentMoves(self, site.parent_elem_id, children, &counts);
+        self.render_metrics.addCommandCounts(counts);
+        return counts;
+    }
+
     fn lastRenderEndIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
         var end_index: ?usize = null;
         self.recordStreamNodesScanned(stream.render_nodes.items.len);
@@ -5814,9 +5957,12 @@ const HostEnv = struct {
 fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = 0,
+        .append_child = 0,
         .allocs_this_event = 0,
+        .bind_event = 0,
         .closure_releases = 0,
         .closure_retains = 0,
+        .create_element = 0,
         .deallocs_this_event = 0,
         .derived_calls_into_roc = 0,
         .each_key_compares = 0,
@@ -5826,11 +5972,17 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .propagation_prunes = 0,
         .recompute_batches = 0,
         .retained_alloc_delta = 0,
+        .reset_dom = 0,
         .rows_created = 0,
         .rows_removed = 0,
         .rows_reused = 0,
         .scopes_created = 0,
         .scopes_disposed = 0,
+        .set_checked = 0,
+        .set_disabled = 0,
+        .set_metadata = 0,
+        .set_text = 0,
+        .set_value = 0,
         .stream_nodes_scanned = 0,
     };
 }
@@ -6148,9 +6300,12 @@ const BenchmarkStats = struct {
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
+        .append_child = left.append_child + right.append_child,
         .allocs_this_event = left.allocs_this_event + right.allocs_this_event,
+        .bind_event = left.bind_event + right.bind_event,
         .closure_releases = left.closure_releases + right.closure_releases,
         .closure_retains = left.closure_retains + right.closure_retains,
+        .create_element = left.create_element + right.create_element,
         .deallocs_this_event = left.deallocs_this_event + right.deallocs_this_event,
         .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
         .each_key_compares = left.each_key_compares + right.each_key_compares,
@@ -6160,11 +6315,17 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .propagation_prunes = left.propagation_prunes + right.propagation_prunes,
         .recompute_batches = left.recompute_batches + right.recompute_batches,
         .retained_alloc_delta = left.retained_alloc_delta + right.retained_alloc_delta,
+        .reset_dom = left.reset_dom + right.reset_dom,
         .rows_created = left.rows_created + right.rows_created,
         .rows_removed = left.rows_removed + right.rows_removed,
         .rows_reused = left.rows_reused + right.rows_reused,
         .scopes_created = left.scopes_created + right.scopes_created,
         .scopes_disposed = left.scopes_disposed + right.scopes_disposed,
+        .set_checked = left.set_checked + right.set_checked,
+        .set_disabled = left.set_disabled + right.set_disabled,
+        .set_metadata = left.set_metadata + right.set_metadata,
+        .set_text = left.set_text + right.set_text,
+        .set_value = left.set_value + right.set_value,
         .stream_nodes_scanned = left.stream_nodes_scanned + right.stream_nodes_scanned,
     };
 }
@@ -6175,6 +6336,15 @@ fn u64MetricAsI64(value: u64) i64 {
 
 fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "active_graph_records_rebuilt")) return u64MetricAsI64(metrics.active_graph_records_rebuilt);
+    if (std.mem.eql(u8, name, "reset_dom")) return u64MetricAsI64(metrics.reset_dom);
+    if (std.mem.eql(u8, name, "create_element")) return u64MetricAsI64(metrics.create_element);
+    if (std.mem.eql(u8, name, "append_child")) return u64MetricAsI64(metrics.append_child);
+    if (std.mem.eql(u8, name, "set_text")) return u64MetricAsI64(metrics.set_text);
+    if (std.mem.eql(u8, name, "set_value")) return u64MetricAsI64(metrics.set_value);
+    if (std.mem.eql(u8, name, "set_checked")) return u64MetricAsI64(metrics.set_checked);
+    if (std.mem.eql(u8, name, "set_disabled")) return u64MetricAsI64(metrics.set_disabled);
+    if (std.mem.eql(u8, name, "set_metadata")) return u64MetricAsI64(metrics.set_metadata);
+    if (std.mem.eql(u8, name, "bind_event")) return u64MetricAsI64(metrics.bind_event);
     if (std.mem.eql(u8, name, "allocs_this_event")) return u64MetricAsI64(metrics.allocs_this_event);
     if (std.mem.eql(u8, name, "deallocs_this_event")) return u64MetricAsI64(metrics.deallocs_this_event);
     if (std.mem.eql(u8, name, "events_processed")) return u64MetricAsI64(metrics.events_processed);
@@ -7073,7 +7243,7 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
         }
     }
 
-    host.render_metrics.patches_emitted += counts.total;
+    host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -7156,6 +7326,75 @@ fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNodeDes
     }
 
     return children.toOwnedSlice(allocator) catch std.process.exit(1);
+}
+
+fn stableSubsequenceLength(indexes: []const usize, scratch: []usize) usize {
+    var len: usize = 0;
+    for (indexes) |index| {
+        var low: usize = 0;
+        var high = len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (scratch[mid] < index) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        scratch[low] = index;
+        if (low == len) len += 1;
+    }
+    return len;
+}
+
+fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
+    const allocator = host.gpa.allocator();
+    if (parent_elem_id >= host.dom_elements.items.len) failHost("structural move referenced missing parent");
+    const parent = &host.dom_elements.items[@intCast(parent_elem_id)];
+    if (!parent.active) {
+        var message: [128]u8 = undefined;
+        const rendered = std.fmt.bufPrint(&message, "structural move referenced inactive parent {d}", .{parent_elem_id}) catch "structural move referenced inactive parent";
+        failHost(rendered);
+    }
+    if (parent.children.items.len != next_child_ids.len) failHost("pure structural move changed child count");
+
+    var old_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .{};
+    defer old_child_indexes.deinit(allocator);
+    for (parent.children.items, 0..) |child_id, index| {
+        const entry = old_child_indexes.getOrPut(allocator, child_id) catch std.process.exit(1);
+        if (entry.found_existing) failHost("parent child list contained duplicate element ids");
+        entry.value_ptr.* = index;
+    }
+
+    const old_indexes_in_next_order = allocator.alloc(usize, next_child_ids.len) catch std.process.exit(1);
+    defer allocator.free(old_indexes_in_next_order);
+    for (next_child_ids, 0..) |child_id, index| {
+        if (child_id >= host.dom_elements.items.len) failHost("structural move referenced missing child");
+        const child = &host.dom_elements.items[@intCast(child_id)];
+        if (!child.active) {
+            var message: [128]u8 = undefined;
+            const rendered = std.fmt.bufPrint(&message, "structural move referenced inactive child {d} under parent {d}", .{ child_id, parent_elem_id }) catch "structural move referenced inactive child";
+            failHost(rendered);
+        }
+        if (child.parent_id == null or child.parent_id.? != parent_elem_id) failHost("pure structural move crossed parent boundary");
+        old_indexes_in_next_order[index] = old_child_indexes.get(child_id) orelse failHost("pure structural move inserted a child");
+    }
+
+    const stable_scratch = allocator.alloc(usize, next_child_ids.len) catch std.process.exit(1);
+    defer allocator.free(stable_scratch);
+    const stable_len = stableSubsequenceLength(old_indexes_in_next_order, stable_scratch);
+    const displaced_count = next_child_ids.len - stable_len;
+    var displaced_index: usize = 0;
+    while (displaced_index < displaced_count) : (displaced_index += 1) {
+        counts.addAppendChild();
+    }
+
+    for (next_child_ids) |child_id| {
+        host.dom_elements.items[@intCast(child_id)].parent_id = parent_elem_id;
+    }
+    parent.children.deinit(allocator);
+    parent.children = .empty;
+    parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
 }
 
 fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64, counts: *CommandCounts) void {
@@ -7451,7 +7690,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     applyStructuralEventBindingsForSeen(host, stream, seen, &counts);
 
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.patches_emitted += counts.total;
+    host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -7518,7 +7757,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
     }
 
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.patches_emitted += counts.total;
+    host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -7604,7 +7843,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
         evalOnChangeInitial(host, roc_host, desc);
     }
 
-    host.render_metrics.patches_emitted += counts.total;
+    host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -7742,7 +7981,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
     applyStructuralEventBindings(host, stream, seen, &counts);
 
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.patches_emitted += counts.total;
+    host.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -7979,6 +8218,15 @@ fn validateEventPayloadKind(desc: HostActiveEventDesc, actual_payload_kind: Even
 fn finishHostMetrics(host: *HostEnv) void {
     var metrics = addRuntimeMetrics(host.last_runtime_metrics, host.pending_roc_metrics);
     metrics.patches_emitted = host.render_metrics.patches_emitted;
+    metrics.reset_dom = host.render_metrics.reset_dom;
+    metrics.create_element = host.render_metrics.create_element;
+    metrics.append_child = host.render_metrics.append_child;
+    metrics.set_text = host.render_metrics.set_text;
+    metrics.set_value = host.render_metrics.set_value;
+    metrics.set_checked = host.render_metrics.set_checked;
+    metrics.set_disabled = host.render_metrics.set_disabled;
+    metrics.set_metadata = host.render_metrics.set_metadata;
+    metrics.bind_event = host.render_metrics.bind_event;
     metrics.events_processed = host.dispatch_metrics.events_processed;
     metrics.recompute_batches = host.dispatch_metrics.recompute_batches;
     host.last_runtime_metrics = metrics;
@@ -8038,6 +8286,13 @@ fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, di
 
                 if (old_active_rows.len == old_render_rows.len and HostEnv.eachDiffPreservesSurvivorRenderOrder(old_render_rows, diff.scope_ids)) {
                     const counts = host.applyDirtyEachRowScopeSplices(roc_host, site, each_desc, diff, dirty_source_node_ids);
+                    total_counts.addAll(counts);
+                    applied_any = true;
+                    continue;
+                }
+
+                if (old_active_rows.len == old_render_rows.len and host.eachDiffIsPurePermutation(old_render_rows, diff, dirty_source_node_ids)) {
+                    const counts = host.applyDirtyEachPermutationMoves(site, diff.scope_ids);
                     total_counts.addAll(counts);
                     applied_any = true;
                     continue;
@@ -8903,6 +9158,10 @@ test "signals metrics accumulate propagation pruning counters" {
     left.each_key_compares = 6;
     left.recompute_batches = 2;
     left.patches_emitted = 7;
+    left.create_element = 2;
+    left.append_child = 3;
+    left.set_text = 1;
+    left.bind_event = 1;
     left.stream_nodes_scanned = 12;
 
     var right = zeroRuntimeMetrics();
@@ -8916,6 +9175,10 @@ test "signals metrics accumulate propagation pruning counters" {
     right.each_key_compares = 7;
     right.recompute_batches = 1;
     right.patches_emitted = 13;
+    right.create_element = 5;
+    right.append_child = 8;
+    right.set_text = 2;
+    right.bind_event = 4;
     right.stream_nodes_scanned = 5;
     right.retained_alloc_delta = -2;
 
@@ -8930,6 +9193,10 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 13), total.each_key_compares);
     try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
+    try std.testing.expectEqual(@as(u64, 7), total.create_element);
+    try std.testing.expectEqual(@as(u64, 11), total.append_child);
+    try std.testing.expectEqual(@as(u64, 3), total.set_text);
+    try std.testing.expectEqual(@as(u64, 5), total.bind_event);
     try std.testing.expectEqual(@as(u64, 17), total.stream_nodes_scanned);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
 }
@@ -10138,6 +10405,79 @@ test "signals host dirty each append patches only changed row" {
     try std.testing.expectEqual(@as(u64, 3), patch_counts.total);
     try std.testing.expectEqual(patch_start + 3, host.render_metrics.patches_emitted);
     try std.testing.expect(activeTextElementId(&host, "row-25-25") != null);
+}
+
+test "signals host dirty each reorder moves rows without recollecting bodies" {
+    test_erased_callable_drop_count = 0;
+    test_row_elem_call_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const each = testNodeEachWithSignalAndRow(&roc_host, testNodeRefExpr(state_token), &testStatefulRowElemCallable);
+    const children = [_]abi.Elem{each};
+    const section = testElementWith(&roc_host, "section", &.{}, &children);
+
+    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueI64List(&roc_host, &initial_items), section);
+    defer abi.decrefElem(root, &roc_host);
+
+    var initial_stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &initial_stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &initial_stream);
+    host.active_stream = initial_stream;
+
+    try std.testing.expectEqual(@as(u64, 3), test_row_elem_call_count);
+    const section_id = host.active_stream.elements.items[0].elem_id;
+    const row_1_id = activeTextElementId(&host, "row-1-1") orelse unreachable;
+    const row_2_id = activeTextElementId(&host, "row-2-2") orelse unreachable;
+    const row_3_id = activeTextElementId(&host, "row-3-3") orelse unreachable;
+    try std.testing.expectEqualSlices(u64, &.{ row_1_id, row_2_id, row_3_id }, host.dom_elements.items[@intCast(section_id)].children.items);
+
+    const state_id = host.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.stateIndexByNodeId(state_id) orelse unreachable;
+
+    const reordered_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
+    testDropHostValue(&roc_host, host.states.items[state_index].cell.value);
+    host.states.items[state_index].cell.value = testHostValueI64List(&roc_host, &reordered_items);
+    host.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const dirty_structural_signals = collectDirtyStructuralSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, changed_record_ids, dirty_generation);
+    defer host.gpa.allocator().free(dirty_structural_signals);
+
+    try std.testing.expectEqual(@as(usize, 1), dirty_structural_signals.len);
+    try std.testing.expectEqual(HostActiveStructuralSignalKind.each, dirty_structural_signals[0].kind);
+
+    const rows_reused_start = host.pending_roc_metrics.rows_reused;
+    const rows_created_start = host.pending_roc_metrics.rows_created;
+    const rows_removed_start = host.pending_roc_metrics.rows_removed;
+    const row_call_start = test_row_elem_call_count;
+    const patch_start = host.render_metrics.patches_emitted;
+    const graph_rebuild_start = host.pending_roc_metrics.active_graph_records_rebuilt;
+
+    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+
+    try std.testing.expectEqual(@as(u64, 3), host.pending_roc_metrics.rows_reused - rows_reused_start);
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.rows_created - rows_created_start);
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.rows_removed - rows_removed_start);
+    try std.testing.expectEqual(@as(u64, 0), host.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
+    try std.testing.expectEqual(row_call_start, test_row_elem_call_count);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
+    try std.testing.expectEqual(@as(u64, 0), patch_counts.set_text);
+    try std.testing.expectEqual(@as(u64, 1), patch_counts.total);
+    try std.testing.expectEqual(patch_start + 1, host.render_metrics.patches_emitted);
+    try std.testing.expectEqualSlices(u64, &.{ row_3_id, row_1_id, row_2_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 }
 
 test "signals host updates nested when without rebuilding unchanged row" {
