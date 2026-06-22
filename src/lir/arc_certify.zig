@@ -58,6 +58,10 @@ pub const Diagnostic = struct {
     /// Lender/holder chain of the dead value at the violation.
     chain: [8]ChainLink = undefined,
     chain_len: usize = 0,
+    /// Number of procedures left unverified because their join-state enumeration
+    /// exceeded the certifier's budget (incompleteness, not a finding). Exposed for
+    /// tests/debugging; a nonzero value means certification was not exhaustive.
+    skipped_proc_count: usize = 0,
 
     pub const ChainLink = struct {
         value: u32,
@@ -122,7 +126,10 @@ pub fn certifyStore(
             // failing a valid build. `certifyProc` resets all per-proc state on the next call, and
             // its work stack is cleaned up on unwind, so skipping is safe. Real findings surface as
             // `error.Certification` and still propagate.
-            error.CertifierCapacityExceeded => continue,
+            error.CertifierCapacityExceeded => {
+                diag.skipped_proc_count += 1;
+                continue;
+            },
             else => |e| return e,
         };
     }
@@ -1767,9 +1774,13 @@ const Certifier = struct {
                         // procedure within budget," so the certifier abandons this procedure
                         // (leaving it unverified) rather than aborting the build or claiming a bug:
                         // a verification tool must only block on a positive finding, never on its
-                        // own incompleteness (issue 9658 was a valid 203-state scanner). Real
-                        // findings (leak / use-after-free / balance mismatch) still `fail` →
-                        // `error.Certification` → abort. The algorithmically-ideal fix is a
+                        // own incompleteness (issue 9658 was a valid 203-state scanner). Findings
+                        // on any path actually walked (leak / use-after-free / balance mismatch)
+                        // still `fail` → `error.Certification` → abort before the cap. The one case
+                        // the cap can mask is a real leak whose *only* symptom is an owned balance
+                        // that grows every iteration (balance is part of the per-join summary
+                        // digest), so the distinct-state count climbs without converging — that
+                        // proc is skipped rather than reported. The algorithmically-ideal fix is a
                         // converging dataflow fixpoint that joins entry states over a finite-height
                         // semilattice (bounding re-walks by lattice height rather than enumerating
                         // summaries); it remains future work because a correct join must preserve
@@ -1782,8 +1793,12 @@ const Certifier = struct {
                         }
                         const copy = try self.allocator.dupe(LocalSummary, jump_summary);
                         errdefer self.allocator.free(copy);
-                        try record.pending.append(self.allocator, copy);
+                        // Append to `work` first, while `errdefer` is the sole owner of
+                        // `copy`; `pending` takes ownership last, so neither append's
+                        // OOM path can double-free (the errdefer only fires before
+                        // `pending` owns it).
                         try work.append(self.allocator, .{ .join_body = jump_stmt.target });
+                        try record.pending.append(self.allocator, copy);
                     }
                     return;
                 },

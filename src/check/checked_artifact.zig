@@ -14309,17 +14309,17 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         const expected_payload = self.payload(expected);
         const actual_payload = self.payload(actual);
 
-        // A variable pinned to a numeric default (a number literal or numeric
-        // expression that defaults to `Dec`) can never be a structural aggregate
-        // (tag union, record, tuple). Treating it as a free wildcard would let a
-        // number silently satisfy such a requirement — e.g. `Err(a1 + a2)` / `Err(1)`
-        // satisfying a platform's `[Exit(I8), ..]` error row, which then reaches
-        // monotype lowering as an ownerless dispatcher (issues 9734, 9735). Reject it
-        // so the normal TYPE MISMATCH is reported. This stays narrow: a numeric var
-        // still matches a concrete numeric requirement (e.g. `Exit(1)` vs `Exit(I8)`),
-        // because a numeric type is not a structural aggregate.
-        if ((checkedTypePayloadIsNumericPinnedVar(expected_payload) and checkedTypePayloadIsStructuralAggregate(actual_payload)) or
-            (checkedTypePayloadIsNumericPinnedVar(actual_payload) and checkedTypePayloadIsStructuralAggregate(expected_payload)))
+        // A variable pinned to a literal default (a number literal/expression that
+        // defaults to `Dec`, or a string literal that defaults to `Str`) can never be
+        // a structural aggregate (tag union, record, tuple). Treating it as a free
+        // wildcard would let a literal silently satisfy such a requirement — e.g.
+        // `Err(a1 + a2)` / `Err(1)` satisfying a platform's `[Exit(I8), ..]` error
+        // row, which then reaches monotype lowering as an ownerless dispatcher (issues
+        // 9734, 9735). Reject it so the normal TYPE MISMATCH is reported. This stays
+        // narrow: a literal-default var still matches a concrete scalar requirement
+        // (e.g. `Exit(1)` vs `Exit(I8)`), because a scalar type is not an aggregate.
+        if ((checkedTypePayloadIsLiteralDefaultPinnedVar(expected_payload) and checkedTypePayloadIsStructuralAggregate(actual_payload)) or
+            (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and checkedTypePayloadIsStructuralAggregate(expected_payload)))
         {
             return false;
         }
@@ -17103,10 +17103,11 @@ fn checkedTypePayloadIsStructuralAggregate(payload: CheckedTypePayload) bool {
     };
 }
 
-/// A flex/rigid variable pinned to a numeric default — i.e. a number literal or a
-/// numeric expression that defaults to `Dec`. Such a variable can unify with a
-/// concrete numeric type, but never with a structural aggregate.
-fn checkedTypePayloadIsNumericPinnedVar(payload: CheckedTypePayload) bool {
+/// A flex/rigid variable pinned to a literal default — a number literal/expression
+/// that defaults to `Dec`, or a string literal that defaults to `Str`. Such a
+/// variable can unify with the corresponding concrete scalar type, but never with a
+/// structural aggregate.
+fn checkedTypePayloadIsLiteralDefaultPinnedVar(payload: CheckedTypePayload) bool {
     return switch (payload) {
         .flex, .rigid => |v| v.numeric_default_phase != null,
         else => false,

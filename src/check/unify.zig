@@ -2237,15 +2237,23 @@ const Unifier = struct {
                     constraint.origin = .{ .from_literal = .{ .numeral = merged } };
                 }
             }
-            // Preserve a body-forced where-clause across unification: if either side
-            // was marked `body_required`, the merged constraint keeps it, so a
-            // body-forced obligation is not downgraded when it unifies with a phantom
-            // copy of the same method.
-            if (constraint.origin == .where_clause) {
+            // Preserve a body-forced where-clause across unification. The bit only
+            // exists on a `where_clause` origin, so it survives only by keeping that
+            // origin — or by promoting a payload-less `method_call` to it (the gap the
+            // sweep would otherwise miss when a same-named direct call wins the merge).
+            // A `from_literal`/operator origin is left intact: its payload (numeral
+            // info, binop negation) is load-bearing for defaulting and reporting, and
+            // such a receiver is pinned by defaulting rather than flagged by the sweep,
+            // so dropping the bit there is correct (overwriting it breaks e.g. ranges).
+            {
                 const a_forced = two_constraints.a.origin == .where_clause and two_constraints.a.origin.where_clause.body_required;
                 const b_forced = two_constraints.b.origin == .where_clause and two_constraints.b.origin.where_clause.body_required;
                 if (a_forced or b_forced) {
-                    constraint.origin.where_clause.body_required = true;
+                    switch (constraint.origin) {
+                        .where_clause => constraint.origin.where_clause.body_required = true,
+                        .method_call => constraint.origin = .{ .where_clause = .{ .body_required = true } },
+                        .from_literal, .desugared_binop, .desugared_unaryop => {},
+                    }
                 }
             }
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);

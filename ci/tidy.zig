@@ -132,8 +132,10 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
 /// pathspecs match across directories, so this is not limited to tidy's normal
 /// file set.
 fn checkNoCommittedScratchFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
+    // `:(glob)**/plan.md` matches a file named exactly `plan.md` in any directory
+    // (including the repo root) without also catching e.g. `rollout_plan.md`.
     const run_result = try std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo", "*plan.md" },
+        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo", ":(glob)**/plan.md" },
     });
     defer gpa.free(run_result.stdout);
     defer gpa.free(run_result.stderr);

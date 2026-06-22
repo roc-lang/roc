@@ -7,11 +7,9 @@ test "issue 9711: custom interpolation against an instantiated annotation is a c
     // `MyType.from_interpolation` whose item type is `x`'s type. The call
     // `g({}, B)` makes the item type `{}`, but the annotation pins the result to
     // `MyType(Str)` — so the program is genuinely ill-typed (`MyType({})` vs
-    // `MyType(Str)`). Checking must report exactly one TYPE MISMATCH; previously the
-    // per-instantiation interpolation re-check unified the item type against the
-    // original (un-instantiated) part var instead of the instantiated one, dropping
-    // the mismatch so it surfaced as a postcheck invariant panic during monotype
-    // lowering instead.
+    // `MyType(Str)`). Checking must report exactly one TYPE MISMATCH: the
+    // per-instantiation interpolation re-check reconciles the item type against the
+    // instantiated part vars, so the mismatch surfaces here at check time.
     const src =
         \\MyType(val) := [A(val), B].{
         \\    from_interpolation : Str, Iter((val, Str)) -> MyType(val)

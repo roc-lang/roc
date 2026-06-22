@@ -5767,6 +5767,10 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     self.cir.store.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
                 }
             } else {
+                // A dispatcher created outside `checkExpr` has no recorded source
+                // expression to mark. Reporting still suffices: `unresolved_dispatcher`
+                // is `runtime_error` severity, so `hasUserErrors` blocks all lowering —
+                // the ownerless dispatch is never reached even without a per-expr mark.
                 primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
