@@ -5746,6 +5746,8 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
         // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
         // is a fresh instantiated var that unifies with nothing concrete, so it is
+        // absent from the pinnable set and reported.
+        //
         // A where-clause with an IN-MODULE dispatch use is stricter
         // (`external_pinnable`): the method is dispatched on this receiver here, so
         // this call must satisfy the copied contract now — lambda parameters inside

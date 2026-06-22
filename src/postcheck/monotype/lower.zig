@@ -5478,8 +5478,7 @@ const BodyContext = struct {
         {
             const crash_ty = expected_ret_ty orelse plan_ret_ty;
             try self.constrainTypeToMono(checked_ret_ty, crash_ty);
-            const msg = try self.builder.program.addStringLiteral("unresolved `where`-clause method dispatch on a polymorphic value");
-            return try self.builder.program.addExpr(.{ .ty = crash_ty, .data = .{ .crash = msg } });
+            return try self.runtimeCrashExpr(crash_ty, "unresolved `where`-clause method dispatch on a polymorphic value");
         }
         const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
