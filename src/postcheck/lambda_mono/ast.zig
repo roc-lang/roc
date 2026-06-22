@@ -89,10 +89,51 @@ pub const CaptureSlot = struct {
     symbol: Common.Symbol,
 };
 
+/// Compiler-generated branch that ties an ordinary presence condition to the
+/// payload local whose initialization that condition represents. The
+/// initialized branch may read `payload`; the uninitialized branch must not.
+pub const InitializedPayloadSwitch = struct {
+    cond: ExprId,
+    cond_mask: u64 = 1,
+    payload: LocalId,
+    uninitialized_is_cold: bool = false,
+    initialized: ExprId,
+    uninitialized: ExprId,
+};
+
+/// Compiler-generated Try sequencing. LIR lowering may turn this into direct
+/// control flow because the Err branch is known to be pure propagation.
+pub const TrySequence = struct {
+    try_expr: ExprId,
+    ok_local: LocalId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
+};
+
+/// Compiler-generated Try sequencing whose Ok payload is an immediately
+/// destructured record. LIR lowering binds these fields directly from the Ok
+/// tag payload.
+pub const TryRecordSequence = struct {
+    try_expr: ExprId,
+    value_local: LocalId,
+    value_field: Type.names.RecordFieldNameId,
+    rest_local: LocalId,
+    rest_field: Type.names.RecordFieldNameId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
+};
+
 /// Direct call to a known Lambda Mono function.
 pub const DirectCall = struct {
     target: FnId,
     args: Span(ExprId),
+    /// Explicit cold-call provenance from generated code. This prevents later
+    /// stages from inlining or laying out this call as if it were on a hot path.
+    is_cold: bool = false,
 };
 
 /// Indirect call through an erased callable value.
@@ -193,6 +234,16 @@ pub const ExprData = union(enum) {
         branches: Span(IfBranch),
         final_else: ExprId,
     },
+    /// Compiler-generated uninitialized value marker. LIR lowering may leave
+    /// the target local unbound instead of assigning a sentinel.
+    uninitialized,
+    uninitialized_payload: struct {
+        condition: LocalId,
+        mask: u64 = 1,
+    },
+    if_initialized_payload: InitializedPayloadSwitch,
+    try_sequence: TrySequence,
+    try_record_sequence: TryRecordSequence,
     block: struct {
         statements: Span(StmtId),
         final_expr: ExprId,

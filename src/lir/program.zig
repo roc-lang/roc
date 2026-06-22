@@ -45,7 +45,7 @@ pub const FnTemplate = struct {
 
 /// Capture field copied from a checked binder into a callable payload.
 pub const CaptureSlot = struct {
-    binder: checked.PatternBinderId,
+    id: const_store.CaptureId,
     slot: u32,
     plan: ConstPlanId,
 };

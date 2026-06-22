@@ -1527,9 +1527,11 @@ pub const Interpreter = struct {
                 .comptime_branch_taken => |marker| marker.next,
                 .incref => |stmt_next| stmt_next.next,
                 .decref => |stmt_next| stmt_next.next,
+                .decref_if_initialized => |stmt_next| stmt_next.next,
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
+                .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
                 .runtime_error,
@@ -1987,6 +1989,38 @@ pub const Interpreter = struct {
                     );
                     current = dec.next;
                 },
+                .decref_if_initialized => |dec| {
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, dec.cond),
+                        self.store.getLocal(dec.cond).layout_idx,
+                    );
+                    if ((cond_value & dec.cond_mask) == dec.cond_mask) {
+                        if (builtin.mode == .Debug and !frame.isAssigned(dec.value)) {
+                            debugPrint(
+                                "LIR/interpreter invariant violated before decref_if_initialized: local {d} unassigned in proc {d} at stmt {d}\n",
+                                .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            );
+                            self.debugDumpProc(frame.proc_id);
+                            self.debugPrintStmtChain(current, 20);
+                        }
+                        trace_rc.log("stmt decref_if_initialized: proc={d} stmt={d} cond={d} mask=0x{x} local={d} layout={d} ptr=0x{x}", .{
+                            @intFromEnum(frame.proc_id),
+                            @intFromEnum(current),
+                            @intFromEnum(dec.cond),
+                            dec.cond_mask,
+                            @intFromEnum(dec.value),
+                            @intFromEnum(self.store.getLocal(dec.value).layout_idx),
+                            @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
+                        });
+                        self.performExplicitRcStmt(
+                            dec.rc,
+                            try self.getLocalChecked(frame, dec.value),
+                            0,
+                            dec.atomicity,
+                        );
+                    }
+                    current = dec.next;
+                },
                 .free => |free_stmt| {
                     if (builtin.mode == .Debug and !frame.isAssigned(free_stmt.value)) {
                         debugPrint(
@@ -2040,6 +2074,29 @@ pub const Interpreter = struct {
                         }
                     }
                     current = target;
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, switch_stmt.cond),
+                        self.store.getLocal(switch_stmt.cond).layout_idx,
+                    );
+                    if (trace.enabled) {
+                        trace.log(
+                            "switch_initialized_payload: cond_local={d} mask=0x{x} payload_local={d} value={d} initialized={d} uninitialized={d}",
+                            .{
+                                @intFromEnum(switch_stmt.cond),
+                                switch_stmt.cond_mask,
+                                @intFromEnum(switch_stmt.payload),
+                                cond_value,
+                                @intFromEnum(switch_stmt.initialized_branch),
+                                @intFromEnum(switch_stmt.uninitialized_branch),
+                            },
+                        );
+                    }
+                    current = if ((cond_value & switch_stmt.cond_mask) == switch_stmt.cond_mask)
+                        switch_stmt.initialized_branch
+                    else
+                        switch_stmt.uninitialized_branch;
                 },
                 .str_match => |str_match| {
                     current = try self.execStrMatch(frame, current, str_match);
@@ -2287,6 +2344,16 @@ pub const Interpreter = struct {
                     });
                     stack.append(self.evalAllocator(), dec.next) catch return;
                 },
+                .decref_if_initialized => |dec| {
+                    debugPrint("    {d}: decref_if_initialized cond={d} mask=0x{x} value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(dec.cond),
+                        dec.cond_mask,
+                        @intFromEnum(dec.value),
+                        @intFromEnum(dec.next),
+                    });
+                    stack.append(self.evalAllocator(), dec.next) catch return;
+                },
                 .free => |dec| {
                     debugPrint("    {d}: free value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
@@ -2310,6 +2377,18 @@ pub const Interpreter = struct {
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    debugPrint("    {d}: switch_initialized_payload cond={d} mask=0x{x} payload={d} initialized={d} uninitialized={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(switch_stmt.cond),
+                        switch_stmt.cond_mask,
+                        @intFromEnum(switch_stmt.payload),
+                        @intFromEnum(switch_stmt.initialized_branch),
+                        @intFromEnum(switch_stmt.uninitialized_branch),
+                    });
+                    stack.append(self.evalAllocator(), switch_stmt.initialized_branch) catch return;
+                    stack.append(self.evalAllocator(), switch_stmt.uninitialized_branch) catch return;
                 },
                 .str_match => |str_match| {
                     debugPrint("    {d}: str_match source={d} on_match={d} on_miss={d}\n", .{
@@ -4336,6 +4415,40 @@ pub const Interpreter = struct {
                 val.write(u8, if (result) 1 else 0);
                 break :blk val;
             },
+            .str_is_eq_static_small => blk: {
+                const result = builtins.str.strEqualStaticSmall(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                    args[4].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_static_small_word_eq => blk: {
+                const result = builtins.str.strStaticSmallWordEq(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_static_small_word_caseless_eq => blk: {
+                const result = builtins.str.strStaticSmallWordCaselessEq(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
             .str_concat => self.callBuiltinStr2Mode(builtins.str.strConcatC, valueToRocStr(args[0]), valueToRocStr(args[1]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_contains => blk: {
                 const result = builtins.str.strContains(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -4376,6 +4489,58 @@ pub const Interpreter = struct {
             },
             .str_drop_prefix => self.callBuiltinStr2(builtins.str.strDropPrefix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
             .str_drop_suffix => self.callBuiltinStr2(builtins.str.strDropSuffix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
+            .str_find_first => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.findFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("str_find_first expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 3 or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
+                {
+                    return self.runtimeError("str_find_first expected fields after Str, before Str, found Bool");
+                }
+
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.before));
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 2)).write(u8, if (result.found) 1 else 0);
+                break :blk val;
+            },
+            .str_drop_prefix_caseless_ascii => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.strDropPrefixCaselessAscii(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("str_drop_prefix_caseless_ascii expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 2 or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
+                {
+                    return self.runtimeError("str_drop_prefix_caseless_ascii expected fields after Str, found Bool");
+                }
+
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).write(u8, if (result.found) 1 else 0);
+                break :blk val;
+            },
             .str_count_utf8_bytes => blk: {
                 const result = builtins.str.countUtf8Bytes(valueToRocStr(args[0]));
                 const val = try self.alloc(ll.ret_layout);

@@ -8,6 +8,9 @@
 pub const LowLevel = enum {
     // String operations
     str_is_eq,
+    str_is_eq_static_small,
+    str_static_small_word_eq,
+    str_static_small_word_caseless_eq,
     str_concat,
     str_contains,
     str_trim,
@@ -20,7 +23,9 @@ pub const LowLevel = enum {
     str_ends_with,
     str_repeat,
     str_drop_prefix,
+    str_drop_prefix_caseless_ascii,
     str_drop_suffix,
+    str_find_first,
     str_count_utf8_bytes,
     str_with_capacity,
     str_reserve,
@@ -628,7 +633,9 @@ pub const LowLevel = enum {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
+            .str_find_first,
             => RcEffect.retainsSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
@@ -728,6 +735,9 @@ pub const LowLevel = enum {
             => RcEffect.none(),
 
             .str_is_eq,
+            .str_is_eq_static_small,
+            .str_static_small_word_eq,
+            .str_static_small_word_caseless_eq,
             .str_contains,
             .str_caseless_ascii_equals,
             .str_starts_with,

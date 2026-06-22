@@ -10,7 +10,7 @@ platform ""
     packages {}
     provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host! }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
         arm64mac: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
