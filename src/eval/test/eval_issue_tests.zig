@@ -5,6 +5,50 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/9686
+        // A type alias (`Score : U64`) defined in an imported type module is used
+        // as a List element type. The comparator passed to List.sort_with desugars
+        // `a < b`/`a > b` to is_lt/is_gt static dispatches on `Score`. Across the
+        // module boundary the alias must be unwrapped to its U64 backing for static
+        // dispatch; otherwise the comparator fails to resolve / selects the wrong
+        // target and the list is not sorted (the issue's wrong `[70, 75, 40]`).
+        // Inline (single module) the alias collapses to U64 and sorts correctly.
+        // Correct top-3 descending of the input is [100, 90, 75].
+        .name = "issue 9686: imported type-module alias element sorts correctly",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "HighScores",
+            .source =
+            \\HighScores :: {}.{
+            \\    Score : U64
+            \\
+            \\    personal_top_three : List(Score) -> List(Score)
+            \\    personal_top_three = |scores| {
+            \\        scores->sort_desc().take_first(3)
+            \\    }
+            \\}
+            \\
+            \\sort_desc = |list| {
+            \\    list.sort_with(
+            \\        |a, b| if a < b {
+            \\            GT
+            \\        } else if a > b {
+            \\            LT
+            \\        } else {
+            \\            EQ
+            \\        },
+            \\    )
+            \\}
+            ,
+        }},
+        .source =
+        \\import HighScores
+        \\
+        \\main = HighScores.personal_top_three([10, 30, 90, 30, 100, 20, 10, 0, 30, 40, 40, 75, 70])
+        ,
+        .expected = .{ .inspect_str = "[100, 90, 75]" },
+    },
+    .{
         .name = "issue 8949: wasm evaluates to_str after boxed closure allocation",
         .source_kind = .module,
         .source =

@@ -885,6 +885,14 @@ const Constraint = union(enum) {
         /// error message — kept here rather than in `ctx` (which is purely
         /// diagnostic) so it doesn't have to ride inside the problem context.
         is_cross_reference: bool = false,
+        /// For a `recursive_def` edge, the referenced def's body var — the one
+        /// that carries the referenced def's annotated function type. It exists
+        /// only to let `defaultLiteralsAtGeneralizationBoundary` read which of a
+        /// recursive call's parameters are concretely annotated (and therefore
+        /// pin a literal argument) at a point where `expected` (a self-reference's
+        /// pattern var) is not yet unified with the annotation. Null for non-
+        /// recursive edges.
+        recursive_annotated_fn_var: ?Var = null,
     },
 
     pub const SafeList = MkSafeList(@This());
@@ -9470,6 +9478,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .actual = expr_var,
                                     .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                                     .is_cross_reference = true,
+                                    .recursive_annotated_fn_var = def_expr_var,
                                 } });
                             } else {
                                 // Unannotated member: the group is inferred together
@@ -9527,12 +9536,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         else
                             pat_var;
 
-                        // Write down this constraint for later validation
+                        // Write down this constraint for later validation. The
+                        // annotated body var is recorded only when the referenced
+                        // def is actually annotated: a literal argument is pinned to
+                        // an annotated parameter, never to one whose type was merely
+                        // inferred from the body.
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
                             .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                             .is_cross_reference = is_cross_reference,
+                            .recursive_annotated_fn_var = if (referenced_def.annotation != null)
+                                ModuleEnv.varFrom(referenced_def.expr)
+                            else
+                                null,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -13453,6 +13470,12 @@ fn freshRecursiveMethodPlaceholder(
         .actual = method_var,
         .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
         .is_cross_reference = is_cross_reference,
+        // A literal argument is pinned to an annotated parameter only; record the
+        // annotated body var solely when the referenced def carries an annotation.
+        .recursive_annotated_fn_var = if (def.annotation != null)
+            ModuleEnv.varFrom(def.expr)
+        else
+            null,
     } });
 
     return method_var;
@@ -14313,11 +14336,23 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // RETURN: a literal whose dispatch hangs off an unresolved recursive result
     // (e.g. `fc(.., fc(..) + 1)` where `fc : I64, I64 -> I64` — `1`'s `plus`
     // receiver is `fc(..)`'s return) stays protected until the recursion resolves
-    // and `plus` pins it to I64, instead of defaulting to Dec first. Seed only the
-    // RETURN, not the call's arguments: a literal passed directly as a recursive
-    // argument (e.g. `fib("bad arg")`) must stay a defaulting/error candidate so a
-    // genuine arg-type mismatch is still reported at the argument. Purely
-    // conservative for the return path — keeps more literals open, defaults none.
+    // and `plus` pins it to I64, instead of defaulting to Dec first.
+    //
+    // Also seed an ARGUMENT whose corresponding annotated parameter is concrete: a
+    // literal passed directly to a recursive call (e.g. `slice(rest, 0, end - 1)`
+    // where param 1 is annotated `U64`) must unify with that parameter's type when
+    // the deferred edge resolves, not default to Dec first. The annotated signature
+    // is read from `recursive_annotated_fn_var` (the referenced def's body var,
+    // carrying its annotated function like `List(a), U64, U64 -> List(a)`) — set
+    // only when the referenced def is actually annotated, since `eql.expected` (a
+    // self-reference's pattern var) is not yet unified with the annotation here.
+    // Resolving each parameter shows whether it pins the argument: a parameter that
+    // is still flex/rigid pins nothing, so its argument is left unseeded — and an
+    // unannotated recursive function records no fn var at all, so its arguments keep
+    // today's behavior. A genuinely mismatched argument (e.g. `fib("bad arg")`)
+    // carries a `Str`, not an open numeral, so seeding its var changes no defaulting
+    // and the real clash still surfaces. Purely conservative throughout: only ever
+    // keeps more literals open, defaults none.
     {
         var rec_iter = self.constraints.iterIndices();
         while (rec_iter.next()) |constraint_idx| {
@@ -14325,14 +14360,24 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
                 .eql => |eql| switch (eql.ctx) {
                     .recursive_def => {
                         const ref_resolved = self.types.resolveVar(eql.actual);
-                        switch (ref_resolved.desc.content) {
-                            .structure => |flat| switch (flat) {
-                                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                                    try self.collectReachableVars(func.ret, &self.boundary_reachable_vars);
-                                },
-                                else => {},
-                            },
-                            else => {},
+                        const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
+                        try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
+
+                        // The referenced def's annotated body var supplies the
+                        // parameter types: `expected` (a self-reference's pattern
+                        // var) is not yet unified with the annotation here, but the
+                        // body var has carried it since the body was checked.
+                        const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
+                        const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
+                        const call_args = self.types.sliceVars(ref_func.args);
+                        const param_vars = self.types.sliceVars(annotated_func.args);
+                        const arg_count = @min(call_args.len, param_vars.len);
+                        for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
+                            const param_content = self.types.resolveVar(param_var).desc.content;
+                            switch (param_content) {
+                                .flex, .rigid => {},
+                                .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
+                            }
                         }
                     },
                     else => {},

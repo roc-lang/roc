@@ -18027,6 +18027,7 @@ pub const CompileTimeRootTable = struct {
         checked_types: *const CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
+        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CompileTimeRootTable {
         const checked_bodies = checked_body_builder.storePtr();
         var roots = std.ArrayList(CompileTimeRoot).empty;
@@ -18147,7 +18148,9 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        for (source_nodes.statements, 0..) |reached, raw| {
+            if (!reached) continue;
+            const statement_idx: CIR.Statement.Idx = @enumFromInt(@as(u32, @intCast(raw)));
             const stmt = module_env.store.getStatement(statement_idx);
             if (stmt != .s_expect) continue;
             try appendCompileTimeRoot(&roots, allocator, .{
@@ -24709,6 +24712,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
+        &source_nodes,
     );
     errdefer compile_time_roots.deinit(allocator);
 
@@ -25229,6 +25233,7 @@ fn expectProvidedExportKind(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
+        &source_nodes,
     );
     defer compile_time_roots.deinit(allocator);
 

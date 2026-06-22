@@ -1543,3 +1543,70 @@ fn scalarConstNodeI64(
     };
     return actual;
 }
+
+test "issue 9733: nested expect statements are collected as test roots" {
+    // https://github.com/roc-lang/roc/issues/9733
+    // The module has two `expect`s: the outer one and the one nested inside its
+    // block body. Both must be collected as compile-time `expect` roots so that
+    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
+    // only the top-level expect is collected, so this count is 1 and `roc test`
+    // wrongly reports "All (1) tests passed".
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect {
+        \\    expect 3.I64 == 4.I64
+        \\    5.I64 == 5.I64
+        \\}
+        \\
+        \\main! = |_args| Ok({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.rootCheckedArtifact("app");
+
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        countCompileTimeRootKind(app_artifact, .expect),
+    );
+}

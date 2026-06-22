@@ -1109,14 +1109,35 @@ fn resolveStaticDispatchPlan(
 }
 
 fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
-    const raw = @intFromEnum(ty);
-    if (raw >= checked_types.store.payloads.items.len) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+    var current = ty;
+    // Aliases are transparent for static dispatch: an alias's method owner is its
+    // backing's owner. Walk the (finite) alias chain so an alias-over-nominal,
+    // alias-over-alias, or alias-over-builtin resolves to the underlying owner
+    // rather than the alias's own identity, where no methods are registered. The
+    // bound on iterations is the store size, so a cyclic chain cannot loop here.
+    var remaining = checked_types.store.payloads.items.len;
+    while (true) {
+        const raw = @intFromEnum(current);
+        if (raw >= checked_types.store.payloads.items.len) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+            }
+            unreachable;
         }
-        unreachable;
+        switch (checked_types.store.payloads.items[raw]) {
+            .alias => |alias| {
+                if (remaining == 0) {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+                    }
+                    unreachable;
+                }
+                remaining -= 1;
+                current = alias.backing;
+            },
+            else => |payload| return methodOwnerForCheckedPayload(payload),
+        }
     }
-    return methodOwnerForCheckedPayload(checked_types.store.payloads.items[raw]);
 }
 
 fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
@@ -1132,17 +1153,6 @@ fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
             .{ .nominal = .{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
-                .source_decl = null,
-            } },
-        .alias => |alias| if (alias.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = alias.origin_module,
-                .statement = source_decl,
-            } }
-        else
-            .{ .nominal = .{
-                .module_name = alias.origin_module,
-                .type_name = alias.name,
                 .source_decl = null,
             } },
         else => null,

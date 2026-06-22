@@ -6222,10 +6222,14 @@ const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
     var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    // `*`, `/`, `//`, and `%` form a single multiplicative precedence group,
+    // left-associative among each other (`right > left` makes a following
+    // same-group operator fail `left >= min_bp`, so `1 % 10 // 100` parses as
+    // `(1 % 10) // 100`). The group binds tighter than additive (`+`/`-`).
     table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 32, .right = 33 };
-    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 30, .right = 31 };
-    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 28, .right = 29 };
-    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 32, .right = 33 };
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };
