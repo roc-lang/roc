@@ -1091,9 +1091,7 @@ pub const PackageEnv = struct {
             try child.dependents.append(self.gpa, module_id);
 
             if (child_id == module_id or (try self.findPath(child_id, module_id)) != null) {
-                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep.addErrorMessage(msg);
+                var rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
 
                 if (try self.findPath(child_id, module_id)) |path| {
                     defer self.gpa.free(path);
@@ -1117,9 +1115,7 @@ pub const PackageEnv = struct {
                 }
 
                 try st.reports.append(self.gpa, rep);
-                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep_child.addErrorMessage(child_msg);
+                var rep_child = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
                 const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
                 try rep_child.document.addText(edge_msg2);
                 try rep_child.document.addAnnotated(st.name, .emphasized);
@@ -1278,9 +1274,7 @@ pub const PackageEnv = struct {
 
             if (child.visit_color == 1 or child_id == module_id) {
                 // Build a report on the current module describing the cycle
-                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep.addErrorMessage(msg);
+                var rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
 
                 // Build full cycle path lazily (rare path): child_id ... module_id -> child_id
                 if (try self.findPath(child_id, module_id)) |path| {
@@ -1308,9 +1302,7 @@ pub const PackageEnv = struct {
                 // Store the report on both modules for clarity
                 try st.reports.append(self.gpa, rep);
                 // Duplicate for child as well so it gets emitted too
-                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep_child.addErrorMessage(child_msg);
+                var rep_child = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
                 const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
                 try rep_child.document.addText(edge_msg2);
                 try rep_child.document.addAnnotated(st.name, .emphasized);

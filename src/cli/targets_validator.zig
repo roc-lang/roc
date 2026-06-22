@@ -241,13 +241,7 @@ pub fn createValidationReport(
         .valid => unreachable, // Should not create report for valid result
 
         .missing_targets_section => |info| {
-            var report = Report.init(allocator, "MISSING TARGETS SECTION", .runtime_error);
-
-            try report.document.addText("Platform headers must include a `targets` section that specifies");
-            try report.document.addLineBreak();
-            try report.document.addText("which targets this platform supports and what files to link.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            var report = try Report.init(allocator, "MISSING TARGETS SECTION", "Platform headers must include a targets section that specifies which targets this platform supports and what files to link.", .runtime_error);
 
             try report.document.addText("In ");
             try report.document.addAnnotated(info.platform_path, .emphasized);
@@ -280,14 +274,9 @@ pub fn createValidationReport(
         },
 
         .missing_files_directory => |info| {
-            var report = Report.init(allocator, "MISSING FILES DIRECTORY", .runtime_error);
-
-            try report.document.addText("The targets section specifies files directory ");
-            try report.document.addAnnotated(info.files_dir, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("but this directory doesn't exist.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The targets section specifies files directory {s} but this directory doesn't exist.", .{info.files_dir});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "MISSING FILES DIRECTORY", headline, .runtime_error);
 
             try report.document.addText("Create the directory structure:");
             try report.document.addLineBreak();
@@ -305,16 +294,9 @@ pub fn createValidationReport(
         },
 
         .missing_target_file => |info| {
-            var report = Report.init(allocator, "MISSING TARGET FILE", .runtime_error);
-
-            try report.document.addText("The targets section declares file ");
-            try report.document.addAnnotated(info.file_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("for target ");
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addText(" but this file doesn't exist.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The targets section declares file {s} for target {s} but this file doesn't exist.", .{ info.file_path, @tagName(info.target) });
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "MISSING TARGET FILE", headline, .runtime_error);
 
             try report.document.addText("Expected file at: ");
             try report.document.addAnnotated(info.expected_full_path, .emphasized);
@@ -328,17 +310,9 @@ pub fn createValidationReport(
         },
 
         .extra_file => |info| {
-            var report = Report.init(allocator, "EXTRA FILE IN TARGETS", .warning);
-
-            try report.document.addText("Found file ");
-            try report.document.addAnnotated(info.file_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("in target directory for ");
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("but this file isn't declared in the targets section.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "Found file {s} in target directory for {s} but this file isn't declared in the targets section.", .{ info.file_path, @tagName(info.target) });
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "EXTRA FILE IN TARGETS", headline, .warning);
 
             try report.document.addText("This file will not be included in the bundle.");
             try report.document.addLineBreak();
@@ -349,14 +323,9 @@ pub fn createValidationReport(
         },
 
         .empty_targets => |info| {
-            var report = Report.init(allocator, "EMPTY TARGETS SECTION", .runtime_error);
-
-            try report.document.addText("The targets section in ");
-            try report.document.addAnnotated(info.platform_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("doesn't declare any targets.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The targets section in {s} doesn't declare any targets.", .{info.platform_path});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "EMPTY TARGETS SECTION", headline, .runtime_error);
 
             try report.document.addText("Add at least one target to the exe, static_lib, or shared_lib section.");
             try report.document.addLineBreak();
@@ -365,16 +334,9 @@ pub fn createValidationReport(
         },
 
         .unsupported_target => |info| {
-            var report = Report.init(allocator, "UNSUPPORTED TARGET", .runtime_error);
-
-            try report.document.addText("The platform at ");
-            try report.document.addAnnotated(info.platform_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addText("does not support the ");
-            try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
-            try report.document.addText(" target.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The platform at {s} does not support the {s} target.", .{ info.platform_path, @tagName(info.requested_target) });
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "UNSUPPORTED TARGET", headline, .runtime_error);
 
             if (info.supported_targets.len > 0) {
                 try report.document.addText("Supported targets:");
@@ -398,15 +360,9 @@ pub fn createValidationReport(
         },
 
         .missing_cross_compile_host => |info| {
-            var report = Report.init(allocator, "MISSING HOST LIBRARY FOR CROSS-COMPILATION", .runtime_error);
-
-            try report.document.addText("Cannot cross-compile for ");
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addText(": the platform doesn't provide");
-            try report.document.addLineBreak();
-            try report.document.addText("a pre-built host library for this target.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "Cannot cross-compile for {s}: the platform doesn't provide a pre-built host library for this target.", .{@tagName(info.target)});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "MISSING HOST LIBRARY FOR CROSS-COMPILATION", headline, .runtime_error);
 
             try report.document.addText("Expected host library at:");
             try report.document.addLineBreak();
@@ -430,15 +386,9 @@ pub fn createValidationReport(
         },
 
         .unsupported_glibc_cross => |info| {
-            var report = Report.init(allocator, "GLIBC CROSS-COMPILATION NOT SUPPORTED", .runtime_error);
-
-            try report.document.addText("Cross-compilation to glibc targets (");
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addText(") is not supported on ");
-            try report.document.addAnnotated(info.host_os, .emphasized);
-            try report.document.addText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "Cross-compilation to glibc targets ({s}) is not supported on {s}.", .{ @tagName(info.target), info.host_os });
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "GLIBC CROSS-COMPILATION NOT SUPPORTED", headline, .runtime_error);
 
             try report.document.addText("glibc targets require dynamic linking with libc symbols that");
             try report.document.addLineBreak();
@@ -458,13 +408,9 @@ pub fn createValidationReport(
         },
 
         .no_platform_found => |info| {
-            var report = Report.init(allocator, "NO PLATFORM FOUND", .runtime_error);
-
-            try report.document.addText("The file ");
-            try report.document.addAnnotated(info.app_path, .emphasized);
-            try report.document.addText(" doesn't have a platform.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The file {s} doesn't have a platform.", .{info.app_path});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "NO PLATFORM FOUND", headline, .runtime_error);
 
             try report.document.addText("Every Roc application needs a platform. Add a platform declaration:");
             try report.document.addLineBreak();
@@ -479,13 +425,9 @@ pub fn createValidationReport(
         },
 
         .invalid_target => |info| {
-            var report = Report.init(allocator, "INVALID TARGET", .runtime_error);
-
-            try report.document.addText("The target ");
-            try report.document.addAnnotated(info.target_str, .emphasized);
-            try report.document.addText(" is not a valid build target.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The target {s} is not a valid build target.", .{info.target_str});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "INVALID TARGET", headline, .runtime_error);
 
             try report.document.addText("Valid targets are:");
             try report.document.addLineBreak();
@@ -502,12 +444,9 @@ pub fn createValidationReport(
         },
 
         .linker_failed => |info| {
-            var report = Report.init(allocator, "LINKER FAILED", .runtime_error);
-
-            try report.document.addText("Failed to create executable: ");
-            try report.document.addAnnotated(info.reason, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "Failed to create executable: {s}", .{info.reason});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "LINKER FAILED", headline, .runtime_error);
 
             try report.document.addText("This may indicate:");
             try report.document.addLineBreak();
@@ -522,11 +461,7 @@ pub fn createValidationReport(
         },
 
         .linker_not_available => {
-            var report = Report.init(allocator, "LINKER NOT AVAILABLE", .runtime_error);
-
-            try report.document.addText("The LLD linker is not available.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            var report = try Report.init(allocator, "LINKER NOT AVAILABLE", "The LLD linker is not available.", .runtime_error);
 
             try report.document.addText("This typically occurs when running a test executable");
             try report.document.addLineBreak();
@@ -541,19 +476,12 @@ pub fn createValidationReport(
         },
 
         .process_crashed => |info| {
-            var report = Report.init(allocator, "PROCESS CRASHED", .runtime_error);
-
-            if (info.is_access_violation) {
-                try report.document.addText("The program crashed with an access violation (segmentation fault).");
-            } else {
-                var buf: [32]u8 = undefined;
-                const code_str = std.fmt.bufPrint(&buf, "0x{X}", .{info.exit_code}) catch "unknown";
-
-                try report.document.addText("The program crashed with exception code: ");
-                try report.document.addAnnotated(code_str, .emphasized);
-            }
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = if (info.is_access_violation)
+                try allocator.dupe(u8, "The program crashed with an access violation (segmentation fault).")
+            else
+                try std.fmt.allocPrint(allocator, "The program crashed with exception code: 0x{X}", .{info.exit_code});
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "PROCESS CRASHED", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
             try report.document.addLineBreak();
@@ -573,8 +501,6 @@ pub fn createValidationReport(
         },
 
         .process_signaled => |info| {
-            var report = Report.init(allocator, "PROCESS KILLED BY SIGNAL", .runtime_error);
-
             const signal_name: []const u8 = switch (info.signal) {
                 11 => "SIGSEGV (Segmentation fault)",
                 6 => "SIGABRT (Aborted)",
@@ -585,14 +511,9 @@ pub fn createValidationReport(
                 else => "Unknown signal",
             };
 
-            try report.document.addText("The program was killed by signal ");
-            var buf: [8]u8 = undefined;
-            const sig_str = std.fmt.bufPrint(&buf, "{d}", .{info.signal}) catch "?";
-            try report.document.addAnnotated(sig_str, .emphasized);
-            try report.document.addText(": ");
-            try report.document.addAnnotated(signal_name, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            const headline = try std.fmt.allocPrint(allocator, "The program was killed by signal {d}: {s}", .{ info.signal, signal_name });
+            defer allocator.free(headline);
+            var report = try Report.init(allocator, "PROCESS KILLED BY SIGNAL", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
             try report.document.addLineBreak();

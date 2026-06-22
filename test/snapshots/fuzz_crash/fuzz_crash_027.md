@@ -232,8 +232,8 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 # PROBLEMS
 LEADING ZERO
-Numbers cannot have leading zeros.
 
+Numbers cannot have leading zeros.
 
                                                              ┌─────────────────┐
 ┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │

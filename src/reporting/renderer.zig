@@ -81,6 +81,10 @@ pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, con
     try writer.writeAll("**");
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
+    if (report.headline.len > 0) {
+        try writer.writeAll(report.headline);
+        try writer.writeByte('\n');
+    }
     try renderDocumentToMarkdown(&report.document, writer, config);
     try writer.writeAll("\n\n");
 }
@@ -241,9 +245,16 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         return;
     };
 
-    // The summary is the text up to the first line break before the region.
-    var summary_end = region.index;
-    {
+    // The headline rides the box's top edge. When the report supplies one
+    // explicitly, the whole document goes below the box. Otherwise (reports
+    // not yet migrated to a required headline) fall back to deriving it from
+    // the lead text up to the first line break before the region.
+    var summary_buf = std.array_list.Managed(u8).init(gpa);
+    defer summary_buf.deinit();
+    var below_start: usize = 0;
+    var summary: []const u8 = report.headline;
+    if (report.headline.len == 0) {
+        var summary_end = region.index;
         var i: usize = 0;
         while (i < region.index) : (i += 1) {
             if (elements[i] == .line_break) {
@@ -251,12 +262,10 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
                 break;
             }
         }
+        try collectPlainText(elements[0..summary_end], &summary_buf);
+        summary = std.mem.trim(u8, summary_buf.items, " ");
+        below_start = if (summary_end < region.index) summary_end + 1 else region.index;
     }
-
-    var summary_buf = std.array_list.Managed(u8).init(gpa);
-    defer summary_buf.deinit();
-    try collectPlainText(elements[0..summary_end], &summary_buf);
-    const summary = std.mem.trim(u8, summary_buf.items, " ");
 
     const title = report.title;
     const total: usize = config.getMaxLineWidth();
@@ -411,7 +420,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     }
 
     // Detailed explanation below the box, indented 4 spaces.
-    try renderBelowContent(writer, palette, config, elements, summary_end, region.index, gpa);
+    try renderBelowContent(writer, palette, config, elements, below_start, region.index, gpa);
 }
 
 /// Render the elements after the summary's first line (excluding the region),
@@ -421,7 +430,7 @@ fn renderBelowContent(
     palette: ColorPalette,
     config: ReportingConfig,
     elements: []const DocumentElement,
-    summary_end: usize,
+    below_start: usize,
     region_idx: usize,
     gpa: Allocator,
 ) (Allocator.Error || error{WriteFailed})!void {
@@ -430,7 +439,7 @@ fn renderBelowContent(
     var ann = std.array_list.Managed(Annotation).init(gpa);
     defer ann.deinit();
 
-    const mid_start = if (summary_end < region_idx) summary_end + 1 else region_idx;
+    const mid_start = @min(below_start, region_idx);
     if (mid_start < region_idx) {
         for (elements[mid_start..region_idx]) |el| try renderElementToTerminal(el, &buf.writer, palette, &ann, config);
     }
@@ -546,6 +555,14 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
     try writer.writeAll(report.title);
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
+    if (report.headline.len > 0) {
+        try writer.writeByte('\n');
+        const width: usize = config.getMaxLineWidth();
+        var it = std.mem.splitScalar(u8, report.headline, '\n');
+        while (it.next()) |ln| {
+            try wrapAndEmitBelowLine(writer, ln, 0, width);
+        }
+    }
     try renderDocumentToTerminal(&report.document, writer, palette, config);
     try writer.writeByte('\n');
 }
@@ -564,6 +581,10 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
     try writeEscapedHtml(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
+    if (report.headline.len > 0) {
+        try writeEscapedHtml(writer, report.headline);
+        try writer.writeAll("<br>\n");
+    }
     try renderDocumentToHtml(&report.document, writer, config);
     try writer.writeAll("</div>\n</div>\n");
 }
@@ -573,6 +594,10 @@ pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: 
     // LSP typically wants plain text without formatting
     try writer.writeAll(report.title);
     try writer.writeAll("\n\n");
+    if (report.headline.len > 0) {
+        try writer.writeAll(report.headline);
+        try writer.writeByte('\n');
+    }
     try renderDocumentToLsp(&report.document, writer, config);
 }
 
@@ -1331,7 +1356,7 @@ fn renderElementToLsp(element: DocumentElement, writer: *std.Io.Writer, config: 
 const testing = std.testing;
 
 test "render report to markdown" {
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
+    var report = try Report.init(testing.allocator, "TEST ERROR", "Something went wrong.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

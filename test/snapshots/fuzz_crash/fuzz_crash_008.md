@@ -14,8 +14,8 @@ PARSE ERROR - fuzz_crash_008.md:1:3:1:4
 PARSE ERROR - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
 ASCII CONTROL CHARACTER
-ASCII control characters are not allowed in Roc source code.
 
+ASCII control characters are not allowed in Roc source code.
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │

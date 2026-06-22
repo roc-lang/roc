@@ -18,7 +18,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     defer writer.deinit();
 
     // Create a Report
-    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);
+    var r = try Report.init(gpa, "SYNTAX PROBLEM", "", .runtime_error);
     defer r.deinit();
 
     // Add the document which describes the problem

@@ -459,12 +459,9 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "not implemented" diagnostic
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) Allocator.Error!Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
-        const owned_feature = try report.addOwnedString(feature);
-        try report.document.addReflowingText("This feature is not yet implemented: ");
-        try report.document.addAnnotatedText(owned_feature, reporting.Annotation.emphasized);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "This feature is not yet implemented: {s}", .{feature});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "NOT IMPLEMENTED", headline, .fatal);
         try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
         return report;
     }
@@ -477,10 +474,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
-        try report.document.addReflowingText("This where clause could not be parsed correctly.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "MALFORMED WHERE CLAUSE", "This where clause could not be parsed correctly.", .runtime_error);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -505,14 +499,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
-
-        const owned_literal = try report.addOwnedString(literal_text);
-
-        try report.document.addReflowingText("This number literal is not valid: ");
-        try report.document.addInlineCode(owned_literal);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "This number literal is not valid: {s}", .{literal_text});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "INVALID NUMBER", headline, .runtime_error);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -546,13 +535,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
-        const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addReflowingText("The name ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is already defined in this scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "The name {s} is already defined in this scope.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "DUPLICATE DEFINITION", headline, .warning);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -577,14 +562,11 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The module header says that {s} is exposed, but it is not defined anywhere in this module.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "EXPOSED BUT NOT DEFINED", headline, .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addReflowingText("The module header says that ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is exposed, but it is not defined anywhere in this module.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -610,14 +592,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
-        const owned_ident = try report.addOwnedString(ident_name);
+        const headline = try std.fmt.allocPrint(allocator, "The identifier {s} is exposed multiple times in the module header.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "REDUNDANT EXPOSED", headline, .warning);
 
-        try report.document.addReflowingText("The identifier ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is exposed multiple times in the module header.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -641,12 +619,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
-        const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addReflowingText("Nothing is named ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" in this scope.");
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "Nothing is named {s} in this scope.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "UNDEFINED VARIABLE", headline, .runtime_error);
         try report.document.addReflowingText("Is there an ");
         try report.document.addKeyword("import");
         try report.document.addReflowingText(" or ");
@@ -683,13 +658,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
-        const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addReflowingText("The value ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "The value {s} is assigned to itself, which would cause an infinite loop at runtime.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", headline, .runtime_error);
         try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -713,12 +684,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
-        const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" does not exist.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "{s} does not exist.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "DOES NOT EXIST", headline, .runtime_error);
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -739,12 +707,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
-        const owned_stmt = try report.addOwnedString(stmt_name);
-        try report.document.addReflowingText("The statement ");
-        try report.document.addInlineCode(owned_stmt);
-        try report.document.addReflowingText(" is not allowed at the top level.");
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "The statement {s} is not allowed at the top level.", .{stmt_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "INVALID STATEMENT", headline, .runtime_error);
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -767,10 +732,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
-        try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "UNKNOWN OPERATOR", "This looks like an operator, but it's not one I recognize!", .runtime_error);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -794,49 +756,38 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "invalid string interpolation" diagnostic
     pub fn buildInvalidStringInterpolationReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID INTERPOLATION", .runtime_error);
-        try report.document.addReflowingText("This string interpolation is not valid.");
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "INVALID INTERPOLATION", "This string interpolation is not valid.", .runtime_error);
         try report.document.addReflowingText("String interpolation should use the format: \"text ${expression} more text\"");
         return report;
     }
 
     /// Build a report for "pattern argument invalid" diagnostic
     pub fn buildPatternArgInvalidReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
-        try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
+        const report = try Report.init(allocator, "INVALID PATTERN", "Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.", .runtime_error);
         return report;
     }
 
     /// Build a report for "pattern not canonicalized" diagnostic
     pub fn buildPatternNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
-        try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
+        const report = try Report.init(allocator, "INVALID PATTERN", "This pattern contains invalid syntax or uses unsupported features.", .runtime_error);
         return report;
     }
 
     /// Build a report for "lambda not implemented" diagnostic
     pub fn buildCanLambdaNotImplementedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error);
-        try report.document.addReflowingText("Lambda expressions are not yet fully implemented.");
+        const report = try Report.init(allocator, "NOT IMPLEMENTED", "Lambda expressions are not yet fully implemented.", .runtime_error);
         return report;
     }
 
     /// Build a report for "lambda body not canonicalized" diagnostic
     pub fn buildLambdaBodyNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error);
-        try report.document.addReflowingText("The body of this lambda expression is not valid.");
+        const report = try Report.init(allocator, "INVALID LAMBDA", "The body of this lambda expression is not valid.", .runtime_error);
         return report;
     }
 
     /// Build a report for "if condition not canonicalized" diagnostic
     pub fn buildIfConditionNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID IF CONDITION", .runtime_error);
-        try report.document.addReflowingText("The condition in this ");
-        try report.document.addKeyword("if");
-        try report.document.addReflowingText(" expression could not be processed.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "INVALID IF CONDITION", "The condition in this if expression could not be processed.", .runtime_error);
         try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
         try report.document.addKeyword("Bool");
         try report.document.addReflowingText(" value (");
@@ -849,14 +800,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "if then not canonicalized" diagnostic
     pub fn buildIfThenNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
-        try report.document.addReflowingText("The ");
-        try report.document.addKeyword("then");
-        try report.document.addReflowingText(" branch of this ");
-        try report.document.addKeyword("if");
-        try report.document.addReflowingText(" expression could not be processed.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "INVALID IF BRANCH", "The then branch of this if expression could not be processed.", .runtime_error);
         try report.document.addReflowingText("The ");
         try report.document.addKeyword("then");
         try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
@@ -865,14 +809,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "if else not canonicalized" diagnostic
     pub fn buildIfElseNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
-        try report.document.addReflowingText("The ");
-        try report.document.addKeyword("else");
-        try report.document.addReflowingText(" branch of this ");
-        try report.document.addKeyword("if");
-        try report.document.addReflowingText(" expression could not be processed.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "INVALID IF BRANCH", "The else branch of this if expression could not be processed.", .runtime_error);
         try report.document.addReflowingText("The ");
         try report.document.addKeyword("else");
         try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
@@ -888,11 +825,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "var across function boundary" diagnostic
     pub fn buildVarAcrossFunctionBoundaryReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error);
-        try report.document.addReflowingText("Cannot reassign a ");
-        try report.document.addKeyword("var");
-        try report.document.addReflowingText(" from outside the function where it was declared.");
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "VAR REASSIGNMENT ERROR", "Cannot reassign a var from outside the function where it was declared.", .runtime_error);
         try report.document.addReflowingText("Variables declared with ");
         try report.document.addKeyword("var");
         try report.document.addReflowingText(" can only be reassigned within the same function scope.");
@@ -901,8 +834,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "malformed type annotation" diagnostic
     pub fn buildMalformedTypeAnnotationReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
-        try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+        const report = try Report.init(allocator, "MALFORMED TYPE", "This type annotation is malformed or contains invalid syntax.", .runtime_error);
         return report;
     }
 
@@ -910,10 +842,7 @@ pub const Diagnostic = union(enum) {
     pub fn buildInvalidSingleQuoteReport(
         allocator: Allocator,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID SCALAR", .runtime_error);
-
-        // Extract the literal's text from the source
-        try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it appears to be invalid.");
+        const report = try Report.init(allocator, "INVALID SCALAR", "I am part way through parsing this scalar literal (character literal), but it appears to be invalid.", .runtime_error);
 
         return report;
     }
@@ -926,11 +855,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
-        try report.document.addReflowingText("The ");
-        try report.document.addAnnotated("crash", .inline_code);
-        try report.document.addReflowingText(" keyword expects a string literal as its argument.");
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "CRASH EXPECTS STRING", "The crash keyword expects a string literal as its argument.", .runtime_error);
         try report.document.addReflowingText("For example: ");
         try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
         try report.document.addLineBreak();
@@ -952,9 +877,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", .runtime_error);
-        try report.document.addReflowingText("I am part way through parsing this tuple, but it is empty:");
-        try report.document.addLineBreak();
+        var report = try Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", "I am part way through parsing this tuple, but it is empty:", .runtime_error);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -979,13 +902,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
+        const headline = try std.fmt.allocPrint(allocator, "The name {s} is being redeclared in this scope.", .{ident_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "DUPLICATE DEFINITION", headline, .warning);
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addReflowingText("The name ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is being redeclared in this scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         // Show where the new declaration is
         try report.document.addReflowingText("The redeclaration is here:");
@@ -1025,13 +945,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The type {s} is being redeclared.", .{type_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE REDECLARED", headline, .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The type ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is being redeclared.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         // Show where the redeclaration is
         try report.document.addReflowingText("The redeclaration is here:");
@@ -1063,8 +980,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "malformed type annotation" diagnostic
     pub fn buildTupleElemNotCanonicalizedReport(allocator: Allocator) Allocator.Error!Report {
-        var report = Report.init(allocator, "INVALID TUPLE ELEMENT", .runtime_error);
-        try report.document.addReflowingText("This tuple element is malformed or contains invalid syntax.");
+        const report = try Report.init(allocator, "INVALID TUPLE ELEMENT", "This tuple element is malformed or contains invalid syntax.", .runtime_error);
         return report;
     }
 
@@ -1077,23 +993,15 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
-        const owned_type_name = try report.addOwnedString(type_name);
-
         // Check if this looks like a qualified type (contains dots)
         const has_dots = std.mem.findScalar(u8, type_name, '.') != null;
 
-        if (has_dots) {
-            try report.document.addReflowingText("Cannot resolve qualified type ");
-            try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(".");
-        } else {
-            try report.document.addReflowingText("The type ");
-            try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" is not declared in this scope.");
-        }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = if (has_dots)
+            try std.fmt.allocPrint(allocator, "Cannot resolve qualified type {s}.", .{type_name})
+        else
+            try std.fmt.allocPrint(allocator, "The type {s} is not declared in this scope.", .{type_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "UNDECLARED TYPE", headline, .runtime_error);
 
         try report.document.addReflowingText("This type is referenced here:");
         try report.document.addLineBreak();
@@ -1118,13 +1026,9 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
-        const owned_type_var_name = try report.addOwnedString(type_var_name);
-        try report.document.addReflowingText("The type variable ");
-        try report.document.addType(owned_type_var_name);
-        try report.document.addReflowingText(" is not declared in this scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "The type variable {s} is not declared in this scope.", .{type_var_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "UNDECLARED TYPE VARIABLE", headline, .runtime_error);
 
         try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
         try report.document.addLineBreak();
@@ -1154,12 +1058,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The type alias {s} is being redeclared.", .{type_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE ALIAS REDECLARED", headline, .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The type alias ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is being redeclared.");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Type aliases can only be declared once in the same scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -1202,12 +1104,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The nominal type {s} is being redeclared.", .{type_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "CUSTOM TYPE REDECLARED", headline, .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The nominal type ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is being redeclared.");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Custom types can only be declared once in the same scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -1254,23 +1154,19 @@ pub const Diagnostic = union(enum) {
         const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
         const title = if (cross_scope) "TYPE SHADOWED" else "TYPE DUPLICATE";
 
-        var report = Report.init(allocator, title, severity);
+        const headline = if (cross_scope)
+            try std.fmt.allocPrint(allocator, "The type {s} shadows a type from an outer scope.", .{type_name})
+        else
+            try std.fmt.allocPrint(allocator, "The type {s} is being redeclared in the same scope.", .{type_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, title, headline, severity);
         const owned_type_name = try report.addOwnedString(type_name);
 
         if (cross_scope) {
-            try report.document.addText("The type ");
-            try report.document.addUnqualifiedSymbol(owned_type_name);
-            try report.document.addText(" shadows a type from an outer scope.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
-        } else {
-            try report.document.addText("The type ");
-            try report.document.addUnqualifiedSymbol(owned_type_name);
-            try report.document.addText(" is being redeclared in the same scope.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
         }
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         // Show where the new declaration is
         try report.document.addText("The new declaration is here:");
@@ -1314,16 +1210,11 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE PARAMETER CONFLICT", .runtime_error);
-        const owned_type_name = try report.addOwnedString(type_name);
+        const headline = try std.fmt.allocPrint(allocator, "The type parameter {s} in type {s} conflicts with another declaration.", .{ parameter_name, type_name });
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE PARAMETER CONFLICT", headline, .runtime_error);
         const owned_parameter_name = try report.addOwnedString(parameter_name);
 
-        try report.document.addText("The type parameter ");
-        try report.document.addUnqualifiedSymbol(owned_parameter_name);
-        try report.document.addText(" in type ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" conflicts with another declaration.");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Type parameters must have unique names within their scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -1367,14 +1258,10 @@ pub const Diagnostic = union(enum) {
     ) Allocator.Error!Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
-        var report = Report.init(gpa, "UNUSED VARIABLE", .warning);
+        const headline = try std.fmt.allocPrint(gpa, "Variable {s} is defined here and then never used:", .{ident_name});
+        defer gpa.free(headline);
+        var report = try Report.init(gpa, "UNUSED VARIABLE", headline, .warning);
         const owned_ident = try report.addOwnedString(ident_name);
-
-        try report.document.addReflowingText("Variable ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is defined here and then never used:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
         const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
@@ -1407,14 +1294,9 @@ pub const Diagnostic = union(enum) {
     ) Allocator.Error!Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
-        var report = Report.init(gpa, "UNDERSCORE VARIABLE USED", .warning);
-        const owned_ident = try report.addOwnedString(ident_name);
-
-        try report.document.addReflowingText("Variable ");
-        try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is prefixed with an underscore but is actually used.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(gpa, "Variable {s} is prefixed with an underscore but is actually used.", .{ident_name});
+        defer gpa.free(headline);
+        var report = try Report.init(gpa, "UNDERSCORE VARIABLE USED", headline, .warning);
 
         try report.document.addReflowingText("Variables prefixed with ");
         try report.document.addInlineCode("_");
@@ -1448,14 +1330,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The record field {s} appears more than once in this record.", .{field_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "DUPLICATE RECORD FIELD", headline, .runtime_error);
         const owned_field_name = try report.addOwnedString(field_name);
-
-        try report.document.addReflowingText("The record field ");
-        try report.document.addRecordField(owned_field_name);
-        try report.document.addReflowingText(" appears more than once in this record.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         // Show where the duplicate field is
         try report.document.addReflowingText("This field is duplicated here:");
@@ -1490,15 +1368,13 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "f64 pattern literal" diagnostic
     pub fn buildF64PatternLiteralReport(allocator: Allocator, region: Region, source: []const u8) Allocator.Error!Report {
-        var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
-
         // Extract the literal's text from the source using its region
         const literal_text = source[region.start.offset..region.end.offset];
 
-        try report.document.addText("This floating-point literal cannot be used in a pattern match: ");
-        try report.document.addInlineCode(literal_text);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "This floating-point literal cannot be used in a pattern match: {s}", .{literal_text});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", headline, .runtime_error);
+
         try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
         try report.document.addInlineCode("Dec");
         try report.document.addReflowingText(" type and would require F64 representation. ");
@@ -1533,14 +1409,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "FILE NOT FOUND", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The file {s} was not found.", .{path});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "FILE NOT FOUND", headline, .runtime_error);
 
-        const owned_path = try report.addOwnedString(path);
-        try report.document.addReflowingText("The file ");
-        try report.document.addModuleName(owned_path);
-        try report.document.addReflowingText(" was not found.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure the file exists relative to your source file:");
         try report.document.addLineBreak();
 
@@ -1565,13 +1437,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "FILE IMPORT ERROR", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "Could not read the file {s}.", .{path});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "FILE IMPORT ERROR", headline, .runtime_error);
 
-        const owned_path = try report.addOwnedString(path);
-        try report.document.addReflowingText("Could not read the file ");
-        try report.document.addModuleName(owned_path);
-        try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("An IO error occurred while trying to read this file:");
         try report.document.addLineBreak();
 
@@ -1596,14 +1465,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "FILE NOT UTF-8", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The file {s} is not valid UTF-8.", .{path});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "FILE NOT UTF-8", headline, .runtime_error);
 
-        const owned_path = try report.addOwnedString(path);
-        try report.document.addReflowingText("The file ");
-        try report.document.addModuleName(owned_path);
-        try report.document.addReflowingText(" is not valid UTF-8.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
         try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`:");
         try report.document.addLineBreak();
 
@@ -1628,13 +1493,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The module {s} was not found.", .{module_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "MODULE NOT FOUND", headline, .runtime_error);
 
-        const owned_module = try report.addOwnedString(module_name);
-        try report.document.addReflowingText("The module ");
-        try report.document.addModuleName(owned_module);
-        try report.document.addReflowingText(" was not found.");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure this module is imported and available in your project.");
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1659,16 +1521,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The {s} module does not expose anything named {s}.", .{ module_name, value_name });
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "VALUE NOT EXPOSED", headline, .runtime_error);
 
-        const owned_module = try report.addOwnedString(module_name);
-        const owned_value = try report.addOwnedString(value_name);
-        try report.document.addReflowingText("The ");
-        try report.document.addModuleName(owned_module);
-        try report.document.addReflowingText(" module does not expose anything named ");
-        try report.document.addUnqualifiedSymbol(owned_value);
-        try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Split this out into multiple modules, or remove some of the exports.");
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1693,36 +1549,20 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
-
-        const owned_module = try report.addOwnedString(module_name);
-        const owned_type = try report.addOwnedString(type_name);
-
         // Check if trying to access a type with the same name as the module (e.g., Try.Try)
         const is_same_name = std.mem.eql(u8, module_name, type_name);
 
-        if (is_same_name) {
+        const headline = if (is_same_name)
             // Special message for Try.Try, Color.Color, etc.
-            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
-            defer allocator.free(qualified_name);
-            const owned_qualified = try report.addOwnedString(qualified_name);
-
-            try report.document.addReflowingText("There is no ");
-            try report.document.addType(owned_qualified);
-            try report.document.addReflowingText(" type.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-        } else {
+            try std.fmt.allocPrint(allocator, "There is no {s}.{s} type.", .{ module_name, type_name })
+        else
             // Standard message for other cases (e.g., Color.RGB where Color is a nominal type)
-            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
-            defer allocator.free(qualified_name);
-            const owned_qualified = try report.addOwnedString(qualified_name);
+            try std.fmt.allocPrint(allocator, "{s}.{s} does not exist.", .{ module_name, type_name });
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE NOT EXPOSED", headline, .runtime_error);
 
-            try report.document.addType(owned_qualified);
-            try report.document.addReflowingText(" does not exist.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-        }
+        const owned_module = try report.addOwnedString(module_name);
+        const owned_type = try report.addOwnedString(type_name);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1760,13 +1600,11 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+        const headline = try std.fmt.allocPrint(allocator, "The module {s} is not imported in the current scope.", .{module_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "MODULE NOT IMPORTED", headline, .runtime_error);
 
         const owned_module = try report.addOwnedString(module_name);
-        try report.document.addReflowingText("The module ");
-        try report.document.addModuleName(owned_module);
-        try report.document.addReflowingText(" is not imported in the current scope.");
-        try report.document.addLineBreak();
         try report.document.addReflowingText("Try adding an import statement like: ");
         try report.document.addKeyword("import");
         try report.document.addText(" ");
@@ -1793,20 +1631,12 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
-
         const max_exports = std.math.maxInt(u16);
 
-        try report.document.addReflowingText("This module has ");
-        const count_str = try std.fmt.allocPrint(allocator, "{}", .{count});
-        defer allocator.free(count_str);
-        try report.document.addInlineCode(count_str);
-        try report.document.addReflowingText(" exports, but the maximum allowed is ");
-        const max_str = try std.fmt.allocPrint(allocator, "{}", .{max_exports});
-        defer allocator.free(max_str);
-        try report.document.addInlineCode(max_str);
-        try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "This module has {} exports, but the maximum allowed is {}.", .{ count, max_exports });
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TOO MANY EXPORTS", headline, .runtime_error);
+
         try report.document.addReflowingText("Split this out into multiple modules, or remove some of the exports.");
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1831,16 +1661,11 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "UNUSED TYPE VARIABLE NAME", .warning);
-        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const headline = try std.fmt.allocPrint(allocator, "The type variable {s} appears only once in this type annotation.", .{type_var_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "UNUSED TYPE VARIABLE NAME", headline, .warning);
         const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
-
-        try report.document.addReflowingText("The type variable ");
-        try report.document.addType(owned_type_var_name);
-        try report.document.addReflowingText(" appears only once in this type annotation.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1869,15 +1694,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE VARIABLE MARKED UNUSED", .warning);
-        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const headline = try std.fmt.allocPrint(allocator, "The type variable {s} starts with an underscore but appears multiple times in this type annotation.", .{type_var_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE VARIABLE MARKED UNUSED", headline, .warning);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
-
-        try report.document.addReflowingText("The type variable ");
-        try report.document.addType(owned_type_var_name);
-        try report.document.addReflowingText(" starts with an underscore but appears multiple times in this type annotation.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1906,15 +1726,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "TYPE VARIABLE ENDING IN UNDERSCORE", .warning);
-        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const headline = try std.fmt.allocPrint(allocator, "The type variable {s} ends with an underscore.", .{type_var_name});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, "TYPE VARIABLE ENDING IN UNDERSCORE", headline, .warning);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
-
-        try report.document.addReflowingText("The type variable ");
-        try report.document.addType(owned_type_var_name);
-        try report.document.addReflowingText(" ends with an underscore.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1947,14 +1762,11 @@ pub const Diagnostic = union(enum) {
         line_starts: []const u32,
     ) Allocator.Error!Report {
         const title = if (is_alias) "UNDERSCORE IN TYPE ALIAS" else "UNDERSCORE IN NOMINAL TYPE";
-        var report = Report.init(allocator, title, .runtime_error);
 
         const declaration_type = if (is_alias) "type alias" else "nominal type";
-        try report.document.addReflowingText("Underscores are not allowed in ");
-        try report.document.addReflowingText(declaration_type);
-        try report.document.addReflowingText(" declarations.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in {s} declarations.", .{declaration_type});
+        defer allocator.free(headline);
+        var report = try Report.init(allocator, title, headline, .runtime_error);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1984,14 +1796,10 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+        var report = try Report.init(allocator, "DEPRECATED NUMBER SUFFIX", "This number literal uses a deprecated suffix syntax:", .runtime_error);
 
         const owned_suffix = try report.addOwnedString(suffix);
         const owned_suggested = try report.addOwnedString(suggested);
-
-        try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(

@@ -16,8 +16,7 @@ type=repl
 ~~~
 # OUTPUT
 **DOES NOT EXIST**
-`Bool.true` does not exist.
-
+Bool.true does not exist.
 `Bool` is in scope, but it has no associated `true`.
 
 It's referenced here:
@@ -28,8 +27,7 @@ Bool.true # incorrect, tags must be UPPERCASE
 ^^^^^^^^^
 ---
 **DOES NOT EXIST**
-`Bool.false` does not exist.
-
+Bool.false does not exist.
 `Bool` is in scope, but it has no associated `false`.
 
 It's referenced here:

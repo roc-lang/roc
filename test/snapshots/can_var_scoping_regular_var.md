@@ -31,9 +31,11 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
 VAR REASSIGNMENT ERROR
+
 Cannot reassign a var from outside the function where it was declared.
 Variables declared with var can only be reassigned within the same function scope.
 VAR REASSIGNMENT ERROR
+
 Cannot reassign a var from outside the function where it was declared.
 Variables declared with var can only be reassigned within the same function scope.
                                                              ┌─────────────────┐

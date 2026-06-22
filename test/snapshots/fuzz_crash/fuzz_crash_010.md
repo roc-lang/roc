@@ -20,8 +20,8 @@ PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
 ASCII CONTROL CHARACTER
-ASCII control characters are not allowed in Roc source code.
 
+ASCII control characters are not allowed in Roc source code.
 
                                                              ┌─────────────────┐
 ┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │

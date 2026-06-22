@@ -152,8 +152,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
     fuzz_crash_022.md:1:19
 
 INVALID IF CONDITION
-The condition in this if expression could not be processed.
 
+The condition in this if expression could not be processed.
 The condition must be a valid expression that evaluates to a Bool value (Bool.true or Bool.false).
                                                              ┌─────────────────┐
 ┌─ Variable id is defined here and then never used: ─────────┤ UNUSED VARIABLE │

@@ -23,19 +23,25 @@ const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
+    /// One-sentence summary shown in the report's headline slot (the box's top
+    /// edge). Owned by the report.
+    headline: []const u8 = "",
     severity: Severity,
     document: Document,
     allocator: Allocator,
     owned_strings: std.array_list.Managed([]const u8),
 
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
-        return Report{
+    pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
+        var report = Report{
             .title = title,
+            .headline = "",
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
             .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
+        report.headline = try report.addOwnedString(headline);
+        return report;
     }
 
     pub fn deinit(self: *Report) void {
@@ -246,61 +252,11 @@ pub const Report = struct {
     }
 };
 
-/// Builder for creating reports with a fluent interface.
-pub const ReportBuilder = struct {
-    report: Report,
-
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) ReportBuilder {
-        return ReportBuilder{
-            .report = Report.init(allocator, title, severity),
-        };
-    }
-
-    pub fn deinit(self: *ReportBuilder) void {
-        self.report.deinit();
-    }
-
-    pub fn header(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addHeader(text);
-        return self;
-    }
-
-    pub fn message(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.document.addText(text);
-        try self.report.document.addLineBreak();
-        return self;
-    }
-
-    pub fn code(self: *ReportBuilder, code_text: []const u8) Allocator.Error!*ReportBuilder {
-        try self.report.addCodeSnippet(code_text, null);
-        return self;
-    }
-
-    pub fn suggestion(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addSuggestion(text);
-        return self;
-    }
-
-    pub fn note(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addNote(text);
-        return self;
-    }
-
-    pub fn typeComparison(self: *ReportBuilder, expected: []const u8, actual: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addTypeComparison(expected, actual);
-        return self;
-    }
-
-    pub fn build(self: *ReportBuilder) Report {
-        return self.report;
-    }
-};
-
 // Tests
 const testing = std.testing;
 
 test "Report basic functionality" {
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
+    var report = try Report.init(testing.allocator, "TEST ERROR", "Something went wrong in the test.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

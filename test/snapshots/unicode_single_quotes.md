@@ -282,23 +282,41 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 
     This is an unexpected parsing error. Please check your syntax.
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
 INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
+
                                                          ┌─────────────────────┐
 ┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
 │                                                        └────────────────────┬┘

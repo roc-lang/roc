@@ -31,16 +31,16 @@ INVALID NUMBER - numbers.md:10:5:10:10
 INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
 UPPERCASE BASE
-Number base prefixes must be lowercase (0x, 0o, 0b).
 
+Number base prefixes must be lowercase (0x, 0o, 0b).
 
 UPPERCASE BASE
-Number base prefixes must be lowercase (0x, 0o, 0b).
 
+Number base prefixes must be lowercase (0x, 0o, 0b).
 
 UPPERCASE BASE
-Number base prefixes must be lowercase (0x, 0o, 0b).
 
+Number base prefixes must be lowercase (0x, 0o, 0b).
 
                                                               ┌────────────────┐
 ┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │

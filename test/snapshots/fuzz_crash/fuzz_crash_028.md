@@ -269,16 +269,16 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:12
 MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
 ASCII CONTROL CHARACTER
-ASCII control characters are not allowed in Roc source code.
 
+ASCII control characters are not allowed in Roc source code.
 
 ASCII CONTROL CHARACTER
+
 ASCII control characters are not allowed in Roc source code.
 
-
 LEADING ZERO
-Numbers cannot have leading zeros.
 
+Numbers cannot have leading zeros.
 
                                                              ┌─────────────────┐
 ┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │

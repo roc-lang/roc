@@ -175,7 +175,9 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 
     Hint: You can declare this type with := to make it nominal.
 INVALID PATTERN
+
 This pattern contains invalid syntax or uses unsupported features.
+
                                                              ┌─────────────────┐
 ┌─ The type B is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
 │                                                            └────────────────┬┘

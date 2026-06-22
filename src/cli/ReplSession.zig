@@ -407,11 +407,9 @@ fn renderAstDiagnostics(
 }
 
 fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
-    var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
+    var report = try reporting.Report.init(self.allocator, "PARSE ERROR", "The REPL input could not be parsed.", .runtime_error);
     defer report.deinit();
-    try report.document.addReflowingText("The REPL input could not be parsed.");
     if (source.len > 0) {
-        try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(source);
     }

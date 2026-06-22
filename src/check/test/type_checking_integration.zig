@@ -1176,7 +1176,7 @@ test "check type - def - call with wrong fn arity - too many" {
         source,
         .fail_with,
         \\**TOO MANY ARGS**
-        \\The `idStr` function expects 1 argument, but it got 2 instead:
+        \\The idStr function expects 1 argument, but it got 2 instead:
         \\**test:4:8:4:29:**
         \\```roc
         \\test = idStr("hello", 10.U8)
@@ -1203,7 +1203,7 @@ test "check type - def - call with wrong fn arity - too few" {
         source,
         .fail_with,
         \\**TOO FEW ARGS**
-        \\The `idStr` function expects 2 arguments, but it got 1 instead:
+        \\The idStr function expects 2 arguments, but it got 1 instead:
         \\**test:4:8:4:22:**
         \\```roc
         \\test = idStr("hello")
@@ -1720,7 +1720,7 @@ test "check type - nominal - local record value - fail" {
         source,
         .fail_with,
         \\**MISSING METHOD**
-        \\This **encode_str** method is being called on a value whose type doesn't have that method:
+        \\This encode_str method is being called on a value whose type doesn't have that method:
         \\**test:9:3:9:13:**
         \\```roc
         \\  Str.encode("hi", fmt)
@@ -1753,7 +1753,7 @@ test "check type - nominal - local method type - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The `encode_str` method on `Utf8Format` has an incompatible type:
+        \\The encode_str method on Utf8Format has an incompatible type:
         \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
@@ -1825,7 +1825,7 @@ test "check type - if else - invalid condition 1" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
+        \\This if condition must evaluate to a Bool – either True or False:
         \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
@@ -2039,7 +2039,7 @@ test "check type - match - diff cond types 1" {
         source,
         .fail_with,
         \\**MISSING METHOD**
-        \\This **from_quote** method is being called on a value whose type doesn't have that method:
+        \\This from_quote method is being called on a value whose type doesn't have that method:
         \\**test:2:9:2:16:**
         \\```roc
         \\  match "hello" {
@@ -2241,7 +2241,7 @@ test "check type - record access - field typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\This record does not have a `helo` field:
+        \\This record does not have a helo field:
         \\**test:9:6:9:11:**
         \\```roc
         \\x = r.helo
@@ -2329,7 +2329,7 @@ test "check type - record - update - fail - empty record" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\The `r` record does not have a `hello` field:
+        \\The r record does not have a hello field:
         \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hello: 10.U8 }
@@ -2354,7 +2354,7 @@ test "check type - record - update - fail - missing field" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\This record does not have a `hllo` field:
+        \\This record does not have a hllo field:
         \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hllo: "goodbye" }
@@ -2436,7 +2436,7 @@ test "check type - record - update - fail - field mismatch 3" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\The type of the field `nice` is incompatible:
+        \\The type of the field nice is incompatible:
         \\**test:5:16:5:22:**
         \\```roc
         \\  { ..r, nice: 10.Dec }
@@ -2913,7 +2913,7 @@ test "check type - expect not bool" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
+        \\This expect statement must evaluate to a Bool – either True or False:
         \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
@@ -4014,7 +4014,7 @@ test "check type - recursive type - recursive alias" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**RECURSIVE ALIAS**
-        \\The type alias _LinkedList_ references itself, which is not allowed:
+        \\The type alias LinkedList references itself, which is not allowed:
         \\**test:1:31:1:44:**
         \\```roc
         \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
@@ -4037,7 +4037,7 @@ test "check type - recursive type - anonymous recursion" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**ANONYMOUS RECURSION**
-        \\I am inferring a recursive type that has no name somewhere in `len`:
+        \\I am inferring a recursive type that has no name somewhere in len:
         \\**test:1:1:5:4:**
         \\```roc
         \\len = |linked_list|
@@ -4998,7 +4998,7 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The recursive definition `fib` is used in an unexpected way:
+        \\The recursive definition fib is used in an unexpected way:
         \\**test:5:5:5:8:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)

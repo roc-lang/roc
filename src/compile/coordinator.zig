@@ -1966,13 +1966,11 @@ pub const Coordinator = struct {
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
     ) Allocator.Error!void {
-        var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
-        errdefer report.deinit();
-
         const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
-        try report.document.addText("The app does not provide ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(", but the platform requires it.");
+        const headline = try std.fmt.allocPrint(self.gpa, "The app does not provide {s}, but the platform requires it.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "MISSING REQUIRED VALUE", headline, .runtime_error);
+        errdefer report.deinit();
 
         try app_mod.reports.append(self.gpa, report);
     }
@@ -1984,17 +1982,11 @@ pub const Coordinator = struct {
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
     ) Allocator.Error!void {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
         const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
-        try report.document.addText("The app provides ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(" with a type that does not match the platform's ");
-        try report.document.addAnnotated("requires", .inline_code);
-        try report.document.addText(" entry.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(self.gpa, "The app provides {s} with a type that does not match the platform's requires entry.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "TYPE MISMATCH", headline, .runtime_error);
+        errdefer report.deinit();
 
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
         defer self.gpa.free(actual);
@@ -2701,11 +2693,11 @@ pub const Coordinator = struct {
         path: []const u8,
         err: anyerror,
     ) void {
-        var rep = Report.init(allocator, title, .fatal);
         const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
         defer if (msg) |owned| allocator.free(owned);
-        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
-            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
+        var rep = Report.init(allocator, title, msg orelse @errorName(err), .fatal) catch |headline_err| {
+            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(headline_err) });
+            return;
         };
         reports.append(allocator, rep) catch |append_err| {
             rep.deinit();
@@ -3578,9 +3570,7 @@ pub const Coordinator = struct {
         const child = pkg.getModule(child_id).?;
 
         // Create cycle error report
-        var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-        const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-        try rep.addErrorMessage(msg);
+        const rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
         try mod.reports.append(self.gpa, rep);
 
         // Mark both as done
@@ -3596,9 +3586,7 @@ pub const Coordinator = struct {
             if (self.total_remaining > 0) self.total_remaining -= 1;
 
             // Add report to child too
-            var child_rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-            const child_msg = try child_rep.addOwnedString("This module participates in an import cycle.");
-            try child_rep.addErrorMessage(child_msg);
+            const child_rep = try Report.init(self.gpa, "Import cycle detected", "This module participates in an import cycle.", .runtime_error);
             try child.reports.append(self.gpa, child_rep);
         }
     }

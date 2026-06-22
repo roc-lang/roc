@@ -12,8 +12,8 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 PARSE ERROR - fuzz_crash_046.md:1:20:1:26
 # PROBLEMS
 ASCII CONTROL CHARACTER
-ASCII control characters are not allowed in Roc source code.
 
+ASCII control characters are not allowed in Roc source code.
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │

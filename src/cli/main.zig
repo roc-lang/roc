@@ -4005,10 +4005,8 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
         error.OutOfMemory => error.OutOfMemory,
         error.ResolutionFailed => {
             for (resolver.diagnostics.items) |diagnostic| {
-                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, diagnostic.message, .runtime_error) catch break;
                 defer report.deinit();
-                const owned = report.addOwnedString(diagnostic.message) catch break;
-                report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
                     reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
@@ -8007,9 +8005,6 @@ fn printTestProblem(
 ) anyerror!void {
     const src = env.getSourceAll();
 
-    var report = reporting.Report.init(allocator, label, severity);
-    defer report.deinit();
-
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -8021,10 +8016,10 @@ fn printTestProblem(
         }
         break :blk null;
     };
-    if (doc_comment) |comment| {
-        try report.document.addText(comment);
-        try report.document.addLineBreak();
-    }
+
+    var report = try reporting.Report.init(allocator, label, doc_comment orelse "", severity);
+    defer report.deinit();
+
     try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {

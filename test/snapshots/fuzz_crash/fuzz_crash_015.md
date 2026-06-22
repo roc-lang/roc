@@ -20,8 +20,8 @@ PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 PARSE ERROR - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
 LEADING ZERO
-Numbers cannot have leading zeros.
 
+Numbers cannot have leading zeros.
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
