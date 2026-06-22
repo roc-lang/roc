@@ -73,7 +73,7 @@ pub fn init(control: *Control, image_offset: usize, image_size: usize) void {
 }
 
 /// 64-bit atomic load that also compiles on targets without lock-free 64-bit atomics.
-/// Hot reload only runs on 64-bit hosts — the dev backend is unavailable on 32-bit, so
+/// Hot reload only runs on 64-bit hosts: the dev backend is unavailable on 32-bit, so
 /// `HostLirCodeGen` is `void` there and this control block is never driven concurrently.
 /// The 32-bit branch is therefore never executed; a plain load keeps the code compiling.
 inline fn loadU64(ptr: *const u64, comptime order: std.builtin.AtomicOrder) u64 {
@@ -88,12 +88,6 @@ inline fn storeU64(ptr: *u64, value: u64, comptime order: std.builtin.AtomicOrde
     } else {
         ptr.* = value;
     }
-}
-
-/// Mark publication as in progress before overwriting shared executable bytes.
-pub fn beginPublish(control: *Control) void {
-    const start = nextOddSequence(loadU64(&control.publish_sequence, .acquire));
-    storeU64(&control.publish_sequence, start, .release);
 }
 
 /// Publish a replacement image for the host shim to load at the next safe point.
@@ -243,7 +237,7 @@ test "hot reload publication snapshots reject in-progress writes" {
     var control = std.mem.zeroes(Control);
     init(&control, 512, 4096);
 
-    beginPublish(&control);
+    storeU64(&control.publish_sequence, 3, .release);
     storeU64(&control.image_offset, 8192, .release);
     storeU64(&control.image_size, 16384, .release);
     storeU64(&control.published_generation, 2, .release);

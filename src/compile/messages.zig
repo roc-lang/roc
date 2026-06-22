@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CheckedArtifact = check.CheckedArtifact;
@@ -161,6 +162,8 @@ pub const ParsedResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
+    /// Raw source file state consumed before line-ending normalization.
+    source_file_state: watch_inputs.State,
     /// The parsed module environment (ownership returned to coordinator)
     module_env: *ModuleEnv,
     /// Cached AST for reuse in canonicalization (ownership returned)
@@ -239,6 +242,8 @@ pub const ParseFailure = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
+    /// Raw source file state observed before parsing failed.
+    source_file_state: watch_inputs.State,
     /// Error reports explaining the failure
     reports: std.ArrayList(Report),
     /// Partial module env if available (for error recovery)
@@ -439,6 +444,7 @@ test "WorkerResult accessors" {
             .module_id = 1,
             .module_name = "Foo",
             .path = "/path/to/Foo.roc",
+            .source_file_state = .{ .hash = [_]u8{0} ** 32 },
             .module_env = undefined,
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,

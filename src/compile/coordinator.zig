@@ -344,6 +344,8 @@ pub const ModuleState = struct {
     path: []const u8,
     /// Source-relative import base override for materialized modules.
     source_dir_override: ?[]const u8 = null,
+    /// Raw source file state observed by the parse worker before normalization.
+    source_file_state: ?watch_inputs.State = null,
     /// Compiler role assigned by the scheduler for this module.
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
@@ -1418,13 +1420,11 @@ pub const Coordinator = struct {
             }
 
             for (pkg.modules.items) |*mod| {
+                if (mod.source_file_state) |state| {
+                    try self.appendWatchInputState(&inputs, &seen, mod.path, state);
+                }
+
                 const env = mod.moduleEnv() orelse continue;
-                try self.appendWatchInputState(
-                    &inputs,
-                    &seen,
-                    mod.path,
-                    .{ .hash = watch_inputs.hashBytes(env.getSourceAll()) },
-                );
                 try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), env);
             }
         }
@@ -2885,6 +2885,13 @@ pub const Coordinator = struct {
         if (source.len > 0) env_alloc.free(@constCast(source));
     }
 
+    fn sourceFileStateForParseReadError(err: error{ AccessDenied, FileNotFound, IoError, StreamTooLong }) watch_inputs.State {
+        return switch (err) {
+            error.FileNotFound => .missing,
+            error.AccessDenied, error.IoError, error.StreamTooLong => .unreadable,
+        };
+    }
+
     fn appendWorkerFailureReport(
         self: *Coordinator,
         allocator: Allocator,
@@ -3315,6 +3322,7 @@ pub const Coordinator = struct {
         }
 
         // Take ownership of module env and AST
+        mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
 
@@ -3662,6 +3670,8 @@ pub const Coordinator = struct {
             });
             unreachable;
         };
+
+        mod.source_file_state = result.source_file_state;
 
         // Store partial env if available
         if (result.partial_env) |env| {
@@ -4181,11 +4191,13 @@ pub const Coordinator = struct {
                     error.FileNotFound => "FILE NOT FOUND",
                     else => "PARSING FAILED",
                 };
+                const source_file_state = sourceFileStateForParseReadError(e);
                 break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
+                    .source_file_state = source_file_state,
                     .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
                 } };
@@ -4196,7 +4208,8 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const src = try self.readModuleSource(task.path, task_allocs.module);
+        const source_read = try self.readModuleSource(task.path, task_allocs.module);
+        const src = source_read.source;
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
@@ -4294,6 +4307,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
+                .source_file_state = source_read.file_state,
                 .module_env = env,
                 .cached_ast = parse_ast,
                 .discovered_local_imports = discovered_local_imports,
@@ -4477,12 +4491,25 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
+    const SourceRead = struct {
+        source: []u8,
+        file_state: watch_inputs.State,
+    };
+
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
         const data = try self.roc_ctx.readFile(path, module_alloc);
-        errdefer module_alloc.free(data);
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
 
         // Normalize line endings
-        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
+        const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
+            module_alloc.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
     }
 
     /// Worker thread main function
@@ -4984,6 +5011,79 @@ test "Coordinator collectWatchInputStates includes package root state" {
     }
 }
 
+test "Coordinator readModuleSource hashes raw CRLF source bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
+    defer allocator.free(main_path);
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+
+    const read = try coord.readModuleSource(main_path, allocator);
+    defer allocator.free(read.source);
+
+    try testing.expectEqualStrings("module [main]\n\nmain = 1\n", read.source);
+    const expected_hash = watch_inputs.hashBytes(source);
+    switch (read.file_state) {
+        .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
+        .missing, .unreadable => try testing.expect(false),
+    }
+}
+
+test "Coordinator collectWatchInputStates includes module source file state" {
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+
+    const root_hash = [_]u8{11} ** 32;
+    const module_hash = [_]u8{22} ** 32;
+    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
+    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
+    const module_id = try pkg.ensureModule(allocator, "Foo", "/test/pkg/Foo.roc");
+    pkg.modules.items[module_id].source_file_state = .{ .hash = module_hash };
+
+    const inputs = try coord.collectWatchInputStates();
+    defer coord.freeWatchInputStates(inputs);
+
+    try std.testing.expectEqual(@as(usize, 2), inputs.len);
+    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    try std.testing.expectEqualStrings("/test/pkg/Foo.roc", inputs[1].path);
+    switch (inputs[1].state) {
+        .hash => |hash| try std.testing.expectEqualSlices(u8, &module_hash, &hash),
+        .missing, .unreadable => try std.testing.expect(false),
+    }
+}
+
 test "Coordinator module creation" {
     const allocator = std.testing.allocator;
 
@@ -5266,6 +5366,7 @@ test "Channel in coordinator context" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_file_state = .missing,
             .reports = std.ArrayList(reporting.Report).empty,
             .partial_env = null,
         },
@@ -5517,6 +5618,7 @@ test "Coordinator handleParseFailed advances module to Done" {
             .module_id = module_id,
             .module_name = "Builder",
             .path = "/test/app/Builder.roc",
+            .source_file_state = .missing,
             .reports = std.ArrayList(reporting.Report).empty,
             .partial_env = null,
         },

@@ -31,6 +31,7 @@ const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
 const messages = @import("messages.zig");
 const roc_target = @import("roc_target");
+const watch_inputs = @import("watch_inputs.zig");
 
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
@@ -144,6 +145,8 @@ const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
+    /// Raw source file state observed before line-ending normalization.
+    source_file_state: ?watch_inputs.State = null,
     semantic: ?OwnedSemanticState = null,
     phase: Phase = .Parse,
     imports: std.ArrayList(ModuleId),
@@ -1025,11 +1028,14 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) (Allocator.Error || error{FileNotFound})!void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = self.readModuleSource(st.path) catch |read_err| {
+        const source_read = self.readModuleSource(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
+            st.source_file_state = .missing;
             return read_err;
         };
+        const src = source_read.source;
+        st.source_file_state = source_read.file_state;
 
         // line starts for diagnostics and consistent positions
 
@@ -1181,17 +1187,31 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
-    fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
+    const SourceRead = struct {
+        source: []u8,
+        file_state: watch_inputs.State,
+    };
+
+    fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
         const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
         };
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
+            self.gpa.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {

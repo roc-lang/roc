@@ -269,17 +269,26 @@ pub fn fromFdWithHeaderOffset(
     var shm = try fromFd(fd, size, page_size);
     errdefer shm.deinit(std.heap.page_allocator);
 
-    const header_ptr: *const Header = @ptrCast(@alignCast(shm.base_ptr));
+    const used_size = try mappedHeaderUsedSize(shm.base_ptr, shm.total_size);
+
+    shm.offset.store(used_size, .monotonic);
+    return shm;
+}
+
+/// Read a mapped shared-memory header's used size after validating it.
+pub fn mappedHeaderUsedSize(
+    base_ptr: [*]align(1) const u8,
+    total_size: usize,
+) error{InvalidSharedMemory}!usize {
+    const header_ptr: *const Header = @ptrCast(@alignCast(base_ptr));
     if (header_ptr.magic != HEADER_MAGIC or header_ptr.version != HEADER_VERSION) {
         return error.InvalidSharedMemory;
     }
     const used_size: usize = @intCast(header_ptr.used_size);
-    if (used_size < @sizeOf(Header) or used_size > shm.total_size) {
+    if (used_size < @sizeOf(Header) or used_size > total_size) {
         return error.InvalidSharedMemory;
     }
-
-    shm.offset.store(used_size, .monotonic);
-    return shm;
+    return used_size;
 }
 
 /// Rewind a mapped shared-memory header's used size. This is for parent-owned
@@ -578,10 +587,12 @@ test "shared memory allocator rewinds mapped header to a used-size boundary" {
     _ = try shm_allocator.alloc(u8, 256);
     shm.updateHeader();
     try testing.expect(shm.getUsedSize() > reusable_boundary);
+    try testing.expectEqual(reusable_boundary + 256, try mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
 
     try rewindMappedHeader(shm.base_ptr, shm.total_size, reusable_boundary);
     const header_ptr: *const Header = @ptrCast(@alignCast(shm.base_ptr));
     try testing.expectEqual(@as(u64, @intCast(reusable_boundary)), header_ptr.used_size);
+    try testing.expectEqual(reusable_boundary, try mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
     try testing.expectError(error.InvalidSharedMemory, rewindMappedHeader(shm.base_ptr, shm.total_size, @sizeOf(Header) - 1));
 }
 

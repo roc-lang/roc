@@ -29,7 +29,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
@@ -512,7 +512,7 @@ pub const BuildEnv = struct {
 
         freeSlice(self.gpa, pkg.root_file);
         pkg.root_file = root_abs;
-        pkg.root_file_state = .{ .hash = header_info.source_hash };
+        pkg.root_file_state = header_info.source_file_state;
         pkg.kind = header_info.kind;
 
         for (pkg.provides_entries.items) |entry| {
@@ -597,7 +597,7 @@ pub const BuildEnv = struct {
             .name = try self.gpa.dupe(u8, pkg_name),
             .kind = header_info.kind,
             .root_file = pkg_root_file,
-            .root_file_state = .{ .hash = header_info.source_hash },
+            .root_file_state = header_info.source_file_state,
             .root_dir = pkg_root_dir,
         });
 
@@ -861,6 +861,7 @@ pub const BuildEnv = struct {
 
                 // Transfer depth from coordinator to scheduler
                 try sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth);
+                sched_mod.source_file_state = coord_mod.source_file_state;
                 if (comptime trace_build) {
                     std.debug.print("[TRANSFER]   Transferred depth {} for {s}\n", .{ coord_mod.depth, coord_mod.name });
                 }
@@ -1139,7 +1140,7 @@ pub const BuildEnv = struct {
 
     const HeaderInfo = struct {
         kind: PackageKind,
-        source_hash: [32]u8,
+        source_file_state: watch_inputs.State,
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -1197,7 +1198,7 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const src = self.readFile(file_abs) catch |err| {
+        const source_read = self.readSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
@@ -1224,6 +1225,7 @@ pub const BuildEnv = struct {
             self.sink.tryEmit();
             return err;
         };
+        const src = source_read.source;
         defer self.gpa.free(src);
 
         var env = try ModuleEnv.init(self.gpa, src);
@@ -1262,7 +1264,7 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
-        var info = HeaderInfo{ .kind = .package, .source_hash = watch_inputs.hashBytes(src) };
+        var info = HeaderInfo{ .kind = .package, .source_file_state = source_read.file_state };
         errdefer info.deinit(self.gpa);
 
         switch (header) {
@@ -1489,15 +1491,37 @@ pub const BuildEnv = struct {
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
+    const SourceRead = struct {
+        source: []u8,
+        file_state: watch_inputs.State,
+    };
+
+    fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
+        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.AccessDenied => return error.AccessDenied,
+            error.StreamTooLong => return error.StreamTooLong,
+            error.IoError => return error.IoError,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+
+        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
+            self.gpa.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
+    }
+
     fn currentFileWatchState(self: *BuildEnv, path: []const u8) Allocator.Error!watch_inputs.State {
-        var data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return .missing,
             error.AccessDenied, error.StreamTooLong, error.IoError => return .unreadable,
             error.OutOfMemory => return error.OutOfMemory,
-        };
-        data = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
-            self.gpa.free(data);
-            return err;
         };
         defer self.gpa.free(data);
 
@@ -1786,7 +1810,11 @@ pub const BuildEnv = struct {
                 .url = url.url,
                 .url_id = url.url_id,
             } else null;
-            try self.ensurePackage(names[i], kind, package.root_file, .{ .hash = package.root_source_hash }, url_view);
+            const root_file_state: watch_inputs.State = if (url_view == null)
+                try self.currentFileWatchState(package.root_file)
+            else
+                .{ .hash = package.root_source_hash };
+            try self.ensurePackage(names[i], kind, package.root_file, root_file_state, url_view);
         }
 
         // Wire every package's shorthand aliases.
@@ -2294,13 +2322,10 @@ pub const BuildEnv = struct {
                             semantic.module_env
                     else
                         null;
+                    if (sched_mod.source_file_state) |state| {
+                        try self.appendWatchInputState(&inputs, &seen, sched_mod.path, state);
+                    }
                     const module_env = env orelse continue;
-                    try self.appendWatchInputState(
-                        &inputs,
-                        &seen,
-                        sched_mod.path,
-                        .{ .hash = watch_inputs.hashBytes(module_env.getSourceAll()) },
-                    );
                     try self.appendFileDependencyWatchInputStates(&inputs, &seen, sched_mod.path, module_env);
                 }
             }
@@ -2815,6 +2840,42 @@ test "BuildEnv collectWatchInputStates includes package root state" {
     try testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
     switch (inputs[0].state) {
         .hash => |hash| try testing.expectEqualSlices(u8, &root_hash, &hash),
+        .missing, .unreadable => try testing.expect(false),
+    }
+}
+
+test "BuildEnv header watch state hashes raw CRLF source bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
+    defer allocator.free(main_path);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        tmp_root,
+        testing.io,
+    );
+    defer env.deinit();
+
+    var header_info = try env.parseHeaderDeps(main_path);
+    defer header_info.deinit(allocator);
+
+    const expected_hash = watch_inputs.hashBytes(source);
+    switch (header_info.source_file_state) {
+        .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
     }
 }

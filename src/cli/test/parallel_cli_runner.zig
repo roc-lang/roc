@@ -1945,7 +1945,7 @@ fn hotReloadPlatformSource(allocator: Allocator, target: HotReloadNativeTarget) 
         \\        "roc_host_stored_boxed_call": Host.stored_boxed_call!,
         \\    }}
         \\    targets: {{
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
         \\    }}
         \\
@@ -2620,7 +2620,7 @@ fn hotReloadModelPlatformSource(allocator: Allocator, target: HotReloadNativeTar
         \\        "roc_model_value": model_value_for_host,
         \\    }}
         \\    targets: {{
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
         \\    }}
         \\

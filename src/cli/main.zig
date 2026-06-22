@@ -1817,6 +1817,17 @@ fn checkedInterpreterHostIdentity(
     return hasher.finalResult();
 }
 
+fn currentCompilerWatchInputState(ctx: *CliCtx, path: []const u8) Allocator.Error!compile.watch_inputs.State {
+    const bytes = ctx.coreCtx().readFile(path, ctx.gpa) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        error.AccessDenied, error.StreamTooLong, error.IoError => return .unreadable,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer ctx.gpa.free(bytes);
+
+    return .{ .hash = compile.watch_inputs.hashBytes(bytes) };
+}
+
 fn updateInterpreterExeFileLinkInput(
     hasher: *std.crypto.hash.sha2.Sha256,
     declared_path: []const u8,
@@ -3659,7 +3670,7 @@ fn buildHotReloadChildArgv(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    reclaim_offset: usize,
+    append_offset: usize,
     inputs_path: []const u8,
     source_rewrite: ?HotReloadSourceRewrite,
 ) Allocator.Error!WatchChildArgv {
@@ -3678,7 +3689,7 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
-    try appendOwnedArg(ctx.gpa, &argv, &owned, "--reclaim-offset={}", .{reclaim_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{append_offset});
     if (comptime is_windows) {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
     } else {
@@ -3709,7 +3720,7 @@ fn spawnHotReloadRebuild(
     shm_handle: SharedMemoryHandle,
     expected_host_identity: [32]u8,
     generation: u64,
-    reclaim_offset: usize,
+    append_offset: usize,
     source_rewrite: ?HotReloadSourceRewrite,
 ) CliMainError!HotReloadRebuild {
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
@@ -3718,7 +3729,7 @@ fn spawnHotReloadRebuild(
     errdefer ctx.gpa.free(inputs_path);
     errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
 
-    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, reclaim_offset, inputs_path, source_rewrite);
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, append_offset, inputs_path, source_rewrite);
     errdefer argv.deinit(ctx.gpa);
 
     const child = try spawnWatchChild(ctx, argv.argv);
@@ -3828,7 +3839,7 @@ fn runHotReloadDevShim(
     var next_generation: u64 = 2;
     const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
     const initial_image = ipc.hot_reload.publishedImage(hot_reload_control) orelse return error.InvalidSharedMemory;
-    const hot_reload_reclaim_offset = initial_image.image_size;
+    const hot_reload_reclaim_boundary = initial_image.image_size;
     var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
     var last_reclaimed_ack = last_reported_ack;
     var last_finished_generation: u64 = 1;
@@ -3849,7 +3860,7 @@ fn runHotReloadDevShim(
                 try SharedMemoryAllocator.rewindMappedHeader(
                     @ptrCast(@alignCast(shm_handle.ptr)),
                     shm_handle.mapped_size,
-                    hot_reload_reclaim_offset,
+                    hot_reload_reclaim_boundary,
                 );
                 last_reclaimed_ack = ack_generation;
             }
@@ -3869,7 +3880,7 @@ fn runHotReloadDevShim(
                     try SharedMemoryAllocator.rewindMappedHeader(
                         @ptrCast(@alignCast(shm_handle.ptr)),
                         shm_handle.mapped_size,
-                        hot_reload_reclaim_offset,
+                        hot_reload_reclaim_boundary,
                     );
                     last_reclaimed_ack = last_reported_ack;
                 }
@@ -3886,6 +3897,10 @@ fn runHotReloadDevShim(
         }
 
         if (pending_rebuild and active_rebuild == null) {
+            const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
+                @ptrCast(@alignCast(shm_handle.ptr)),
+                shm_handle.mapped_size,
+            );
             active_rebuild = try spawnHotReloadRebuild(
                 ctx,
                 arg0,
@@ -3894,7 +3909,7 @@ fn runHotReloadDevShim(
                 shm_handle,
                 expected_host_identity,
                 next_generation,
-                hot_reload_reclaim_offset,
+                append_offset,
                 source_rewrite,
             );
             next_generation += 1;
@@ -3974,14 +3989,14 @@ test "hot reload host child maps the full shared-memory reservation" {
     try std.testing.expectEqual(@as(usize, 8192), child.mapped_size);
 }
 
-test "hot reload worker args require reclaim offset" {
+test "hot reload worker args require append offset" {
     const zero_host = "0000000000000000000000000000000000000000000000000000000000000000";
 
     const parsed = try parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
         "--generation=2",
-        "--reclaim-offset=4096",
+        "--append-offset=4096",
         "--shm-handle=3",
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
@@ -3989,7 +4004,7 @@ test "hot reload worker args require reclaim offset" {
     });
 
     try std.testing.expectEqual(@as(u64, 2), parsed.generation);
-    try std.testing.expectEqual(@as(usize, 4096), parsed.reclaim_offset);
+    try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -4167,7 +4182,7 @@ const HotReloadDevWorkerArgs = struct {
     path: []const u8,
     target: []const u8,
     generation: u64,
-    reclaim_offset: usize,
+    append_offset: usize,
     shm_handle: []const u8,
     shm_size: usize,
     expected_host_identity: [32]u8,
@@ -4201,7 +4216,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var path: ?[]const u8 = null;
     var target: ?[]const u8 = null;
     var generation: ?u64 = null;
-    var reclaim_offset: ?usize = null;
+    var append_offset: ?usize = null;
     var shm_handle: ?[]const u8 = null;
     var shm_size: ?usize = null;
     var expected_host_identity: ?[32]u8 = null;
@@ -4219,8 +4234,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             target = value;
         } else if (hotReloadFlagValue(arg, "--generation")) |value| {
             generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
-        } else if (hotReloadFlagValue(arg, "--reclaim-offset")) |value| {
-            reclaim_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--append-offset")) |value| {
+            append_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
             shm_handle = value;
         } else if (hotReloadFlagValue(arg, "--shm-size")) |value| {
@@ -4250,7 +4265,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .path = path orelse return error.InvalidArguments,
         .target = target orelse return error.InvalidArguments,
         .generation = generation orelse return error.InvalidArguments,
-        .reclaim_offset = reclaim_offset orelse return error.InvalidArguments,
+        .append_offset = append_offset orelse return error.InvalidArguments,
         .shm_handle = shm_handle orelse return error.InvalidArguments,
         .shm_size = shm_size orelse return error.InvalidArguments,
         .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
@@ -4329,8 +4344,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
-    try shm.resetToUsedSize(args.reclaim_offset);
-    ipc.hot_reload.beginPublish(control);
+    try shm.resetToUsedSize(args.append_offset);
     const publication = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
@@ -4575,7 +4589,7 @@ fn lowerLirWithCoordinator(
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
     const root_package = resolved.packages[compile.package_resolution.Resolved.root_index];
-    try app_pkg.setRootInput(ctx.gpa, root_package.root_file, .{ .hash = root_package.root_source_hash });
+    try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
     if (source_dir_override) |source_dir| {
@@ -4595,7 +4609,11 @@ fn lowerLirWithCoordinator(
             .url_id = url.url_id,
         } else null;
         const pkg = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
-        try pkg.setRootInput(ctx.gpa, package.root_file, .{ .hash = package.root_source_hash });
+        const root_file_state: compile.watch_inputs.State = if (url_view == null)
+            try currentCompilerWatchInputState(ctx, package.root_file)
+        else
+            .{ .hash = package.root_source_hash };
+        try pkg.setRootInput(ctx.gpa, package.root_file, root_file_state);
     }
 
     {
