@@ -16016,7 +16016,12 @@ pub fn canonicalizePattern(
                             // Fresh mutable binder in a mixed declaration pattern; no-op.
                         } else if (result != pattern_idx) {
                             self.pattern_reused_existing_var = true;
-                            try self.scratch_reassign_targets.append(result);
+                            // Only record the reassignment target inside a block declaration's
+                            // pattern window (see the matching guard on the .var_reassignment_ok
+                            // path above); recording elsewhere never gets consumed or cleared.
+                            if (self.allow_pattern_var_reuse) {
+                                try self.scratch_reassign_targets.append(result);
+                            }
                         }
                         last_pattern = result;
                     } else {
