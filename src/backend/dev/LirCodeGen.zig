@@ -3387,11 +3387,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_abi = builtinInternalListAbi(ls, "dev.list_set.builtin_list_abi", ll.ret_layout);
 
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const result_offset = self.codegen.allocStackSlot(roc_list_size);
+                    if (list_abi.elem_size_align.size == 0) {
+                        const tmp = try self.allocTempGeneral();
+                        defer self.codegen.freeGeneral(tmp);
+                        var off: i32 = 0;
+                        while (off < roc_list_size) : (off += 8) {
+                            try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
+                            try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                        }
+                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                    }
+
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
-                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     // We need a scratch slot for the old element (out_element param)
-                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (list_abi.elem_size_align.size > 0) list_abi.elem_size_align.size else 8));
+                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(list_abi.elem_size_align.size));
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
