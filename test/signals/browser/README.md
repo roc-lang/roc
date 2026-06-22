@@ -23,3 +23,20 @@ node --test test/signals/browser/controlled_input_policy.test.mjs
 Open `controlled_input_spike.html` in a browser for the real focus and IME
 exercise. The page is intentionally standalone so it can be used before the
 wasm host grows the full runtime.
+
+## `memory.grow` View Invalidation
+
+`wasm_memory_views.mjs` is the deterministic guard for JS typed-array views over
+Wasm linear memory. The chosen browser-runtime rule is:
+
+- JS may cache `Uint8Array`, `Int32Array`, and `DataView` objects only between
+  host calls;
+- after every call into a host export that may allocate, JS must refresh those
+  views before reading command buffers, strings, or event payload memory;
+- the initial runtime does not require a host-bumped memory generation export.
+
+Run the guard with:
+
+```sh
+node --test test/signals/browser/wasm_memory_views.test.mjs
+```

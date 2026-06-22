@@ -1,6 +1,6 @@
 # Signals Browser Runtime — JS/WASM Architecture Design
 
-> Status: design plus the G-B1 controlled-input spike; no wasm runtime
+> Status: design plus the G-B1/G-B2 browser spikes; no wasm runtime
 > implementation yet. This document proposes how a JavaScript runtime loads,
 > instantiates, mounts, and drives a Signals Roc app compiled to `wasm32`.
 > It is written against the *actual* code in this directory:
@@ -200,12 +200,16 @@ instead of being smuggled into the thin executor.
    browser build routes them to `console`).
 3. **Memory access model.** JS holds typed-array views over
    `instance.exports.memory.buffer` (`memory8 = Uint8Array`, `memory32 =
-   Int32Array`). **Views must be re-created whenever `memory.grow` may have run**
-   (i.e. after any host call that can allocate). The runtime caches a generation
-   counter and rebuilds views lazily. JS reads the command buffer and string
-   bytes through these views; it **never interprets Roc heap layout for meaning**
-   — only the explicit command records and explicit (ptr,len) string slices the
-   host hands it.
+   Int32Array`). **Views must be re-created after every host export call that may
+   allocate**, before JS reads command buffers, strings, or event payload memory.
+   The G-B2 spike (`browser/wasm_memory_views.mjs`) chooses this
+   rebuild-after-host-call rule instead of adding a host-bumped memory generation
+   export for the initial runtime. The refresh checks whether `memory.buffer`
+   changed and rebuilds cached views only when needed; the rule is that the
+   refresh happens after each allocating host call. JS reads the command buffer
+   and string bytes through these views; it **never interprets Roc heap layout
+   for meaning** — only the explicit command records and explicit (ptr,len)
+   string slices the host hands it.
 4. **Call entrypoint.** JS calls `roc_ui_mount()`. Inside WASM the Zig host calls
    `roc_ui_init() -> Box(Elem)` (`platform/main.roc:30`), ingests the descriptor
    tree, mints ids, builds adjacency/ranks, computes initial values by calling
@@ -457,11 +461,11 @@ click; zero retained-closure leak on unmount) hold.
 
 Deliberately **out of milestone 1**: `Ui.each`/`Ui.when` structural splicing,
 focused-input normalization beyond the guarded `SetValue` rule, async tasks,
-intervals, event delegation sophistication, `memory.grow` view-rebuild edge
-cases (use a fixed initial memory large enough for the counter, then add the
-generation-counter rebuild in milestone 2). These line up with the `DESIGN.md`
-"Definition of Done" being *simulated-host* scoped — the browser host is
-explicitly the next stage.
+intervals, event delegation sophistication, and high-pressure allocation tuning.
+G-B2 already pins the required `memory.grow` view-refresh rule; the milestone
+runtime must use that helper, but does not need to stress repeated grows. These
+line up with the `DESIGN.md` "Definition of Done" being *simulated-host* scoped
+— the browser host is explicitly the next stage.
 
 ---
 
@@ -490,11 +494,15 @@ browser constraints, and should be settled before milestone 2.
   on small-string bit-twiddling. If any path can't, that path must add an
   explicit accessor, not a JS-side decode.
 
-- **O4 — `memory.grow` and cached views.** Any `roc_alloc` during a host call can
-  grow memory and detach JS typed-array views. Confirm the host's allocation
-  pattern (or add an explicit "memory generation" export the host bumps on grow)
-  so JS rebuilds views correctly. This is a browser-constraint detail with no
-  simulated-host analogue.
+- **O4 — `memory.grow` and cached views.** G-B2 has a repo-local spike and guard
+  in `browser/wasm_memory_views.mjs`. Finding: do not add a memory generation
+  export for the initial runtime. Instead, every JS call into a host export that
+  may allocate must refresh cached `Uint8Array`/`Int32Array`/`DataView` objects
+  immediately after the call and before reading command buffers or string/payload
+  bytes. The refresh compares `memory.buffer` identity and rebuilds only when it
+  changed. The guard instantiates a tiny Wasm module, forces `memory.grow` via
+  `roc_alloc`, proves the stale view detaches, then reads a known byte pattern
+  across the old/new page boundary through refreshed views.
 
 - **O5 — Controlled inputs / focus / IME / selection.** G-B1 has a repo-local
   spike and guard in `browser/controlled_input_policy.mjs` plus a manual browser

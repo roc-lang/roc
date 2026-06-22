@@ -220,7 +220,7 @@ The open questions (O1–O8) referenced below are defined in
   observed behavior before declaring text-input-heavy browser apps complete.
   G-B2 is the next implementation slice.
 
-### G-B2 — `memory.grow` view invalidation + marshalling spike (Critical)
+### G-B2 — `memory.grow` view invalidation + marshalling spike (Critical, guard landed)
 
 - **Why early:** any `roc_alloc` during a host call can grow linear memory and
   detach JS typed-array views (design O4). Getting this wrong is silent memory
@@ -230,8 +230,16 @@ The open questions (O1–O8) referenced below are defined in
 - **Spike:** instantiate a tiny module, force `memory.grow` via repeated
   `roc_alloc`, and prove JS view rebuild is correct. Decide the mechanism: a
   host-bumped "memory generation" export vs. rebuild-on-every-host-call.
-- **Finding + guard:** record the chosen view-rebuild rule in O4; add a JS test
-  that allocates across a grow boundary and reads back a known byte pattern.
+- **Status:** `browser/wasm_memory_views.mjs` now carries the view-cache helper
+  and tiny Wasm fixture; `browser/wasm_memory_views.test.mjs` asserts stale view
+  detachment, refreshed-view writes, and Wasm reads across the grow boundary.
+- **Finding:** choose rebuild-on-every-allocating-host-call for the initial
+  runtime. JS refreshes cached `Uint8Array`/`Int32Array`/`DataView` objects after
+  every host export that may allocate and before reading command buffers or
+  string/payload bytes. No host-bumped memory generation export is needed for
+  G-B4.
+- **Remaining:** wire the helper into the eventual browser executor. G-B3 is the
+  next implementation slice.
 
 ### G-B3 — Command-buffer wire format + executor contract (Critical, unblocks all rendering)
 
@@ -331,6 +339,8 @@ Browser-runtime slices (G-B*) additionally gate on:
   `zig build build-test-hosts -Dplatform=signals` (wasm32 target)
 - Controlled-input spike policy:
   `node --test test/signals/browser/controlled_input_policy.test.mjs`
+- `memory.grow` view invalidation policy:
+  `node --test test/signals/browser/wasm_memory_views.test.mjs`
 - The browser executor + spike findings: each G-B slice records its finding in
   `BROWSER_RUNTIME_DESIGN.md` (O1–O8) and lands a JS/host test or assertion that
   would catch a regression. A browser spike with no recorded finding or guard is
