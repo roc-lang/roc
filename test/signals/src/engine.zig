@@ -1538,6 +1538,9 @@ pub fn Engine(comptime Ctx: type) type {
         pub const StateLookupError = error{
             MissingActiveState,
         };
+        pub const RocHostRequiredError = error{
+            MissingRocHost,
+        };
 
         host_values: HostValueRegistry = .{},
         active_events: std.ArrayListUnmanaged(ActiveEventDesc) = .empty,
@@ -1586,6 +1589,74 @@ pub fn Engine(comptime Ctx: type) type {
             var metrics = self.pending_roc_metrics;
             metrics.bump(.each_key_compares, 1);
             self.pending_roc_metrics = metrics;
+        }
+
+        pub fn clearEventDescriptors(self: *Self) void {
+            self.event_descriptors.items.len = 0;
+        }
+
+        pub fn deinitActiveEventDesc(self: *Self, roc_host: *abi.RocHost, desc: ActiveEventDesc) void {
+            abi.decrefBox(@ptrCast(desc.payload_tag), roc_host);
+            abi.decrefErasedCallable(desc.payload_drop, roc_host);
+            abi.decrefErasedCallable(desc.transform, roc_host);
+            self.pending_roc_metrics.bump(.closure_releases, 2);
+        }
+
+        pub fn clearActiveEvents(self: *Self) RocHostRequiredError!void {
+            const roc_host = self.roc_host orelse {
+                if (self.active_events.items.len != 0) return RocHostRequiredError.MissingRocHost;
+                return;
+            };
+            for (self.active_events.items) |desc| {
+                self.deinitActiveEventDesc(roc_host, desc);
+            }
+            self.active_events.items.len = 0;
+        }
+
+        pub fn clearSignalCache(self: *Self) RocHostRequiredError!void {
+            const roc_host = self.roc_host orelse {
+                if (self.signal_cache.items.len != 0) return RocHostRequiredError.MissingRocHost;
+                return;
+            };
+            for (self.signal_cache.items) |*slot| {
+                slot.deinit(roc_host, &self.pending_roc_metrics);
+            }
+            self.signal_cache.items.len = 0;
+        }
+
+        pub fn clearStates(self: *Self) RocHostRequiredError!void {
+            const roc_host = self.roc_host orelse {
+                for (self.states.items) |state| {
+                    if (state.active) return RocHostRequiredError.MissingRocHost;
+                }
+                self.states.items.len = 0;
+                return;
+            };
+            for (self.states.items) |*state| {
+                if (!state.active) continue;
+                state.cell.deinit(roc_host, &self.pending_roc_metrics);
+                state.active = false;
+            }
+            self.states.items.len = 0;
+        }
+
+        pub fn deactivateState(self: *Self, roc_host: *abi.RocHost, node_id: u64) void {
+            const state_index = self.stateIndexByNodeId(node_id) orelse return;
+            const state = &self.states.items[state_index];
+            state.cell.deinit(roc_host, &self.pending_roc_metrics);
+            state.active = false;
+        }
+
+        pub fn clearScopes(self: *Self) RocHostRequiredError!void {
+            if (self.roc_host) |roc_host| {
+                for (self.scopes.items) |*scope| {
+                    if (!scope.active) continue;
+                    deinitHostScopeStep(&scope.step, roc_host, &self.pending_roc_metrics);
+                }
+            } else if (self.scopes.items.len != 0) {
+                return RocHostRequiredError.MissingRocHost;
+            }
+            self.scopes.items.len = 0;
         }
 
         pub fn cleanupEventCount(self: *const Self, name: []const u8) u64 {

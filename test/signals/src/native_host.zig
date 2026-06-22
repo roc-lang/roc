@@ -698,6 +698,12 @@ fn failSignalLookupError(err: HostEngine.SignalLookupError) noreturn {
     }
 }
 
+fn failRocHostRequiredError(err: HostEngine.RocHostRequiredError, message: []const u8) noreturn {
+    switch (err) {
+        error.MissingRocHost => failHost(message),
+    }
+}
+
 fn failKeyedRowsError(err: anyerror) noreturn {
     switch (err) {
         error.OutOfMemory => std.process.exit(1),
@@ -930,17 +936,13 @@ const HostEnv = struct {
     }
 
     fn clearEventDescriptors(self: *HostEnv) void {
-        self.engine.event_descriptors.items.len = 0;
+        self.engine.clearEventDescriptors();
     }
 
     fn clearActiveEvents(self: *HostEnv) void {
-        for (self.engine.active_events.items) |desc| {
-            abi.decrefBox(@ptrCast(desc.payload_tag), self.engine.roc_host.?);
-            abi.decrefErasedCallable(desc.payload_drop, self.engine.roc_host.?);
-            abi.decrefErasedCallable(desc.transform, self.engine.roc_host.?);
-            self.engine.pending_roc_metrics.bump(.closure_releases, 2);
-        }
-        self.engine.active_events.items.len = 0;
+        self.engine.clearActiveEvents() catch |err| {
+            failRocHostRequiredError(err, "active event table cannot release retained payloads without a Roc host");
+        };
     }
 
     fn rebuildActiveEventsFromStream(self: *HostEnv, stream: *HostNodeDescriptorStream) void {
@@ -1147,10 +1149,9 @@ const HostEnv = struct {
     }
 
     fn clearSignalCache(self: *HostEnv) void {
-        for (self.engine.signal_cache.items) |*slot| {
-            slot.deinit(self.engine.roc_host.?, &self.engine.pending_roc_metrics);
-        }
-        self.engine.signal_cache.items.len = 0;
+        self.engine.clearSignalCache() catch |err| {
+            failRocHostRequiredError(err, "signal cache cannot release values without a Roc host");
+        };
     }
 
     fn clearActiveSignalGraph(self: *HostEnv) void {
@@ -1935,12 +1936,9 @@ const HostEnv = struct {
     }
 
     fn clearStates(self: *HostEnv) void {
-        for (self.engine.states.items) |*state| {
-            if (!state.active) continue;
-            state.cell.deinit(self.engine.roc_host.?, &self.engine.pending_roc_metrics);
-            state.active = false;
-        }
-        self.engine.states.items.len = 0;
+        self.engine.clearStates() catch |err| {
+            failRocHostRequiredError(err, "state table cannot release values without a Roc host");
+        };
     }
 
     fn stateValueByNodeId(self: *HostEnv, node_id: u64) HostValue {
@@ -1984,10 +1982,7 @@ const HostEnv = struct {
     }
 
     fn deactivateState(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64) void {
-        const state_index = self.engine.stateIndexByNodeId(node_id) orelse return;
-        const state = &self.engine.states.items[state_index];
-        state.cell.deinit(roc_host, &self.engine.pending_roc_metrics);
-        state.active = false;
+        self.engine.deactivateState(roc_host, node_id);
     }
 
     fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
@@ -3322,10 +3317,7 @@ const HostEnv = struct {
     }
 
     fn deinitActiveEventDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostActiveEventDesc) void {
-        abi.decrefBox(@ptrCast(desc.payload_tag), roc_host);
-        abi.decrefErasedCallable(desc.payload_drop, roc_host);
-        abi.decrefErasedCallable(desc.transform, roc_host);
-        self.engine.pending_roc_metrics.bump(.closure_releases, 2);
+        self.engine.deinitActiveEventDesc(roc_host, desc);
     }
 
     fn removeActiveElementDescriptorsInTarget(self: *HostEnv, target: HostStructuralReplacementTarget) void {
@@ -4168,15 +4160,9 @@ const HostEnv = struct {
     }
 
     fn clearScopes(self: *HostEnv) void {
-        if (self.engine.roc_host) |roc_host| {
-            for (self.engine.scopes.items) |*scope| {
-                if (!scope.active) continue;
-                deinitHostScopeStep(&scope.step, roc_host, &self.engine.pending_roc_metrics);
-            }
-        } else if (self.engine.scopes.items.len != 0) {
-            failHost("host scope table cannot release keys without a Roc host");
-        }
-        self.engine.scopes.items.len = 0;
+        self.engine.clearScopes() catch |err| {
+            failRocHostRequiredError(err, "host scope table cannot release keys without a Roc host");
+        };
     }
 
     fn deinit(self: *HostEnv) void {
