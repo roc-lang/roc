@@ -76,7 +76,7 @@ const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryErro
     SysctlFailed,
 };
 
-var runtime_state_initialized: bool = false;
+var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
 var runtime_state_mutex: std.Io.Mutex = .init;
 
@@ -135,18 +135,18 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
 }
 
 fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
-    if (runtime_state_initialized) return &runtime_state;
+    if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
 
-    if (runtime_state_initialized) return &runtime_state;
+    if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
     runtime_state = openRuntimeState(allocator()) catch {
         ops.crash("Machine-code shim could not map the compiled Roc image");
         return error.ImageUnavailable;
     };
-    runtime_state_initialized = true;
+    runtime_state_initialized.store(true, .release);
     return &runtime_state;
 }
 
@@ -473,7 +473,7 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
 
-    if (runtime_state_initialized) {
+    if (runtime_state_initialized.load(.acquire)) {
         reclaimRetiredProgramsLocked(&runtime_state);
     }
 }
@@ -552,7 +552,7 @@ pub fn roc_hot_reload_enter(return_address: usize) ?*anyopaque {
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
 
-    if (!runtime_state_initialized) return null;
+    if (!runtime_state_initialized.load(.acquire)) return null;
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
     return program;

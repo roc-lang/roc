@@ -117,7 +117,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
 }
-const bench = @import("bench.zig");
 const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
@@ -608,9 +607,6 @@ const windows = if (is_windows) struct {
     const HANDLE_FLAG_INHERIT = 0x00000001;
     const INFINITE = 0xFFFFFFFF;
 } else struct {};
-
-const benchTokenizer = bench.benchTokenizer;
-const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
@@ -2693,9 +2689,6 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .max_threads = args.max_threads,
         .wasm_memory = null,
         .wasm_stack_size = null,
-        .z_bench_tokenize = null,
-        .z_bench_parse = null,
-        .z_dump_linker = false,
         .exit_on_warnings = false,
         .warning_count_out = &warning_count,
         .require_executable_output = true,
@@ -5724,18 +5717,6 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
 }
 
 fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
-    // Handle the --z-bench-tokenize flag
-    if (args.z_bench_tokenize) |file_path| {
-        try benchTokenizer(ctx.gpa, ctx.io.std_io, file_path);
-        return;
-    }
-
-    // Handle the --z-bench-parse flag
-    if (args.z_bench_parse) |directory_path| {
-        try benchParse(ctx.gpa, ctx.io.std_io, directory_path);
-        return;
-    }
-
     // `roc build --watch` rebuilds on every change. The watch loop reruns this same
     // command (minus --watch) per change; the child writes its discovered inputs to
     // the --watch-inputs-file so the next iteration watches the right files.
@@ -6533,10 +6514,6 @@ fn rocBuildWasmSurgical(
             .scratch_dir = build_cache_dir,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
@@ -7017,10 +6994,6 @@ fn rocBuildWasmLlvm(
             .scratch_dir = app_object.artifact_dir,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
@@ -7116,7 +7089,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
-    defer writeBuildWatchInputs(ctx, args, &build_env);
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -7385,10 +7358,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
                     null,
             };
 
-            if (args.z_dump_linker) {
-                try dumpLinkerInputs(ctx, link_config);
-            }
-
             linker.link(ctx, link_config) catch |err| {
                 reporter.fail();
                 return ctx.fail(.{ .linker_failed = .{
@@ -7461,7 +7430,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
-    defer writeBuildWatchInputs(ctx, args, &build_env);
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -7739,10 +7708,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
                 null,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
@@ -7816,7 +7781,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
-    defer writeBuildWatchInputs(ctx, args, &build_env);
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -8010,10 +7975,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             .scratch_dir = build_cache_dir,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
@@ -8045,134 +8006,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         std.process.exit(2);
     }
 }
-
-/// Dump linker inputs to a temp directory for debugging linking issues.
-/// Creates a directory with all input files copied and a README with the linker command.
-fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) CliMainError!void {
-    const stderr = ctx.io.stderr();
-
-    // Create temp directory with unique name based on timestamp
-    const timestamp = @divTrunc(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds, 1_000_000_000);
-    const dir_name = try std.fmt.allocPrint(ctx.arena, "roc-linker-debug-{d}", .{timestamp});
-    const dump_dir = try std.fs.path.join(ctx.arena, &.{ "/tmp", dir_name });
-
-    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, dump_dir) catch |err| {
-        try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
-        return err;
-    };
-
-    // Track copied files for the README
-    var copied_files = try std.array_list.Managed(CopiedFile).initCapacity(ctx.arena, 16);
-
-    // Copy platform_files_pre
-    for (link_config.platform_files_pre, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "pre_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (pre-link)" });
-    }
-
-    // Copy object_files
-    for (link_config.object_files, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "obj_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "object file" });
-    }
-
-    // Copy platform_files_post
-    for (link_config.platform_files_post, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "post_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (post-link)" });
-    }
-
-    // Generate the linker command string
-    const link_cmd = linker.formatLinkCommand(ctx, link_config) catch |err| {
-        try stderr.print("Warning: Failed to format linker command: {}\n", .{err});
-        return;
-    };
-
-    // Build the file list for README
-    var file_list = std.array_list.Managed(u8).init(ctx.arena);
-    for (copied_files.items) |file| {
-        try file_list.print("  {s}\n    <- {s} ({s})\n", .{ file.name, file.original, file.category });
-    }
-
-    // Write README.txt with instructions
-    const readme_content = try std.fmt.allocPrint(ctx.arena,
-        \\Roc Linker Debug Dump
-        \\=====================
-        \\
-        \\Target format: {s}
-        \\Target OS: {s}
-        \\Target arch: {s}
-        \\Output: {s}
-        \\
-        \\Files ({d} copied):
-        \\{s}
-        \\
-        \\To manually reproduce the link step:
-        \\
-        \\  {s}
-        \\
-        \\Note: The command above uses original file paths. The copied files
-        \\in this directory preserve original filenames for inspection.
-        \\
-    , .{
-        @tagName(link_config.target_format),
-        if (link_config.target_os) |os| @tagName(os) else "native",
-        if (link_config.target_arch) |arch| @tagName(arch) else "native",
-        link_config.output_path,
-        copied_files.items.len,
-        file_list.items,
-        link_cmd,
-    });
-
-    const readme_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, "README.txt" });
-    const readme_file = std.Io.Dir.cwd().createFile(ctx.io.std_io, readme_path, .{}) catch |err| {
-        try stderr.print("Warning: Failed to create README.txt: {}\n", .{err});
-        return;
-    };
-    defer readme_file.close(ctx.io.std_io);
-    readme_file.writeStreamingAll(ctx.io.std_io, readme_content) catch |err| {
-        try stderr.print("Warning: Failed to write README.txt: {}\n", .{err});
-    };
-
-    // Print summary to stderr
-    try stderr.print(
-        \\
-        \\=== Linker debug dump ===
-        \\Directory: {s}
-        \\Files: {d} copied
-        \\
-        \\To reproduce:
-        \\  {s}
-        \\
-        \\See {s}/README.txt for details
-        \\=========================
-        \\
-    , .{ dump_dir, copied_files.items.len, link_cmd, dump_dir });
-}
-
-const CopiedFile = struct {
-    name: []const u8,
-    original: []const u8,
-    category: []const u8,
-};
 
 // Test cache blob format
 // Binary format for caching test results.
@@ -9311,11 +9144,10 @@ fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildE
 }
 
 /// For `roc build --watch`, the build child records its discovered source inputs so the
-/// parent watch loop knows which files to watch. The root path is always included, which
-/// also covers the synthetic-default-platform case where the discovered inputs live in a
-/// temporary directory. Best-effort: a failed write just leaves the parent to fall back to
-/// the root path it already watches.
-fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) void {
+/// parent watch loop knows which files to watch. The root path is always included for
+/// ordinary builds. Synthetic-default-platform builds compile through temporary files, so
+/// the parent supplies the real root path separately instead of reading it from this file.
+fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) WatchWriteInputsError!void {
     const file_path = args.watch_inputs_file orelse return;
     // Synthetic default-platform builds compile through throwaway temp files that are
     // deleted as soon as the build finishes. Recording those as watch inputs would make
@@ -9323,10 +9155,22 @@ fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *Bui
     // would rebuild forever. The parent already watches the real root path it was given,
     // so write an empty discovered-input set in that case.
     if (args.synthetic_default_platform) {
-        writeWatchInputsFile(ctx, file_path, null, &.{}) catch {};
+        try writeWatchInputsFile(ctx, file_path, null, &.{});
         return;
     }
-    writeWatchInputsFile(ctx, file_path, build_env, &[_][]const u8{args.path}) catch {};
+    try writeWatchInputsFile(ctx, file_path, build_env, &[_][]const u8{args.path});
+}
+
+fn reportBuildWatchInputsWriteError(ctx: *CliCtx, file_path: []const u8, err: WatchWriteInputsError) void {
+    ctx.io.stderr().print("Error: failed to write watch input state to {s}: {}\n", .{ file_path, err }) catch {};
+    ctx.io.flush();
+}
+
+fn writeBuildWatchInputsOnExit(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) void {
+    writeBuildWatchInputs(ctx, args, build_env) catch |err| {
+        const file_path = args.watch_inputs_file orelse return;
+        reportBuildWatchInputsWriteError(ctx, file_path, err);
+    };
 }
 
 fn writeHotReloadWatchPathsFile(
@@ -9394,6 +9238,46 @@ fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const
     return .{
         .inputs = owned_paths,
         .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchCommandError!WatchInputSet {
+    return readWatchInputsFile(ctx, file_path, extra_paths) catch |err| {
+        switch (err) {
+            error.OutOfMemory => {},
+            error.WatchInputsMissing => try ctx.io.stderr().print("Error: watch child did not write source input state to {s}.\n", .{file_path}),
+            error.WatchInputsReadFailed => try ctx.io.stderr().print("Error: failed to read watch input state from {s}.\n", .{file_path}),
+            error.WatchInputsMalformed => try ctx.io.stderr().print("Error: watch child wrote malformed source input state to {s}.\n", .{file_path}),
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.FileTooBig,
+            error.InputOutput,
+            error.NoSpaceLeft,
+            error.DeviceBusy,
+            error.AccessDenied,
+            error.NoDevice,
+            error.FileBusy,
+            error.Canceled,
+            error.IsDir,
+            error.ProcessFdQuotaExceeded,
+            error.SystemFdQuotaExceeded,
+            error.PathAlreadyExists,
+            error.SymLinkLoop,
+            error.FileNotFound,
+            error.NotDir,
+            error.NetworkNotFound,
+            error.NameTooLong,
+            error.BadPathName,
+            error.PipeBusy,
+            error.AntivirusInterference,
+            error.OperationUnsupported,
+            error.FileSystem,
+            error.UnrecognizedVolume,
+            => try ctx.io.stderr().print("Error: failed to resolve an explicit watch path while reading source input state from {s}: {}\n", .{ file_path, err }),
+        }
+        ctx.io.flush();
+        return err;
     };
 }
 
@@ -9764,7 +9648,7 @@ fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchC
             try replayWatchChildOutput(ctx, child, !first_run);
         }
 
-        const new_inputs = try readWatchInputsFile(ctx, inputs_path, extra_paths);
+        const new_inputs = try readWatchInputsFileAfterChild(ctx, inputs_path, extra_paths);
         const changed_during_refresh = try refreshWatchState(ctx, &state, &signal, new_inputs);
 
         first_run = false;

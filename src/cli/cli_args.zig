@@ -157,9 +157,6 @@ pub const BuildArgs = struct {
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
-    z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
-    z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
-    z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
     exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
@@ -412,9 +409,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var max_threads: ?usize = null;
     var wasm_memory: ?usize = null;
     var wasm_stack_size: ?usize = null;
-    var z_bench_tokenize: ?[]const u8 = null;
-    var z_bench_parse: ?[]const u8 = null;
-    var z_dump_linker: bool = false;
     var watch: bool = false;
     var watch_inputs_file: ?[]const u8 = null;
     var resolve_limits: ResolveLimitArgs = .{};
@@ -441,9 +435,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
-            \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
-            \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
-            \\      --z-dump-linker                Dump linker inputs to temp directory for debugging
             \\      -h, --help                     Print help
             \\
             };
@@ -474,18 +465,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
-        } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
-            if (getFlagValue(arg)) |value| {
-                z_bench_tokenize = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--z-bench-tokenize" } } };
-            }
-        } else if (mem.startsWith(u8, arg, "--z-bench-parse")) {
-            if (getFlagValue(arg)) |value| {
-                z_bench_parse = value;
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--z-bench-parse" } } };
-            }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
         } else if (mem.eql(u8, arg, "--allow-errors")) {
@@ -506,8 +485,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
             }
-        } else if (mem.eql(u8, arg, "--z-dump-linker")) {
-            z_dump_linker = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
         } else if (mem.eql(u8, arg, "--timings")) {
@@ -547,7 +524,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
