@@ -8660,6 +8660,7 @@ fn checkFileWithBuildEnv(
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
+    source_dir_override: ?[]const u8,
 ) anyerror!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8673,6 +8674,9 @@ fn checkFileWithBuildEnv(
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
     build_env.resolution_config = resolution_config;
+    if (source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -8810,6 +8814,49 @@ fn checkFileWithBuildEnv(
     };
 }
 
+fn rocCheckDefaultApp(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    original_source: []const u8,
+    cache_config: CacheConfig,
+) anyerror!CheckResult {
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
+
+    const app_filename = std.fs.path.basename(args.path);
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, app_filename });
+    const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
+    const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
+
+    return checkFileWithBuildEnv(
+        ctx,
+        app_path,
+        args.time,
+        cache_config,
+        args.max_threads,
+        resolutionConfigFromLimits(args.resolve_limits),
+        std.fs.path.dirname(args.path) orelse ".",
+    );
+}
+
 fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8832,18 +8879,26 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
     // Use BuildEnv to check the file
     reporter.begin("Type Checking");
-    var check_result = checkFileWithBuildEnv(
-        ctx,
-        args.path,
-        args.time,
-        cache_config,
-        args.max_threads,
-        resolutionConfigFromLimits(args.resolve_limits),
-    ) catch |err| {
-        reporter.fail();
-        try handleProcessFileError(err, stderr, args.path);
-        return;
-    };
+    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+        rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
+            reporter.fail();
+            try handleProcessFileError(err, stderr, args.path);
+            return;
+        }
+    else
+        checkFileWithBuildEnv(
+            ctx,
+            args.path,
+            args.time,
+            cache_config,
+            args.max_threads,
+            resolutionConfigFromLimits(args.resolve_limits),
+            null,
+        ) catch |err| {
+            reporter.fail();
+            try handleProcessFileError(err, stderr, args.path);
+            return;
+        };
     defer check_result.deinit(ctx.gpa);
 
     if (builtin.target.cpu.arch == .wasm32) {

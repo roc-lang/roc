@@ -559,7 +559,7 @@ pub const BuildEnv = struct {
 
         // Resolve the full dependency graph (downloads plus version solving),
         // then materialize the resolved packages and their shorthands.
-        if (header_info.kind == .app or header_info.kind == .package) {
+        if (header_info.kind == .app or header_info.kind == .default_app or header_info.kind == .package) {
             try self.resolveAndMaterialize(pkg_name);
         }
 

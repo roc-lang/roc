@@ -403,6 +403,7 @@ pub const PublishInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     available_artifacts: []const ImportedModuleView = &.{},
     relation_artifacts: []const ImportedModuleView = &.{},
+    platform_requirement_artifact: ?ImportedModuleView = null,
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
@@ -5946,6 +5947,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_exported_const_templates = ExportedConstTemplateTable{};
     const empty_provided_exports = ProvidedExportTable{};
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
     const empty_hoisted_constants = HoistedConstTable{};
@@ -5978,6 +5980,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .exported_const_templates = empty_exported_const_templates.view(),
         .provided_exports = &empty_provided_exports,
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_declarations = &empty_platform_required_declarations,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
         .hoisted_constants = &empty_hoisted_constants,
@@ -10296,6 +10299,55 @@ fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeI
     }
 }
 
+/// Public `checkedTypeBuiltinNominal` function.
+pub fn checkedTypeBuiltinNominal(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) ?CheckedBuiltinNominal {
+    return checkedBuiltinForLiteralTarget(artifact.checked_types.view(), root);
+}
+
+/// Public `checkedTypeRootKey` function.
+pub fn checkedTypeRootKey(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) canonical.CanonicalTypeKey {
+    const index: usize = @intFromEnum(root);
+    if (index >= artifact.checked_types.roots.items.len) {
+        checkedArtifactInvariant("checked type key lookup referenced a missing root", .{});
+    }
+    return artifact.checked_types.roots.items[index].key;
+}
+
+/// Public `builtinNominalAcceptsNumeralLiteral` function.
+pub fn builtinNominalAcceptsNumeralLiteral(builtin_nominal: CheckedBuiltinNominal) bool {
+    return switch (builtin_nominal) {
+        .u8,
+        .i8,
+        .u16,
+        .i16,
+        .u32,
+        .i32,
+        .u64,
+        .i64,
+        .u128,
+        .i128,
+        .f32,
+        .f64,
+        .dec,
+        => true,
+
+        .bool,
+        .str,
+        .list,
+        .box,
+        .parse_tag_union_spec,
+        .fields,
+        .field,
+        => false,
+    };
+}
+
 fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
     return switch (variable.numeric_default_phase orelse return null) {
         .mono_specialization => .dec,
@@ -13866,6 +13918,280 @@ fn platformRequiredPayloadForDeclaration(
     };
 }
 
+fn applyPlatformRequiredSignatureSubstitutions(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    platform_requirement_context: ?PlatformRequirementContextKey,
+    platform_requirement_artifact: ?ImportedModuleView,
+) Allocator.Error!void {
+    const context = platform_requirement_context orelse return;
+    const platform = platform_requirement_artifact orelse {
+        checkedArtifactInvariant("platform requirement substitution missing platform declaration artifact", .{});
+    };
+    const expected_context = PlatformRequirementContextKey.compute(
+        platform.module_identity,
+        platform.platform_required_declarations.identityHash(platform.canonical_names),
+    );
+    if (!std.meta.eql(context.bytes, expected_context.bytes)) {
+        checkedArtifactInvariant("platform requirement substitution context does not match declaration artifact", .{});
+    }
+
+    if (platform.platform_required_declarations.declarations.len == 0) return;
+
+    var projector = CheckedTypeStoreImportProjector.init(allocator, &checked_types.store, names, platform);
+    defer projector.deinit();
+
+    var formals = std.ArrayList(CheckedTypeId).empty;
+    defer formals.deinit(allocator);
+    var actuals = std.ArrayList(CheckedTypeId).empty;
+    defer actuals.deinit(allocator);
+    var app_scheme_keys = std.ArrayList(canonical.CanonicalTypeSchemeKey).empty;
+    defer app_scheme_keys.deinit(allocator);
+
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+
+    for (platform.platform_required_declarations.declarations) |declaration| {
+        const required_name = platform.canonical_names.exportNameText(declaration.platform_name);
+        const app_def = appDefByRequiredName(module, required_name) orelse continue;
+        const app_root = checked_types.rootForSourceVar(module, module.defType(app_def)) orelse {
+            checkedArtifactInvariant("platform requirement substitution missing app def checked root", .{});
+        };
+        const app_scheme_key = try canonical_type_keys.schemeFromVar(
+            allocator,
+            module.typeStoreConst(),
+            module.identStoreConst(),
+            module.defType(app_def),
+        );
+        const platform_scheme = platform.checked_types.schemeForKey(declaration.declared_source_ty) orelse {
+            checkedArtifactInvariant("platform requirement substitution missing platform declaration checked scheme", .{});
+        };
+        const expected_root = try projector.project(platform_scheme.root);
+
+        active.clearRetainingCapacity();
+        try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            &checked_types.store,
+            expected_root,
+            app_root,
+            &formals,
+            &actuals,
+            &active,
+        );
+        try app_scheme_keys.append(allocator, app_scheme_key);
+    }
+
+    if (formals.items.len == 0) return;
+
+    var clone_active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer clone_active.deinit();
+
+    for (checked_types.source_type_roots) |*entry| {
+        clone_active.clearRetainingCapacity();
+        entry.checked_root = try checked_types.store.cloneCheckedTypeRootSubstituting(
+            allocator,
+            names,
+            entry.checked_root,
+            formals.items,
+            actuals.items,
+            &clone_active,
+        );
+    }
+
+    for (app_scheme_keys.items) |scheme_key| {
+        for (checked_types.store.schemes.items) |*scheme| {
+            if (!std.meta.eql(scheme.key.bytes, scheme_key.bytes)) continue;
+            clone_active.clearRetainingCapacity();
+            scheme.root = try checked_types.store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                scheme.root,
+                formals.items,
+                actuals.items,
+                &clone_active,
+            );
+            break;
+        }
+    }
+}
+
+fn appDefByRequiredName(
+    module: TypedCIR.Module,
+    required_name: []const u8,
+) ?CIR.Def.Idx {
+    const module_env = module.moduleEnvConst();
+    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+        const def = module.def(def_idx);
+        const name = def.patternName() orelse continue;
+        if (std.mem.eql(u8, module.identStoreConst().getText(name), required_name)) return def_idx;
+    }
+    return null;
+}
+
+fn collectPlatformRequiredSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected: CheckedTypeId,
+    actual: CheckedTypeId,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    if (expected == actual) return;
+
+    const pair = PlatformRequirementTypePair{
+        .expected = @intFromEnum(expected),
+        .actual = @intFromEnum(actual),
+    };
+    if (active.contains(pair)) return;
+    try active.put(pair, {});
+    defer _ = active.remove(pair);
+
+    const expected_payload = store.payload(expected);
+    const actual_payload = store.payload(actual);
+
+    if (checkedTypePayloadIsIdentity(actual_payload)) {
+        try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, actual, expected);
+        return;
+    }
+    if (checkedTypePayloadIsIdentity(expected_payload)) return;
+
+    switch (expected_payload) {
+        .alias => |alias| return try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            alias.backing,
+            actual,
+            formals,
+            actuals,
+            active,
+        ),
+        else => {},
+    }
+    switch (actual_payload) {
+        .alias => |alias| return try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected,
+            alias.backing,
+            formals,
+            actuals,
+            active,
+        ),
+        else => {},
+    }
+
+    switch (expected_payload) {
+        .function => |expected_fn| {
+            const actual_fn = switch (actual_payload) {
+                .function => |actual_fn| actual_fn,
+                else => return,
+            };
+            if (expected_fn.args.len != actual_fn.args.len) return;
+            for (expected_fn.args, actual_fn.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_arg,
+                    actual_arg,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_fn.ret,
+                actual_fn.ret,
+                formals,
+                actuals,
+                active,
+            );
+        },
+        .nominal => |expected_nominal| {
+            const actual_nominal = switch (actual_payload) {
+                .nominal => |actual_nominal| actual_nominal,
+                else => {
+                    if (!expected_nominal.is_opaque) {
+                        try collectPlatformRequiredSignatureSubstitutions(
+                            allocator,
+                            names,
+                            store,
+                            expected_nominal.backing,
+                            actual,
+                            formals,
+                            actuals,
+                            active,
+                        );
+                    }
+                    return;
+                },
+            };
+            if (expected_nominal.name != actual_nominal.name or
+                expected_nominal.origin_module != actual_nominal.origin_module or
+                expected_nominal.source_decl != actual_nominal.source_decl or
+                expected_nominal.builtin != actual_nominal.builtin or
+                expected_nominal.args.len != actual_nominal.args.len)
+            {
+                return;
+            }
+            for (expected_nominal.args, actual_nominal.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_arg,
+                    actual_arg,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+            if (!expected_nominal.is_opaque) {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_nominal.backing,
+                    actual_nominal.backing,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+        },
+        .tuple => |expected_items| {
+            const actual_items = switch (actual_payload) {
+                .tuple => |actual_items| actual_items,
+                else => return,
+            };
+            if (expected_items.len != actual_items.len) return;
+            for (expected_items, actual_items) |expected_item, actual_item| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_item,
+                    actual_item,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+        },
+        else => {},
+    }
+}
+
 fn applyPlatformForClauseSubstitutions(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -14297,6 +14623,17 @@ fn platformRequirementTypesCompatible(
     var checker = PlatformRequirementTypeCompatibilityChecker.init(allocator, &scratch_store);
     defer checker.deinit();
     return try checker.compatible(scratch_expected, scratch_actual);
+}
+
+/// Public `checkedTypesCompatible` function.
+pub fn checkedTypesCompatible(
+    allocator: Allocator,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected: CheckedTypeId,
+    actual_artifact: *const CheckedModuleArtifact,
+    actual: CheckedTypeId,
+) Allocator.Error!bool {
+    return platformRequirementTypesCompatible(allocator, expected_artifact, expected, actual_artifact, actual);
 }
 
 const PlatformRequirementTypePair = struct {
@@ -17107,6 +17444,14 @@ fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
         .flex, .rigid => true,
         else => false,
     };
+}
+
+/// Public `checkedTypeRootIsIdentity` function.
+pub fn checkedTypeRootIsIdentity(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) bool {
+    return checkedTypePayloadIsIdentity(artifact.checked_types.payload(root));
 }
 
 /// Public `formatCheckedTypeAlloc` function.
@@ -23301,6 +23646,7 @@ pub const ImportedModuleView = struct {
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
@@ -23344,6 +23690,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .hoisted_constants = &artifact.hoisted_constants,
@@ -24664,6 +25011,14 @@ pub fn publishFromTypedModule(
     var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts, &source_nodes);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
+    try applyPlatformRequiredSignatureSubstitutions(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_type_publication,
+        inputs.platform_requirement_context,
+        inputs.platform_requirement_artifact,
+    );
     try applyPlatformForClauseSubstitutions(
         allocator,
         module,
@@ -25119,6 +25474,7 @@ fn expectProvidedExportKind(
     const empty_exported_const_templates = ExportedConstTemplateTable{};
     const empty_provided_exports = ProvidedExportTable{};
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
     const empty_hoisted_constants = HoistedConstTable{};
@@ -25151,6 +25507,7 @@ fn expectProvidedExportKind(
         .exported_const_templates = empty_exported_const_templates.view(),
         .provided_exports = &empty_provided_exports,
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_declarations = &empty_platform_required_declarations,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
         .hoisted_constants = &empty_hoisted_constants,
