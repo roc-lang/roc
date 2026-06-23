@@ -36,6 +36,13 @@ const R_X86_64_GLOB_DAT: u32 = 6;
 const R_X86_64_JUMP_SLOT: u32 = 7;
 const R_X86_64_RELATIVE: u32 = 8;
 
+/// Resolves an undefined dynamic symbol (by name) to an absolute address in
+/// the running host process, or null when it is not a symbol the caller can
+/// provide. Used to bind the compiler-rt runtime libcalls that native codegen
+/// emits but the self-contained eval image does not define (there is no dynamic
+/// linker to bind them for the in-process loader).
+pub const UndefinedSymbolResolver = *const fn (name: []const u8) ?usize;
+
 const RelocKind = enum { relative, symbol, unsupported };
 
 fn classifyReloc(r_type: u32) RelocKind {
@@ -64,14 +71,17 @@ pub const loader_skips_relocations = builtin.os.tag == .linux and
 /// Apply the dynamic relocations of an ELF image already mapped at `base`.
 ///
 /// `base` is the load address of an `ET_DYN` image whose vaddr-0 maps to
-/// `base` (i.e. the value of `ElfDynLib.memory.ptr`). Only `RELATIVE` and
-/// in-image `GLOB_DAT`/`JUMP_SLOT`/absolute relocations are applied; entries
-/// against undefined symbols are left untouched (there is no dynamic linker to
-/// bind them, and a self-contained eval image should not contain any).
+/// `base` (i.e. the value of `ElfDynLib.memory.ptr`). `RELATIVE` and in-image
+/// `GLOB_DAT`/`JUMP_SLOT`/absolute relocations are applied directly. Entries
+/// against undefined symbols are handed to `resolver` (when one is supplied):
+/// native codegen can emit compiler-rt runtime libcalls (`__divti3`, ...) that
+/// the image itself does not define, and there is no dynamic linker to bind
+/// them, so the resolver maps each to its host implementation. Symbols neither
+/// in-image nor resolvable are left untouched rather than written with garbage.
 ///
 /// The caller decides *whether* to invoke this (see `loader_skips_relocations`);
 /// the work here is platform-independent so it can be unit-tested everywhere.
-pub fn applyDynamicRelocations(base: usize) void {
+pub fn applyDynamicRelocations(base: usize, resolver: ?UndefinedSymbolResolver) void {
     const ehdr: *const elf.Ehdr = @ptrFromInt(base);
 
     // Locate PT_DYNAMIC and the symbol table from the program headers / dynamic
@@ -100,6 +110,7 @@ pub fn applyDynamicRelocations(base: usize) void {
     var pltrel_size: usize = 0;
     var symtab: usize = 0;
     var syment: usize = @sizeOf(elf.Elf64_Sym);
+    var strtab: usize = 0;
     {
         var i: usize = 0;
         while (dynv[i].d_tag != elf.DT_NULL) : (i += 1) {
@@ -112,13 +123,14 @@ pub fn applyDynamicRelocations(base: usize) void {
                 elf.DT_PLTRELSZ => pltrel_size = val,
                 elf.DT_SYMTAB => symtab = base + val,
                 elf.DT_SYMENT => syment = val,
+                elf.DT_STRTAB => strtab = base + val,
                 else => {},
             }
         }
     }
 
-    applyRelaTable(base, rela, rela_size, rela_ent, symtab, syment);
-    applyRelaTable(base, jmprel, pltrel_size, rela_ent, symtab, syment);
+    applyRelaTable(base, rela, rela_size, rela_ent, symtab, syment, strtab, resolver);
+    applyRelaTable(base, jmprel, pltrel_size, rela_ent, symtab, syment, strtab, resolver);
 }
 
 fn applyRelaTable(
@@ -128,6 +140,8 @@ fn applyRelaTable(
     ent: usize,
     symtab: usize,
     syment: usize,
+    strtab: usize,
+    resolver: ?UndefinedSymbolResolver,
 ) void {
     if (table == 0 or size == 0 or ent == 0) return;
 
@@ -143,10 +157,20 @@ fn applyRelaTable(
             .symbol => {
                 if (symtab == 0 or r_sym == 0) continue;
                 const sym: *const elf.Elf64_Sym = @ptrFromInt(symtab + @as(usize, r_sym) * syment);
-                // SHN_UNDEF (0): no in-image definition and no dynamic linker to
-                // bind it — leave the slot untouched rather than write garbage.
-                if (sym.st_shndx == elf.SHN_UNDEF) continue;
-                slot.* = base +% sym.st_value +% @as(usize, @bitCast(@as(isize, @intCast(r.r_addend))));
+                const addend: usize = @bitCast(@as(isize, @intCast(r.r_addend)));
+                // SHN_UNDEF (0): no in-image definition. Ask the resolver to bind
+                // it to a host implementation (compiler-rt libcalls emitted by
+                // native codegen land here); if it cannot, leave the slot
+                // untouched rather than write garbage.
+                if (sym.st_shndx == elf.SHN_UNDEF) {
+                    if (resolver != null and strtab != 0) {
+                        const name_ptr: [*:0]const u8 = @ptrFromInt(strtab + sym.st_name);
+                        const name = std.mem.sliceTo(name_ptr, 0);
+                        if (resolver.?(name)) |addr| slot.* = addr +% addend;
+                    }
+                    continue;
+                }
+                slot.* = base +% sym.st_value +% addend;
             },
             .unsupported => {},
         }
@@ -159,6 +183,20 @@ fn relativeRelocType() u32 {
         .x86_64 => R_X86_64_RELATIVE,
         else => 0,
     };
+}
+
+fn jumpSlotRelocType() u32 {
+    return switch (builtin.cpu.arch) {
+        .aarch64 => R_AARCH64_JUMP_SLOT,
+        .x86_64 => R_X86_64_JUMP_SLOT,
+        else => 0,
+    };
+}
+
+const test_resolved_addr: usize = 0xABCD_0000;
+
+fn testResolver(name: []const u8) ?usize {
+    return if (std.mem.eql(u8, name, "__divti3")) test_resolved_addr else null;
 }
 
 test "applyDynamicRelocations applies a RELATIVE entry" {
@@ -213,7 +251,74 @@ test "applyDynamicRelocations applies a RELATIVE entry" {
     const target: *usize = @ptrCast(@alignCast(buf.ptr + target_off));
     target.* = 0;
 
-    applyDynamicRelocations(base);
+    applyDynamicRelocations(base, null);
 
     try std.testing.expectEqual(base +% @as(usize, @intCast(addend)), target.*);
+}
+
+test "applyDynamicRelocations binds an undefined symbol through the resolver" {
+    if (comptime jumpSlotRelocType() == 0 or @bitSizeOf(usize) != 64) return error.SkipZigTest;
+
+    // Like the RELATIVE test above, but with a JUMP_SLOT entry against an
+    // undefined symbol named "__divti3", plus the DT_SYMTAB/DT_STRTAB the
+    // resolver path needs to read that name. The resolver binds the slot to a
+    // sentinel address, mirroring how the eval loader binds compiler-rt libcalls.
+    const ehdr_size = @sizeOf(elf.Ehdr);
+    const phdr_size = @sizeOf(elf.Phdr);
+    const dyn_off = std.mem.alignForward(usize, ehdr_size + phdr_size, 8);
+    const dyn_count = 7;
+    const rela_off = std.mem.alignForward(usize, dyn_off + dyn_count * @sizeOf(elf.Elf64_Dyn), 8);
+    const sym_off = std.mem.alignForward(usize, rela_off + @sizeOf(elf.Elf64_Rela), 8);
+    const str_off = std.mem.alignForward(usize, sym_off + 2 * @sizeOf(elf.Elf64_Sym), 8);
+    const name_bytes = "\x00__divti3\x00"; // index 0 is the empty string
+    const target_off = std.mem.alignForward(usize, str_off + name_bytes.len, 8);
+    const total = target_off + 8;
+
+    const buf = try std.testing.allocator.alignedAlloc(u8, .of(elf.Ehdr), total);
+    defer std.testing.allocator.free(buf);
+    @memset(buf, 0);
+
+    const base = @intFromPtr(buf.ptr);
+
+    const ehdr: *elf.Ehdr = @ptrCast(buf.ptr);
+    ehdr.e_ident[0..4].* = elf.MAGIC.*;
+    ehdr.e_type = .DYN;
+    ehdr.e_phoff = ehdr_size;
+    ehdr.e_phentsize = phdr_size;
+    ehdr.e_phnum = 1;
+
+    const phdr: *elf.Phdr = @ptrCast(@alignCast(buf.ptr + ehdr_size));
+    phdr.p_type = elf.PT_DYNAMIC;
+    phdr.p_vaddr = dyn_off;
+    phdr.p_offset = dyn_off;
+    phdr.p_filesz = dyn_count * @sizeOf(elf.Elf64_Dyn);
+    phdr.p_memsz = phdr.p_filesz;
+
+    const dynv: [*]elf.Elf64_Dyn = @ptrCast(@alignCast(buf.ptr + dyn_off));
+    dynv[0] = .{ .d_tag = elf.DT_JMPREL, .d_val = rela_off };
+    dynv[1] = .{ .d_tag = elf.DT_PLTRELSZ, .d_val = @sizeOf(elf.Elf64_Rela) };
+    dynv[2] = .{ .d_tag = elf.DT_RELAENT, .d_val = @sizeOf(elf.Elf64_Rela) };
+    dynv[3] = .{ .d_tag = elf.DT_SYMTAB, .d_val = sym_off };
+    dynv[4] = .{ .d_tag = elf.DT_SYMENT, .d_val = @sizeOf(elf.Elf64_Sym) };
+    dynv[5] = .{ .d_tag = elf.DT_STRTAB, .d_val = str_off };
+    dynv[6] = .{ .d_tag = elf.DT_NULL, .d_val = 0 };
+
+    @memcpy(buf[str_off..][0..name_bytes.len], name_bytes);
+
+    // symtab[1] is an undefined reference to "__divti3" (st_name = 1).
+    const symtab: [*]elf.Elf64_Sym = @ptrCast(@alignCast(buf.ptr + sym_off));
+    symtab[1].st_name = 1;
+    symtab[1].st_shndx = elf.SHN_UNDEF;
+
+    const rela: *elf.Elf64_Rela = @ptrCast(@alignCast(buf.ptr + rela_off));
+    rela.r_offset = target_off;
+    rela.r_info = (@as(u64, 1) << 32) | jumpSlotRelocType(); // symbol index 1
+    rela.r_addend = 0;
+
+    const target: *usize = @ptrCast(@alignCast(buf.ptr + target_off));
+    target.* = 0;
+
+    applyDynamicRelocations(base, &testResolver);
+
+    try std.testing.expectEqual(test_resolved_addr, target.*);
 }

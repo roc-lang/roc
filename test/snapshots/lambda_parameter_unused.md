@@ -219,7 +219,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "_factor")))
-			(e-dispatch-call (method "times") (constraint-fn-var 234)
+			(e-dispatch-call (method "times") (constraint-fn-var 240)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "_factor"))))
@@ -244,7 +244,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "times") (constraint-fn-var 468)
+			(e-dispatch-call (method "times") (constraint-fn-var 480)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -262,33 +262,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 578)
+					(e-call (constraint-fn-var 593)
 						(e-lookup-local
 							(p-assign (ident "add")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 679)
+					(e-call (constraint-fn-var 697)
 						(e-lookup-local
 							(p-assign (ident "multiply")))
 						(e-num (value "3"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 780)
+					(e-call (constraint-fn-var 801)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-num (value "7"))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call (constraint-fn-var 881)
+					(e-call (constraint-fn-var 905)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "4"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 972)
+				(e-dispatch-call (method "plus") (constraint-fn-var 996)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 962)
+						(e-dispatch-call (method "plus") (constraint-fn-var 986)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 952)
+								(e-dispatch-call (method "plus") (constraint-fn-var 976)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "result1"))))

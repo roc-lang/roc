@@ -901,6 +901,7 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) anyerror!CaseEnv {
     try env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir);
     try env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
+    try util.putIsolatedTempEnv(&env_map, dirs.temp_dir);
 
     return .{
         .dirs = dirs,
@@ -993,6 +994,11 @@ fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: 
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set XDG_CACHE_HOME" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ZIG_LOCAL_CACHE_DIR" };
+    // Isolate the temp dir so roc's background temp-cleanup thread cannot race
+    // other concurrent roc processes on the shared system temp dir. This is the
+    // fix for the non-deterministic interpreter-backend access-violation flake.
+    util.putIsolatedTempEnv(&env_map, dirs.temp_dir) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set isolated temp dir" };
 
     const result = switch (backend) {
         .interpreter => runInterpreterTest(io, allocator, backend, platform, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),

@@ -3573,8 +3573,14 @@ fn mkFlexWithFromNumeralConstraint(
     const numeral_content = try self.mkNumeralContent(env);
     const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
 
-    // Create the error type: [InvalidNumeral(Str)] (closed tag union)
-    const str_var = self.str_var;
+    // Create the error type: [InvalidNumeral(Str)] (closed tag union).
+    // Use a fresh Str instance, not the shared `self.str_var`: this Str lands in
+    // the literal's deferred from_numeral constraint, and embedding the module's
+    // one canonical Str var here would make every numeric literal's constraint
+    // alias it. A dispatch failure poisons its operands to `.err`, so a shared Str
+    // would carry that `.err` into every other literal's constraint and silently
+    // suppress their own (independent) dispatch errors.
+    const str_var = try self.freshStr(env, num_literal_info.region);
     const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("InvalidNumeral"),
     );
@@ -3650,8 +3656,14 @@ fn mkFlexWithFromQuoteConstraint(
     // Create the argument type: Str
     const arg_var = try self.freshStr(env, region);
 
-    // Create the error type: [BadQuotedBytes(Str)] (closed tag union)
-    const str_var = self.str_var;
+    // Create the error type: [BadQuotedBytes(Str)] (closed tag union).
+    // Use a fresh Str instance, not the shared `self.str_var`: this Str lands in
+    // the literal's deferred from_quote constraint, and embedding the module's one
+    // canonical Str var here would make every string literal's constraint alias
+    // it. A dispatch failure poisons its operands to `.err`, so a shared Str would
+    // carry that `.err` into every other literal's constraint and silently
+    // suppress their own (independent) dispatch errors.
+    const str_var = try self.freshStr(env, region);
     const bad_quoted_bytes_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("BadQuotedBytes"),
     );

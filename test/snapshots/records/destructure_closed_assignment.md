@@ -102,7 +102,7 @@ compute = {
 							(e-num (value "2")))
 						(field (name "z")
 							(e-num (value "3"))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 133)
+			(e-dispatch-call (method "plus") (constraint-fn-var 142)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

@@ -106,3 +106,57 @@ pub fn decToIntTryBits(dec_value: i128, target_bits: u32, target_signed: bool) ?
 
     return @bitCast(whole_part);
 }
+
+test "integer target fit predicates cover signed and unsigned boundaries" {
+    try std.testing.expect(i128FitsTarget(-128, 8, true));
+    try std.testing.expect(i128FitsTarget(127, 8, true));
+    try std.testing.expect(!i128FitsTarget(-129, 8, true));
+    try std.testing.expect(!i128FitsTarget(128, 8, true));
+
+    try std.testing.expect(!i128FitsTarget(-1, 8, false));
+    try std.testing.expect(i128FitsTarget(255, 8, false));
+    try std.testing.expect(!i128FitsTarget(256, 8, false));
+
+    try std.testing.expect(u128FitsTarget(127, 8, true));
+    try std.testing.expect(!u128FitsTarget(128, 8, true));
+    try std.testing.expect(u128FitsTarget(255, 8, false));
+    try std.testing.expect(!u128FitsTarget(256, 8, false));
+
+    try std.testing.expect(i128FitsTarget(std.math.maxInt(i128), 128, true));
+    try std.testing.expect(!i128FitsTarget(-1, 128, false));
+    try std.testing.expect(u128FitsTarget(std.math.maxInt(u128), 128, false));
+    try std.testing.expect(!u128FitsTarget(@as(u128, 1) << 127, 128, true));
+}
+
+test "float to int conversions truncate and reject target boundary violations" {
+    try std.testing.expect(truncatedFloatFitsTarget(f64, 127.0, 8, true));
+    try std.testing.expect(truncatedFloatFitsTarget(f64, -128.0, 8, true));
+    try std.testing.expect(!truncatedFloatFitsTarget(f64, 128.0, 8, true));
+    try std.testing.expect(!truncatedFloatFitsTarget(f64, -129.0, 8, true));
+    try std.testing.expect(truncatedFloatFitsTarget(f64, 255.0, 8, false));
+    try std.testing.expect(!truncatedFloatFitsTarget(f64, 256.0, 8, false));
+    try std.testing.expect(!truncatedFloatFitsTarget(f64, -1.0, 8, false));
+
+    try std.testing.expectEqual(@as(?i8, 42), floatToIntTry(f32, i8, 42.9));
+    try std.testing.expectEqual(@as(?i8, -42), floatToIntTry(f32, i8, -42.9));
+    try std.testing.expectEqual(@as(?u8, 255), floatToIntTry(f64, u8, 255.999));
+    try std.testing.expectEqual(@as(?i8, null), floatToIntTry(f64, i8, 128.0));
+    try std.testing.expectEqual(@as(?u8, null), floatToIntTry(f64, u8, -1.0));
+    try std.testing.expectEqual(@as(?i8, null), floatToIntTry(f64, i8, std.math.inf(f64)));
+    try std.testing.expectEqual(@as(?i8, null), floatToIntTry(f64, i8, std.math.nan(f64)));
+}
+
+test "raw float and Dec conversion bits preserve signed integer representation" {
+    try std.testing.expectEqual(@as(?u128, 42), f64ToIntTryBits(42.9, 8, true));
+    try std.testing.expectEqual(@as(?u128, @bitCast(@as(i128, -42))), f64ToIntTryBits(-42.9, 8, true));
+    try std.testing.expectEqual(@as(?u128, 255), f64ToIntTryBits(255.999, 8, false));
+    try std.testing.expectEqual(@as(?u128, null), f64ToIntTryBits(128.0, 8, true));
+    try std.testing.expectEqual(@as(?u128, null), f64ToIntTryBits(256.0, 8, false));
+    try std.testing.expectEqual(@as(?u128, null), f64ToIntTryBits(std.math.inf(f64), 8, true));
+
+    try std.testing.expectEqual(@as(?u128, 42), decToIntTryBits(42_900_000_000_000_000_000, 8, true));
+    try std.testing.expectEqual(@as(?u128, @bitCast(@as(i128, -42))), decToIntTryBits(-42_900_000_000_000_000_000, 8, true));
+    try std.testing.expectEqual(@as(?u128, 255), decToIntTryBits(255_999_000_000_000_000_000, 8, false));
+    try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(128_000_000_000_000_000_000, 8, true));
+    try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(-1_000_000_000_000_000_000, 8, false));
+}
