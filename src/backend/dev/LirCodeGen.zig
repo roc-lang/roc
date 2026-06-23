@@ -6097,8 +6097,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
 
             switch (op) {
-                .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_minus => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_plus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.addsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
+                .num_minus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.subsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
                 .num_times => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_div_by, .num_div_trunc_by => {
                     // For integers, div and div_trunc are the same (integer division truncates)
@@ -6174,6 +6188,90 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
+        fn emitCheckedIntAddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            result_reg: GeneralReg,
+            operand_layout: layout.Idx,
+            is_unsigned: bool,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u8 => try self.emitUnsignedIntRangeCheck(result_reg, 255, message),
+                .u16 => try self.emitUnsignedIntRangeCheck(result_reg, 65_535, message),
+                .u32 => try self.emitUnsignedIntRangeCheck(result_reg, 4_294_967_295, message),
+                .i8 => try self.emitSignedIntRangeCheck(result_reg, -128, 127, message),
+                .i16 => try self.emitSignedIntRangeCheck(result_reg, -32_768, 32_767, message),
+                .i32 => try self.emitSignedIntRangeCheck(result_reg, -2_147_483_648, 2_147_483_647, message),
+                .u64 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i64 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.assert(!is_unsigned or operand_layout == .u128);
+                    }
+                },
+            }
+        }
+
+        fn emitUnsignedIntRangeCheck(self: *Self, result_reg: GeneralReg, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condAbove(), message);
+        }
+
+        fn emitSignedIntRangeCheck(self: *Self, result_reg: GeneralReg, min_value: i64, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, min_value);
+            try self.emitCrashOnCond(condLess(), message);
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condGreater(), message);
+        }
+
+        fn emitCmpRegImm64(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
+            const temp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp);
+            try self.codegen.emitLoadImm(temp, value);
+            try self.emitCmpReg(reg, temp);
+        }
+
+        fn emitCrashOnCond(self: *Self, cond: Condition, message: []const u8) Allocator.Error!void {
+            const crash_patch = try self.codegen.emitCondJump(cond);
+            const done_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(crash_patch, self.codegen.currentOffset());
+            try self.emitRocCrash(message);
+            try self.emitTrap();
+            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+        }
+
+        fn emitCheckedI128AddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            operand_layout: layout.Idx,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u128 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i128 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {},
+            }
+        }
+
         // Condition code helpers for cross-architecture support
         fn condEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .eq else .equal;
@@ -6215,6 +6313,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn condAboveOrEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
+        }
+
+        fn condOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .vs else .overflow;
+        }
+
+        fn condUnsignedAddOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cs else .below;
+        }
+
+        fn condUnsignedSubOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
         }
 
         /// Generate 128-bit integer binary operation
@@ -6264,9 +6374,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_plus => {
                     // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
                     if (comptime target.toCpuArch() == .aarch64) {
-                        // ADDS sets carry flag, ADC adds with carry
+                        // ADDS sets carry; ADCS adds it into the high word and leaves final flags.
                         try self.codegen.emit.addsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.adcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.adcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: ADD sets carry, ADC uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6274,13 +6384,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_minus => {
                     // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
                     if (comptime target.toCpuArch() == .aarch64) {
                         // SUBS sets borrow flag, SBC subtracts with borrow
                         try self.codegen.emit.subsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.sbcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.sbcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: SUB sets borrow, SBB uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6288,6 +6399,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_times => {
                     if (operand_layout == .dec) {

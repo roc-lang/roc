@@ -336,6 +336,19 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// ADCS reg, reg, reg (add with carry, sets flags)
+        pub fn adcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
+            // ADCS <Xd>, <Xn>, <Xm> - same as ADC but with S bit set
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0111010000 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// SUBS reg, reg, reg (subtract and set flags)
         pub fn subsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SUBS <Xd>, <Xn>, <Xm> - same as SUB but with S bit set

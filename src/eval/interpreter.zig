@@ -5812,19 +5812,19 @@ pub const Interpreter = struct {
 
         switch (kind) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, intBinOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, intBinOp(u16, a.read(u16), b.read(u16), op)),
-                32 => val.write(u32, intBinOp(u32, a.read(u32), b.read(u32), op)),
-                64 => val.write(u64, intBinOp(u64, a.read(u64), b.read(u64), op)),
-                128 => val.write(u128, intBinOp(u128, a.read(u128), b.read(u128), op)),
+                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op)),
+                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op)),
+                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op)),
+                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op)),
+                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, intBinOp(i8, a.read(i8), b.read(i8), op)),
-                16 => val.write(i16, intBinOp(i16, a.read(i16), b.read(i16), op)),
-                32 => val.write(i32, intBinOp(i32, a.read(i32), b.read(i32), op)),
-                64 => val.write(i64, intBinOp(i64, a.read(i64), b.read(i64), op)),
-                128 => val.write(i128, intBinOp(i128, a.read(i128), b.read(i128), op)),
+                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op)),
+                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op)),
+                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op)),
+                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op)),
+                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -7102,10 +7102,10 @@ pub const Interpreter = struct {
     }
 
     /// Generic integer binary operation.
-    fn intBinOp(comptime T: type, av: T, bv: T, op: NumOp) T {
+    fn intBinOp(self: *LirInterpreter, comptime T: type, av: T, bv: T, op: NumOp) Error!T {
         return switch (op) {
-            .add => av +% bv,
-            .sub => av -% bv,
+            .add => checkedIntAdd(T, av, bv) orelse return self.triggerCrash("Integer addition overflowed!"),
+            .sub => checkedIntSub(T, av, bv) orelse return self.triggerCrash("Integer subtraction overflowed!"),
             .mul => av *% bv,
             .negate => if (@typeInfo(T).int.signedness == .signed) -%av else -%av,
             .abs => if (@typeInfo(T).int.signedness == .signed)
@@ -7120,6 +7120,18 @@ pub const Interpreter = struct {
             .rem => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @rem(av, bv)) else 0,
             .mod => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @mod(av, bv)) else 0,
         };
+    }
+
+    fn checkedIntAdd(comptime T: type, av: T, bv: T) ?T {
+        const result = @addWithOverflow(av, bv);
+        if (result[1] != 0) return null;
+        return result[0];
+    }
+
+    fn checkedIntSub(comptime T: type, av: T, bv: T) ?T {
+        const result = @subWithOverflow(av, bv);
+        if (result[1] != 0) return null;
+        return result[0];
     }
 
     fn signedMinDivOverflow(comptime T: type, av: T, bv: T) bool {
