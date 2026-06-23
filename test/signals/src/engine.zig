@@ -253,6 +253,11 @@ fn u64SliceContains(items: []const u64, target: u64) bool {
     return false;
 }
 
+pub fn appendUniqueU64(allocator: std.mem.Allocator, values: *std.ArrayListUnmanaged(u64), value: u64) void {
+    if (u64SliceContains(values.items, value)) return;
+    values.append(allocator, value) catch @panic("out of memory");
+}
+
 fn u64SliceIndex(items: []const u64, target: u64) ?usize {
     for (items, 0..) |item, index| {
         if (item == target) return index;
@@ -1789,6 +1794,39 @@ pub fn renderNodeScopeId(stream: *const HostNodeDescriptorStream, node: HostRend
         .text => (findTextNodeDesc(stream, node.elem_id) orelse @panic("renderNodeScopeId: render node has no matching descriptor")).scope_id,
         .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse @panic("renderNodeScopeId: render node has no matching descriptor")).scope_id,
     };
+}
+
+pub fn elemScopeId(stream: *const HostNodeDescriptorStream, elem_id: u64) ?u64 {
+    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
+    if (descriptor_index.element) |index| {
+        if (index >= stream.elements.items.len) @panic("element descriptor index exceeded descriptor table");
+        const desc = stream.elements.items[index];
+        if (desc.elem_id != elem_id) @panic("element descriptor index pointed at the wrong elem id");
+        return desc.scope_id;
+    }
+    if (descriptor_index.text_node) |index| {
+        if (index >= stream.text_nodes.items.len) @panic("text node descriptor index exceeded descriptor table");
+        const desc = stream.text_nodes.items[index];
+        if (desc.elem_id != elem_id) @panic("text node descriptor index pointed at the wrong elem id");
+        return desc.scope_id;
+    }
+    if (descriptor_index.signal_text_node) |index| {
+        if (index >= stream.signal_text_nodes.items.len) @panic("signal text node descriptor index exceeded descriptor table");
+        const desc = stream.signal_text_nodes.items[index];
+        if (desc.elem_id != elem_id) @panic("signal text node descriptor index pointed at the wrong elem id");
+        return desc.scope_id;
+    }
+    return null;
+}
+
+pub fn adjustedRenderInsertIndex(old_index: usize, replace_index: usize, removed_count: usize, replacement_count: usize) usize {
+    if (removed_count == 0) {
+        if (old_index < replace_index) return old_index;
+        return old_index + replacement_count;
+    }
+    if (old_index <= replace_index) return old_index;
+    if (old_index < replace_index + removed_count) @panic("scope site inside replaced scope was not removed");
+    return old_index - removed_count + replacement_count;
 }
 
 fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
@@ -3732,6 +3770,709 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             self.rebuildActiveSinkSignalRoutesFromStream(ctx, stream);
+        }
+
+        fn removeActiveSignalDependentId(self: *Self, ctx: anytype, input_record_id: u64, dependent_record_id: u64) void {
+            signal_graph.removeDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
+                error.OutOfMemory => @panic("out of memory"),
+                error.UnknownNode => @panic("active signal dependent removal referenced an unknown input record"),
+                else => @panic("active signal dependent removal missed its edge"),
+            };
+        }
+
+        fn replaceActiveSignalDependentId(self: *Self, input_record_id: u64, old_dependent_id: u64, new_dependent_id: u64) void {
+            signal_graph.replaceDependent(HostSignalRecord, self.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id) catch |err| switch (err) {
+                error.UnknownNode => @panic("active signal dependent rewrite referenced an unknown input record"),
+                else => @panic("active signal dependent rewrite missed its edge"),
+            };
+        }
+
+        fn removeActiveSourceSignalRoute(self: *Self, source_node_id: u64, record_id: u64) void {
+            if (source_node_id >= self.active_source_signal_routes.items.len) @panic("active source signal route removal referenced an unknown source node");
+            var route = &self.active_source_signal_routes.items[@intCast(source_node_id)];
+            for (route.items, 0..) |existing_id, index| {
+                if (existing_id != record_id) continue;
+                _ = route.swapRemove(index);
+                return;
+            }
+            @panic("active source signal route removal missed its record");
+        }
+
+        fn replaceActiveSourceSignalRouteId(self: *Self, source_node_id: u64, old_record_id: u64, new_record_id: u64) void {
+            if (source_node_id >= self.active_source_signal_routes.items.len) @panic("active source signal route rewrite referenced an unknown source node");
+            const route = self.active_source_signal_routes.items[@intCast(source_node_id)].items;
+            for (route) |*existing_id| {
+                if (existing_id.* != old_record_id) continue;
+                existing_id.* = new_record_id;
+                return;
+            }
+            @panic("active source signal route rewrite missed its record");
+        }
+
+        fn appendUniqueActiveInputRecord(ctx: anytype, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+            if (!recordSliceContains(records.items, record)) {
+                records.append(Ctx.allocator(ctx), record) catch @panic("out of memory");
+            }
+        }
+
+        fn appendActiveSignalInputRecords(ctx: anytype, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+            switch (record.payload) {
+                .ref, .const_value, .task_source, .interval_source => {},
+                .map => |payload| appendUniqueActiveInputRecord(ctx, records, payload.input),
+                .map2 => |payload| {
+                    appendUniqueActiveInputRecord(ctx, records, payload.left);
+                    appendUniqueActiveInputRecord(ctx, records, payload.right);
+                },
+                .combine => |payload| {
+                    for (payload.children) |child| {
+                        appendUniqueActiveInputRecord(ctx, records, child);
+                    }
+                },
+            }
+        }
+
+        fn updateMovedActiveSignalRecordEdges(self: *Self, moved_record: *HostSignalRecord, old_record_id: u64, new_record_id: u64) void {
+            switch (moved_record.payload) {
+                .ref => |source_node_id| self.replaceActiveSourceSignalRouteId(source_node_id, old_record_id, new_record_id),
+                .const_value, .task_source, .interval_source => {},
+                .map => |payload| self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.input), old_record_id, new_record_id),
+                .map2 => |payload| {
+                    self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.left), old_record_id, new_record_id);
+                    if (payload.right != payload.left) {
+                        self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.right), old_record_id, new_record_id);
+                    }
+                },
+                .combine => |payload| {
+                    for (payload.children, 0..) |child, index| {
+                        if (recordSliceContains(payload.children[0..index], child)) continue;
+                        self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(child), old_record_id, new_record_id);
+                    }
+                },
+            }
+        }
+
+        fn removeActiveSignalGraphNode(self: *Self, ctx: anytype, record_id: u64, record: *HostSignalRecord) void {
+            const allocator = Ctx.allocator(ctx);
+            const record_index: usize = @intCast(record_id);
+            if (record_index >= self.active_signal_graph.items.len) @panic("active signal graph removal referenced an unknown record");
+            if (self.active_signal_graph.items[record_index].record != record) @panic("active signal graph removal referenced the wrong record");
+            if (self.active_signal_graph.items[record_index].dependents.len != 0) @panic("active signal graph removed a record with live dependents");
+
+            allocator.free(self.active_signal_graph.items[record_index].dependents);
+            const last_index = self.active_signal_graph.items.len - 1;
+            _ = self.active_signal_graph.swapRemove(record_index);
+            record.active_graph_id = null;
+            record.release(allocator, self.roc_host.?, &self.pending_roc_metrics);
+
+            if (record_index != last_index) {
+                const moved_id: u64 = @intCast(record_index);
+                const old_moved_id: u64 = @intCast(last_index);
+                const moved_record = self.active_signal_graph.items[record_index].record;
+                moved_record.active_graph_id = moved_id;
+                self.updateMovedActiveSignalRecordEdges(moved_record, old_moved_id, moved_id);
+            }
+        }
+
+        pub fn releaseActiveSignalRecord(self: *Self, ctx: anytype, record: *HostSignalRecord) void {
+            if (record.active_use_count == 0) @panic("active signal graph record use count underflow");
+            record.active_use_count -= 1;
+            if (record.active_use_count != 0) return;
+
+            const allocator = Ctx.allocator(ctx);
+            const record_id = self.requireActiveSignalRecordId(record);
+            var input_records: std.ArrayListUnmanaged(*HostSignalRecord) = .empty;
+            defer input_records.deinit(allocator);
+            appendActiveSignalInputRecords(ctx, &input_records, record);
+
+            switch (record.payload) {
+                .ref => |source_node_id| self.removeActiveSourceSignalRoute(source_node_id, record_id),
+                .const_value, .task_source, .interval_source => {},
+                .map, .map2, .combine => {},
+            }
+
+            for (input_records.items) |input_record| {
+                self.removeActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(input_record), record_id);
+            }
+
+            self.removeActiveSignalGraphNode(ctx, record_id, record);
+
+            for (input_records.items) |input_record| {
+                self.releaseActiveSignalRecord(ctx, input_record);
+            }
+        }
+
+        fn deinitActiveSignalTextNodeDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
+            desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+            desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+            self.pending_roc_metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.read, roc_host);
+        }
+
+        fn deinitActiveSignalTextAttrDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
+            desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+            desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+            self.pending_roc_metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.read, roc_host);
+        }
+
+        fn deinitActiveSignalBoolAttrDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalBoolAttrDesc) void {
+            desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+            desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+            self.pending_roc_metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.read, roc_host);
+        }
+
+        fn deinitActiveOnChangeDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
+            desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+            desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+            self.pending_roc_metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.to_cmd, roc_host);
+        }
+
+        pub fn scopeIsInReplacementTarget(self: *Self, scope_id: u64, target: HostStructuralReplacementTarget) bool {
+            return switch (target) {
+                .scope => |root_scope_id| self.scopeIsDescendantOrSelf(scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"),
+                .each_site => |site| self.scopeIsEachSiteRowDescendantOrSelf(scope_id, site) catch @panic("scope descriptor referenced an unknown parent scope"),
+            };
+        }
+
+        pub fn renderNodeInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {
+            return self.scopeIsInReplacementTarget(renderNodeScopeId(stream, node), target);
+        }
+
+        pub fn elemIdInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, elem_id: u64, target: HostStructuralReplacementTarget) bool {
+            const scope_id = elemScopeId(stream, elem_id) orelse @panic("descriptor referenced an element outside the render stream");
+            return self.scopeIsInReplacementTarget(scope_id, target);
+        }
+
+        pub fn streamNodeIdInReplacementTarget(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, target: HostStructuralReplacementTarget) bool {
+            self.recordStreamNodesScanned(previous.scope_sites.items.len);
+            for (previous.scope_sites.items) |site| {
+                if (site.node_id == node_id and self.scopeIsInReplacementTarget(site.scope_id, target)) return true;
+            }
+            return false;
+        }
+
+        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.elements.items.len);
+            for (self.active_stream.elements.items, 0..) |desc, read_index| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    self.active_stream.clearElementIndex(desc.elem_id, read_index);
+                    allocator.free(desc.tag);
+                    continue;
+                }
+                self.active_stream.elements.items[write_index] = desc;
+                self.active_stream.updateElementIndex(desc.elem_id, write_index);
+                write_index += 1;
+            }
+            self.active_stream.elements.items.len = write_index;
+        }
+
+        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.text_nodes.items.len);
+            for (self.active_stream.text_nodes.items, 0..) |desc, read_index| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    self.active_stream.clearTextNodeIndex(desc.elem_id, read_index);
+                    allocator.free(desc.value);
+                    continue;
+                }
+                self.active_stream.text_nodes.items[write_index] = desc;
+                self.active_stream.updateTextNodeIndex(desc.elem_id, write_index);
+                write_index += 1;
+            }
+            self.active_stream.text_nodes.items.len = write_index;
+        }
+
+        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.signal_text_nodes.items.len);
+            for (self.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    var removed = desc;
+                    self.active_stream.clearSignalTextNodeIndex(removed.elem_id, read_index);
+                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
+                    self.deinitActiveSignalTextNodeDesc(ctx, roc_host, &removed);
+                    continue;
+                }
+                self.active_stream.signal_text_nodes.items[write_index] = desc;
+                self.active_stream.updateSignalTextNodeIndex(desc.elem_id, write_index);
+                write_index += 1;
+            }
+            self.active_stream.signal_text_nodes.items.len = write_index;
+        }
+
+        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.static_text_attrs.items.len);
+            for (self.active_stream.static_text_attrs.items, 0..) |desc, read_index| {
+                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                    self.active_stream.clearStaticTextAttrIndex(desc.elem_id, desc.field, read_index);
+                    allocator.free(desc.value);
+                    continue;
+                }
+                self.active_stream.static_text_attrs.items[write_index] = desc;
+                self.active_stream.updateStaticTextAttrIndex(desc.elem_id, desc.field, write_index);
+                write_index += 1;
+            }
+            self.active_stream.static_text_attrs.items.len = write_index;
+        }
+
+        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.signal_text_attrs.items.len);
+            for (self.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
+                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                    var removed = desc;
+                    self.active_stream.clearSignalTextAttrIndex(removed.elem_id, removed.field, read_index);
+                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
+                    self.deinitActiveSignalTextAttrDesc(ctx, roc_host, &removed);
+                    continue;
+                }
+                self.active_stream.signal_text_attrs.items[write_index] = desc;
+                self.active_stream.updateSignalTextAttrIndex(desc.elem_id, desc.field, write_index);
+                write_index += 1;
+            }
+            self.active_stream.signal_text_attrs.items.len = write_index;
+        }
+
+        fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *Self, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.static_bool_attrs.items.len);
+            for (self.active_stream.static_bool_attrs.items, 0..) |desc, read_index| {
+                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                    self.active_stream.clearStaticBoolAttrIndex(desc.elem_id, desc.field, read_index);
+                    continue;
+                }
+                self.active_stream.static_bool_attrs.items[write_index] = desc;
+                self.active_stream.updateStaticBoolAttrIndex(desc.elem_id, desc.field, write_index);
+                write_index += 1;
+            }
+            self.active_stream.static_bool_attrs.items.len = write_index;
+        }
+
+        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.signal_bool_attrs.items.len);
+            for (self.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
+                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                    var removed = desc;
+                    self.active_stream.clearSignalBoolAttrIndex(removed.elem_id, removed.field, read_index);
+                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
+                    self.deinitActiveSignalBoolAttrDesc(ctx, roc_host, &removed);
+                    continue;
+                }
+                self.active_stream.signal_bool_attrs.items[write_index] = desc;
+                self.active_stream.updateSignalBoolAttrIndex(desc.elem_id, desc.field, write_index);
+                write_index += 1;
+            }
+            self.active_stream.signal_bool_attrs.items.len = write_index;
+        }
+
+        fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.on_changes.items.len);
+            for (self.active_stream.on_changes.items) |desc| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    var removed = desc;
+                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
+                    self.deinitActiveOnChangeDesc(ctx, roc_host, &removed);
+                    continue;
+                }
+                self.active_stream.on_changes.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.on_changes.items.len = write_index;
+        }
+
+        fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.cleanups.items.len);
+            for (self.active_stream.cleanups.items) |desc| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    allocator.free(desc.name);
+                    continue;
+                }
+                self.active_stream.cleanups.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.cleanups.items.len = write_index;
+        }
+
+        fn removeActiveEventDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            if (self.active_events.items.len != self.active_stream.events.items.len) {
+                if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync with active events");
+            }
+
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.events.items.len);
+            for (self.active_stream.events.items, 0..) |desc, event_index| {
+                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                    if (desc.owns_payload_tag or desc.owns_payload_drop or desc.owns_transform) {
+                        @panic("active event descriptor retained ownership outside the active event table");
+                    }
+                    self.active_stream.clearEventIndex(desc.elem_id, desc.kind, event_index);
+                    if (self.active_events.items.len != 0) {
+                        self.deinitActiveEventDesc(roc_host, self.active_events.items[event_index]);
+                    }
+                    continue;
+                }
+
+                self.active_stream.events.items[write_index] = desc;
+                self.active_stream.updateEventIndex(desc.elem_id, desc.kind, write_index);
+                if (self.active_events.items.len != 0) {
+                    self.active_events.items[write_index] = self.active_events.items[event_index];
+                }
+                write_index += 1;
+            }
+            self.active_stream.events.items.len = write_index;
+            if (self.active_events.items.len != 0) self.active_events.items.len = write_index;
+        }
+
+        fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.scope_sites.items.len);
+            for (self.active_stream.scope_sites.items) |desc| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    allocator.free(desc.binder_bindings);
+                    continue;
+                }
+                self.active_stream.scope_sites.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.scope_sites.items.len = write_index;
+        }
+
+        fn removeActiveStateDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.states.items.len);
+            for (self.active_stream.states.items) |desc| {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+                    self.pending_roc_metrics.bump(.closure_releases, 3);
+                    abi.decrefErasedCallable(desc.initial, roc_host);
+                    abi.decrefErasedCallable(desc.eq, roc_host);
+                    abi.decrefErasedCallable(desc.drop, roc_host);
+                    continue;
+                }
+                self.active_stream.states.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.states.items.len = write_index;
+        }
+
+        fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.whens.items.len);
+            for (self.active_stream.whens.items) |desc| {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+                    var removed = desc;
+                    self.releaseActiveSignalRecord(ctx, removed.condition.record);
+                    removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+                    removed.condition.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+                    self.pending_roc_metrics.bump(.closure_releases, 1);
+                    abi.decrefErasedCallable(removed.read, roc_host);
+                    abi.decrefElem(removed.when_false, roc_host);
+                    abi.decrefElem(removed.when_true, roc_host);
+                    continue;
+                }
+                self.active_stream.whens.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.whens.items.len = write_index;
+        }
+
+        fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.eaches.items.len);
+            for (self.active_stream.eaches.items) |desc| {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+                    var removed = desc;
+                    self.releaseActiveSignalRecord(ctx, removed.items.record);
+                    removed.cached_value.deinit(roc_host, &self.pending_roc_metrics);
+                    removed.items.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
+                    self.pending_roc_metrics.bump(.closure_releases, 8);
+                    abi.decrefErasedCallable(removed.items_to_values, roc_host);
+                    abi.decrefErasedCallable(removed.key_hash, roc_host);
+                    abi.decrefErasedCallable(removed.key_of, roc_host);
+                    abi.decrefErasedCallable(removed.key_eq, roc_host);
+                    abi.decrefErasedCallable(removed.key_drop, roc_host);
+                    abi.decrefErasedCallable(removed.item_eq, roc_host);
+                    abi.decrefErasedCallable(removed.item_drop, roc_host);
+                    abi.decrefErasedCallable(removed.row, roc_host);
+                    continue;
+                }
+                self.active_stream.eaches.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.eaches.items.len = write_index;
+        }
+
+        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            self.removeActiveStaticTextAttrDescriptorsInTarget(ctx, target);
+            self.removeActiveSignalTextAttrDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveStaticBoolAttrDescriptorsInTarget(target);
+            self.removeActiveSignalBoolAttrDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveCleanupDescriptorsInTarget(ctx, target);
+            self.removeActiveEventDescriptorsInTarget(roc_host, target);
+            self.removeActiveStateDescriptorsInTarget(roc_host, target);
+            self.removeActiveWhenDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveEachDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveScopeSiteDescriptorsInTarget(ctx, target);
+            self.removeActiveElementDescriptorsInTarget(ctx, target);
+            self.removeActiveTextNodeDescriptorsInTarget(ctx, target);
+            self.removeActiveSignalTextNodeDescriptorsInTarget(ctx, roc_host, target);
+        }
+
+        fn adjustActiveScopeSiteRenderInsertIndices(self: *Self, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
+            for (self.active_stream.scope_sites.items) |*desc| {
+                desc.render_insert_index = adjustedRenderInsertIndex(desc.render_insert_index, replace_index, removed_render_count, replacement_render_count);
+            }
+        }
+
+        fn appendReplacementEventsMoved(self: *Self, ctx: anytype, replacement: *HostNodeDescriptorStream) void {
+            const allocator = Ctx.allocator(ctx);
+            if (self.active_events.items.len != self.active_stream.events.items.len) {
+                if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync before replacement event splice");
+            }
+
+            const event_base = self.active_stream.events.items.len;
+            for (replacement.events.items, 0..) |*desc, offset| {
+                if (!desc.owns_payload_tag or !desc.owns_payload_drop or !desc.owns_transform) {
+                    @panic("replacement event descriptor did not own its retained payload");
+                }
+                self.active_stream.recordEventIndex(allocator, desc.elem_id, desc.kind, event_base + offset);
+                self.active_events.append(allocator, .{
+                    .target_node_id = desc.target_node_id,
+                    .payload_kind = desc.payload_kind,
+                    .payload_tag = @ptrCast(desc.payload_tag),
+                    .payload_drop = desc.payload_drop,
+                    .transform = desc.transform,
+                }) catch @panic("out of memory");
+                desc.owns_payload_tag = false;
+                desc.owns_payload_drop = false;
+                desc.owns_transform = false;
+            }
+
+            self.active_stream.events.appendSlice(allocator, replacement.events.items) catch @panic("out of memory");
+            replacement.events.items.len = 0;
+        }
+
+        fn appendReplacementNonRenderDescriptorsMoved(self: *Self, ctx: anytype, replacement: *HostNodeDescriptorStream, render_insert_offset: usize) void {
+            const allocator = Ctx.allocator(ctx);
+
+            const element_base = self.active_stream.elements.items.len;
+            for (replacement.elements.items, 0..) |desc, offset| {
+                self.active_stream.recordElementIndex(allocator, desc.elem_id, element_base + offset);
+            }
+            self.active_stream.elements.appendSlice(allocator, replacement.elements.items) catch @panic("out of memory");
+            replacement.elements.items.len = 0;
+
+            const text_node_base = self.active_stream.text_nodes.items.len;
+            for (replacement.text_nodes.items, 0..) |desc, offset| {
+                self.active_stream.recordTextNodeIndex(allocator, desc.elem_id, text_node_base + offset);
+            }
+            self.active_stream.text_nodes.appendSlice(allocator, replacement.text_nodes.items) catch @panic("out of memory");
+            replacement.text_nodes.items.len = 0;
+
+            const signal_text_node_base = self.active_stream.signal_text_nodes.items.len;
+            for (replacement.signal_text_nodes.items, 0..) |desc, offset| {
+                self.active_stream.recordSignalTextNodeIndex(allocator, desc.elem_id, signal_text_node_base + offset);
+            }
+            for (replacement.signal_text_nodes.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            self.active_stream.signal_text_nodes.appendSlice(allocator, replacement.signal_text_nodes.items) catch @panic("out of memory");
+            replacement.signal_text_nodes.items.len = 0;
+
+            const static_text_attr_base = self.active_stream.static_text_attrs.items.len;
+            for (replacement.static_text_attrs.items, 0..) |desc, offset| {
+                self.active_stream.recordStaticTextAttrIndex(allocator, desc.elem_id, desc.field, static_text_attr_base + offset);
+            }
+            self.active_stream.static_text_attrs.appendSlice(allocator, replacement.static_text_attrs.items) catch @panic("out of memory");
+            replacement.static_text_attrs.items.len = 0;
+
+            const signal_text_attr_base = self.active_stream.signal_text_attrs.items.len;
+            for (replacement.signal_text_attrs.items, 0..) |desc, offset| {
+                self.active_stream.recordSignalTextAttrIndex(allocator, desc.elem_id, desc.field, signal_text_attr_base + offset);
+            }
+            for (replacement.signal_text_attrs.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            self.active_stream.signal_text_attrs.appendSlice(allocator, replacement.signal_text_attrs.items) catch @panic("out of memory");
+            replacement.signal_text_attrs.items.len = 0;
+
+            const static_bool_attr_base = self.active_stream.static_bool_attrs.items.len;
+            for (replacement.static_bool_attrs.items, 0..) |desc, offset| {
+                self.active_stream.recordStaticBoolAttrIndex(allocator, desc.elem_id, desc.field, static_bool_attr_base + offset);
+            }
+            self.active_stream.static_bool_attrs.appendSlice(allocator, replacement.static_bool_attrs.items) catch @panic("out of memory");
+            replacement.static_bool_attrs.items.len = 0;
+
+            const signal_bool_attr_base = self.active_stream.signal_bool_attrs.items.len;
+            for (replacement.signal_bool_attrs.items, 0..) |desc, offset| {
+                self.active_stream.recordSignalBoolAttrIndex(allocator, desc.elem_id, desc.field, signal_bool_attr_base + offset);
+            }
+            for (replacement.signal_bool_attrs.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            self.active_stream.signal_bool_attrs.appendSlice(allocator, replacement.signal_bool_attrs.items) catch @panic("out of memory");
+            replacement.signal_bool_attrs.items.len = 0;
+
+            for (replacement.on_changes.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            self.active_stream.on_changes.appendSlice(allocator, replacement.on_changes.items) catch @panic("out of memory");
+            replacement.on_changes.items.len = 0;
+
+            self.active_stream.cleanups.appendSlice(allocator, replacement.cleanups.items) catch @panic("out of memory");
+            replacement.cleanups.items.len = 0;
+
+            self.appendReplacementEventsMoved(ctx, replacement);
+
+            for (replacement.scope_sites.items) |*desc| {
+                desc.render_insert_index += render_insert_offset;
+            }
+            self.active_stream.scope_sites.appendSlice(allocator, replacement.scope_sites.items) catch @panic("out of memory");
+            replacement.scope_sites.items.len = 0;
+
+            self.active_stream.states.appendSlice(allocator, replacement.states.items) catch @panic("out of memory");
+            replacement.states.items.len = 0;
+
+            for (replacement.whens.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.condition.record);
+            }
+            self.active_stream.whens.appendSlice(allocator, replacement.whens.items) catch @panic("out of memory");
+            replacement.whens.items.len = 0;
+
+            for (replacement.eaches.items) |desc| {
+                self.retainActiveSignalRecord(ctx, desc.items.record);
+            }
+            self.active_stream.eaches.appendSlice(allocator, replacement.eaches.items) catch @panic("out of memory");
+            replacement.eaches.items.len = 0;
+        }
+
+        fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            self.active_stream.signal_records_by_token.items.len = 0;
+
+            for (self.active_stream.signal_text_nodes.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+            }
+            for (self.active_stream.signal_text_attrs.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+            }
+            for (self.active_stream.signal_bool_attrs.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+            }
+            for (self.active_stream.on_changes.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+            }
+            for (self.active_stream.whens.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.condition.record);
+            }
+            for (self.active_stream.eaches.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.items.record);
+            }
+        }
+
+        fn validateActiveRenderDescriptorIntegrity(self: *Self) void {
+            for (self.active_stream.render_nodes.items) |node| {
+                const found = switch (node.kind) {
+                    .element => findElementDesc(&self.active_stream, node.elem_id) != null,
+                    .text => findTextNodeDesc(&self.active_stream, node.elem_id) != null,
+                    .signal_text => findSignalTextNodeDesc(&self.active_stream, node.elem_id) != null,
+                };
+                if (!found) {
+                    var message: [128]u8 = undefined;
+                    const rendered = std.fmt.bufPrint(
+                        &message,
+                        "active render node {d} with kind {s} has no matching descriptor",
+                        .{ node.elem_id, @tagName(node.kind) },
+                    ) catch "active render node has no matching descriptor";
+                    @panic(rendered);
+                }
+            }
+        }
+
+        pub fn spliceActiveStreamReplacingTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
+            const allocator = Ctx.allocator(ctx);
+            if (render_insert_index > self.active_stream.render_nodes.items.len) @panic("structural replacement render insertion point is outside the active stream");
+
+            var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer removed_elem_ids.deinit(allocator);
+            var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
+            errdefer touched_parent_ids.deinit(allocator);
+
+            var removed_render_start: ?usize = null;
+            var removed_render_count: usize = 0;
+            var target_range_closed = false;
+
+            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            for (self.active_stream.render_nodes.items, 0..) |node, index| {
+                if (self.renderNodeInReplacementTarget(&self.active_stream, node, target)) {
+                    if (target_range_closed) @panic("structural replacement render target is not contiguous");
+                    if (removed_render_start == null) removed_render_start = index;
+                    removed_render_count += 1;
+                    removed_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
+                } else if (removed_render_start != null) {
+                    target_range_closed = true;
+                }
+            }
+
+            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            for (self.active_stream.render_nodes.items) |node| {
+                if (!self.renderNodeInReplacementTarget(&self.active_stream, node, target)) continue;
+                const parent_elem_id = renderNodeParentElemId(&self.active_stream, node);
+                if (u64SliceContains(removed_elem_ids.items, parent_elem_id)) continue;
+                appendUniqueU64(allocator, &touched_parent_ids, parent_elem_id);
+            }
+
+            const render_start = removed_render_start orelse render_insert_index;
+            if (removed_render_count != 0 and render_start != render_insert_index) {
+                @panic("structural replacement render target did not start at its explicit insertion point");
+            }
+
+            const replacement_render_count = replacement.render_nodes.items.len;
+            const on_change_count = replacement.on_changes.items.len;
+            const replacement_elem_ids = allocator.alloc(u64, replacement_render_count) catch @panic("out of memory");
+            errdefer allocator.free(replacement_elem_ids);
+            for (replacement.render_nodes.items, 0..) |node, index| {
+                replacement_elem_ids[index] = node.elem_id;
+            }
+
+            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target);
+            self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
+            const on_change_start = self.active_stream.on_changes.items.len;
+            const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch @panic("out of memory");
+            errdefer allocator.free(replacement_on_change_indices);
+            for (replacement_on_change_indices, 0..) |*index, offset| {
+                index.* = on_change_start + offset;
+            }
+            self.appendReplacementNonRenderDescriptorsMoved(ctx, replacement, render_insert_index);
+
+            self.active_stream.render_nodes.replaceRange(allocator, render_start, removed_render_count, replacement.render_nodes.items) catch @panic("out of memory");
+            replacement.render_nodes.items.len = 0;
+            self.validateActiveRenderDescriptorIntegrity();
+            self.rebuildActiveStreamSignalRecordTable(ctx);
+            self.rebuildActiveSinkSignalRoutesFromStream(ctx, &self.active_stream);
+
+            return .{
+                .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
+                .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
+                .replacement_elem_ids = replacement_elem_ids,
+                .replacement_on_change_indices = replacement_on_change_indices,
+            };
+        }
+
+        pub fn spliceActiveStreamReplacingScope(self: *Self, ctx: anytype, roc_host: *abi.RocHost, replaced_scope_id: u64, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
+            return self.spliceActiveStreamReplacingTarget(ctx, roc_host, .{ .scope = replaced_scope_id }, render_insert_index, replacement);
         }
 
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
