@@ -8465,6 +8465,123 @@ const DrainedReport = struct {
     }
 };
 
+fn countNewlines(bytes: []const u8) u32 {
+    var count: u32 = 0;
+    for (bytes) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    return count;
+}
+
+fn remapDefaultAppSourceRegion(
+    allocator: Allocator,
+    region: *reporting.SourceCodeDisplayRegion,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
+    if (original_line_starts.len == 0) return;
+
+    const original_start_line = region.start_line - synthetic_header_lines;
+    const original_end_line = region.end_line - synthetic_header_lines;
+    const region_info = base.RegionInfo{
+        .start_line_idx = original_start_line - 1,
+        .start_col_idx = region.start_column - 1,
+        .end_line_idx = original_end_line - 1,
+        .end_col_idx = region.end_column - 1,
+    };
+
+    const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
+    errdefer allocator.free(line_text);
+    const filename = try allocator.dupe(u8, original_path);
+    errdefer allocator.free(filename);
+
+    allocator.free(region.line_text);
+    if (region.filename) |old_filename| allocator.free(old_filename);
+
+    region.line_text = line_text;
+    region.filename = filename;
+    region.start_line = original_start_line;
+    region.end_line = original_end_line;
+}
+
+fn remapDefaultAppDocumentElement(
+    allocator: Allocator,
+    element: *reporting.DocumentElement,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    switch (element.*) {
+        .source_code_region => |*region| try remapDefaultAppSourceRegion(
+            allocator,
+            region,
+            original_path,
+            original_source,
+            original_line_starts,
+            synthetic_header_lines,
+        ),
+        .source_code_with_underlines => |*underlines| {
+            const old_start_line = underlines.display_region.start_line;
+            try remapDefaultAppSourceRegion(
+                allocator,
+                &underlines.display_region,
+                original_path,
+                original_source,
+                original_line_starts,
+                synthetic_header_lines,
+            );
+            if (old_start_line <= synthetic_header_lines) return;
+            for (underlines.underline_regions) |*underline| {
+                if (underline.start_line > synthetic_header_lines) {
+                    underline.start_line -= synthetic_header_lines;
+                }
+                if (underline.end_line > synthetic_header_lines) {
+                    underline.end_line -= synthetic_header_lines;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn remapDefaultAppCheckReports(
+    ctx: *CliCtx,
+    check_result: *CheckResult,
+    synthetic_app_path: []const u8,
+    original_path: []const u8,
+    original_source: []const u8,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    var original_line_starts = try base.RegionInfo.findLineStarts(ctx.gpa, original_source);
+    defer original_line_starts.deinit(ctx.gpa);
+
+    for (check_result.reports) |*module| {
+        if (!std.mem.eql(u8, module.file_path, synthetic_app_path)) continue;
+
+        const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
+        errdefer ctx.gpa.free(remapped_file_path);
+        ctx.gpa.free(module.file_path);
+        module.file_path = remapped_file_path;
+
+        for (module.reports) |*report| {
+            for (report.document.elements.items) |*element| {
+                try remapDefaultAppDocumentElement(
+                    report.document.allocator,
+                    element,
+                    original_path,
+                    original_source,
+                    original_line_starts.items.items,
+                    synthetic_header_lines,
+                );
+            }
+        }
+    }
+}
+
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
@@ -8846,7 +8963,7 @@ fn rocCheckDefaultApp(
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
-    return checkFileWithBuildEnv(
+    var check_result = try checkFileWithBuildEnv(
         ctx,
         app_path,
         args.time,
@@ -8855,6 +8972,18 @@ fn rocCheckDefaultApp(
         resolutionConfigFromLimits(args.resolve_limits),
         std.fs.path.dirname(args.path) orelse ".",
     );
+    errdefer check_result.deinit(ctx.gpa);
+
+    try remapDefaultAppCheckReports(
+        ctx,
+        &check_result,
+        app_path,
+        args.path,
+        original_source,
+        countNewlines(header),
+    );
+
+    return check_result;
 }
 
 fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
