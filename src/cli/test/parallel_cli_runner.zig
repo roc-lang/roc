@@ -2003,6 +2003,10 @@ const hot_reload_host_c_source =
     \\extern void roc_builtins_erased_callable_incref(unsigned char *, intptr_t, void *);
     \\extern void roc_builtins_erased_callable_decref(unsigned char *, void *);
     \\
+    \\#ifndef ROC_TARGET_NAME
+    \\#error "ROC_TARGET_NAME must be defined"
+    \\#endif
+    \\
     \\typedef void (*RocCallable)(void *, void *, const void *, unsigned char *);
     \\struct RocErasedCallablePayload {
     \\    RocCallable callable;
@@ -2167,6 +2171,27 @@ const hot_reload_host_c_source =
     \\static const char *app_const_seventeen =
     \\"main! : U64 => U64\n"
     \\"main! = |_| 17\n";
+    \\
+    \\static const char *platform_plus_one =
+    \\"platform \"\"\n"
+    \\"    requires {} { main! : U64 => U64 }\n"
+    \\"    exposes [Host]\n"
+    \\"    packages {}\n"
+    \\"    provides { \"roc_main\": main_for_host! }\n"
+    \\"    hosted {\n"
+    \\"        \"roc_host_add\": Host.add!,\n"
+    \\"        \"roc_host_edit_app_and_sleep\": Host.edit_app_and_sleep!,\n"
+    \\"        \"roc_host_store_boxed\": Host.store_boxed!,\n"
+    \\"        \"roc_host_stored_boxed_call\": Host.stored_boxed_call!,\n"
+    \\"    }\n"
+    \\"    targets: {\n"
+    \\"        " ROC_TARGET_NAME ": { inputs: [\"crt1.o\", \"libhost.a\", app, \"libc.a\"] },\n"
+    \\"    }\n"
+    \\"\n"
+    \\"import Host\n"
+    \\"\n"
+    \\"main_for_host! : U64 => U64\n"
+    \\"main_for_host! = |arg| main!(arg) + 1\n";
     \\
     \\static const char *extra_five =
     \\"module [value]\n\n"
@@ -2380,12 +2405,8 @@ const hot_reload_host_c_source =
     \\    fflush(stdout);
     \\    if (in_flight_old_result != 15) return 1;
     \\
-    \\    if (append_bytes(platform_path, "\n# hot reload platform input edit\n")) return 1;
-    \\    usleep(2000000);
-    \\    uint64_t after_platform = roc_main(0);
-    \\    printf("platform-edit:%llu\n", (unsigned long long)after_platform);
-    \\    fflush(stdout);
-    \\    if (after_platform != 17) return 1;
+    \\    if (write_bytes(platform_path, platform_plus_one)) return 1;
+    \\    if (wait_for_value("platform-edit", 18)) return 1;
     \\
     \\    puts("done");
     \\    fflush(stdout);
@@ -2458,6 +2479,8 @@ fn customHotReloadDevShim(
         return customInfraFailure(allocator, timer, "failed to allocate host archive path: {}", .{err});
     const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.roc_target}) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+    const target_define_arg = std.fmt.allocPrint(allocator, "-DROC_TARGET_NAME=\"{s}\"", .{target.roc_target}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target define: {}", .{err});
 
     std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
@@ -2486,6 +2509,7 @@ fn customHotReloadDevShim(
         "cc",
         "-target",
         target.zig_target,
+        target_define_arg,
         "-O2",
         "-c",
         host_c_path,
@@ -2544,7 +2568,7 @@ fn customHotReloadDevShim(
             .{ .stream = .stdout, .text = "in-flight-loaded:15\n" },
             .{ .stream = .stdout, .text = "in-flight-old-return:15\n" },
             .{ .stream = .stdout, .text = "in-flight-new-generation:17\n" },
-            .{ .stream = .stdout, .text = "platform-edit:17\n" },
+            .{ .stream = .stdout, .text = "platform-edit:18\n" },
             .{ .stream = .stdout, .text = "done\n" },
             .{ .stream = .stderr, .text = "TYPE MISMATCH" },
             .{ .stream = .stderr, .text = "hot reload generation" },
