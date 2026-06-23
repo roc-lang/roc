@@ -1326,10 +1326,10 @@ pub const MonoLlvmCodeGen = struct {
             .registers => |pieces| {
                 ret_pieces = pieces;
                 if (pieces.len == 1) {
-                    ret_ty = try pieceLlvmType(builder, pieces[0]);
+                    ret_ty = try self.cAbiPieceLlvmType(builder, pieces[0]);
                 } else {
                     const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
-                    for (pieces, field_types) |piece, *t| t.* = try pieceLlvmType(builder, piece);
+                    for (pieces, field_types) |piece, *t| t.* = try self.cAbiPieceLlvmType(builder, piece);
                     ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
                 }
             },
@@ -1347,7 +1347,7 @@ pub const MonoLlvmCodeGen = struct {
                 },
                 .registers => |pieces| {
                     for (pieces) |piece| {
-                        try param_types.append(self.allocator, try pieceLlvmType(builder, piece));
+                        try param_types.append(self.allocator, try self.cAbiPieceLlvmType(builder, piece));
                     }
                 },
             }
@@ -1411,7 +1411,8 @@ pub const MonoLlvmCodeGen = struct {
                         const val = wip.arg(param_cursor);
                         param_cursor += 1;
                         const dst = try self.offsetPtr(args_buf, offset + piece.offset);
-                        _ = wip.store(.normal, val, dst, arg_align) catch return error.OutOfMemory;
+                        const store_val = try self.coerceScalar(val, try pieceLlvmType(builder, piece), self.cAbiPieceIsSigned(arg_layout));
+                        _ = wip.store(.normal, store_val, dst, arg_align) catch return error.OutOfMemory;
                     }
                 },
             }
@@ -1440,15 +1441,19 @@ pub const MonoLlvmCodeGen = struct {
             const ret_align = self.alignmentForLayout(ret_layout);
             if (ret_pieces.len == 1) {
                 const src = try self.offsetPtr(ret_slot, ret_pieces[0].offset);
-                const val = wip.load(.normal, ret_ty, src, ret_align, "") catch return error.OutOfMemory;
-                _ = wip.ret(val) catch return error.OutOfMemory;
+                const piece_ty = try pieceLlvmType(builder, ret_pieces[0]);
+                const val = wip.load(.normal, piece_ty, src, ret_align, "") catch return error.OutOfMemory;
+                const ret_val = try self.coerceScalar(val, ret_ty, self.cAbiPieceIsSigned(ret_layout));
+                _ = wip.ret(ret_val) catch return error.OutOfMemory;
             } else {
                 var agg = builder.poisonValue(ret_ty) catch return error.OutOfMemory;
                 for (ret_pieces, 0..) |piece, i| {
                     const piece_ty = try pieceLlvmType(builder, piece);
                     const src = try self.offsetPtr(ret_slot, piece.offset);
                     const val = wip.load(.normal, piece_ty, src, ret_align, "") catch return error.OutOfMemory;
-                    agg = wip.insertValue(agg, val, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                    const field_ty = try self.cAbiPieceLlvmType(builder, piece);
+                    const field = try self.coerceScalar(val, field_ty, self.cAbiPieceIsSigned(ret_layout));
+                    agg = wip.insertValue(agg, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
                 }
                 _ = wip.ret(agg) catch return error.OutOfMemory;
             }
@@ -6550,6 +6555,40 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    /// The LLVM C-ABI carrier type for a register piece. LLVM IR has sub-i32
+    /// integers, but WebAssembly's C ABI does not: narrow integer parameters
+    /// and returns travel as i32 values with explicit extension/truncation at
+    /// the ABI boundary.
+    fn cAbiPieceLlvmType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, piece: layout.abi.RegPiece) Error!LlvmBuilder.Type {
+        if ((self.abiTarget() == .wasm32 or self.abiTarget() == .wasm64) and
+            piece.class == .integer and piece.size < 4)
+        {
+            return .i32;
+        }
+        return pieceLlvmType(builder, piece);
+    }
+
+    fn cAbiPieceIsSigned(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) bool {
+        const direct_idx = switch (self.abiTarget()) {
+            .wasm32, .wasm64 => switch (layout.abi.wasm.classifyType(self.layouts(), layout_idx)) {
+                .direct => |idx| idx,
+                .indirect => layout_idx,
+            },
+            else => layout_idx,
+        };
+
+        const lay = self.layoutValue(direct_idx);
+        return switch (lay.tag) {
+            .scalar => switch (lay.getScalar().tag) {
+                .int => direct_idx.isSigned(),
+                .frac => direct_idx == .dec,
+                .opaque_ptr, .str => false,
+            },
+            .tag_union, .box, .box_of_zst, .ptr => false,
+            else => direct_idx.isSigned(),
+        };
+    }
+
     /// A type with the exact size and alignment of `layout_idx`, for a `byval`/`sret`
     /// pointer parameter (LLVM derives the memory convention and alignment from it).
     fn memoryLlvmTypeForLayout(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, layout_idx: layout.Idx) Error!LlvmBuilder.Type {
@@ -6845,10 +6884,10 @@ pub const MonoLlvmCodeGen = struct {
             .registers => |pieces| {
                 ret_pieces = pieces;
                 if (pieces.len == 1) {
-                    ret_ty = try pieceLlvmType(builder, pieces[0]);
+                    ret_ty = try self.cAbiPieceLlvmType(builder, pieces[0]);
                 } else {
                     const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
-                    for (pieces, field_types) |piece, *t| t.* = try pieceLlvmType(builder, piece);
+                    for (pieces, field_types) |piece, *t| t.* = try self.cAbiPieceLlvmType(builder, piece);
                     ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
                 }
             },
@@ -6879,8 +6918,9 @@ pub const MonoLlvmCodeGen = struct {
                         const piece_ty = try pieceLlvmType(builder, piece);
                         const src = try self.offsetPtr(arg_ptr, piece.offset);
                         const val = wip.load(.normal, piece_ty, src, arg_align, "") catch return error.OutOfMemory;
-                        try param_types.append(self.allocator, piece_ty);
-                        try call_args.append(self.allocator, val);
+                        const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
+                        try param_types.append(self.allocator, carrier_ty);
+                        try call_args.append(self.allocator, try self.coerceScalar(val, carrier_ty, self.cAbiPieceIsSigned(arg_layout)));
                     }
                 },
             }
@@ -6907,12 +6947,14 @@ pub const MonoLlvmCodeGen = struct {
             const ret_align = self.alignmentForLayout(ret_layout);
             if (ret_pieces.len == 1) {
                 const dst = try self.offsetPtr(ret_ptr, ret_pieces[0].offset);
-                _ = wip.store(.normal, result, dst, ret_align) catch return error.OutOfMemory;
+                const store_val = try self.coerceScalar(result, try pieceLlvmType(builder, ret_pieces[0]), self.cAbiPieceIsSigned(ret_layout));
+                _ = wip.store(.normal, store_val, dst, ret_align) catch return error.OutOfMemory;
             } else {
                 for (ret_pieces, 0..) |piece, i| {
                     const field = wip.extractValue(result, &.{@intCast(i)}, "") catch return error.OutOfMemory;
                     const dst = try self.offsetPtr(ret_ptr, piece.offset);
-                    _ = wip.store(.normal, field, dst, ret_align) catch return error.OutOfMemory;
+                    const store_val = try self.coerceScalar(field, try pieceLlvmType(builder, piece), self.cAbiPieceIsSigned(ret_layout));
+                    _ = wip.store(.normal, store_val, dst, ret_align) catch return error.OutOfMemory;
                 }
             }
         }
