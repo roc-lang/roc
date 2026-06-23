@@ -12,6 +12,7 @@ PARSE ERROR - fuzz_crash_001.md:1:1:1:3
 PARSE ERROR - fuzz_crash_001.md:1:3:1:4
 PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -21,6 +22,8 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
  └───────────────────────────────────────────────────── fuzz_crash_001.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -30,6 +33,8 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
  └───────────────────────────────────────────────────── fuzz_crash_001.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -39,6 +44,7 @@ PARSE ERROR - fuzz_crash_001.md:1:4:1:5
  └───────────────────────────────────────────────────── fuzz_crash_001.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpBar,OpPercent,

@@ -15,6 +15,7 @@ PARSE ERROR - fuzz_crash_014.md:1:3:1:5
 PARSE ERROR - fuzz_crash_014.md:2:1:2:6
 PARSE ERROR - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -24,6 +25,8 @@ PARSE ERROR - fuzz_crash_014.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_014.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -33,6 +36,8 @@ PARSE ERROR - fuzz_crash_014.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_014.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -42,6 +47,8 @@ PARSE ERROR - fuzz_crash_014.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_014.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -51,6 +58,7 @@ PARSE ERROR - fuzz_crash_014.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_014.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,NoSpaceDotInt,

@@ -16,9 +16,10 @@ blue = CC.Color.RGB(0,0,255)
 MODULE NOT FOUND - nominal_tag_package_import.md:5:10:5:16
 MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Color is qualified by the module ──────────────┐
-└┬─────────────────┘  styles.Color, but that module was not found in this     │
+│ MODULE NOT FOUND ├─ The type `Color` is qualified by the module ────────────┐
+└┬─────────────────┘  `styles.Color`, but that module was not found in this   │
  │                    Roc project.                                            │
  │                                                                            │
  │  blue : CC.Color                                                           │
@@ -26,9 +27,11 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
  └──────────────────────────────────────── nominal_tag_package_import.md:5:10 ┘
 
     You're attempting to use this type here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Color is qualified by the module ──────────────┐
-└┬─────────────────┘  styles.Color, but that module was not found in this     │
+│ MODULE NOT FOUND ├─ The type `Color` is qualified by the module ────────────┐
+└┬─────────────────┘  `styles.Color`, but that module was not found in this   │
  │                    Roc project.                                            │
  │                                                                            │
  │  blue = CC.Color.RGB(0,0,255)                                              │
@@ -36,6 +39,7 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
  └──────────────────────────────────────── nominal_tag_package_import.md:6:10 ┘
 
     You're attempting to use this type here:
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

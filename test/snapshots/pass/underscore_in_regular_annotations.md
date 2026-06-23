@@ -40,6 +40,7 @@ PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -53,6 +54,8 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -62,16 +65,19 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
  └──────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable list is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `list` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  process = |list| "processed"                                              │
  │             ‾‾‾‾                                                           │
  └───────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _list to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_list`
+    to suppress this warning.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

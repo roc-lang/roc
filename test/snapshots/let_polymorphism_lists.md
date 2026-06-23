@@ -46,6 +46,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -55,6 +56,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:12:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -64,6 +67,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:12:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -73,6 +78,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:13:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -82,6 +89,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:13:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -91,6 +100,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:14:30 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -100,6 +111,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:14:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────────┐
 │ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
 └┬────────────────────┘                                                       │
@@ -109,6 +122,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:12:16 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌─────────────────────┐
 │ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
 └┬────────────────────┘                                                       │
@@ -118,6 +133,8 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:13:16 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌─────────────────────┐
 │ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
 └┬────────────────────┘                                                       │
@@ -127,6 +144,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
  └─────────────────────────────────────────── let_polymorphism_lists.md:14:18 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

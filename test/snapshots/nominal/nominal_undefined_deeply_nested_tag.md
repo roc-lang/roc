@@ -14,6 +14,7 @@ x = Foo.Bar.Baz.X
 # EXPECTED
 UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Foo.Bar.Baz is not declared in this scope. ─────┐
 └┬────────────────┘                                                           │
@@ -23,6 +24,7 @@ UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
  └─────────────────────────────── nominal_undefined_deeply_nested_tag.md:5:12 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

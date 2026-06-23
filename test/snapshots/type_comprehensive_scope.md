@@ -49,22 +49,22 @@ MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
+
 ┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name Try is being redeclared in this scope. ────┐
+│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
 └┬─────────────────────┘                                                      │
  │                                                                            │
  │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └────────────────────────────────────────── type_comprehensive_scope.md:10:1 ┘
 
-    The redeclaration is here:
+    In this scope, `Try` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  # Built-in types should work                                         │
+      │  ‾                                                                    │
+      └────────────────────────────────────── type_comprehensive_scope.md:1:1 ┘
 
-    But Try was already defined here:
-      ┌─────────────────────────────────────────────
-      type_comprehensive_scope.md:1:1
-      │
-    1 │ # Built-in types should work
-      │ ^
+
 ┌─────────────────────────────────┐
 │ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias Tree and Node form a ─────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
@@ -74,16 +74,17 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
  └────────────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
-    you need recursive types, use nominal types (:=) instead.
+    you need recursive types, use nominal types (`:=`) instead.
 
     This type is declared here:
 
     And it references Node declared here:
-       ┌───────────────────────────────────────────
-       type_comprehensive_scope.md:16:1
-       │
-    16 │ Node(a) : { value: a, children: List(Tree(a)) }
-       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       ┌──────────────────────────────────────────────────────────────────────┐
+    16 │  Node(a) : { value: a, children: List(Tree(a)) }                     │
+       │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                     │
+       └──────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
+
+
 ┌─────────────────────────────────┐
 │ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias Node and Tree form a ─────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
@@ -93,16 +94,17 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
  └────────────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
-    you need recursive types, use nominal types (:=) instead.
+    you need recursive types, use nominal types (`:=`) instead.
 
     This type is declared here:
 
     And it references Tree declared here:
-       ┌───────────────────────────────────────────
-       type_comprehensive_scope.md:13:1
-       │
-    13 │ Tree(a) : [Branch(Node(a)), Leaf(a)]
-       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       ┌──────────────────────────────────────────────────────────────────────┐
+    13 │  Tree(a) : [Branch(Node(a)), Leaf(a)]                                │
+       │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
+       └──────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
+
+
 ┌─────────────────┐
 │ TYPE REDECLARED ├─ The type Person is being redeclared. ────────────────────┐
 └┬────────────────┘                                                           │
@@ -114,11 +116,12 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
     The redeclaration is here:
 
     But Person was already declared here:
-      ┌─────────────────────────────────────────────
-      type_comprehensive_scope.md:7:1
-      │
-    7 │ Person : { name: Str, age: U64 }
-      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      ┌───────────────────────────────────────────────────────────────────────┐
+    7 │  Person : { name: Str, age: U64 }                                     │
+      │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+      └────────────────────────────────────── type_comprehensive_scope.md:7:1 ┘
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type SomeUndeclaredType is not declared in this ─────┐
 └┬────────────────┘  scope.                                                   │
@@ -128,6 +131,7 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
  └───────────────────────────────────────── type_comprehensive_scope.md:25:11 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

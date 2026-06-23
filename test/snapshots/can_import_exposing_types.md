@@ -89,6 +89,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -98,6 +99,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └───────────────────────────────────────── can_import_exposing_types.md:6:24 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -107,15 +110,19 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └───────────────────────────────────────── can_import_exposing_types.md:6:31 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named parse in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  parseJson = |input| Json.parse(input)                                     │
  │                      ‾‾‾‾‾‾‾‾‾‾                                            │
  └───────────────────────────────────────── can_import_exposing_types.md:7:21 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Request is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
@@ -125,6 +132,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:10:17 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
@@ -134,33 +143,41 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:10:28 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named decode in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  result = Json.decode(req.body)                                            │
  │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:12:14 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named ok in this scope. ───────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ok` in this scope. ─────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Ok(value) => Http.ok(value)                                               │
  │               ‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:14:22 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named badRequest in this scope. ───────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `badRequest` in this scope. ─────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Err(error) => Http.badRequest(error)                                      │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └──────────────────────────────────────── can_import_exposing_types.md:15:23 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -170,6 +187,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:20:15 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -179,6 +198,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:20:28 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -188,6 +209,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:20:47 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -197,26 +220,32 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:20:55 ┘
 
     This type is referenced here:
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ List.mapTry does not exist. ──────────────────────────────┐
+│ DOES NOT EXIST ├─ `List.mapTry` does not exist. ────────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  List.mapTry(                                                              │
  │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
  └───────────────────────────────────────── can_import_exposing_types.md:22:5 ┘
 
-    List is in scope, but it has no associated mapTry.
+    `List` is in scope, but it has no associated `mapTry`.
 
     It's referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named validateWith in this scope. ─────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `validateWith` in this scope. ───────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  |v| Json.validateWith(config, v),                                         │
  │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────── can_import_exposing_types.md:24:13 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -226,6 +255,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:29:18 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Status is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -235,6 +266,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:30:18 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
@@ -244,6 +277,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:31:23 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -253,9 +288,11 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:35:16 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Client is qualified by the module ─────────────┐
-└┬─────────────────┘  http.Client, but that module was not found in this      │
+│ MODULE NOT FOUND ├─ The type `Client` is qualified by the module ───────────┐
+└┬─────────────────┘  `http.Client`, but that module was not found in this    │
  │                    Roc project.                                            │
  │                                                                            │
  │  createClient : Config -> Http.Client                                      │
@@ -263,15 +300,19 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:35:30 ┘
 
     You're attempting to use this type here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named clientWith in this scope. ───────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `clientWith` in this scope. ─────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  createClient = |config| Http.clientWith(config)                           │
  │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
  └──────────────────────────────────────── can_import_exposing_types.md:36:25 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
@@ -281,22 +322,28 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:39:18 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named statusToString in this scope. ───────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `statusToString` in this scope. ─────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Ok(status) => Http.statusToString(status)                                 │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────────── can_import_exposing_types.md:42:23 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Error.toString does not exist. ───────────────────────────┐
+│ DOES NOT EXIST ├─ `Error.toString` does not exist. ─────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  Err(error) => Error.toString(error)                                       │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └──────────────────────────────────────── can_import_exposing_types.md:43:23 ┘
+
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
@@ -307,6 +354,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:47:19 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -316,6 +365,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:47:26 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Status is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -325,6 +376,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:47:34 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
@@ -334,6 +387,8 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:47:48 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -343,15 +398,18 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └──────────────────────────────────────── can_import_exposing_types.md:47:58 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named encode in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })         │
  │                          ‾‾‾‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

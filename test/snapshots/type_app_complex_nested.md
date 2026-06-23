@@ -34,6 +34,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -43,6 +44,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
  └─────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -52,16 +55,20 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
  └─────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable maybeList is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
+│ UNUSED VARIABLE ├─ Variable `maybeList` is defined here and then never ─────┐
+└┬────────────────┘  used.                                                    │
  │                                                                            │
  │  Ok(maybeList) => []                                                       │
  │     ‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _maybeList to suppress this warning.
+    `_maybeList` to suppress this warning.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -71,6 +78,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
  └────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -80,6 +89,8 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
  └────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -89,6 +100,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
  └────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

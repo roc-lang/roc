@@ -12,6 +12,7 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
 └┬──────────────┘  needed.                                                    │
@@ -21,12 +22,10 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
  └──────────────────────────────── can_list_mismatch_then_nested_error.md:1:2 ┘
 
     The type was determined to be non-numeric here:
-      ┌─────────────────────────────────
-      can_list_mismatch_then_nested_error.md:1:14
-      │
-    1 │ [1, "hello", [3, "world"]]
-      │              ^^^^^^^^^^^^
-
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  [1, "hello", [3, "world"]]                                           │
+      │               ‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+      └────────────────────────── can_list_mismatch_then_nested_error.md:1:14 ┘
     Other code expects this to have the type:
 
         List(a)
@@ -34,6 +33,8 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
             a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
             a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
           ]
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -49,6 +50,8 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
             a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
             a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
           ]
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -60,6 +63,7 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,

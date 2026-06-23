@@ -15,6 +15,7 @@ PARSE ERROR - fuzz_crash_055.md:1:10:1:12
 PARSE ERROR - fuzz_crash_055.md:1:12:1:13
 PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
 └┬────────────┘                                                               │
@@ -24,6 +25,8 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -33,6 +36,8 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -42,6 +47,8 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -51,6 +58,8 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -60,6 +69,8 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -69,6 +80,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 KwModule,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,OpColon,LowerIdent,

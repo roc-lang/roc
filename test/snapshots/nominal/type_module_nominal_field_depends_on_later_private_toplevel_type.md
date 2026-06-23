@@ -14,9 +14,10 @@ InternalType := [Some, Other]
 # EXPECTED
 PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_later_private_toplevel_type.md:2:13:2:25
 # PROBLEMS
+
 ┌───────────────────────────────┐
-│ PRIVATE TYPE IN EXPOSED FIELD ├─ The field field of ModuleType refers to ───┐
-└┬──────────────────────────────┘  InternalType, but InternalType is          │
+│ PRIVATE TYPE IN EXPOSED FIELD ├─ The `field` field of ModuleType refers ────┐
+└┬──────────────────────────────┘  to InternalType, but InternalType is       │
  │                                 private to this module.                    │
  │                                                                            │
  │  field : InternalType,                                                     │
@@ -29,8 +30,9 @@ PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_later_priva
     It's referenced here:
 
 
-    Hint: Expose the referenced type, make ModuleType opaque with ::, or move
+    Hint: Expose the referenced type, make ModuleType opaque with `::`, or move
     the type into ModuleType's associated block.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,

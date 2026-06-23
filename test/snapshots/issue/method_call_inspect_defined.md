@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ; is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -19,6 +20,7 @@ UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
  └─────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

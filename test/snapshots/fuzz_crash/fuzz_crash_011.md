@@ -12,6 +12,7 @@ PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
 └┬────────────┘                                                               │
@@ -21,6 +22,8 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
  └───────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -30,6 +33,8 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
  └───────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -51,6 +56,7 @@ PARSE ERROR - fuzz_crash_011.md:2:1:2:1
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
 # TOKENS
 ~~~zig
 KwModule,UpperIdent,CloseSquare,UpperIdent,

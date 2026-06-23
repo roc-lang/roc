@@ -212,6 +212,7 @@ UNUSED VARIABLE - everything.md:79:2:79:4
 DECLARATION HAS NO VALUE - everything.md:56:1:56:17
 NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
+
 ┌────────────────────┐
 │ WHERE CLAUSE ERROR ├─ Expected an opening bracket [ after where. ───────────┐
 └┬───────────────────┘                                                        │
@@ -221,6 +222,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:13:2 ┘
 
     Where clauses should look like:     where [a.method : Type]
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -230,6 +233,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:14:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -239,6 +244,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:14:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -248,6 +255,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:14:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -257,6 +266,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:14:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -266,6 +277,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:14:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -275,6 +288,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:14:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -284,6 +299,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:14:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -293,6 +310,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:15:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -302,6 +321,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:15:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -311,6 +332,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:16:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -320,6 +343,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -333,6 +358,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -354,6 +381,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -363,6 +392,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:18:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -372,6 +403,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:18:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -381,6 +414,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:18:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -390,6 +425,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:18:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -399,6 +436,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:18:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -408,6 +447,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:18:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -417,6 +458,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:18:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -426,6 +469,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:19:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -435,6 +480,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:19:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -444,6 +491,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:20:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -453,6 +502,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:21:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -466,6 +517,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -487,6 +540,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -496,6 +551,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:22:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -505,6 +562,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:22:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -514,6 +573,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:22:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -523,6 +584,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:22:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -532,6 +595,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:22:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -541,6 +606,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:23:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -550,6 +617,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:24:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -559,6 +628,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:24:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -568,6 +639,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:24:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -577,6 +650,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:24:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -586,6 +661,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:24:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -595,6 +672,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:24:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -604,6 +683,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:24:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -613,6 +694,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:25:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -622,6 +705,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:25:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -631,6 +716,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:26:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -640,6 +727,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:27:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -653,6 +742,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -674,6 +765,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -683,6 +776,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:28:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -692,6 +787,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:28:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -701,6 +798,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:28:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -710,6 +809,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:28:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -719,6 +820,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:28:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -728,6 +831,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:28:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -737,6 +842,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:28:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -746,6 +853,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:29:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -755,6 +864,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:29:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -764,6 +875,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:30:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -773,6 +886,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:31:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -786,6 +901,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -807,6 +924,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -816,6 +935,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:33:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -825,6 +946,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:34:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -834,6 +957,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:34:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -843,6 +968,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:35:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -852,6 +979,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:36:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -861,6 +990,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:36:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -870,6 +1001,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:36:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -879,6 +1012,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:37:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -888,6 +1023,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:37:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -897,6 +1034,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:38:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -906,6 +1045,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:39:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────┐
 │ WHERE CLAUSE ERROR ├─ Expected an opening bracket [ after where. ───────────┐
 └┬───────────────────┘                                                        │
@@ -915,6 +1056,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:12 ┘
 
     Where clauses should look like:     where [a.method : Type]
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -924,6 +1067,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -933,6 +1078,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -942,6 +1089,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -951,6 +1100,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -960,6 +1111,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -969,6 +1122,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -978,6 +1133,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -987,6 +1144,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:37 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -996,6 +1155,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -1005,6 +1166,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -1014,10 +1177,12 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:40 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
-└┬─────────────────────────────────────────────┘  clause inside a type        │
- │                                                declaration.                │
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
+└┬─────────────────────────────────────────────┘  `where` clause inside a     │
+ │                                                type declaration.           │
  │                                                                            │
  │  A(a) : a                                                                  │
  │      where                                                                 │
@@ -1025,6 +1190,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:12:1 ┘
 
     You're attempting do this here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type C is not declared in this scope. ───────────────┐
 └┬────────────────┘                                                           │
@@ -1034,6 +1201,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └──────────────────────────────────────────────────────── everything.md:43:5 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────────┐
 │ MALFORMED WHERE CLAUSE ├─ This where clause could not be parsed correctly. ─┐
 └┬───────────────────────┘                                                    │
@@ -1043,96 +1212,116 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
  └─────────────────────────────────────────────────────── everything.md:56:12 ┘
 
     Check the syntax of your where clause.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:88:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:93:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:98:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────────── everything.md:104:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h1 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h1` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h1 = {                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:59:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h1 to
+    If you don't need this variable, prefix it with an underscore like `_h1` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h2 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h2` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h2 = h(                                                                   │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:67:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h2 to
+    If you don't need this variable, prefix it with an underscore like `_h2` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h3 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h3` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h3 = A(                                                                   │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:71:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h3 to
+    If you don't need this variable, prefix it with an underscore like `_h3` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h4 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h4` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h4 = [                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:75:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h4 to
+    If you don't need this variable, prefix it with an underscore like `_h4` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h5 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h5` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h5 = (                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:79:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h5 to
+    If you don't need this variable, prefix it with an underscore like `_h5` to
     suppress this warning.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1143,6 +1332,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────┐
 │ NON-EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
 └┬─────────────────────┘  cases.                                              │
@@ -1180,7 +1371,8 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
     Missing patterns:
             Z4 []
 
-    Hint: Add branches to handle these cases, or use _ to match anything.
+    Hint: Add branches to handle these cases, or use `_` to match anything.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

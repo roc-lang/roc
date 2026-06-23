@@ -24,6 +24,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
 TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
+
 ┌──────────────────────────┐
 │ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
 └┬─────────────────────────┘  declarations.                                   │
@@ -35,6 +36,8 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -46,6 +49,8 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
     The type was determined to be:
 
         BadDerived
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -57,6 +62,7 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
     The type was determined to be:
 
         GoodDerived
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

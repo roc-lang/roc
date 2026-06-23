@@ -13,6 +13,7 @@ match list {
 # EXPECTED
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
+
 ┌───────────────────┐
 │ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
 └┬──────────────────┘  polymorphic type.                                      │
@@ -27,6 +28,7 @@ POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
     Its type is:
     a where [a.plus : a, a -> a]
     Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

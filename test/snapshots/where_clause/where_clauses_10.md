@@ -17,6 +17,7 @@ decode_things # After member name
 UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
+
 ┌──────────────────────────┐
 │ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
 └┬─────────────────────────┘  supported.                                      │
@@ -26,7 +27,9 @@ DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
  └─────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like where [a.methodName(args) -> ret] instead.
+    method constraints like `where [a.methodName(args) -> ret]` instead.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -41,6 +44,7 @@ DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

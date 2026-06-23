@@ -33,6 +33,7 @@ UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
 TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -42,6 +43,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:1:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -51,6 +54,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:1:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -72,6 +77,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -93,6 +100,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌──────────────────────────┐
 │ IMPORT MUST BE TOP LEVEL ├─ Import statements must appear at the top ───────┐
 └┬─────────────────────────┘  level of a module.                              │
@@ -103,6 +112,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 
     Move this import to the top of the file, after the module header but before
     any definitions.
+
+
 ┌─────────────────────────────┐
 │ UNEXPECTED TOKEN IN PATTERN ├─ The token - is not expected in a pattern. ───┐
 └┬────────────────────────────┘                                               │
@@ -112,6 +123,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:7:21 ┘
 
     Patterns can contain identifiers, literals, lists, records, or tags.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
 └┬────────────┘                                                               │
@@ -121,6 +134,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:7:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌──────────────────────────┐
 │ UNDECLARED TYPE VARIABLE ├─ The type variable lue is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
@@ -133,6 +148,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
     used.
 
     This type variable is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Loc is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -142,6 +159,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:1:21 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -151,6 +170,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  └──────────────────────────────────────────────────── fuzz_crash_032.md:4:25 ┘
 
     This type is referenced here:
+
+
 ┌───────────────────────┐
 │ EXPECTED NOMINAL TYPE ├─ You are using the type LocalStatus like a ─────────┐
 └┬──────────────────────┘  nominal type, but it is an alias.                  │
@@ -162,10 +183,14 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
     This type is referenced here:
 
 
-    Hint: You can declare this type with := to make it nominal.
+    Hint: You can declare this type with `:=` to make it nominal.
+
+
 INVALID PATTERN
 
 This pattern contains invalid syntax or uses unsupported features.
+
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type B is not declared in this scope. ───────────────┐
@@ -176,6 +201,8 @@ This pattern contains invalid syntax or uses unsupported features.
  └───────────────────────────────────────────────────── fuzz_crash_032.md:8:3 ┘
 
     This type is referenced here:
+
+
 ┌───────────────────────┐
 │ EXPECTED NOMINAL TYPE ├─ You are using the type LocalStatus like a ─────────┐
 └┬──────────────────────┘  nominal type, but it is an alias.                  │
@@ -187,9 +214,11 @@ This pattern contains invalid syntax or uses unsupported features.
     This type is referenced here:
 
 
-    Hint: You can declare this type with := to make it nominal.
+    Hint: You can declare this type with `:=` to make it nominal.
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The second branch of this match does not match the ────────┐
+│ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
 └┬──────────────┘  previous branches .                                        │
  │                                                                            │
  │  Green => LocalStatus-Complete                                             │
@@ -204,9 +233,10 @@ This pattern contains invalid syntax or uses unsupported features.
 
         tus
 
-    All branches in a match must have compatible types.
+    All branches in a `match` must have compatible types.
     Note: You can wrap branches values in a tag to make them compatible.
     To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,LowerIdent,OpFatArrow,UpperIdent,OpAssign,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

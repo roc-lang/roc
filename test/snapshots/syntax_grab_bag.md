@@ -274,6 +274,7 @@ DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
 └┬────────────────┘  module name contains invalid control characters.         │
@@ -290,18 +291,22 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module BadName was not found in this Roc project. ──┐
-└┬─────────────────┘                                                          │
+│ MODULE NOT FOUND ├─ The module `BadName` was not found in this Roc ─────────┐
+└┬─────────────────┘  project.                                                │
  │                                                                            │
  │  import BadName as GoodName                                                │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:16:1 ┘
 
     You're attempting to use this module here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module BadNameMultiline was not found in this Roc ──┐
-└┬─────────────────┘  project.                                                │
+│ MODULE NOT FOUND ├─ The module `BadNameMultiline` was not found in this ────┐
+└┬─────────────────┘  Roc project.                                            │
  │                                                                            │
  │  import                                                                    │
  │      BadNameMultiline                                                      │
@@ -311,6 +316,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:17:1 ┘
 
     You're attempting to use this module here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -320,6 +327,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:36:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -329,6 +338,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:36:13 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -338,6 +349,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:39:2 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -347,6 +360,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:40:2 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
 └┬────────────────┘                                                           │
@@ -356,6 +371,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:43:19 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
@@ -365,6 +382,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:43:32 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
 └┬────────────────┘                                                           │
@@ -374,6 +393,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:45:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
@@ -383,6 +404,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:46:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
 └┬────────────────┘                                                           │
@@ -392,6 +415,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:52:4 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
@@ -401,35 +426,43 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └─────────────────────────────────────────────────── syntax_grab_bag.md:53:8 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named some_func in this scope. ────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  some_func() # After debug expr                                            │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:72:4 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable lower is defined here and then never used. ─────┐
+│ UNUSED VARIABLE ├─ Variable `lower` is defined here and then never used. ───┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  lower # After pattern comment                                             │
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:97:3 ┘
 
-    If you don't need this variable, prefix it with an underscore like _lower
+    If you don't need this variable, prefix it with an underscore like `_lower`
     to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  # This is a module comment!                                               │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -440,16 +473,20 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  # This is a module comment!                                               │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -460,16 +497,20 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  # This is a module comment!                                               │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -480,27 +521,33 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named add in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `add` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                                    ‾‾‾                                     │
  └───────────────────────────────────────────────── syntax_grab_bag.md:121:37 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                    ‾‾‾‾‾‾                                                  │
  └───────────────────────────────────────────────── syntax_grab_bag.md:121:21 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  .. # After spread operator                                                │
@@ -508,8 +555,10 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │                                                                            │
  └────────────────────────────────────────────────── syntax_grab_bag.md:127:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -520,6 +569,8 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -530,25 +581,31 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:82:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  blah == 1 # Comment after expect statement                                │
  │  ‾‾‾‾                                                                      │
  └────────────────────────────────────────────────── syntax_grab_bag.md:141:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -558,53 +615,65 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └───────────────────────────────────────────────── syntax_grab_bag.md:143:14 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  expect blah == 1                                                          │
  │         ‾‾‾‾                                                               │
  └────────────────────────────────────────────────── syntax_grab_bag.md:147:9 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named some_func in this scope. ────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  some_func(                                                                │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └────────────────────────────────────────────────── syntax_grab_bag.md:158:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Stdout.line!("Adding ${n} to ${number}")                                  │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:175:3 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named punned in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `punned` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
  │                                                               ‾‾‾‾‾‾       │
  └───────────────────────────────────────────────── syntax_grab_bag.md:178:63 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named nested in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nested` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
  │                                          ‾‾‾‾‾‾                            │
  └───────────────────────────────────────────────── syntax_grab_bag.md:179:42 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value tuple is assigned to itself, ─────┐
+│ INVALID ASSIGNMENT TO ITSELF ├─ The value `tuple` is assigned to itself, ───┐
 └┬─────────────────────────────┘  which would cause an infinite loop at       │
  │                                runtime.                                    │
  │                                                                            │
@@ -615,79 +684,97 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to
     the value being assigned.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named tag1 in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tag1` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  tag1,                                                                     │
  │  ‾‾‾‾                                                                      │
  └────────────────────────────────────────────────── syntax_grab_bag.md:183:3 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named nested in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nested` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  (nested, tuple),                                                          │
  │   ‾‾‾‾‾‾                                                                   │
  └────────────────────────────────────────────────── syntax_grab_bag.md:185:4 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named foo in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  …t = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5 │
  │           ‾‾‾                                                              │
  └───────────────────────────────────────────────── syntax_grab_bag.md:188:22 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named some_fn in this scope. ──────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `some_fn` in this scope. ────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
  │           ‾‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named arg1 in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  …some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.…│
  │           ‾‾‾‾                                                             │
  └───────────────────────────────────────────────── syntax_grab_bag.md:189:34 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Stdout.line!(interpolated)?                                               │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:190:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  Stdout.line!(                                                             │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:191:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Num.toStr does not exist. ────────────────────────────────┐
+│ DOES NOT EXIST ├─ `Num.toStr` does not exist. ──────────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  Num.toStr(number) # Comment after string interpolation expr               │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └────────────────────────────────────────────────── syntax_grab_bag.md:193:4 ┘
 
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable tag_with_payload is defined here and then ──────┐
+│ UNUSED VARIABLE ├─ Variable `tag_with_payload` is defined here and then ────┐
 └┬────────────────┘  never used.                                              │
  │                                                                            │
  │  tag_with_payload = Ok(number)                                             │
@@ -695,19 +782,23 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:164:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _tag_with_payload to suppress this warning.
+    `_tag_with_payload` to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable record is defined here and then never used. ────┐
+│ UNUSED VARIABLE ├─ Variable `record` is defined here and then never used. ──┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
  │  ‾‾‾‾‾‾                                                                    │
  └────────────────────────────────────────────────── syntax_grab_bag.md:178:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _record
-    to suppress this warning.
+    If you don't need this variable, prefix it with an underscore like
+    `_record` to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable multiline_tuple is defined here and then ───────┐
+│ UNUSED VARIABLE ├─ Variable `multiline_tuple` is defined here and then ─────┐
 └┬────────────────┘  never used.                                              │
  │                                                                            │
  │  multiline_tuple = (                                                       │
@@ -715,19 +806,23 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:180:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _multiline_tuple to suppress this warning.
+    `_multiline_tuple` to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable bin_op_result is defined here and then never ───┐
-└┬────────────────┘  used.                                                    │
+│ UNUSED VARIABLE ├─ Variable `bin_op_result` is defined here and then ───────┐
+└┬────────────────┘  never used.                                              │
  │                                                                            │
  │  bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or… │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
  └────────────────────────────────────────────────── syntax_grab_bag.md:188:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _bin_op_result to suppress this warning.
+    `_bin_op_result` to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable static_dispatch_style is defined here and ──────┐
+│ UNUSED VARIABLE ├─ Variable `static_dispatch_style` is defined here and ────┐
 └┬────────────────┘  then never used.                                         │
  │                                                                            │
  │  static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_st… │
@@ -735,7 +830,9 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:189:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _static_dispatch_style to suppress this warning.
+    `_static_dispatch_style` to suppress this warning.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -745,9 +842,11 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:201:9 ┘
 
     This type is referenced here:
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ This if condition must evaluate to a Bool – either True ───┐
-└┬──────────────┘  or False.                                                  │
+│ TYPE MISMATCH ├─ This `if` condition must evaluate to a `Bool` – either ────┐
+└┬──────────────┘  `True` or `False`.                                         │
  │                                                                            │
  │  if num {                                                                  │
  │     ‾‾‾                                                                    │
@@ -757,31 +856,37 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
         U64
 
-    But I need this to be a Bool value.
+    But I need this to be a `Bool` value.
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
-└┬───────────────┘  type doesn't have that method.                            │
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
  │  "foo" => # After arrow comment                                            │
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:99:3 ┘
 
-    The value's type, which does not have a method named from_quote, is:
+    The value's type, which does not have a method named `from_quote`, is:
 
         [Blue, Green, Red, ..]
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
-└┬───────────────┘  type doesn't have that method.                            │
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
  │  "foo" | "bar" => 200                                                      │
  │  ‾‾‾‾‾                                                                     │
  └────────────────────────────────────────────────── syntax_grab_bag.md:101:3 ┘
 
-    The value's type, which does not have a method named from_quote, is:
+    The value's type, which does not have a method named `from_quote`, is:
 
         [Blue, Green, Red, ..]
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The sixth branch of this match does not match the ─────────┐
+│ TYPE MISMATCH ├─ The sixth branch of this `match` does not match the ───────┐
 └┬──────────────┘  previous ones.                                             │
  │                                                                            │
  │  match a {                                                                 │
@@ -850,14 +955,16 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
             d.is_eq : d, d -> Bool,
           ]
 
-    But the expression between the match parenthesis has the type:
+    But the expression between the `match` parenthesis has the type:
 
         [Blue, Green, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
+
+
 ┌──────────────┐
-│ TOO FEW ARGS ├─ The match_time function expects 2 arguments, but it got 1 ──┐
-└┬─────────────┘  instead.                                                    │
+│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
+└┬─────────────┘  1 instead.                                                  │
  │                                                                            │
  │  match_time(                                                               │
  │      ..., # Single args with comment                                       │
@@ -865,11 +972,13 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │                                                                            │
  └────────────────────────────────────────────────── syntax_grab_bag.md:155:2 ┘
 
-    The match_time function has the type:
+    The `match_time` function has the type:
 
         [Blue, Green, Red, ..], _arg -> Error
 
     Are there any missing commas?
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
 └┬──────────────┘  wrong type.                                                │
@@ -885,11 +994,13 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
         {}
 
-    But add_one needs the first argument to be:
+    But `add_one` needs the first argument to be:
 
         U64
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ This return does not match the function's return type. ────┐
+│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
 └┬──────────────┘                                                             │
  │                                                                            │
  │  tag # Comment after return statement                                      │
@@ -904,8 +1015,10 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
         Try({}, _d)
 
-    Hint: All return statements and the final expression in a function must
+    Hint: All `return` statements and the final expression in a function must
     have the same type.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -916,10 +1029,12 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌────────────────┐
 │ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  static_dispatch_method on an unresolved type variable,    │
- │                  but unresolved type variables have no methods.            │
+└┬───────────────┘  `static_dispatch_method` on an unresolved type            │
+ │                  variable, but unresolved type variables have no methods.  │
  │                                                                            │
  │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
@@ -929,9 +1044,11 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
+
+
 ┌────────────────┐
 │ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  next_static_dispatch_method on an unresolved type         │
+└┬───────────────┘  `next_static_dispatch_method` on an unresolved type       │
  │                  variable, but unresolved type variables have no methods.  │
  │                                                                            │
  │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
@@ -942,6 +1059,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

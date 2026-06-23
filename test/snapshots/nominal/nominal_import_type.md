@@ -14,24 +14,28 @@ red = Color.RGB.Red
 MODULE NOT FOUND - nominal_import_type.md:3:12:3:16
 MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type RGB is qualified by the module Color, but ─────┐
-└┬─────────────────┘  that module was not found in this Roc project.          │
+│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
+└┬─────────────────┘  but that module was not found in this Roc project.      │
  │                                                                            │
  │  red : Color.RGB                                                           │
  │             ‾‾‾‾                                                           │
  └─────────────────────────────────────────────── nominal_import_type.md:3:12 ┘
 
     You're attempting to use this type here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type RGB is qualified by the module Color, but ─────┐
-└┬─────────────────┘  that module was not found in this Roc project.          │
+│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
+└┬─────────────────┘  but that module was not found in this Roc project.      │
  │                                                                            │
  │  red = Color.RGB.Red                                                       │
  │             ‾‾‾‾                                                           │
  └─────────────────────────────────────────────── nominal_import_type.md:4:12 ┘
 
     You're attempting to use this type here:
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

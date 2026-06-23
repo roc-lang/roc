@@ -15,6 +15,7 @@ main! = |_| processNested([])
 # EXPECTED
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Err is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -24,6 +25,7 @@ UNDECLARED TYPE - type_app_nested.md:3:31:3:34
  └─────────────────────────────────────────────────── type_app_nested.md:3:31 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

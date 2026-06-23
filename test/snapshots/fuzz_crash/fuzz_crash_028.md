@@ -268,17 +268,24 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
 MISSING METHOD - fuzz_crash_028.md:133:5:133:12
 MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
-ASCII CONTROL CHARACTER
-
-ASCII control characters are not allowed in Roc source code.
 
 ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
+
+
+
+ASCII CONTROL CHARACTER
+
+ASCII control characters are not allowed in Roc source code.
+
+
 
 LEADING ZERO
 
 Numbers cannot have leading zeros.
+
+
 
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
@@ -287,6 +294,8 @@ Numbers cannot have leading zeros.
  │  crash "Unrnt                                                              │
  │        ‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:111:8 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
@@ -297,6 +306,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:10:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -318,6 +329,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -339,6 +352,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -360,6 +375,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -369,6 +386,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -378,6 +397,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -387,6 +408,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -396,6 +419,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -405,6 +430,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -414,6 +441,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -435,6 +464,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -444,6 +475,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -453,6 +486,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -466,6 +501,8 @@ Numbers cannot have leading zeros.
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -475,6 +512,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -484,6 +523,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -497,6 +538,8 @@ Numbers cannot have leading zeros.
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -518,6 +561,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -527,6 +572,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:16:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -536,6 +583,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:17:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -545,6 +594,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -554,6 +605,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:18:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -563,6 +616,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:18:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -572,6 +627,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:19:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -581,6 +638,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:20:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -602,6 +661,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -611,6 +672,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -620,6 +683,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -633,6 +698,8 @@ Numbers cannot have leading zeros.
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -642,6 +709,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -651,6 +720,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:23:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -664,6 +735,8 @@ Numbers cannot have leading zeros.
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -685,6 +758,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -694,6 +769,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:26:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -703,6 +780,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:26:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -724,6 +803,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -745,6 +826,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -766,6 +849,8 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -775,6 +860,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:40:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -784,6 +871,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:40:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -793,6 +882,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:41:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -802,8 +893,10 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:48:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module Stdot was not found in this Roc project. ────┐
+│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Stdot                                                              │
@@ -813,6 +906,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_028.md:6:1 ┘
 
     You're attempting to use this module here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -822,6 +917,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:29:2 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -831,6 +928,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:30:2 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
 └┬────────────────┘                                                           │
@@ -840,6 +939,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:32:19 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────────────┐
 │ UNDECLARED TYPE VARIABLE ├─ The type variable g is not declared in this ────┐
 └┬─────────────────────────┘  scope.                                          │
@@ -852,6 +953,8 @@ Numbers cannot have leading zeros.
     used.
 
     This type variable is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -861,6 +964,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:34:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -870,6 +975,8 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:38:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -879,6 +986,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:43:11 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -888,6 +997,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:43:26 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────────────┐
 │ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
 └┬────────────────────────┘  it is empty.                                     │
@@ -896,44 +1007,54 @@ Numbers cannot have leading zeros.
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:52:1 ┘
 
-    If you want to represent nothing, try using an empty record: {}.
+    If you want to represent nothing, try using an empty record: `{}`.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named x in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  x x                                                                       │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:65:4 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named x in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  x x                                                                       │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:65:6 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named ment in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ment` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  => ment                                                                   │
  │     ‾‾‾‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:71:7 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  # Thnt!                                                                   │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -944,16 +1065,20 @@ Numbers cannot have leading zeros.
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  # Thnt!                                                                   │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -964,25 +1089,31 @@ Numbers cannot have leading zeros.
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named add in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `add` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                                    ‾‾‾                                     │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:78:37 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                    ‾‾‾‾‾‾                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:78:21 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rest to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
 └┬────────────────┘  pattern outside match expression.                        │
@@ -993,25 +1124,31 @@ Numbers cannot have leading zeros.
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:62:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  blah == 1 # nt                                                            │
  │  ‾‾‾‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:93:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -1021,6 +1158,8 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:95:10 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Result is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -1030,80 +1169,98 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:95:21 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  expect blah == 1                                                          │
  │         ‾‾‾‾                                                               │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:99:9 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named nc in this scope. ───────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nc` in this scope. ─────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  nc(                                                                       │
  │  ‾‾                                                                        │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:107:1 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named er in this scope. ───────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `er` in this scope. ─────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  er, # afarg                                                               │
  │  ‾‾                                                                        │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:116:1 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named list in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `list` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  for n in list {                                                           │
  │           ‾‾‾‾                                                             │
  └────────────────────────────────────────────────── fuzz_crash_028.md:119:11 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  line!("Ag ${n} to ${er}")                                                 │
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:120:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named er in this scope. ───────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `er` in this scope. ─────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  line!("Ag ${n} to ${er}")                                                 │
  │                      ‾‾                                                    │
  └────────────────────────────────────────────────── fuzz_crash_028.md:120:22 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named ned in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ned` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
  │                                                      ‾‾‾                   │
  └────────────────────────────────────────────────── fuzz_crash_028.md:123:54 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named nd in this scope. ───────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nd` in this scope. ─────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
  │                                          ‾‾                                │
  └────────────────────────────────────────────────── fuzz_crash_028.md:124:42 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value tuple is assigned to itself, ─────┐
+│ INVALID ASSIGNMENT TO ITSELF ├─ The value `tuple` is assigned to itself, ───┐
 └┬─────────────────────────────┘  which would cause an infinite loop at       │
  │                                runtime.                                    │
  │                                                                            │
@@ -1114,121 +1271,147 @@ Numbers cannot have leading zeros.
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to
     the value being assigned.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named ag1 in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ag1` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  "World",ag1,                                                              │
  │          ‾‾‾                                                               │
  └────────────────────────────────────────────────── fuzz_crash_028.md:127:11 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named foo in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
  │          ‾‾‾                                                               │
  └────────────────────────────────────────────────── fuzz_crash_028.md:132:10 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named arg1 in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  le =(arg1)?.od()?.ned()?.recd?                                            │
  │       ‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:133:6 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  line!(                                                                    │
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:134:2 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named r in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `r` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  r(number) # xpr                                                           │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:136:4 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable tag_ is defined here and then never used. ──────┐
+│ UNUSED VARIABLE ├─ Variable `tag_` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  tag_ = Ok(number)                                                         │
  │  ‾‾‾‾                                                                      │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:112:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _tag_ to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_tag_`
+    to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable i is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `i` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  i= "H, ${world}"                                                          │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:113:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _i to
+    If you don't need this variable, prefix it with an underscore like `_i` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable t is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `t` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  t = [                                                                     │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:114:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _t to
+    If you don't need this variable, prefix it with an underscore like `_t` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable rd is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `rd` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
  │  ‾‾                                                                        │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:123:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _rd to
+    If you don't need this variable, prefix it with an underscore like `_rd` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable mle is defined here and then never used. ───────┐
+│ UNUSED VARIABLE ├─ Variable `mle` is defined here and then never used. ─────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  mle = (                                                                   │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:125:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _mle to
-    suppress this warning.
+    If you don't need this variable, prefix it with an underscore like `_mle`
+    to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:132:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable le is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `le` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  le =(arg1)?.od()?.ned()?.recd?                                            │
  │  ‾‾                                                                        │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:133:1 ┘
 
-    If you don't need this variable, prefix it with an underscore like _le to
+    If you don't need this variable, prefix it with an underscore like `_le` to
     suppress this warning.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type V is not declared in this scope. ───────────────┐
 └┬────────────────┘                                                           │
@@ -1238,44 +1421,55 @@ Numbers cannot have leading zeros.
  └─────────────────────────────────────────────────── fuzz_crash_028.md:144:5 ┘
 
     This type is referenced here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named h in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `h` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  h == foo                                                                  │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:148:1 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named foo in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  h == foo                                                                  │
  │       ‾‾‾                                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:148:6 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable f is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `f` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  f= 1                                                                      │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:147:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _f to
+    If you don't need this variable, prefix it with an underscore like `_f` to
     suppress this warning.
+
+
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that main! is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `main!` is ──────────┐
+└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
+ │                           this module.                                     │
  │                                                                            │
  │  app [main!] { pf: platform "c" }                                          │
  │       ‾‾‾‾‾                                                                │
  └───────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
 
-    You can fix this by either defining main! in this module, or by removing it
-    from the list of exposed values.
+    You can fix this by either defining `main!` in this module, or by removing
+    it from the list of exposed values.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1289,6 +1483,8 @@ Numbers cannot have leading zeros.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1299,10 +1495,12 @@ Numbers cannot have leading zeros.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The lue binding in the second pattern of the first ────────┐
-└┬──────────────┘  branch of this match does not match the same binding in    │
- │                 the first pattern.                                         │
+│ TYPE MISMATCH ├─ The `lue` binding in the second pattern of the first ──────┐
+└┬──────────────┘  branch of this `match` does not match the same binding     │
+ │                 in the first pattern.                                      │
  │                                                                            │
  │      match a {lue | Red => {                                               │
  │              x x                                                           │
@@ -1334,40 +1532,46 @@ Numbers cannot have leading zeros.
  │                                                                            │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:64:17 ┘
 
-    In the second pattern, lue is:
+    In the second pattern, `lue` is:
 
         [Red, ..]
 
-    But in the first pattern, lue is:
+    But in the first pattern, `lue` is:
 
         [Red, ..]
 
-    A name shared across | patterns in the same match branch must have one
+    A name shared across `|` patterns in the same `match` branch must have one
     compatible type.
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
-└┬───────────────┘  type doesn't have that method.                            │
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
  │  "foo" => # ent                                                            │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:68:3 ┘
 
-    The value's type, which does not have a method named from_quote, is:
+    The value's type, which does not have a method named `from_quote`, is:
 
         [Blue, Red, ..]
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
-└┬───────────────┘  type doesn't have that method.                            │
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
  │  "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                              │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:70:3 ┘
 
-    The value's type, which does not have a method named from_quote, is:
+    The value's type, which does not have a method named `from_quote`, is:
 
         [Blue, Red, ..]
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The fifth branch of this match does not match the ─────────┐
+│ TYPE MISMATCH ├─ The fifth branch of this `match` does not match the ───────┐
 └┬──────────────┘  previous ones.                                             │
  │                                                                            │
  │      match a {lue | Red => {                                               │
@@ -1408,11 +1612,13 @@ Numbers cannot have leading zeros.
             d.is_eq : d, d -> Bool,
           ]
 
-    But the expression between the match parenthesis has the type:
+    But the expression between the `match` parenthesis has the type:
 
         [Blue, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1423,6 +1629,8 @@ Numbers cannot have leading zeros.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
 └┬──────────────┘  used.                                                      │
@@ -1435,11 +1643,13 @@ Numbers cannot have leading zeros.
 
         [Jus, ..]
 
-    Since this expression is used as a statement, it must evaluate to {}.
-    If you don't need the value, you can ignore it with _ =.
+    Since this expression is used as a statement, it must evaluate to `{}`.
+    If you don't need the value, you can ignore it with `_ =`.
+
+
 ┌──────────────┐
-│ TOO FEW ARGS ├─ The match_time function expects 2 arguments, but it got 1 ──┐
-└┬─────────────┘  instead.                                                    │
+│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
+└┬─────────────┘  1 instead.                                                  │
  │                                                                            │
  │  match_time(                                                               │
  │      ...                                                                   │
@@ -1447,11 +1657,13 @@ Numbers cannot have leading zeros.
  │                                                                            │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:104:2 ┘
 
-    The match_time function has the type:
+    The `match_time` function has the type:
 
         [Blue, Red, ..], _arg -> Error
 
     Are there any missing commas?
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
 └┬──────────────┘  wrong type.                                                │
@@ -1466,11 +1678,13 @@ Numbers cannot have leading zeros.
 
         {}
 
-    But add_one needs the first argument to be:
+    But `add_one` needs the first argument to be:
 
         U64
+
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ This ? may return early with a type that doesn't match ────┐
+│ TYPE MISMATCH ├─ This `?` may return early with a type that doesn't match ──┐
 └┬──────────────┘  the function body.                                         │
  │                                                                            │
  │  le =(arg1)?.od()?.ned()?.recd?                                            │
@@ -1485,8 +1699,10 @@ Numbers cannot have leading zeros.
 
         [Blue, ..]
 
-    Hint: The error types from all ? operators and the function body must be
+    Hint: The error types from all `?` operators and the function body must be
     compatible since any of them could be the actual return value.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1497,6 +1713,8 @@ Numbers cannot have leading zeros.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -1507,8 +1725,10 @@ Numbers cannot have leading zeros.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named od on an ───────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `od` on an ─────┐
 └┬───────────────┘  unresolved type variable, but unresolved type variables   │
  │                  have no methods.                                          │
  │                                                                            │
@@ -1520,8 +1740,10 @@ Numbers cannot have leading zeros.
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named ned on an ──────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `ned` on an ────┐
 └┬───────────────┘  unresolved type variable, but unresolved type variables   │
  │                  have no methods.                                          │
  │                                                                            │
@@ -1533,6 +1755,7 @@ Numbers cannot have leading zeros.
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

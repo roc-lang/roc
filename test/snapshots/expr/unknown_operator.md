@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -19,6 +20,7 @@ UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
  └─────────────────────────────────────────────────── unknown_operator.md:1:4 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
 # TOKENS
 ~~~zig
 Int,OpPlus,OpPlus,Int,

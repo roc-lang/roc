@@ -17,10 +17,11 @@ result = func(10, 20)
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:8:4:9
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 # PROBLEMS
+
 ┌───────────────────┐
 │ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
 └┬──────────────────┘  type of this number literal, so it was given the       │
- │                     default type Dec instead.                              │
+ │                     default type `Dec` instead.                            │
  │                                                                            │
  │  add_x(5).plus(add_y(5))                                                   │
  │        ‾                                                                   │
@@ -28,10 +29,12 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.
+
+
 ┌───────────────────┐
 │ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
 └┬──────────────────┘  type of this number literal, so it was given the       │
- │                     default type Dec instead.                              │
+ │                     default type `Dec` instead.                            │
  │                                                                            │
  │  add_x(5).plus(add_y(5))                                                   │
  │                      ‾                                                     │
@@ -39,6 +42,7 @@ LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,

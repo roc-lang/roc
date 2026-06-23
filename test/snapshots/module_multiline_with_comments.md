@@ -17,6 +17,7 @@ PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
 PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
 PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -26,6 +27,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
  └───────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -35,6 +38,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
  └───────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -44,6 +49,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
  └──────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -65,6 +72,8 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -74,6 +83,7 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
  └───────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 OpenSquare,

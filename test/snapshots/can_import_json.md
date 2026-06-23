@@ -12,15 +12,17 @@ main = Json.utf8
 # EXPECTED
 UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named utf8 in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  main = Json.utf8                                                          │
  │         ‾‾‾‾‾‾‾‾‾                                                          │
  └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

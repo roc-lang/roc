@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_binary_number.md:1:1:1:3
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 0b is not expected in an ───────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -19,6 +20,7 @@ UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_binary_number.md:1:1:1:3
  └────────────────────────────────────── parse_malformed_binary_number.md:1:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,

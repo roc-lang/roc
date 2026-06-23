@@ -15,37 +15,43 @@ UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named person in this scope. ───────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  match person {                                                            │
  │        ‾‾‾‾‾‾                                                              │
  └────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Str.len does not exist. ──────────────────────────────────┐
+│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  …rs } => Str.len(first_name) > Str.len(others.last_name)                  │
  │           ‾‾‾‾‾‾‾                                                          │
  └───────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
 
-    Str is in scope, but it has no associated len.
+    `Str` is in scope, but it has no associated `len`.
 
     It's referenced here:
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Str.len does not exist. ──────────────────────────────────┐
+│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  …name) > Str.len(others.last_name)                                        │
  │           ‾‾‾‾‾‾‾                                                          │
  └───────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
 
-    Str is in scope, but it has no associated len.
+    `Str` is in scope, but it has no associated `len`.
 
     It's referenced here:
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

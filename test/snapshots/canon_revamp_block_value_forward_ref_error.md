@@ -14,25 +14,29 @@ x = {
 UNDEFINED VARIABLE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named y in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `y` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  y + 1                                                                     │
  │  ‾                                                                         │
  └───────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable y is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `y` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  y = 5                                                                     │
  │  ‾                                                                         │
  └───────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _y to
+    If you don't need this variable, prefix it with an underscore like `_y` to
     suppress this warning.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,

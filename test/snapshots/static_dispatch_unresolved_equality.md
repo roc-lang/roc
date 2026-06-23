@@ -12,8 +12,9 @@ result = poly() == poly()
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This is trying to compare values with ==, but their ──────┐
+│ MISSING METHOD ├─ This is trying to compare values with `==`, but their ────┐
 └┬───────────────┘  type is an unresolved type variable, which has no         │
  │                  methods.                                                  │
  │                                                                            │
@@ -25,6 +26,7 @@ MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,

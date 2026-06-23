@@ -21,10 +21,11 @@ Decode(a) : a
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:1:1:8:19
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 # PROBLEMS
+
 ┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
-└┬─────────────────────────────────────────────┘  clause inside a type        │
- │                                                declaration.                │
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
+└┬─────────────────────────────────────────────┘  `where` clause inside a     │
+ │                                                type declaration.           │
  │                                                                            │
  │  Hash(a, hasher) # After header                                            │
  │      : # After colon                                                       │
@@ -38,10 +39,12 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
  └──────────────────────────────────────────────────── where_clauses_7.md:1:1 ┘
 
     You're attempting do this here:
+
+
 ┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
-└┬─────────────────────────────────────────────┘  clause inside a type        │
- │                                                declaration.                │
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
+└┬─────────────────────────────────────────────┘  `where` clause inside a     │
+ │                                                type declaration.           │
  │                                                                            │
  │  Decode(a) : a                                                             │
  │      where [a.decode : List(U8) -> a]                                      │
@@ -49,6 +52,7 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
  └─────────────────────────────────────────────────── where_clauses_7.md:10:1 ┘
 
     You're attempting do this here:
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,

@@ -15,6 +15,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
 └┬──────────────┘  wrong type.                                                │
@@ -30,6 +31,7 @@ TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
     But the function needs the first argument to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenCurly,

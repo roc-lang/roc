@@ -11,6 +11,7 @@ type=expr
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
 └┬────────────┘                                                               │
@@ -20,6 +21,8 @@ PARSE ERROR - fuzz_crash_033.md:1:14:1:15
  └───────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
 └┬────────────┘  expected_expr_close_curly_or_comma                           │
@@ -29,6 +32,7 @@ PARSE ERROR - fuzz_crash_033.md:1:14:1:15
  └──────────────────────────────────────────────────── fuzz_crash_033.md:1:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,UpperIdent,CloseSquare,

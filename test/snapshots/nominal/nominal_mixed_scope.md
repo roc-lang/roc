@@ -27,6 +27,7 @@ UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
+
 ┌──────────────────────────┐
 │ IMPORT MUST BE TOP LEVEL ├─ Import statements must appear at the top ───────┐
 └┬─────────────────────────┘  level of a module.                              │
@@ -37,6 +38,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 
     Move this import to the top of the file, after the module header but before
     any definitions.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -46,6 +49,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
  └─────────────────────────────────────────────── nominal_mixed_scope.md:7:12 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -55,6 +60,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
  └─────────────────────────────────────────────── nominal_mixed_scope.md:10:9 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -64,6 +71,8 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
  └─────────────────────────────────────────────── nominal_mixed_scope.md:11:9 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -73,6 +82,7 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
  └─────────────────────────────────────────────── nominal_mixed_scope.md:12:9 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

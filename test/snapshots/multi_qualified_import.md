@@ -34,6 +34,7 @@ UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -43,6 +44,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -52,6 +55,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -61,6 +66,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -70,6 +77,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -79,6 +88,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -88,6 +99,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -97,6 +110,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -106,6 +121,8 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └─────────────────────────────────────────── multi_qualified_import.md:12:37 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Encoder is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
@@ -115,16 +132,20 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └──────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
 
     This type is referenced here:
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Json.Core.Utf8.defaultEncoder does not exist. ────────────┐
+│ DOES NOT EXIST ├─ `Json.Core.Utf8.defaultEncoder` does not exist. ──────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  json_encoder = Json.Core.Utf8.defaultEncoder                              │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
  └──────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
 
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name json.Core.Utf8 ─────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `json.Core.Utf8` ───┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  process : json.Core.Utf8.Encoder -> Str                                   │
@@ -132,18 +153,22 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └──────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
 
     You're attempting to use this module here:
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable encoder is defined here and then never used. ───┐
+│ UNUSED VARIABLE ├─ Variable `encoder` is defined here and then never used. ─┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  process = |encoder| "processing"                                          │
  │             ‾‾‾‾‾‾‾                                                        │
  └──────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _encoder
-    to suppress this warning.
+    If you don't need this variable, prefix it with an underscore like
+    `_encoder` to suppress this warning.
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name json.Core.Utf8 ─────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `json.Core.Utf8` ───┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  data : json.Core.Utf8.EncodedData                                         │
@@ -151,15 +176,18 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  └──────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
 
     You're attempting to use this module here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named json in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `json` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  data = json.Core.Utf8.encode("hello")                                     │
  │         ‾‾‾‾                                                               │
  └──────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

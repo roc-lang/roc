@@ -19,6 +19,7 @@ PARSE ERROR - fuzz_crash_059.md:2:14:2:15
 PARSE ERROR - fuzz_crash_059.md:2:15:2:16
 MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -28,6 +29,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └───────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -37,6 +40,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └───────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -46,6 +51,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └───────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -55,6 +62,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └───────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -64,6 +73,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └───────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -73,6 +84,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └──────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -82,6 +95,8 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └──────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -91,8 +106,10 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └──────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module B was not found in this Roc project. ────────┐
+│ MODULE NOT FOUND ├─ The module `B` was not found in this Roc project. ──────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  app[]{f:platform""}import B as                                            │
@@ -101,6 +118,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  └──────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
 
     You're attempting to use this module here:
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,UpperIdent,KwAs,

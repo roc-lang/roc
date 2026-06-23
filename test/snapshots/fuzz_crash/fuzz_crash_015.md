@@ -19,9 +19,12 @@ PARSE ERROR - fuzz_crash_015.md:3:1:3:4
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 PARSE ERROR - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
+
 LEADING ZERO
 
 Numbers cannot have leading zeros.
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
@@ -32,6 +35,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -41,6 +46,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -50,6 +57,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -59,6 +68,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -68,6 +79,8 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:3:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -77,6 +90,7 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_015.md:4:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 Int,NoSpaceDotInt,

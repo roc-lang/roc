@@ -19,17 +19,20 @@ package # Comment after keyword
 MODULE NOT FOUND - package_header_nonempty_multiline_6.md:4:3:4:11
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
 # PROBLEMS
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module SomeType was not found in this Roc project. ─┐
-└┬─────────────────┘                                                          │
+│ MODULE NOT FOUND ├─ The module `SomeType` was not found in this Roc ────────┐
+└┬─────────────────┘  project.                                                │
  │                                                                            │
  │  SomeType, # Comment after last exposed item                               │
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────── package_header_nonempty_multiline_6.md:4:3 ┘
 
     You're attempting to use this module here:
+
+
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that something is ────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `something` is ──────┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
  │                           this module.                                     │
  │                                                                            │
@@ -37,8 +40,9 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └──────────────────────────────── package_header_nonempty_multiline_6.md:3:3 ┘
 
-    You can fix this by either defining something in this module, or by
+    You can fix this by either defining `something` in this module, or by
     removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage,

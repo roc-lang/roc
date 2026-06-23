@@ -11,26 +11,30 @@ foo = if tru 0
 UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named tru in this scope. ──────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tru` in this scope. ────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  foo = if tru 0                                                            │
  │           ‾‾‾                                                              │
  └────────────────────────────────────────────── expr_if_missing_else.md:1:10 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────┐
-│ MISSING METHOD ├─ This from_numeral method is being called on a value ──────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
 └┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
  │  foo = if tru 0                                                            │
  │               ‾                                                            │
  └────────────────────────────────────────────── expr_if_missing_else.md:1:14 ┘
 
-    The value's type, which does not have a method named from_numeral, is:
+    The value's type, which does not have a method named `from_numeral`, is:
 
         {}
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,KwIf,LowerIdent,Int,

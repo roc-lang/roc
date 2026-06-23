@@ -20,6 +20,7 @@ UNEXPECTED TOKEN IN EXPRESSION - question_binop_removed.md:7:15:7:16
 UNRECOGNIZED SYNTAX - question_binop_removed.md:7:15:7:16
 TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ? is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -29,6 +30,8 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
  └──────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────────────┐
 │ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
 └┬────────────────────┘                                                       │
@@ -38,6 +41,8 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
  └──────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
 └┬──────────────┘  used.                                                      │
@@ -50,8 +55,9 @@ TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 
         [BadInput, ..]
 
-    Since this expression is used as a statement, it must evaluate to {}.
-    If you don't need the value, you can ignore it with _ =.
+    Since this expression is used as a statement, it must evaluate to `{}`.
+    If you don't need the value, you can ignore it with `_ =`.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

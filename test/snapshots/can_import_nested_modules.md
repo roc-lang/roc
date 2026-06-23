@@ -45,8 +45,9 @@ MODULE NOT FOUND - can_import_nested_modules.md:23:52:23:58
 MODULE NOT FOUND - can_import_nested_modules.md:23:68:23:74
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name Config imported ────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `Config` imported ──┐
 └┬────────────────────┘  into this Roc file.                                  │
  │                                                                            │
  │  parseConfig : Config.Settings -> Str                                      │
@@ -54,17 +55,21 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └───────────────────────────────────────── can_import_nested_modules.md:6:15 ┘
 
     You're attempting to use this module here:
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Config.toString does not exist. ──────────────────────────┐
+│ DOES NOT EXIST ├─ `Config.toString` does not exist. ────────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  parseConfig = |settings| Config.toString(settings)                        │
  │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └───────────────────────────────────────── can_import_nested_modules.md:7:26 ┘
 
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Token is qualified by the module ──────────────┐
-└┬─────────────────┘  http.Client, but that module was not found in this      │
+│ MODULE NOT FOUND ├─ The type `Token` is qualified by the module ────────────┐
+└┬─────────────────┘  `http.Client`, but that module was not found in this    │
  │                    Roc project.                                            │
  │                                                                            │
  │  authenticate : Str, Str -> HttpAuth.Token                                 │
@@ -72,17 +77,21 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:10:36 ┘
 
     You're attempting to use this type here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named login in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `login` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  authenticate = |user, pass| HttpAuth.login(user, pass)                    │
  │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
  └──────────────────────────────────────── can_import_nested_modules.md:11:29 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name Config.Parser ──────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `Config.Parser` ────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
@@ -90,8 +99,10 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:14:15 ┘
 
     You're attempting to use this module here:
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name Config.Parser ──────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `Config.Parser` ────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
@@ -99,34 +110,42 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:14:55 ┘
 
     You're attempting to use this module here:
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Config.Parser.Advanced.parseWith does not exist. ─────────┐
+│ DOES NOT EXIST ├─ `Config.Parser.Advanced.parseWith` does not exist. ───────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  Config.Parser.Advanced.parseWith(advancedConfig, input)                   │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └───────────────────────────────────────── can_import_nested_modules.md:16:5 ┘
 
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named padLeft in this scope. ──────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `padLeft` in this scope. ────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
  │                        ‾‾‾‾‾‾‾                                             │
  └──────────────────────────────────────── can_import_nested_modules.md:20:23 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────┐
-│ DOES NOT EXIST ├─ Config.defaultPadding does not exist. ────────────────────┐
+│ DOES NOT EXIST ├─ `Config.defaultPadding` does not exist. ──────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
  │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
  └──────────────────────────────────────── can_import_nested_modules.md:20:37 ┘
 
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Credentials is qualified by the module ────────┐
-└┬─────────────────┘  http.Client, but that module was not found in this      │
+│ MODULE NOT FOUND ├─ The type `Credentials` is qualified by the module ──────┐
+└┬─────────────────┘  `http.Client`, but that module was not found in this    │
  │                    Roc project.                                            │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
@@ -134,9 +153,11 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:23:24 ┘
 
     You're attempting to use this type here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Token is qualified by the module ──────────────┐
-└┬─────────────────┘  http.Client, but that module was not found in this      │
+│ MODULE NOT FOUND ├─ The type `Token` is qualified by the module ────────────┐
+└┬─────────────────┘  `http.Client`, but that module was not found in this    │
  │                    Roc project.                                            │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
@@ -144,9 +165,11 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:23:52 ┘
 
     You're attempting to use this type here:
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type Error is qualified by the module ──────────────┐
-└┬─────────────────┘  http.Client, but that module was not found in this      │
+│ MODULE NOT FOUND ├─ The type `Error` is qualified by the module ────────────┐
+└┬─────────────────┘  `http.Client`, but that module was not found in this    │
  │                    Roc project.                                            │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
@@ -154,15 +177,18 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  └──────────────────────────────────────── can_import_nested_modules.md:23:68 ┘
 
     You're attempting to use this type here:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named validate in this scope. ─────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `validate` in this scope. ───────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  validateAuth = |creds| HttpAuth.validate(creds)                           │
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └──────────────────────────────────────── can_import_nested_modules.md:24:24 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,

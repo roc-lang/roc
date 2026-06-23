@@ -11,6 +11,7 @@ a=()->b()()()
 EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
 UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
+
 ┌─────────────────────────┐
 │ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
 └┬────────────────────────┘  it is empty.                                     │
@@ -19,16 +20,19 @@ UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
  │    ‾‾                                                                      │
  └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:3 ┘
 
-    If you want to represent nothing, try using an empty record: {}.
+    If you want to represent nothing, try using an empty record: `{}`.
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named b in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  a=()->b()()()                                                             │
  │        ‾                                                                   │
  └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

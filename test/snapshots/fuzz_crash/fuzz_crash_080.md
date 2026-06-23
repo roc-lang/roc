@@ -15,6 +15,7 @@ c : L
 UNDECLARED TYPE - fuzz_crash_080.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type L is not declared in this scope. ───────────────┐
 └┬────────────────┘                                                           │
@@ -24,6 +25,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
  └───────────────────────────────────────────────────── fuzz_crash_080.md:1:5 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -38,6 +41,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

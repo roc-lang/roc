@@ -17,31 +17,32 @@ main = {
 DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:31
 UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
 # PROBLEMS
+
 ┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name MyModule is being redeclared in this ──────┐
-└┬─────────────────────┘  scope.                                              │
+│ DUPLICATE DEFINITION ├─ The name `MyModule` is being redeclared here. ──────┐
+└┬─────────────────────┘                                                      │
  │                                                                            │
  │  import http.Client as MyModule                                            │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └─────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
 
-    The redeclaration is here:
+    In this scope, `MyModule` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json as MyModule                                         │
+      │  ‾                                                                    │
+      └────────────────────────────────── can_import_aliased_conflicts.md:1:1 ┘
 
-    But MyModule was already defined here:
-      ┌─────────────────────────────────────────
-      can_import_aliased_conflicts.md:1:1
-      │
-    1 │ import json.Json as MyModule
-      │ ^
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named parse in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  x = MyModule.parse                                                        │
  │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

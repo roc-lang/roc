@@ -13,8 +13,9 @@ describe = |rec| match rec {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The first pattern in this match is incompatible. ──────────┐
+│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
 └┬──────────────┘                                                             │
  │                                                                            │
  │  describe = |rec| match rec {                                              │
@@ -27,13 +28,14 @@ TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 
         { x: _field, y: _field2 }
 
-    But the expression between the match parenthesis has the type:
+    But the expression between the `match` parenthesis has the type:
 
         { x: U64, y: U64, z: U64 }
 
     These can never match! Either the pattern or expression has a problem.
-    Hint: This pattern doesn't bind the z field. Match it explicitly with z: _,
-    or add .. to match all the remaining fields.
+    Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
+    _`, or add `..` to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,OpArrow,UpperIdent,

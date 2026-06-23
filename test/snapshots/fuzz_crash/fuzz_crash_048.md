@@ -25,9 +25,12 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
+
 ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
+
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Thing is not declared in this scope. ───────────┐
@@ -38,6 +41,8 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_048.md:2:7 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -47,6 +52,8 @@ ASCII control characters are not allowed in Roc source code.
  └──────────────────────────────────────────────────── fuzz_crash_048.md:6:14 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -56,6 +63,8 @@ ASCII control characters are not allowed in Roc source code.
  └──────────────────────────────────────────────────── fuzz_crash_048.md:7:13 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -66,6 +75,8 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -76,6 +87,8 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -86,6 +99,8 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -97,6 +112,8 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -107,6 +124,8 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -117,6 +136,7 @@ ASCII control characters are not allowed in Roc source code.
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

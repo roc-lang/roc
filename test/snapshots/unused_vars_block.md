@@ -31,8 +31,9 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable unused_var is defined here and then never ──────┐
+│ UNUSED VARIABLE ├─ Variable `unused_var` is defined here and then never ────┐
 └┬────────────────┘  used.                                                    │
  │                                                                            │
  │  unused_var = 42                                                           │
@@ -40,17 +41,20 @@ UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
  └────────────────────────────────────────────────── unused_vars_block.md:5:5 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _unused_var to suppress this warning.
+    `_unused_var` to suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable another_unused is defined here and then never ──┐
-└┬────────────────┘  used.                                                    │
+│ UNUSED VARIABLE ├─ Variable `another_unused` is defined here and then ──────┐
+└┬────────────────┘  never used.                                              │
  │                                                                            │
  │  another_unused = "hello"                                                  │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
  └───────────────────────────────────────────────── unused_vars_block.md:11:5 ┘
 
     If you don't need this variable, prefix it with an underscore like
-    _another_unused to suppress this warning.
+    `_another_unused` to suppress this warning.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

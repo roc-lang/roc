@@ -10,6 +10,7 @@ F
 # EXPECTED
 PARSE ERROR - fuzz_crash_004.md:2:1:2:1
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -31,6 +32,7 @@ PARSE ERROR - fuzz_crash_004.md:2:1:2:1
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
 # TOKENS
 ~~~zig
 UpperIdent,

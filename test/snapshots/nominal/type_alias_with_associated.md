@@ -10,6 +10,7 @@ Foo : [A, B, C].{ x = 5 }
 # EXPECTED
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 # PROBLEMS
+
 ┌──────────────────────────────────┐
 │ TYPE ALIAS WITH ASSOCIATED ITEMS ├─ Type aliases cannot have associated ────┐
 └┬─────────────────────────────────┘  items (such as types or methods).       │
@@ -20,6 +21,7 @@ TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 
     Only nominal types (defined with :=) can have associated items. Type
     aliases (defined with :) only define names for other types.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,CloseCurly,

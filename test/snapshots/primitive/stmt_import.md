@@ -13,6 +13,7 @@ PARSE ERROR - stmt_import.md:1:19:1:22
 PARSE ERROR - stmt_import.md:1:22:1:23
 PARSE ERROR - stmt_import.md:1:27:1:28
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -22,6 +23,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
  └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -31,6 +34,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
  └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -40,6 +45,8 @@ PARSE ERROR - stmt_import.md:1:27:1:28
  └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -61,6 +68,7 @@ PARSE ERROR - stmt_import.md:1:27:1:28
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,

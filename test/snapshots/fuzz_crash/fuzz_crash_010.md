@@ -19,9 +19,12 @@ PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
+
 ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
+
+
 
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
@@ -30,6 +33,8 @@ ASCII control characters are not allowed in Roc source code.
  │  "on        (string 'onmo %')))                                            │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └───────────────────────────────────────────────────── fuzz_crash_010.md:5:5 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
@@ -52,6 +57,8 @@ ASCII control characters are not allowed in Roc source code.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -61,6 +68,8 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -70,6 +79,8 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -79,6 +90,7 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpenCurly,LowerIdent,Comma,

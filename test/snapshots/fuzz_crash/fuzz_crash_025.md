@@ -41,6 +41,7 @@ PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -62,6 +63,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -71,6 +74,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
  └───────────────────────────────────────────────────── fuzz_crash_025.md:9:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -80,6 +85,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
  └───────────────────────────────────────────────────── fuzz_crash_025.md:9:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -89,6 +96,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
  └─────────────────────────────────────────────────── fuzz_crash_025.md:12:48 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -110,6 +119,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -119,6 +130,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
  └──────────────────────────────────────────────────── fuzz_crash_025.md:13:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -128,6 +141,8 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
  └──────────────────────────────────────────────────── fuzz_crash_025.md:13:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -139,6 +154,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
     The inferred type is:
 
         U128
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

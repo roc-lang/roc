@@ -97,6 +97,7 @@ PARSE ERROR - fuzz_hang_002.md:1:86:1:87
 PARSE ERROR - fuzz_hang_002.md:1:87:1:88
 PARSE ERROR - fuzz_hang_002.md:1:88:1:89
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -106,6 +107,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -115,6 +118,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -124,6 +129,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -133,6 +140,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -142,6 +151,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -151,6 +162,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -160,6 +173,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -169,6 +184,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -178,6 +195,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └────────────────────────────────────────────────────── fuzz_hang_002.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -187,6 +206,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -196,6 +217,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -205,6 +228,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -214,6 +239,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -223,6 +250,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -232,6 +261,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:15 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -241,6 +272,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -250,6 +283,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:17 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -259,6 +294,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -268,6 +305,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -277,6 +316,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -286,6 +327,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -295,6 +338,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -304,6 +349,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -313,6 +360,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -322,6 +371,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -331,6 +382,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -340,6 +393,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -349,6 +404,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -358,6 +415,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -367,6 +426,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -376,6 +437,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -385,6 +448,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -394,6 +459,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -403,6 +470,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:34 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -412,6 +481,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -421,6 +492,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -430,6 +503,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:37 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -439,6 +514,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -448,6 +525,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -457,6 +536,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:40 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -466,6 +547,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:41 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -475,6 +558,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:42 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -484,6 +569,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:43 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -493,6 +580,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:44 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -502,6 +591,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:45 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -511,6 +602,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:46 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -520,6 +613,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:47 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -529,6 +624,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:48 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -538,6 +635,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:49 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -547,6 +646,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:50 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -556,6 +657,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:51 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -565,6 +668,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:52 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -574,6 +679,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:53 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -583,6 +690,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:54 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -592,6 +701,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:55 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -601,6 +712,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:56 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -610,6 +723,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:57 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -619,6 +734,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:58 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -628,6 +745,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:59 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -637,6 +756,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:60 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -646,6 +767,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:61 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -655,6 +778,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:62 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -664,6 +789,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:63 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -673,6 +800,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:64 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -682,6 +811,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:65 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -691,6 +822,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:66 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -700,6 +833,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:67 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -709,6 +844,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:68 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -718,6 +855,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:69 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -727,6 +866,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:70 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -736,6 +877,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:71 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -745,6 +888,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:72 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -754,6 +899,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:73 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -763,6 +910,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:74 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -772,6 +921,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:75 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -781,6 +932,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:76 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -790,6 +943,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:77 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -799,6 +954,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:78 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -808,6 +965,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:79 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -817,6 +976,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:80 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -826,6 +987,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:81 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -835,6 +998,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:82 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -844,6 +1009,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:83 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -853,6 +1020,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:84 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -862,6 +1031,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:85 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -871,6 +1042,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:86 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -880,6 +1053,8 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:87 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -889,6 +1064,7 @@ PARSE ERROR - fuzz_hang_002.md:1:88:1:89
  └───────────────────────────────────────────────────── fuzz_hang_002.md:1:88 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,

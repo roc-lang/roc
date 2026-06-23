@@ -22,6 +22,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -31,6 +32,8 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
  └─────────────────────────────────────────── nominal_import_wildcard.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -40,6 +43,8 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
  └──────────────────────────────────────────── nominal_import_wildcard.md:3:7 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -49,6 +54,8 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
  └──────────────────────────────────────────── nominal_import_wildcard.md:6:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -58,6 +65,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
  └──────────────────────────────────────────── nominal_import_wildcard.md:9:9 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,DotStar,

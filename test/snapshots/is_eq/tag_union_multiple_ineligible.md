@@ -15,6 +15,7 @@ expect result == result
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ TYPE DOES NOT SUPPORT EQUALITY ├─ This expression is doing an equality ─────┐
 └┬───────────────────────────────┘  check on a type that doesn't support      │
@@ -47,6 +48,7 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
             Function equality is not supported.
     Hint: Tag unions only have an is_eq method if all of their payload types
     have is_eq methods.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,UpperIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,

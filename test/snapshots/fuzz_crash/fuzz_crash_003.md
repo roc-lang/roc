@@ -14,6 +14,7 @@ PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
 └┬────────────────┘                                                           │
@@ -21,6 +22,8 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
  │  = "te                                                                     │
  │    ‾‾‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
@@ -31,6 +34,8 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
  └───────────────────────────────────────────────────── fuzz_crash_003.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -40,6 +45,8 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
  └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -49,6 +56,8 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
  └───────────────────────────────────────────────────── fuzz_crash_003.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -58,6 +67,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
  └───────────────────────────────────────────────────── fuzz_crash_003.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 OpAssign,StringStart,StringPart,StringEnd,

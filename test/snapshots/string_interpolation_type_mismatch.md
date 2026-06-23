@@ -13,6 +13,7 @@ y = "value: ${x}"
 # EXPECTED
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
 └┬──────────────┘                                                             │
@@ -28,6 +29,7 @@ TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
     But you are trying to use it as:
 
         Str
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

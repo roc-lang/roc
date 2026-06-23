@@ -21,6 +21,7 @@ Baz : Foo
 TYPE REDECLARED - type_scope_integration.md:5:1:5:10
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
+
 ┌─────────────────┐
 │ TYPE REDECLARED ├─ The type Foo is being redeclared. ───────────────────────┐
 └┬────────────────┘                                                           │
@@ -32,11 +33,12 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
     The redeclaration is here:
 
     But Foo was already declared here:
-      ┌───────────────────────────────────────────────
-      type_scope_integration.md:2:1
-      │
-    2 │ Foo : U64
-      │ ^^^^^^^^^
+      ┌───────────────────────────────────────────────────────────────────────┐
+    2 │  Foo : U64                                                            │
+      │  ‾‾‾‾‾‾‾‾‾                                                            │
+      └──────────────────────────────────────── type_scope_integration.md:2:1 ┘
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type SomeUndeclaredType is not declared in this ─────┐
 └┬────────────────┘  scope.                                                   │
@@ -46,6 +48,7 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
  └───────────────────────────────────────────── type_scope_integration.md:8:7 ┘
 
     This type is referenced here:
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

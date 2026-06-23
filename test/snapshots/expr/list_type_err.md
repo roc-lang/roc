@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - list_type_err.md:1:8:1:15
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -21,6 +22,7 @@ TYPE MISMATCH - list_type_err.md:1:8:1:15
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,

@@ -10,6 +10,7 @@ I.5
 # EXPECTED
 TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
 └┬──────────────┘                                                             │
@@ -25,6 +26,7 @@ TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
     But you are trying to use it as:
 
         [I, ..]
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotInt,

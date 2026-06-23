@@ -41,6 +41,7 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
 └┬──────────────┘  wrong type.                                                │
@@ -53,9 +54,10 @@ TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 
         b
 
-    But f needs the first argument to be:
+    But `f` needs the first argument to be:
 
         a
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

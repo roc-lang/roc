@@ -30,24 +30,30 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
+
 VAR REASSIGNMENT ERROR
 
-Cannot reassign a var from outside the function where it was declared.
-Variables declared with var can only be reassigned within the same function scope.
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+
+
 VAR REASSIGNMENT ERROR
 
-Cannot reassign a var from outside the function where it was declared.
-Variables declared with var can only be reassigned within the same function scope.
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable items is defined here and then never used. ─────┐
+│ UNUSED VARIABLE ├─ Variable `items` is defined here and then never used. ───┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processItems = |items| {                                                  │
  │                  ‾‾‾‾‾                                                     │
  └─────────────────────────────────────── can_var_scoping_regular_var.md:2:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _items
+    If you don't need this variable, prefix it with an underscore like `_items`
     to suppress this warning.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

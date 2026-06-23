@@ -20,6 +20,7 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type UnknownType is not declared in this scope. ─────┐
 └┬────────────────┘                                                           │
@@ -29,6 +30,8 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
  └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type UndeclaredResult is not declared in this ───────┐
 └┬────────────────┘  scope.                                                   │
@@ -38,18 +41,22 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
  └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable value is defined here and then never used. ─────┐
+│ UNUSED VARIABLE ├─ Variable `value` is defined here and then never used. ───┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processValue = |value| {                                                  │
  │                  ‾‾‾‾‾                                                     │
  └───────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
 
-    If you don't need this variable, prefix it with an underscore like _value
+    If you don't need this variable, prefix it with an underscore like `_value`
     to suppress this warning.
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name SomeModule ─────────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `SomeModule` ───────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  AnotherType : SomeModule.MissingType                                      │
@@ -57,6 +64,7 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
  └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
     You're attempting to use this module here:
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

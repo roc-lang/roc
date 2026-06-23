@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 INVALID ESCAPE SEQUENCE - weird_escape.md:1:5:1:7
 # PROBLEMS
+
 ┌─────────────────────────┐
 │ INVALID ESCAPE SEQUENCE ├─ This escape sequence is not recognized. ─────────┐
 └┬────────────────────────┘                                                   │
@@ -17,6 +18,7 @@ INVALID ESCAPE SEQUENCE - weird_escape.md:1:5:1:7
  │  "abc\qdef"                                                                │
  │      ‾‾                                                                    │
  └─────────────────────────────────────────────────────── weird_escape.md:1:5 ┘
+
 
 # TOKENS
 ~~~zig

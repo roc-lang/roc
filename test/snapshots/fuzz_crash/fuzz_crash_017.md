@@ -12,6 +12,7 @@ foo = "hello ${namF
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
 └┬────────────┘  string_expected_close_interpolation                          │
@@ -21,6 +22,8 @@ UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
  └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────────┐
 │ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
 └┬────────────────────┘                                                       │
@@ -30,6 +33,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
  └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,

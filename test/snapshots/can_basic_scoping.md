@@ -23,22 +23,21 @@ outerFunc = |_| {
 # EXPECTED
 DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
+
 ┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name x is being redeclared in this scope. ──────┐
+│ DUPLICATE DEFINITION ├─ The name `x` is being redeclared here. ─────────────┐
 └┬─────────────────────┘                                                      │
  │                                                                            │
  │  x = 20  # Should shadow top-level x                                       │
  │  ‾                                                                         │
  └────────────────────────────────────────────────── can_basic_scoping.md:7:5 ┘
 
-    The redeclaration is here:
+    In this scope, `x` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    2 │  x = 5                                                                │
+      │  ‾                                                                    │
+      └───────────────────────────────────────────── can_basic_scoping.md:2:1 ┘
 
-    But x was already defined here:
-      ┌────────────────────────────────────────────────────
-      can_basic_scoping.md:2:1
-      │
-    2 │ x = 5
-      │ ^
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,

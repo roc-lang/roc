@@ -18,6 +18,7 @@ PARSE ERROR - module.md:1:3:1:4
 PARSE ERROR - module.md:2:2:2:3
 PARSE ERROR - module.md:3:1:3:2
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -27,6 +28,8 @@ PARSE ERROR - module.md:3:1:3:2
  └───────────────────────────────────────────────────────────── module.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -36,6 +39,8 @@ PARSE ERROR - module.md:3:1:3:2
  └───────────────────────────────────────────────────────────── module.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -45,6 +50,8 @@ PARSE ERROR - module.md:3:1:3:2
  └───────────────────────────────────────────────────────────── module.md:2:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -54,6 +61,7 @@ PARSE ERROR - module.md:3:1:3:2
  └───────────────────────────────────────────────────────────── module.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 LowerIdent,Comma,

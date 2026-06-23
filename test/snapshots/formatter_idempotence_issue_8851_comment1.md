@@ -11,15 +11,17 @@ a=0->b
 # EXPECTED
 UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named b in this scope. ────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  a=0->b                                                                    │
  │       ‾                                                                    │
  └────────────────────────── formatter_idempotence_issue_8851_comment1.md:1:6 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,

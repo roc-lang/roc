@@ -62,6 +62,7 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ I'm having trouble with this bool operation. ──────────────┐
 └┬──────────────┘                                                             │
@@ -70,12 +71,14 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
  │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
 
-    Both sides of and must be Bool values, but the right side is:
+    Both sides of `and` must be `Bool` values, but the right side is:
 
         { data: a, ..b }, a -> { data: a, ..b }
 
     Note: Roc does not have "truthiness". You must convert values to bools
     yourself.
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -87,6 +90,7 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

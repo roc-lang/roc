@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -21,6 +22,7 @@ INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
     The inferred type is:
 
         U8
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,

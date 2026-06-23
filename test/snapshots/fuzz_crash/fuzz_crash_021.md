@@ -19,6 +19,7 @@ PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
 └┬────────────────┘                                                           │
@@ -26,6 +27,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  │  Fli/main.roc" }                                                           │
  │              ‾‾‾                                                           │
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
@@ -48,6 +51,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -57,6 +62,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -66,6 +73,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -75,6 +84,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -84,6 +95,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -93,6 +106,8 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
 └┬────────────┘  expected_ty_anno_close_round_or_comma                        │
@@ -102,6 +117,7 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
  └───────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpSlash,LowerIdent,NoSpaceDotLowerIdent,StringStart,StringPart,StringEnd,

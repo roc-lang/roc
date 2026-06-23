@@ -19,15 +19,18 @@ main! = print_msg!("Hello, world!")
 UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
 EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  print_msg! = |msg| Stdout.line!(msg)                                      │
  │                     ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └─────────────────────────────── effectful_with_effectful_annotation.md:7:20 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌───────────────────────────┐
 │ EFFECTFUL TOP-LEVEL VALUE ├─ This top-level definition performs an effect ──┐
 └┬──────────────────────────┘  while initializing.                            │
@@ -37,6 +40,7 @@ EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
  └──────────────────────────────── effectful_with_effectful_annotation.md:9:9 ┘
 
     Move the effect into a function body so it runs when the function is called.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

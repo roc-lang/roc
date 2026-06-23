@@ -12,6 +12,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token & is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -21,6 +22,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
  └───────────────────────────────────────── record_field_update_error.md:1:10 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 31 is not expected in a ───┐
 └┬────────────────────────────────────┘  type annotation.                     │
@@ -30,6 +33,8 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
  └───────────────────────────────────────── record_field_update_error.md:1:17 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -40,6 +45,7 @@ DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

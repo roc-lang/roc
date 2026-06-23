@@ -26,6 +26,7 @@ UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
 MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -35,6 +36,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
  └────────────────────────────────────────────────── type_declarations.md:3:8 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
@@ -44,6 +47,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
  └───────────────────────────────────────────────── type_declarations.md:3:13 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
 └┬────────────────┘                                                           │
@@ -53,6 +58,8 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
  └───────────────────────────────────────────────── type_declarations.md:5:19 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
@@ -62,8 +69,10 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
  └───────────────────────────────────────────────── type_declarations.md:5:32 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name Module imported ────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `Module` imported ──┐
 └┬────────────────────┘  into this Roc file.                                  │
  │                                                                            │
  │  MyType2 : Module.Thingy                                                   │
@@ -71,6 +80,7 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
  └──────────────────────────────────────────────── type_declarations.md:13:11 ┘
 
     You're attempting to use this module here:
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,

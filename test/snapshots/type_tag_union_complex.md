@@ -34,22 +34,21 @@ main! = |_| {}
 # EXPECTED
 DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
+
 ┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name Try is being redeclared in this scope. ────┐
+│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
 └┬─────────────────────┘                                                      │
  │                                                                            │
  │  Try : [Success(Str), Error(Str), Warning(Str, I32)]                       │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                       │
  └───────────────────────────────────────────── type_tag_union_complex.md:7:1 ┘
 
-    The redeclaration is here:
+    In this scope, `Try` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  app [main!] { pf: platform "../basic-cli/main.roc" }                 │
+      │  ‾                                                                    │
+      └──────────────────────────────────────── type_tag_union_complex.md:1:1 ┘
 
-    But Try was already defined here:
-      ┌───────────────────────────────────────────────
-      type_tag_union_complex.md:1:1
-      │
-    1 │ app [main!] { pf: platform "../basic-cli/main.roc" }
-      │ ^
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

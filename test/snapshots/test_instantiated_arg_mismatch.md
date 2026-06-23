@@ -15,6 +15,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -26,6 +27,7 @@ TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenCurly,

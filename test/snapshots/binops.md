@@ -26,8 +26,9 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
+
 ┌───────────────┐
-│ TYPE MISMATCH ├─ The first pattern in this match is incompatible. ──────────┐
+│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
 └┬──────────────┘                                                             │
  │                                                                            │
  │  None ?? 0,                                                                │
@@ -38,11 +39,12 @@ TYPE MISMATCH - binops.md:16:5:16:5
 
         Try(ok, err)
 
-    But the expression between the match parenthesis has the type:
+    But the expression between the `match` parenthesis has the type:
 
         [None, ..]
 
     These can never match! Either the pattern or expression has a problem.
+
 # TOKENS
 ~~~zig
 OpenRound,

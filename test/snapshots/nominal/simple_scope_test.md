@@ -16,15 +16,17 @@ Outer := [A].{
 # EXPECTED
 UNDEFINED VARIABLE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named inner_val in this scope. ────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `inner_val` in this scope. ──────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  outer_val = inner_val                                                     │
  │              ‾‾‾‾‾‾‾‾‾                                                     │
  └───────────────────────────────────────────────── simple_scope_test.md:6:17 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

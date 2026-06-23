@@ -33,6 +33,7 @@ TYPE MISMATCH - annotations.md:16:28:16:31
 TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -44,6 +45,8 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
     The type was determined to be:
 
         U8
+
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -55,6 +58,8 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
     The type was determined to be:
 
         U64
+
+
 ┌─────────────────────┐
 │ INVALID NOMINAL TAG ├─ I'm having trouble with this nominal tag. ───────────┐
 └┬────────────────────┘                                                       │
@@ -70,6 +75,7 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
     But the nominal type needs it to be:
 
         Pair(a, a)
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseSquare,

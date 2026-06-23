@@ -10,6 +10,7 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ? is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -19,6 +20,7 @@ UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
  └───────────────────────────────────────────────── suffixed_question.md:1:14 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,OpDoubleQuestion,NoSpaceOpQuestion,

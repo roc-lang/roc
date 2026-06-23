@@ -14,6 +14,7 @@ PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -23,6 +24,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -32,6 +35,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
  └───────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type S is not declared in this scope. ───────────────┐
 └┬────────────────┘                                                           │
@@ -41,6 +46,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -51,6 +58,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

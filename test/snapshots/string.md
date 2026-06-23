@@ -31,6 +31,7 @@ PARSE ERROR - string.md:13:1:13:2
 PARSE ERROR - string.md:13:2:13:3
 PARSE ERROR - string.md:13:3:13:3
 # PROBLEMS
+
 ┌─────────────────────────────────┐
 │ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
 └┬────────────────────────────────┘  valid.                                   │
@@ -38,6 +39,8 @@ PARSE ERROR - string.md:13:3:13:3
  │  "\u",                                                                     │
  │   ‾‾                                                                       │
  └───────────────────────────────────────────────────────────── string.md:4:3 ┘
+
+
 
 ┌─────────────────────────────────┐
 │ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
@@ -47,6 +50,8 @@ PARSE ERROR - string.md:13:3:13:3
  │   ‾‾                                                                       │
  └───────────────────────────────────────────────────────────── string.md:5:3 ┘
 
+
+
 ┌─────────────────────────────────┐
 │ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
 └┬────────────────────────────────┘  valid.                                   │
@@ -54,6 +59,8 @@ PARSE ERROR - string.md:13:3:13:3
  │  "\u(",                                                                    │
  │   ‾‾‾                                                                      │
  └───────────────────────────────────────────────────────────── string.md:6:3 ┘
+
+
 
 ┌─────────────────────────────────┐
 │ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
@@ -63,6 +70,8 @@ PARSE ERROR - string.md:13:3:13:3
  │   ‾‾‾‾                                                                     │
  └───────────────────────────────────────────────────────────── string.md:7:3 ┘
 
+
+
 ┌─────────────────────────────────┐
 │ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
 └┬────────────────────────────────┘  valid.                                   │
@@ -70,6 +79,8 @@ PARSE ERROR - string.md:13:3:13:3
  │  "\u(K)",                                                                  │
  │   ‾‾‾‾‾                                                                    │
  └───────────────────────────────────────────────────────────── string.md:8:3 ┘
+
+
 
 ┌─────────────────────────┐
 │ INVALID ESCAPE SEQUENCE ├─ This escape sequence is not recognized. ─────────┐
@@ -80,6 +91,8 @@ PARSE ERROR - string.md:13:3:13:3
  │                                                                            │
  └──────────────────────────────────────────────────────────── string.md:13:2 ┘
 
+
+
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
 └┬────────────────┘                                                           │
@@ -87,6 +100,8 @@ PARSE ERROR - string.md:13:3:13:3
  │  "\                                                                        │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────────── string.md:13:1 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
@@ -97,6 +112,8 @@ PARSE ERROR - string.md:13:3:13:3
  └──────────────────────────────────────────────────────────── string.md:13:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -106,6 +123,8 @@ PARSE ERROR - string.md:13:3:13:3
  └──────────────────────────────────────────────────────────── string.md:13:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -115,6 +134,7 @@ PARSE ERROR - string.md:13:3:13:3
  └──────────────────────────────────────────────────────────── string.md:13:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

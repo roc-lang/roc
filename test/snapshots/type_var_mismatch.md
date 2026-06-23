@@ -25,6 +25,7 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
 └┬──────────────┘  needed.                                                    │
@@ -34,15 +35,14 @@ TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
  └────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
 
     The type was determined to be non-numeric here:
-       ┌─────────────────────────────────────────────────
-       type_var_mismatch.md:11:11
-       │
-    11 │ 	result = List.first(list).ok_or(item)
-       │ 	         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+       ┌──────────────────────────────────────────────────────────────────────┐
+    11 │   result = List.first(list).ok_or(item)                              │
+       │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
+       └────────────────────────────────────────── type_var_mismatch.md:11:11 ┘
     Other code expects this to have the type:
 
         item
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

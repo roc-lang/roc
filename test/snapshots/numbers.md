@@ -30,17 +30,24 @@ INVALID NUMBER - numbers.md:9:5:9:11
 INVALID NUMBER - numbers.md:10:5:10:10
 INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
-UPPERCASE BASE
-
-Number base prefixes must be lowercase (0x, 0o, 0b).
 
 UPPERCASE BASE
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
+
+
 UPPERCASE BASE
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
+
+
+
+UPPERCASE BASE
+
+Number base prefixes must be lowercase (0x, 0o, 0b).
+
+
 
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
@@ -53,6 +60,8 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
     The inferred type is:
 
         Dec
+
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -64,6 +73,8 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
     The inferred type is:
 
         Dec
+
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -75,6 +86,8 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
     The inferred type is:
 
         Dec
+
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -86,6 +99,7 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
     The inferred type is:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenRound,

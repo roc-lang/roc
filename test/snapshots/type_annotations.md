@@ -39,6 +39,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:11:1:11:32
 DECLARATION HAS NO VALUE - type_annotations.md:13:1:15:2
 DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Thing is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -48,6 +49,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  └─────────────────────────────────────────────────── type_annotations.md:3:7 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
 └┬────────────────┘                                                           │
@@ -57,6 +60,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  └────────────────────────────────────────────────── type_annotations.md:9:14 ┘
 
     This type is referenced here:
+
+
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
@@ -66,6 +71,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  └───────────────────────────────────────────────── type_annotations.md:11:13 ┘
 
     This type is referenced here:
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -76,6 +83,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -86,6 +95,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -96,6 +107,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -106,6 +119,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -116,6 +131,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -126,6 +143,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -138,6 +157,8 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -151,6 +172,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

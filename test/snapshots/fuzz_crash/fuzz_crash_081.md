@@ -12,6 +12,7 @@ PARSE ERROR - fuzz_crash_081.md:1:6:1:7
 PARSE ERROR - fuzz_crash_081.md:1:7:1:8
 PARSE ERROR - fuzz_crash_081.md:1:8:1:9
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -21,6 +22,8 @@ PARSE ERROR - fuzz_crash_081.md:1:8:1:9
  └───────────────────────────────────────────────────── fuzz_crash_081.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -30,6 +33,8 @@ PARSE ERROR - fuzz_crash_081.md:1:8:1:9
  └───────────────────────────────────────────────────── fuzz_crash_081.md:1:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -39,6 +44,7 @@ PARSE ERROR - fuzz_crash_081.md:1:8:1:9
  └───────────────────────────────────────────────────── fuzz_crash_081.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,Dot,NoSpaceOpenRound,CloseRound,

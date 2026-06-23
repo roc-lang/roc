@@ -11,6 +11,7 @@ app[]{f:platform"",r:"
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
 # PROBLEMS
+
 ┌─────────────────┐
 │ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
 └┬────────────────┘                                                           │
@@ -18,6 +19,7 @@ UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
  │  app[]{f:platform"",r:"                                                    │
  │                       ‾                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_058.md:1:22 ┘
+
 
 # TOKENS
 ~~~zig

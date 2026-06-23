@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:6:1:13
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -21,6 +22,7 @@ TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:6:1:13
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,Comma,OpenSquare,Int,Comma,Int,CloseSquare,CloseSquare,

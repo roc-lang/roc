@@ -32,6 +32,7 @@ UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: expected_package_or_platform_name ─┐
 └┬────────────┘                                                               │
@@ -41,6 +42,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └───────────────────────────────────────────────────── fuzz_crash_022.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token platform is not expected ──┐
 └┬────────────────────────────────────┘  in a type annotation.                │
@@ -50,6 +53,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -59,6 +64,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -68,6 +75,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -77,6 +86,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -86,6 +97,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ) is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -95,6 +108,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:6:27 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token else is not expected in an ─────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -104,6 +119,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └──────────────────────────────────────────────────── fuzz_crash_022.md:6:35 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -113,6 +130,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └───────────────────────────────────────────────────── fuzz_crash_022.md:8:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
 └┬────────────┘  expected_expr_close_round_or_comma                           │
@@ -122,6 +141,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token  is not expected in an ─────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -131,6 +152,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌────────────────┐
 │ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
 └┬───────────────┘  syntax.                                                   │
@@ -139,20 +162,26 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
  │                    ‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
+
+
 INVALID IF CONDITION
 
-The condition in this if expression could not be processed.
-The condition must be a valid expression that evaluates to a Bool value (Bool.true or Bool.false).
+The condition in this `if` expression could not be processed.
+The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable id is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `id` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  getUser = |id| if (id > 1!) "big" else "l"                                │
  │             ‾‾                                                             │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:6:12 ┘
 
-    If you don't need this variable, prefix it with an underscore like _id to
+    If you don't need this variable, prefix it with an underscore like `_id` to
     suppress this warning.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -163,6 +192,8 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -173,6 +204,7 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

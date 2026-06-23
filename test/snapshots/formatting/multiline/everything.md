@@ -141,10 +141,11 @@ UNSUPPORTED WHERE CLAUSE - everything.md:65:3:65:6
 DECLARATION HAS NO VALUE - everything.md:62:1:66:3
 NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
+
 ┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
-└┬─────────────────────────────────────────────┘  clause inside a type        │
- │                                                declaration.                │
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
+└┬─────────────────────────────────────────────┘  `where` clause inside a     │
+ │                                                type declaration.           │
  │                                                                            │
  │  A(a) : a                                                                  │
  │      where [                                                               │
@@ -161,10 +162,12 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
  └──────────────────────────────────────────────────────── everything.md:12:1 ┘
 
     You're attempting do this here:
+
+
 ┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
-└┬─────────────────────────────────────────────┘  clause inside a type        │
- │                                                declaration.                │
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
+└┬─────────────────────────────────────────────┘  `where` clause inside a     │
+ │                                                type declaration.           │
  │                                                                            │
  │  B(b) : b                                                                  │
  │      where [                                                               │
@@ -181,96 +184,116 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
  └──────────────────────────────────────────────────────── everything.md:24:1 ┘
 
     You're attempting do this here:
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:98:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────────── everything.md:103:4 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────────── everything.md:108:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────────── everything.md:114:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _b to
+    If you don't need this variable, prefix it with an underscore like `_b` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h1 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h1` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h1 = {                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:69:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h1 to
+    If you don't need this variable, prefix it with an underscore like `_h1` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h2 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h2` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h2 = h(                                                                   │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:77:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h2 to
+    If you don't need this variable, prefix it with an underscore like `_h2` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h3 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h3` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h3 = A(                                                                   │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:81:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h3 to
+    If you don't need this variable, prefix it with an underscore like `_h3` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h4 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h4` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h4 = [                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:85:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h4 to
+    If you don't need this variable, prefix it with an underscore like `_h4` to
     suppress this warning.
+
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable h5 is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `h5` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  h5 = (                                                                    │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:89:2 ┘
 
-    If you don't need this variable, prefix it with an underscore like _h5 to
+    If you don't need this variable, prefix it with an underscore like `_h5` to
     suppress this warning.
+
+
 ┌──────────────────────────┐
 │ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax A is not supported. ────┐
 └┬─────────────────────────┘                                                  │
@@ -280,7 +303,9 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
  └──────────────────────────────────────────────────────── everything.md:64:3 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like where [a.methodName(args) -> ret] instead.
+    method constraints like `where [a.methodName(args) -> ret]` instead.
+
+
 ┌──────────────────────────┐
 │ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax B is not supported. ────┐
 └┬─────────────────────────┘                                                  │
@@ -290,7 +315,9 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
  └──────────────────────────────────────────────────────── everything.md:65:3 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like where [a.methodName(args) -> ret] instead.
+    method constraints like `where [a.methodName(args) -> ret]` instead.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -305,6 +332,8 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────┐
 │ NON-EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
 └┬─────────────────────┘  cases.                                              │
@@ -342,7 +371,8 @@ NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
     Missing patterns:
             Z4 []
 
-    Hint: Add branches to handle these cases, or use _ to match anything.
+    Hint: Add branches to handle these cases, or use `_` to match anything.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

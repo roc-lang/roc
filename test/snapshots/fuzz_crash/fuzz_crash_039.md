@@ -13,6 +13,7 @@ UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
 PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 # PROBLEMS
+
 ┌───────────────────────┐
 │ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
 └┬──────────────────────┘  quote.                                             │
@@ -20,6 +21,8 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
  │  module[}('                                                                │
  │           ‾                                                                │
  └──────────────────────────────────────────────────── fuzz_crash_039.md:1:10 ┘
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: exposed_item_unexpected_token ─────┐
@@ -30,6 +33,8 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
  └───────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: header_expected_close_square ──────┐
 └┬────────────┘                                                               │
@@ -39,6 +44,7 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
  └───────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,CloseCurly,NoSpaceOpenRound,MalformedSingleQuote,

@@ -14,6 +14,7 @@ z = 0.5
 # EXPECTED
 INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -25,6 +26,7 @@ INVALID NUMBER - can_frac_literal.md:3:5:3:12
     The inferred type is:
 
         Dec
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Float,

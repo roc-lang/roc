@@ -14,6 +14,7 @@ foo = Json.parse(data)
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
+
 ┌────────────────┐
 │ FILE NOT FOUND ├─ The file users.json was not found. ───────────────────────┐
 └┬───────────────┘                                                            │
@@ -23,15 +24,18 @@ UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
  └─────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
 
     Make sure the file exists relative to your source file:
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named parse in this scope. ────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  foo = Json.parse(data)                                                    │
  │        ‾‾‾‾‾‾‾‾‾‾                                                          │
  └─────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwImport,StringStart,StringPart,StringEnd,KwAs,LowerIdent,OpColon,UpperIdent,

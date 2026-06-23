@@ -19,6 +19,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token <- is not expected in an ───────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -28,6 +29,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
  └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 5 is not expected in a ────┐
 └┬────────────────────────────────────┘  type annotation.                     │
@@ -37,6 +40,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
  └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -46,6 +51,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
  └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
 └┬────────────────────────────────────┘  type annotation.                     │
@@ -55,6 +62,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
  └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌────────────────────────────────┐
 │ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
 └┬───────────────────────────────┘  expression.                               │
@@ -64,6 +73,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
  └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -74,6 +85,8 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -84,6 +97,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

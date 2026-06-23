@@ -13,9 +13,12 @@ PARSE ERROR - fuzz_crash_008.md:1:1:1:2
 PARSE ERROR - fuzz_crash_008.md:1:3:1:4
 PARSE ERROR - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
+
 ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
+
+
 
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
@@ -26,6 +29,8 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -35,6 +40,8 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -44,6 +51,7 @@ ASCII control characters are not allowed in Roc source code.
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 OpBar,OpBar,Int,

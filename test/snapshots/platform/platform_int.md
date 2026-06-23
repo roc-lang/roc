@@ -19,8 +19,9 @@ multiplyInts : I64, I64 -> I64
 EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:48
 DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
+
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that multiplyInts is ─────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `multiplyInts` is ───┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
  │                           this module.                                     │
  │                                                                            │
@@ -28,8 +29,10 @@ DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
  │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
  └────────────────────────────────────────────────────── platform_int.md:7:16 ┘
 
-    You can fix this by either defining multiplyInts in this module, or by
+    You can fix this by either defining `multiplyInts` in this module, or by
     removing it from the list of exposed values.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -40,6 +43,7 @@ DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

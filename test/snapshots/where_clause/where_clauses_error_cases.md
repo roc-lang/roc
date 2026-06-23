@@ -30,6 +30,7 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
+
 ┌────────────────────┐
 │ WHERE CLAUSE ERROR ├─ Expected a colon : after the method name in this ─────┐
 └┬───────────────────┘  where clause constraint.                              │
@@ -41,6 +42,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
     Method constraints require a colon to separate the method name from its
     type.
     For example:     a.method : a -> b
+
+
 ┌────────────────────┐
 │ WHERE CLAUSE ERROR ├─ Expected a closing bracket ] after the where clause ──┐
 └┬───────────────────┘  constraints.                                          │
@@ -50,6 +53,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └────────────────────────────────────────── where_clauses_error_cases.md:3:3 ┘
 
     Where clauses should look like:     where [a.method : Type]
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -59,6 +64,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └───────────────────────────────────────── where_clauses_error_cases.md:3:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -68,6 +75,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └───────────────────────────────────────── where_clauses_error_cases.md:3:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────┐
 │ WHERE CLAUSE ERROR ├─ A where clause cannot be empty. ──────────────────────┐
 └┬───────────────────┘                                                        │
@@ -79,6 +88,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
     Where clauses must contain at least one constraint.
     For example:
             where [a.method : a -> b]
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -88,6 +99,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └───────────────────────────────────────── where_clauses_error_cases.md:7:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────────────┐
 │ MALFORMED WHERE CLAUSE ├─ This where clause could not be parsed correctly. ─┐
 └┬───────────────────────┘                                                    │
@@ -97,6 +110,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └───────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
 
     Check the syntax of your where clause.
+
+
 ┌────────────────────────┐
 │ MALFORMED WHERE CLAUSE ├─ This where clause could not be parsed correctly. ─┐
 └┬───────────────────────┘                                                    │
@@ -106,6 +121,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  └────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
 
     Check the syntax of your where clause.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -117,6 +134,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -128,6 +147,8 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -139,6 +160,7 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,

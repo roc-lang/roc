@@ -15,8 +15,9 @@ canonicalize_diagnostics=true
 # EXPECTED
 USED BEFORE DEFINITION - local_let_forward_reference.md:2:13:2:14
 # PROBLEMS
+
 ┌────────────────────────┐
-│ USED BEFORE DEFINITION ├─ The name f is used before it is defined. ─────────┐
+│ USED BEFORE DEFINITION ├─ The name `f` is used before it is defined. ───────┐
 └┬───────────────────────┘                                                    │
  │                                                                            │
  │  g = |x| f(x)                                                              │
@@ -25,7 +26,8 @@ USED BEFORE DEFINITION - local_let_forward_reference.md:2:13:2:14
 
     Local definitions are evaluated in order: a definition can refer to itself
     or to definitions written before it, but not to definitions written later
-    in the same block. Move f above this use, or move both to the top level.
+    in the same block. Move `f` above this use, or move both to the top level.
+
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

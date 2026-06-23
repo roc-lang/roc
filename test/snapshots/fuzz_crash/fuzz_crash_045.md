@@ -10,6 +10,7 @@ platform""requires{}{}exposes[]packages{}provides[
 # EXPECTED
 PARSE ERROR - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: expected_provides_open_curly ──────┐
 └┬────────────┘                                                               │
@@ -19,6 +20,7 @@ PARSE ERROR - fuzz_crash_045.md:1:50:1:51
  └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenSquare,

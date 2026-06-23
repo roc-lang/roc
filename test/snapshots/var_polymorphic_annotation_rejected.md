@@ -18,16 +18,19 @@ main! = |_| {
 UNUSED VARIABLE - var_polymorphic_annotation_rejected.md:5:5:5:16
 POLYMORPHIC VAR - var_polymorphic_annotation_rejected.md:4:5:4:17
 # PROBLEMS
+
 ┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable xs is defined here and then never used. ────────┐
+│ UNUSED VARIABLE ├─ Variable `xs` is defined here and then never used. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  var xs = []                                                               │
  │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
  └──────────────────────────────── var_polymorphic_annotation_rejected.md:5:5 ┘
 
-    If you don't need this variable, prefix it with an underscore like _xs to
+    If you don't need this variable, prefix it with an underscore like `_xs` to
     suppress this warning.
+
+
 ┌─────────────────┐
 │ POLYMORPHIC VAR ├─ This var is declared with a polymorphic type ────────────┐
 └┬────────────────┘  annotation, but a mutable variable must have a single    │
@@ -37,8 +40,9 @@ POLYMORPHIC VAR - var_polymorphic_annotation_rejected.md:4:5:4:17
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └──────────────────────────────── var_polymorphic_annotation_rejected.md:4:5 ┘
 
-    Give it a concrete type, or replace the type variable with _ to let the
-    type be inferred from how the var is used.
+    Give it a concrete type, or replace the type variable with `_` to let the
+    type be inferred from how the `var` is used.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

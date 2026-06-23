@@ -20,6 +20,7 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -33,6 +34,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -42,6 +45,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -51,6 +56,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:40 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
 └┬────────────┘                                                               │
@@ -64,6 +71,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -73,6 +82,8 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:46 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -82,6 +93,7 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:48 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

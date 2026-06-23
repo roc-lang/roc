@@ -15,6 +15,7 @@ PARSE ERROR - fuzz_crash_040.md:2:4:2:5
 MALFORMED TYPE - fuzz_crash_040.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -24,6 +25,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
  └──────────────────────────────────────────────────── fuzz_crash_040.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
 └┬────────────────────────────────────┘  type annotation.                     │
@@ -33,6 +36,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
  └───────────────────────────────────────────────────── fuzz_crash_040.md:2:3 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -42,6 +47,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
  └───────────────────────────────────────────────────── fuzz_crash_040.md:2:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────┐
 │ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
 └┬───────────────┘  syntax.                                                   │
@@ -49,6 +56,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
  │  o:0)                                                                      │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_040.md:2:3 ┘
+
+
 
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
@@ -60,6 +69,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,

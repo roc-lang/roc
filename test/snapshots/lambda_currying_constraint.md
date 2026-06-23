@@ -24,20 +24,22 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 # EXPECTED
 MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 # PROBLEMS
+
 ┌────────────────┐
-│ MISSING METHOD ├─ The value before this + operator has a type that ─────────┐
-└┬───────────────┘  doesn't have a plus method.                               │
+│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
+└┬───────────────┘  doesn't have a `plus` method.                             │
  │                                                                            │
  │  makeAdder = |x| |y| x + y                                                 │
  │                      ‾‾‾‾‾                                                 │
  └──────────────────────────────────────── lambda_currying_constraint.md:3:21 ┘
 
-    The value's type, which does not have a method named plus, is:
+    The value's type, which does not have a method named `plus`, is:
 
         a
 
-    Hint: The + operator calls a method named plus on the value preceding it,
-    passing the value after the operator as the one argument.
+    Hint: The `+` operator calls a method named `plus` on the value preceding
+    it, passing the value after the operator as the one argument.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,

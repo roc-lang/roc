@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
 # PROBLEMS
+
 ┌────────────────┐
 │ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
 └┬───────────────┘                                                            │
@@ -21,6 +22,7 @@ INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
     The inferred type is:
 
         Dec
+
 # TOKENS
 ~~~zig
 Float,

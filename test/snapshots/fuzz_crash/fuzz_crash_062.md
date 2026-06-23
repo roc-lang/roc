@@ -12,6 +12,7 @@ as s|||0
 PARSE ERROR - fuzz_crash_062.md:1:8:1:9
 PARSE ERROR - fuzz_crash_062.md:1:9:1:10
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: exposed_item_unexpected_token ─────┐
 └┬────────────┘                                                               │
@@ -21,6 +22,8 @@ PARSE ERROR - fuzz_crash_062.md:1:9:1:10
  └───────────────────────────────────────────────────── fuzz_crash_062.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: header_expected_close_square ──────┐
 └┬────────────┘                                                               │
@@ -30,6 +33,7 @@ PARSE ERROR - fuzz_crash_062.md:1:9:1:10
  └───────────────────────────────────────────────────── fuzz_crash_062.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,CloseCurly,OpBar,Int,

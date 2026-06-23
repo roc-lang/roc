@@ -12,6 +12,7 @@ PARSE ERROR - fuzz_crash_042.md:1:11:1:12
 MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -21,15 +22,19 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type a.E is qualified by the module u.R, but that ──┐
-└┬─────────────────┘  module was not found in this Roc project.               │
+│ MODULE NOT FOUND ├─ The type `a.E` is qualified by the module `u.R`, but ───┐
+└┬─────────────────┘  that module was not found in this Roc project.          │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
  │                     ‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
     You're attempting to use this type here:
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -40,6 +45,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,CloseCurly,LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceDotUpperIdent,

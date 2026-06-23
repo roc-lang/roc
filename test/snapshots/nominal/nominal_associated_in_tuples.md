@@ -23,6 +23,7 @@ UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
+
 ┌──────────────────────────┐
 │ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
 └┬─────────────────────────┘  scope.                                          │
@@ -35,6 +36,8 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
     used.
 
     This type variable is referenced here:
+
+
 ┌──────────────────────────┐
 │ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
 └┬─────────────────────────┘  scope.                                          │
@@ -47,6 +50,8 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
     used.
 
     This type variable is referenced here:
+
+
 ┌───────────────┐
 │ TOO MANY ARGS ├─ The type Container expects 0 arguments, but got 1 ─────────┐
 └┬──────────────┘  instead.                                                   │
@@ -54,6 +59,7 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
  │  boxed : Container(Foo.Bar)                                                │
  │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
+
 
 # TOKENS
 ~~~zig

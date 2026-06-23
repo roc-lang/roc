@@ -17,6 +17,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -28,6 +29,7 @@ TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

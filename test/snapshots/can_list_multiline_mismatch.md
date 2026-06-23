@@ -14,6 +14,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -25,6 +26,7 @@ TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,

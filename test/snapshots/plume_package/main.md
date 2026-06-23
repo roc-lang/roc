@@ -12,8 +12,9 @@ package [
 # EXPECTED
 MODULE NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
+
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module Color was not found in this Roc project. ────┐
+│ MODULE NOT FOUND ├─ The module `Color` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  Color,                                                                    │
@@ -21,6 +22,7 @@ MODULE NOT FOUND - main.md:2:5:2:10
  └─────────────────────────────────────────────────────────────── main.md:2:5 ┘
 
     You're attempting to use this module here:
+
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,

@@ -16,26 +16,31 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named some_fn in this scope. ──────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `some_fn` in this scope. ────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.… │
  │  ‾‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named arg1 in this scope. ─────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
 └┬───────────────────┘                                                        │
  │                                                                            │
  │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.… │
  │          ‾‾‾‾                                                              │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:9 ┘
 
-    Is there an import or exposing missing up-top?
+    Is there an `import` or `exposing` missing up-top?
+
+
 ┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The ? operator can only be used inside ────┐
+│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
 └┬──────────────────────────────┘  function bodies because it can cause an    │
  │                                 early return.                              │
  │                                                                            │
@@ -43,8 +48,10 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
+
+
 ┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The ? operator can only be used inside ────┐
+│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
 └┬──────────────────────────────┘  function bodies because it can cause an    │
  │                                 early return.                              │
  │                                                                            │
@@ -52,8 +59,10 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
+
+
 ┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The ? operator can only be used inside ────┐
+│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
 └┬──────────────────────────────┘  function bodies because it can cause an    │
  │                                 early return.                              │
  │                                                                            │
@@ -61,14 +70,17 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾   │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
+
+
 ┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The ? operator can only be used inside ────┐
+│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
 └┬──────────────────────────────┘  function bodies because it can cause an    │
  │                                 early return.                              │
  │                                                                            │
  │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.… │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
+
 
 # TOKENS
 ~~~zig

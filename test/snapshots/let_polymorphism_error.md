@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 # PROBLEMS
+
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
@@ -21,6 +22,7 @@ TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
     The type was determined to be:
 
         Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Float,Comma,StringStart,StringPart,StringEnd,CloseSquare,

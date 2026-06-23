@@ -20,6 +20,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:2:17:2:19
 UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:5:12:5:14
 UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 # PROBLEMS
+
 ┌──────────────────────────┐
 │ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
 └┬─────────────────────────┘  declarations.                                   │
@@ -31,6 +32,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
+
+
 ┌──────────────────────────┐
 │ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
 └┬─────────────────────────┘  declarations.                                   │
@@ -42,6 +45,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
+
+
 ┌──────────────────────────┐
 │ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
 └┬─────────────────────────┘  declarations.                                   │
@@ -53,6 +58,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
+
+
 ┌──────────────────────────┐
 │ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
 └┬─────────────────────────┘  declarations.                                   │
@@ -64,6 +71,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,OpColon,NamedUnderscore,

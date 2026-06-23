@@ -12,6 +12,7 @@ PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
 TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -33,6 +34,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌──────────────┐
 │ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
 └┬─────────────┘                                                              │
@@ -40,6 +43,8 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
  │  nums : List U8                                                            │
  │         ‾‾‾‾                                                               │
  └───────────────────────────────────── type_annotation_missing_parens.md:1:8 ┘
+
+
 
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
@@ -51,6 +56,7 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,UpperIdent,

@@ -43,6 +43,7 @@ PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
+
 ┌────────────────────────┐
 │ EXPECTED OPENING BRACE ├─ Platform headers must have a packages section ────┐
 └┬───────────────────────┘  that lists package dependencies.                  │
@@ -52,6 +53,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:11:3 ┘
 
     For example:     packages { base: "../base/main.roc" }
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: expected_provides ─────────────────┐
 └┬────────────┘                                                               │
@@ -61,6 +64,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:12:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────────────────────────────┐
 │ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
 └┬────────────────────────────────────┘  type annotation.                     │
@@ -70,6 +75,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -79,6 +86,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -88,6 +97,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -97,6 +108,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -106,6 +119,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -115,6 +130,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -124,6 +141,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:14:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -133,6 +152,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:15:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
 └┬────────────┘  arguments.                                                   │
@@ -154,6 +175,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -163,6 +186,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:15:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -172,6 +197,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └─────────────────────────────────────────────────── fuzz_crash_029.md:15:17 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -181,6 +208,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:16:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -190,6 +219,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:16:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌─────────────┐
 │ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
 └┬────────────┘                                                               │
@@ -199,6 +230,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  └──────────────────────────────────────────────────── fuzz_crash_029.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
+
+
 ┌────────────────┐
 │ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
 └┬───────────────┘  syntax.                                                   │
@@ -206,6 +239,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  │  pkg: "..l", mmen  } # Cose                                                │
  │       ‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
+
+
 
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
@@ -217,6 +252,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPlatform,
