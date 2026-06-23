@@ -21,7 +21,6 @@ MODULE NOT FOUND - main.md:2:5:2:10
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────────────────────────── main.md:2:5 ┘
 
-    You're attempting to use this module here:
 
 # TOKENS
 ~~~zig

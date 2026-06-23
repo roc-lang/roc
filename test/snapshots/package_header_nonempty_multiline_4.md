@@ -27,7 +27,6 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────── package_header_nonempty_multiline_4.md:4:3 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────────────┐

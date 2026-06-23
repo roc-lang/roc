@@ -25,14 +25,13 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `a.E` is qualified by the module `u.R`, but ───┐
-└┬─────────────────┘  that module was not found in this Roc project.          │
+│ MODULE NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
  │                     ‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────────────┐

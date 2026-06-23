@@ -57,15 +57,13 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `InvalidType` is qualified by the module ──────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `InvalidType` type is declared to be in ───────────┐
+└┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  parseData : Json.InvalidType -> Str                                       │
  │                  ‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └─────────────────────────────────── can_import_unresolved_qualified.md:8:17 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -80,27 +78,23 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Server.Request` is qualified by the module ───┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Server.Request` type is declared to be in ────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  processRequest : Http.Server.Request -> Http.Server.Response              │
  │                              ‾‾‾‾‾‾‾‾                                      │
  └────────────────────────────────── can_import_unresolved_qualified.md:12:29 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Server.Response` is qualified by the module ──┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Server.Response` type is declared to be in ───────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  processRequest : Http.Server.Request -> Http.Server.Response              │
  │                                                     ‾‾‾‾‾‾‾‾‾              │
  └────────────────────────────────── can_import_unresolved_qualified.md:12:52 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐

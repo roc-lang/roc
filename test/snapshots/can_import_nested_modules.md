@@ -54,7 +54,6 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └───────────────────────────────────────── can_import_nested_modules.md:6:15 ┘
 
-    You're attempting to use this module here:
 
 
 ┌────────────────┐
@@ -68,15 +67,13 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Token` is qualified by the module ────────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  authenticate : Str, Str -> HttpAuth.Token                                 │
  │                                     ‾‾‾‾‾‾                                 │
  └──────────────────────────────────────── can_import_nested_modules.md:10:36 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -98,7 +95,6 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
  └──────────────────────────────────────── can_import_nested_modules.md:14:15 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────────┐
@@ -109,7 +105,6 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
  │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾ │
  └──────────────────────────────────────── can_import_nested_modules.md:14:55 ┘
 
-    You're attempting to use this module here:
 
 
 ┌────────────────┐
@@ -144,39 +139,33 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Credentials` is qualified by the module ──────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Credentials` type is declared to be in ───────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_nested_modules.md:23:24 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Token` is qualified by the module ────────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                     ‾‾‾‾‾‾                 │
  └──────────────────────────────────────── can_import_nested_modules.md:23:52 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Error` is qualified by the module ────────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Error` type is declared to be in `http.Client`, ──┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                                     ‾‾‾‾‾‾ │
  └──────────────────────────────────────── can_import_nested_modules.md:23:68 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐

@@ -66,8 +66,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias Tree and Node form a ─────┐
-└┬────────────────────────────────┘  recursive cycle.                         │
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `Tree` and `Node` form ───┐
+└┬────────────────────────────────┘  a recursive cycle.                       │
  │                                                                            │
  │  Tree(a) : [Branch(Node(a)), Leaf(a)]                                      │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
@@ -86,8 +86,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias Node and Tree form a ─────┐
-└┬────────────────────────────────┘  recursive cycle.                         │
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `Node` and `Tree` form ───┐
+└┬────────────────────────────────┘  a recursive cycle.                       │
  │                                                                            │
  │  Node(a) : { value: a, children: List(Tree(a)) }                           │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
@@ -106,7 +106,7 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Person is being redeclared. ────────────────────┐
+│ TYPE REDECLARED ├─ The type `Person` is being redeclared. ──────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Person : U64                                                              │
@@ -123,14 +123,13 @@ UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type SomeUndeclaredType is not declared in this ─────┐
+│ UNDECLARED TYPE ├─ The type `SomeUndeclaredType` is not declared in this ───┐
 └┬────────────────┘  scope.                                                   │
  │                                                                            │
  │  BadType : SomeUndeclaredType                                              │
  │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └───────────────────────────────────────── type_comprehensive_scope.md:25:11 ┘
 
-    This type is referenced here:
 
 # TOKENS
 ~~~zig

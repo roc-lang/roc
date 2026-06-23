@@ -14,7 +14,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencie
 # PROBLEMS
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias A and B form a ───────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `A` and `B` form a ───────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
  │                                                                            │
  │  A : [Tag(B)]                                                              │
@@ -34,7 +34,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencie
 
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias B and A form a ───────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `B` and `A` form a ───────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
  │                                                                            │
  │  B : A                                                                     │

@@ -41,47 +41,43 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  import Color.RGB                                                          │
  │         ‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────── nominal_mixed_scope.md:7:12 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  RGB.Red => LocalStatus.Pending                                            │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────── nominal_mixed_scope.md:10:9 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  RGB.Green => LocalStatus.Complete                                         │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────── nominal_mixed_scope.md:11:9 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type RGB is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  RGB.Blue => LocalStatus.Pending                                           │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────── nominal_mixed_scope.md:12:9 ┘
 
-    This type is referenced here:
 
 # TOKENS
 ~~~zig

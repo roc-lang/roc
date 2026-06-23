@@ -20,14 +20,13 @@ UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Person is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Person` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  expectsPerson : Person -> Str                                             │
  │                  ‾‾‾‾‾‾                                                    │
  └────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐

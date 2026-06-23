@@ -18,27 +18,23 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Color` is qualified by the module ────────────┐
-└┬─────────────────┘  `styles.Color`, but that module was not found in this   │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `styles.Color`, which does not exist.                   │
  │                                                                            │
  │  blue : CC.Color                                                           │
  │           ‾‾‾‾‾‾                                                           │
  └──────────────────────────────────────── nominal_tag_package_import.md:5:10 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Color` is qualified by the module ────────────┐
-└┬─────────────────┘  `styles.Color`, but that module was not found in this   │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `styles.Color`, which does not exist.                   │
  │                                                                            │
  │  blue = CC.Color.RGB(0,0,255)                                              │
  │           ‾‾‾‾‾‾                                                           │
  └──────────────────────────────────────── nominal_tag_package_import.md:6:10 ┘
 
-    You're attempting to use this type here:
 
 # TOKENS
 ~~~zig

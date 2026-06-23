@@ -91,25 +91,23 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  parseJson : Str -> Try(Value, Error)                                      │
  │                         ‾‾‾‾‾                                              │
  └───────────────────────────────────────── can_import_exposing_types.md:6:24 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  parseJson : Str -> Try(Value, Error)                                      │
  │                                ‾‾‾‾‾                                       │
  └───────────────────────────────────────── can_import_exposing_types.md:6:31 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -124,25 +122,23 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Request is not declared in this scope. ─────────┐
+│ UNDECLARED TYPE ├─ The type `Request` is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  handleRequest : Request -> Response                                       │
  │                  ‾‾‾‾‾‾‾                                                   │
  └──────────────────────────────────────── can_import_exposing_types.md:10:17 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
+│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  handleRequest : Request -> Response                                       │
  │                             ‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:10:28 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -179,47 +175,43 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processData : Config, List(Value) -> Try(List(Value), Error)              │
  │                ‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:20:15 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processData : Config, List(Value) -> Try(List(Value), Error)              │
  │                             ‾‾‾‾‾                                          │
  └──────────────────────────────────────── can_import_exposing_types.md:20:28 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processData : Config, List(Value) -> Try(List(Value), Error)              │
  │                                                ‾‾‾‾‾                       │
  └──────────────────────────────────────── can_import_exposing_types.md:20:47 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processData : Config, List(Value) -> Try(List(Value), Error)              │
  │                                                        ‾‾‾‾‾               │
  └──────────────────────────────────────── can_import_exposing_types.md:20:55 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────┐
@@ -231,8 +223,6 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
  └───────────────────────────────────────── can_import_exposing_types.md:22:5 ┘
 
     `List` is in scope, but it has no associated `mapTry`.
-
-    It's referenced here:
 
 
 ┌────────────────────┐
@@ -247,59 +237,53 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  jsonConfig : Config,                                                      │
  │               ‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:29:18 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Status is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Status` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  httpStatus : Status,                                                      │
  │               ‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:30:18 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
+│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  defaultResponse : Response,                                               │
  │                    ‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────────────────── can_import_exposing_types.md:31:23 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Config is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  createClient : Config -> Http.Client                                      │
  │                 ‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────── can_import_exposing_types.md:35:16 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Client` is qualified by the module ───────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  createClient : Config -> Http.Client                                      │
  │                               ‾‾‾‾‾‾‾                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:35:30 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -314,14 +298,13 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
+│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  handleResponse : Response -> Str                                          │
  │                   ‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────────────────── can_import_exposing_types.md:39:18 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -346,58 +329,53 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
  │                    ‾‾‾‾‾                                                   │
  └──────────────────────────────────────── can_import_exposing_types.md:47:19 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
  │                           ‾‾‾‾‾                                            │
  └──────────────────────────────────────── can_import_exposing_types.md:47:26 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Status is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Status` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
  │                                   ‾‾‾‾‾‾                                   │
  └──────────────────────────────────────── can_import_exposing_types.md:47:34 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
+│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
  │                                                 ‾‾‾‾‾‾‾‾                   │
  └──────────────────────────────────────── can_import_exposing_types.md:47:48 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
  │                                                           ‾‾‾‾‾            │
  └──────────────────────────────────────── can_import_exposing_types.md:47:58 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐

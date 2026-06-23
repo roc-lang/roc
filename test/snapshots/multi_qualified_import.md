@@ -124,14 +124,13 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Encoder is not declared in this scope. ─────────┐
+│ UNDECLARED TYPE ├─ The type `Encoder` is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  json_encoder : Encoder                                                    │
  │                 ‾‾‾‾‾‾‾                                                    │
  └──────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────┐
@@ -152,7 +151,6 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └──────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────┐
@@ -175,7 +173,6 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
 
-    You're attempting to use this module here:
 
 
 ┌────────────────────┐

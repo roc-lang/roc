@@ -33,36 +33,33 @@ ASCII control characters are not allowed in Roc source code.
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Thing is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Thing` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Thing(a, b, _)                                                      │
  │        ‾‾‾‾‾                                                               │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:2:7 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : List(String) -> Try({}, _)                                        │
  │               ‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_048.md:6:14 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  tag_tuple : Value((a, b, c))                                              │
  │              ‾‾‾‾‾                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_048.md:7:13 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐

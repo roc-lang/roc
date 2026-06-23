@@ -38,14 +38,13 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type S is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `S` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  0 b:S                                                                     │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐

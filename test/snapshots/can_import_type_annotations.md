@@ -64,25 +64,23 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Request is not declared in this scope. ─────────┐
+│ UNDECLARED TYPE ├─ The type `Request` is not declared in this scope. ───────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processRequest : Request -> Response                                      │
  │                   ‾‾‾‾‾‾‾                                                  │
  └─────────────────────────────────────── can_import_type_annotations.md:5:18 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Response is not declared in this scope. ────────┐
+│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  processRequest : Request -> Response                                      │
  │                              ‾‾‾‾‾‾‾‾                                      │
  └─────────────────────────────────────── can_import_type_annotations.md:5:29 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -109,15 +107,13 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Value` is qualified by the module ────────────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  parseJson : Str -> Json.Value                                             │
  │                         ‾‾‾‾‾‾                                             │
  └─────────────────────────────────────── can_import_type_annotations.md:8:24 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -132,39 +128,33 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Request` is qualified by the module ──────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Request` type is declared to be in ───────────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
  │                  ‾‾‾‾‾‾‾‾                                                  │
  └────────────────────────────────────── can_import_type_annotations.md:11:17 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Response` is qualified by the module ─────────┐
-└┬─────────────────┘  `http.Client`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Response` type is declared to be in ──────────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
  │                                      ‾‾‾‾‾‾‾‾‾                             │
  └────────────────────────────────────── can_import_type_annotations.md:11:37 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Error` is qualified by the module ────────────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Error` type is declared to be in `json.Json`, ────┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
  │                                                     ‾‾‾‾‾‾                 │
  └────────────────────────────────────── can_import_type_annotations.md:11:52 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -190,15 +180,13 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Config` is qualified by the module ───────────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Config` type is declared to be in `json.Json`, ───┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  config : Json.Config                                                      │
  │               ‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────────── can_import_type_annotations.md:20:14 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐
@@ -213,39 +201,33 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Parser.Config` is qualified by the module ────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Parser.Config` type is declared to be in ─────────┐
+└┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  …n.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)               │
  │           ‾‾‾‾‾‾‾                                                          │
  └────────────────────────────────────── can_import_type_annotations.md:24:29 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Value` is qualified by the module ────────────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  …Try(Json.Value, Json.Parser.Error)                                       │
  │           ‾‾‾‾‾‾                                                           │
  └────────────────────────────────────── can_import_type_annotations.md:24:53 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Parser.Error` is qualified by the module ─────┐
-└┬─────────────────┘  `json.Json`, but that module was not found in this      │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `Parser.Error` type is declared to be in ──────────┐
+└┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  …n.Parser.Error)                                                          │
  │           ‾‾‾‾‾‾                                                           │
  └────────────────────────────────────── can_import_type_annotations.md:24:72 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────────┐

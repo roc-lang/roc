@@ -14,7 +14,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 # PROBLEMS
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias A and B form a ───────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `A` and `B` form a ───────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
  │                                                                            │
  │  A : B                                                                     │
@@ -34,7 +34,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 
 
 ┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias B and A form a ───────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `B` and `A` form a ───────┐
 └┬────────────────────────────────┘  recursive cycle.                         │
  │                                                                            │
  │  B : A                                                                     │

@@ -301,7 +301,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:16:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -315,117 +314,106 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │                                                                            │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:17:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │         ‾‾‾                                                                │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:36:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │              ‾‾‾                                                           │
  └────────────────────────────────────────────────── syntax_grab_bag.md:36:13 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Bar, # Comment after pattern tuple item                                   │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:39:2 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Baz, # Another after pattern tuple item                                   │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:40:2 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Some(a) : { foo : Ok(a), bar : Something }                                │
  │                    ‾‾                                                      │
  └────────────────────────────────────────────────── syntax_grab_bag.md:43:19 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
+│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Some(a) : { foo : Ok(a), bar : Something }                                │
  │                                 ‾‾‾‾‾‾‾‾‾                                  │
  └────────────────────────────────────────────────── syntax_grab_bag.md:43:32 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  foo : Ok(a), # After field                                                │
  │        ‾‾                                                                  │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:45:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
+│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Something, # After last field                                       │
  │        ‾‾‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:46:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Ok(a), # Comment after pattern record field                               │
  │  ‾‾                                                                        │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:52:4 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
+│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Something, # Another after pattern record field                     │
  │        ‾‾‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:53:8 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -607,14 +595,13 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : List(String) -> Try({}, _)                                        │
  │               ‾‾‾‾‾‾                                                       │
  └───────────────────────────────────────────────── syntax_grab_bag.md:143:14 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -834,14 +821,13 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  tuple : Value((a, b, c))                                                  │
  │          ‾‾‾‾‾                                                             │
  └────────────────────────────────────────────────── syntax_grab_bag.md:201:9 ┘
 
-    This type is referenced here:
 
 
 ┌───────────────┐

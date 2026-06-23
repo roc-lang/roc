@@ -905,44 +905,40 @@ Numbers cannot have leading zeros.
  │                                                                            │
  └───────────────────────────────────────────────────── fuzz_crash_028.md:6:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Bar, #                                                                    │
  │  ‾‾‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:29:2 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Baz, #m                                                                   │
  │  ‾‾‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:30:2 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Some(a) : { foo : Ok(a), bar : g }                                        │
  │                    ‾‾                                                      │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:32:19 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable g is not declared in this ────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
  │                                                                            │
  │  Some(a) : { foo : Ok(a), bar : g }                                        │
@@ -952,51 +948,45 @@ Numbers cannot have leading zeros.
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Som# Afld                                                           │
  │        ‾‾‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:34:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Som                                                                 │
  │        ‾‾‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:38:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
  │            ‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:43:11 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
  │                           ‾‾‾‾‾                                            │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:43:26 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────────────┐
@@ -1150,25 +1140,23 @@ Numbers cannot have leading zeros.
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : (String) -> Result({}, _)                                         │
  │           ‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:95:10 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Result is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Result` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : (String) -> Result({}, _)                                         │
  │                      ‾‾‾‾‾‾                                                │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:95:21 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -1413,14 +1401,13 @@ Numbers cannot have leading zeros.
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type V is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `V` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  t : V((a,c))                                                              │
  │      ‾                                                                     │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:144:5 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐

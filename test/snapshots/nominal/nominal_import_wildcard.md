@@ -35,36 +35,33 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  red : Color                                                               │
  │        ‾‾‾‾‾                                                               │
  └──────────────────────────────────────────── nominal_import_wildcard.md:3:7 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  blue : Color                                                              │
  │         ‾‾‾‾‾                                                              │
  └──────────────────────────────────────────── nominal_import_wildcard.md:6:8 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  green : Color                                                             │
  │          ‾‾‾‾‾                                                             │
  └──────────────────────────────────────────── nominal_import_wildcard.md:9:9 ┘
 
-    This type is referenced here:
 
 # TOKENS
 ~~~zig

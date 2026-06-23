@@ -19,7 +19,6 @@ type=repl
 `Bool.true` does not exist.
 `Bool` is in scope, but it has no associated `true`.
 
-It's referenced here:
 **repl:1:1:1:10:**
 ```roc
 Bool.true # incorrect, tags must be UPPERCASE
@@ -30,7 +29,6 @@ Bool.true # incorrect, tags must be UPPERCASE
 `Bool.false` does not exist.
 `Bool` is in scope, but it has no associated `false`.
 
-It's referenced here:
 **repl:1:1:1:11:**
 ```roc
 Bool.false

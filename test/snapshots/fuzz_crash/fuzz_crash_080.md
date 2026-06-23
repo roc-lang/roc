@@ -17,14 +17,13 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type L is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `L` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  c : L                                                                     │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_080.md:1:5 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐

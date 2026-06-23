@@ -14,7 +14,7 @@ TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Maybe is being redeclared. ─────────────────────┐
+│ TYPE REDECLARED ├─ The type `Maybe` is being redeclared. ───────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Maybe(a) : [Ok(a), Err]                                                   │

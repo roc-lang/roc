@@ -124,7 +124,6 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
  └──────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -135,7 +134,6 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └──────────────────────────────────── qualified_type_canonicalization.md:9:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -146,7 +144,6 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
  └─────────────────────────────────── qualified_type_canonicalization.md:10:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -157,65 +154,56 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └─────────────────────────────────── qualified_type_canonicalization.md:11:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  simpleQualified : Color.RGB                                               │
  │                         ‾‾‾‾                                               │
  └────────────────────────────────── qualified_type_canonicalization.md:14:24 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })                       │
  │                    ‾‾‾‾‾                                                   │
  └────────────────────────────────── qualified_type_canonicalization.md:15:19 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `DataType` is qualified by the module ─────────┐
-└┬─────────────────┘  `ExternalModule`, but that module was not found in      │
- │                    this Roc project.                                       │
+│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
  │                                                                            │
  │  aliasedQualified : ExtMod.DataType                                        │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
  └────────────────────────────────── qualified_type_canonicalization.md:18:26 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `DataType` is qualified by the module ─────────┐
-└┬─────────────────┘  `ExternalModule`, but that module was not found in      │
- │                    this Roc project.                                       │
+│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
  │                                                                            │
  │  aliasedQualified = ExtMod.DataType.Default                                │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
  └────────────────────────────────── qualified_type_canonicalization.md:19:26 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `ModuleB.TypeC` is qualified by the module ────┐
-└┬─────────────────┘  `ModuleA`, but that module was not found in this Roc    │
- │                    project.                                                │
+│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
+└┬─────────────────┘  `ModuleA`, which does not exist.                        │
  │                                                                            │
  │  multiLevelQualified : ModuleA.ModuleB.TypeC                               │
  │                                       ‾‾‾‾‾‾                               │
  └────────────────────────────────── qualified_type_canonicalization.md:22:38 ┘
 
-    You're attempting to use this type here:
 
 
 ┌────────────────┐
@@ -236,40 +224,36 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │               ‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────── qualified_type_canonicalization.md:26:14 ┘
 
-    It's referenced here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  getColor : {} -> Color.RGB                                                │
  │                        ‾‾‾‾                                                │
  └────────────────────────────────── qualified_type_canonicalization.md:30:23 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })                          │
  │                 ‾‾‾‾‾                                                      │
  └────────────────────────────────── qualified_type_canonicalization.md:31:16 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  processColor : Color.RGB -> Str                                           │
  │                      ‾‾‾‾                                                  │
  └────────────────────────────────── qualified_type_canonicalization.md:34:21 ┘
 
-    You're attempting to use this type here:
 
 
 ┌─────────────────┐
@@ -292,53 +276,46 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │              ‾‾‾‾‾‾‾                                                       │
  └────────────────────────────────── qualified_type_canonicalization.md:39:13 ┘
 
-    It's referenced here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                           ‾‾‾‾                                             │
  └────────────────────────────────── qualified_type_canonicalization.md:39:26 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `Error` is qualified by the module ────────────┐
-└┬─────────────────┘  `ExternalModule`, but that module was not found in      │
- │                    this Roc project.                                       │
+│ MODULE NOT FOUND ├─ This `Error` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                                       ‾‾‾‾‾‾                               │
  └────────────────────────────────── qualified_type_canonicalization.md:39:38 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `ModuleB.TypeC` is qualified by the module ────┐
-└┬─────────────────┘  `ModuleA`, but that module was not found in this Roc    │
- │                    project.                                                │
+│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
+└┬─────────────────┘  `ModuleA`, which does not exist.                        │
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                                                                 ‾‾‾‾‾‾     │
  └────────────────────────────────── qualified_type_canonicalization.md:39:64 ┘
 
-    You're attempting to use this type here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Try is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────── qualified_type_canonicalization.md:42:9 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────┐
@@ -352,14 +329,13 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Try is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Try.Err(err) => TypeC.default                                             │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────── qualified_type_canonicalization.md:43:9 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────┐

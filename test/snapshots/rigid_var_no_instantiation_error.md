@@ -47,8 +47,6 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 
     `Bool` is in scope, but it has no associated `true`.
 
-    It's referenced here:
-
 
 ┌─────────────────┐
 │ UNUSED VARIABLE ├─ Variable `result1` is defined here and then never used. ─┐

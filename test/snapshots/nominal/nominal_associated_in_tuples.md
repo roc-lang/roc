@@ -25,7 +25,7 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
  │                                                                            │
  │  Container : a -> [Container(a)]                                           │
@@ -35,11 +35,9 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
  │                                                                            │
  │  Container : a -> [Container(a)]                                           │
@@ -48,8 +46,6 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 
     Type variables must be introduced in a type annotation before they can be
     used.
-
-    This type variable is referenced here:
 
 
 ┌───────────────┐

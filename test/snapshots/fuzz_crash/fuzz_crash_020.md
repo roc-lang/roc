@@ -294,7 +294,6 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │                                                                            │
  └───────────────────────────────────────────────────── fuzz_crash_020.md:6:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -305,7 +304,6 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:10:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌──────────────────┐
@@ -317,23 +315,21 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:11:1 ┘
 
-    You're attempting to use this module here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Lis is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Lis` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Map(a, b) : Lis, (ab) -> List(b)                                          │
  │              ‾‾‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:13:13 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable ab is not declared in this ───┐
-└┬─────────────────────────┘  scope.                                          │
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
+└┬─────────────────────────┘  this scope.                                     │
  │                                                                            │
  │  Map(a, b) : Lis, (ab) -> List(b)                                          │
  │                    ‾‾                                                      │
@@ -342,12 +338,10 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable ab is not declared in this ───┐
-└┬─────────────────────────┘  scope.                                          │
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
+└┬─────────────────────────┘  this scope.                                     │
  │                                                                            │
  │  (ab) -> # row                                                             │
  │   ‾‾                                                                       │
@@ -356,11 +350,9 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable b is not declared in this ────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
  │                                                                            │
  │  List(   b ) #z)                                                           │
@@ -370,22 +362,19 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type O is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `O` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Som : { foo : O, bar : g }                                                │
  │                ‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:24:15 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable g is not declared in this ────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
 └┬─────────────────────────┘  scope.                                          │
  │                                                                            │
  │  Som : { foo : O, bar : g }                                                │
@@ -395,18 +384,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type U6 is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `U6` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  one : U6                                                                  │
  │        ‾‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:37:7 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -534,14 +520,13 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Listlt is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `Listlt` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : Listlt({}, _)                                                     │
  │          ‾‾‾‾‾‾                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:74:9 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐
@@ -853,14 +838,13 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type V is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `V` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  t : V((a,c))                                                              │
  │      ‾                                                                     │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:116:5 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────┐

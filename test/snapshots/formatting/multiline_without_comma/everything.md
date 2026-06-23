@@ -1193,14 +1193,13 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type C is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `C` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  ) : C(                                                                    │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────────── everything.md:43:5 ┘
 
-    This type is referenced here:
 
 
 ┌────────────────────────┐

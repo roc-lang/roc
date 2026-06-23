@@ -137,8 +137,8 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 
 
 ┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable lue is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `lue` is not declared in ─────┐
+└┬─────────────────────────┘  this scope.                                     │
  │                                                                            │
  │  LocalStatus :lue => Loc= [Pending, Complete]                              │
  │               ‾‾‾                                                          │
@@ -147,41 +147,34 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
     Type variables must be introduced in a type annotation before they can be
     used.
 
-    This type variable is referenced here:
-
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Loc is not declared in this scope. ─────────────┐
+│ UNDECLARED TYPE ├─ The type `Loc` is not declared in this scope. ───────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  LocalStatus :lue => Loc= [Pending, Complete]                              │
  │                      ‾‾‾                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_032.md:1:21 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Color is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  olor = |color| { import Color.RGB                                         │
  │                          ‾‾‾‾‾                                             │
  └──────────────────────────────────────────────────── fuzz_crash_032.md:4:25 ┘
 
-    This type is referenced here:
 
 
 ┌───────────────────────┐
-│ EXPECTED NOMINAL TYPE ├─ You are using the type LocalStatus like a ─────────┐
+│ EXPECTED NOMINAL TYPE ├─ You are using the type `LocalStatus` like a ───────┐
 └┬──────────────────────┘  nominal type, but it is an alias.                  │
  │                                                                            │
  │  match color { RGB => LocalStatus.Pending                                  │
  │                       ‾‾‾‾‾‾‾‾‾‾‾                                          │
  └──────────────────────────────────────────────────── fuzz_crash_032.md:6:26 ┘
-
-    This type is referenced here:
-
 
     Hint: You can declare this type with `:=` to make it nominal.
 
@@ -193,26 +186,22 @@ This pattern contains invalid syntax or uses unsupported features.
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type B is not declared in this scope. ───────────────┐
+│ UNDECLARED TYPE ├─ The type `B` is not declared in this scope. ─────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  B.Blue => LocalStatus.Pending                                             │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_032.md:8:3 ┘
 
-    This type is referenced here:
 
 
 ┌───────────────────────┐
-│ EXPECTED NOMINAL TYPE ├─ You are using the type LocalStatus like a ─────────┐
+│ EXPECTED NOMINAL TYPE ├─ You are using the type `LocalStatus` like a ───────┐
 └┬──────────────────────┘  nominal type, but it is an alias.                  │
  │                                                                            │
  │  B.Blue => LocalStatus.Pending                                             │
  │            ‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_032.md:8:13 ┘
-
-    This type is referenced here:
-
 
     Hint: You can declare this type with `:=` to make it nominal.
 

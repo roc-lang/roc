@@ -16,25 +16,23 @@ MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  red : Color.RGB                                                           │
  │             ‾‾‾‾                                                           │
  └─────────────────────────────────────────────── nominal_import_type.md:3:12 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `RGB` is qualified by the module `Color`, ─────┐
-└┬─────────────────┘  but that module was not found in this Roc project.      │
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  red = Color.RGB.Red                                                       │
  │             ‾‾‾‾                                                           │
  └─────────────────────────────────────────────── nominal_import_type.md:4:12 ┘
 
-    You're attempting to use this type here:
 
 # TOKENS
 ~~~zig

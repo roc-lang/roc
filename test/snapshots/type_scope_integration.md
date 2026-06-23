@@ -23,7 +23,7 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Foo is being redeclared. ───────────────────────┐
+│ TYPE REDECLARED ├─ The type `Foo` is being redeclared. ─────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Foo : Str                                                                 │
@@ -40,14 +40,13 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type SomeUndeclaredType is not declared in this ─────┐
+│ UNDECLARED TYPE ├─ The type `SomeUndeclaredType` is not declared in this ───┐
 └┬────────────────┘  scope.                                                   │
  │                                                                            │
  │  Bar : SomeUndeclaredType                                                  │
  │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
  └───────────────────────────────────────────── type_scope_integration.md:8:7 ┘
 
-    This type is referenced here:
 
 # TOKENS
 ~~~zig

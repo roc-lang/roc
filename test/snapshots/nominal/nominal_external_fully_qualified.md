@@ -23,39 +23,33 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `MyTryType` is qualified by the module ────────┐
-└┬─────────────────┘  `MyTryModule`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
  │                                                                            │
  │  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                        │
  │                         ‾‾‾‾‾‾‾‾‾‾                                         │
  └────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `MyTryType` is qualified by the module ────────┐
-└┬─────────────────┘  `MyTryModule`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
  │                                                                            │
  │  MyTryModule.MyTryType.Ok(value) => value                                  │
  │             ‾‾‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
 
-    You're attempting to use this type here:
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The type `MyTryType` is qualified by the module ────────┐
-└┬─────────────────┘  `MyTryModule`, but that module was not found in this    │
- │                    Roc project.                                            │
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
  │                                                                            │
  │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
  │             ‾‾‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
 
-    You're attempting to use this type here:
 
 
 ┌─────────────────┐

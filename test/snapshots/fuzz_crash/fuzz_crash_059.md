@@ -117,7 +117,6 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
 
-    You're attempting to use this module here:
 
 # TOKENS
 ~~~zig

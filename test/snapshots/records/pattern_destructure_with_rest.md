@@ -37,8 +37,6 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 
     `Str` is in scope, but it has no associated `len`.
 
-    It's referenced here:
-
 
 ┌────────────────┐
 │ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
@@ -49,8 +47,6 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
  └───────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
 
     `Str` is in scope, but it has no associated `len`.
-
-    It's referenced here:
 
 # TOKENS
 ~~~zig

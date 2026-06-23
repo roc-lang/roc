@@ -4649,7 +4649,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Inner is being redeclared. ─────────────────────┐
+│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Inner := [H].{                                                            │
@@ -4721,7 +4721,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Inner is being redeclared. ─────────────────────┐
+│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Inner := [J].{                                                            │
@@ -4752,7 +4752,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type Inner is being redeclared. ─────────────────────┐
+│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  Inner := [L].{                                                            │
@@ -4853,7 +4853,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [T].{                                                               │
@@ -4914,7 +4914,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [W].{                                                               │
@@ -4951,7 +4951,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [Z].{                                                               │
@@ -4979,7 +4979,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [AC].{                                                              │
@@ -5055,7 +5055,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [AF].{                                                              │
@@ -5128,7 +5128,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [AJ].{                                                              │
@@ -5171,7 +5171,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [AN].{                                                              │
@@ -5244,7 +5244,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [AR].{                                                              │
@@ -5287,7 +5287,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BB].{                                                              │
@@ -5327,7 +5327,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BF].{                                                              │
@@ -5370,7 +5370,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BJ].{                                                              │
@@ -5428,7 +5428,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BN].{                                                              │
@@ -5467,7 +5467,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BR].{                                                              │
@@ -5497,7 +5497,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BV].{                                                              │
@@ -5527,7 +5527,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [BZ].{                                                              │
@@ -5604,7 +5604,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [CE].{                                                              │
@@ -5666,7 +5666,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [CJ].{                                                              │
@@ -5713,7 +5713,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [CO].{                                                              │
@@ -5756,7 +5756,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [CT].{                                                              │
@@ -5801,7 +5801,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [DD].{                                                              │
@@ -5907,7 +5907,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [DI].{                                                              │
@@ -5963,7 +5963,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [DN].{                                                              │
@@ -5995,7 +5995,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 
 
 ┌─────────────────┐
-│ TYPE REDECLARED ├─ The type L2 is being redeclared. ────────────────────────┐
+│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  L2 := [DS].{                                                              │

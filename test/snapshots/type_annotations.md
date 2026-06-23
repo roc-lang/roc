@@ -41,36 +41,33 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Thing is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Thing` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  bar : Thing(_a, _b, _)                                                    │
  │        ‾‾‾‾‾                                                               │
  └─────────────────────────────────────────────────── type_annotations.md:3:7 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
+│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  main! : List(String) -> Try({}, _)                                        │
  │               ‾‾‾‾‾‾                                                       │
  └────────────────────────────────────────────────── type_annotations.md:9:14 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type Value is not declared in this scope. ───────────┐
+│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  tag_tuple : Value((_a, _b, _c))                                           │
  │              ‾‾‾‾‾                                                         │
  └───────────────────────────────────────────────── type_annotations.md:11:13 ┘
 
-    This type is referenced here:
 
 
 ┌──────────────────────────┐

@@ -22,25 +22,23 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type UnknownType is not declared in this scope. ─────┐
+│ UNDECLARED TYPE ├─ The type `UnknownType` is not declared in this scope. ───┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  MyType : UnknownType                                                      │
  │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type UndeclaredResult is not declared in this ───────┐
+│ UNDECLARED TYPE ├─ The type `UndeclaredResult` is not declared in this ─────┐
 └┬────────────────┘  scope.                                                   │
  │                                                                            │
  │  processValue : UndeclaredResult -> Str                                    │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
 
-    This type is referenced here:
 
 
 ┌─────────────────┐
@@ -63,7 +61,6 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
  └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
-    You're attempting to use this module here:
 
 # TOKENS
 ~~~zig

@@ -15,14 +15,13 @@ UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
 
 ┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type CE is not declared in this scope. ──────────────┐
+│ UNDECLARED TYPE ├─ The type `CE` is not declared in this scope. ────────────┐
 └┬────────────────┘                                                           │
  │                                                                            │
  │  red : CE                                                                  │
  │        ‾‾                                                                  │
  └──────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
 
-    This type is referenced here:
 
 # TOKENS
 ~~~zig
