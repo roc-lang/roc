@@ -1201,7 +1201,7 @@ pub const Diagnostic = union(enum) {
         line_starts: []const u32,
     ) Allocator.Error!Report {
         const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
-        const title = if (cross_scope) "TYPE SHADOWED" else "TYPE DUPLICATE";
+        const title = if (cross_scope) "Type Shadowed" else "Type Duplicate";
 
         var report = try Report.init(allocator, title, "", severity);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -1868,7 +1868,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        const title = if (is_alias) "Underscore In Type Alias" else "UNDERSCORE IN NOMINAL TYPE";
+        const title = if (is_alias) "Underscore In Type Alias" else "Underscore In Nominal Type";
 
         const declaration_type = if (is_alias) "type alias" else "nominal type";
         const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in {s} declarations.", .{declaration_type});

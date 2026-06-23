@@ -447,7 +447,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Load Error", "Failed to load bitcode file", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -458,7 +458,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Parse Error", "Failed to parse bitcode", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }

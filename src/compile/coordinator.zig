@@ -3975,7 +3975,7 @@ pub const Coordinator = struct {
             else => |e| blk: {
                 const title = switch (e) {
                     error.FileNotFound => "File Not Found",
-                    else => "PARSING FAILED",
+                    else => "Parsing Failed",
                 };
                 break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
@@ -4192,7 +4192,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .reports = self.workerFailureReports(allocators.result, "Type Checking Failed", task.path, e),
                 .partial_env = task.module_env,
             } },
         };

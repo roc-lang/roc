@@ -1845,7 +1845,7 @@ pub const BuildEnv = struct {
             },
         );
         defer self.gpa.free(msg);
-        try self.emitWorkspaceReport("INVALID TARGET CONFIGURATION", msg);
+        try self.emitWorkspaceReport("Invalid Target Configuration", msg);
     }
 
     // Compute global deterministic emission of accumulated reports:
