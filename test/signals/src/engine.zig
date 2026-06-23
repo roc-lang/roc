@@ -1775,6 +1775,23 @@ pub fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNod
     return children.toOwnedSlice(allocator) catch @panic("out of memory");
 }
 
+pub fn renderNodeScopeId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
+    return switch (node.kind) {
+        .element => (findElementDesc(stream, node.elem_id) orelse @panic("renderNodeScopeId: render node has no matching descriptor")).scope_id,
+        .text => (findTextNodeDesc(stream, node.elem_id) orelse @panic("renderNodeScopeId: render node has no matching descriptor")).scope_id,
+        .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse @panic("renderNodeScopeId: render node has no matching descriptor")).scope_id,
+    };
+}
+
+fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
+    for (left) |left_id| {
+        for (right) |right_id| {
+            if (left_id == right_id) return true;
+        }
+    }
+    return false;
+}
+
 // Host-agnostic signal-record construction helpers (shared by both hosts).
 
 pub fn resolveNodeBinderRef(binder_stack: []const HostBinderBinding, token: HostBinderToken) u64 {
@@ -2759,6 +2776,153 @@ pub fn Engine(comptime Ctx: type) type {
                 .record = record,
                 .source_node_ids = source_node_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
             };
+        }
+
+        pub fn streamNodeIdInScopeSubtree(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
+            self.recordStreamNodesScanned(previous.scope_sites.items.len);
+            for (previous.scope_sites.items) |site| {
+                if (site.node_id == node_id and self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) return true;
+            }
+            return false;
+        }
+
+        pub fn renderNodeInScopeSubtree(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, root_scope_id: u64) bool {
+            return self.scopeIsDescendantOrSelf(renderNodeScopeId(stream, node), root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope");
+        }
+
+        pub fn firstRenderIndexInScopeSubtree(self: *Self, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
+            self.recordStreamNodesScanned(stream.render_nodes.items.len);
+            for (stream.render_nodes.items, 0..) |node, index| {
+                if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) return index;
+            }
+            return null;
+        }
+
+        pub fn lastRenderEndIndexInScopeSubtree(self: *Self, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
+            var end_index: ?usize = null;
+            self.recordStreamNodesScanned(stream.render_nodes.items.len);
+            for (stream.render_nodes.items, 0..) |node, index| {
+                if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) {
+                    end_index = index + 1;
+                }
+            }
+            return end_index;
+        }
+
+        pub fn scopeSubtreeHasDirtyStructuralSource(self: *Self, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
+            if (dirty_source_node_ids.len == 0) return false;
+
+            self.recordStreamNodesScanned(previous.whens.items.len);
+            for (previous.whens.items) |desc| {
+                if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+                if (sourceNodeIdsIntersect(desc.condition.source_node_ids, dirty_source_node_ids)) return true;
+            }
+            self.recordStreamNodesScanned(previous.eaches.items.len);
+            for (previous.eaches.items) |desc| {
+                if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+                if (sourceNodeIdsIntersect(desc.items.source_node_ids, dirty_source_node_ids)) return true;
+            }
+            return false;
+        }
+
+        pub fn cloneHostSignalCacheSlot(self: *Self, ctx: anytype, slot: HostSignalCacheSlot, metrics: anytype) HostSignalCacheSlot {
+            _ = self;
+            return slot.cloneRetained(ctx, metrics);
+        }
+
+        pub fn copyActiveScopeSubtreeDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
+            const allocator = Ctx.allocator(ctx);
+            const previous = &self.active_stream;
+            const previous_render_base = self.firstRenderIndexInScopeSubtree(previous, root_scope_id);
+            const next_render_base = stream.render_nodes.items.len;
+            var copied_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
+            defer copied_elem_ids.deinit(allocator);
+
+            for (previous.render_nodes.items) |node| {
+                const node_scope_id = renderNodeScopeId(previous, node);
+                if (!(self.scopeIsDescendantOrSelf(node_scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
+
+                copied_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
+                switch (node.kind) {
+                    .element => {
+                        const desc = findElementDesc(previous, node.elem_id) orelse @panic("copyActiveScopeSubtreeDescriptors: render node has no matching descriptor");
+                        _ = stream.appendElement(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.tag);
+                    },
+                    .text => {
+                        const desc = findTextNodeDesc(previous, node.elem_id) orelse @panic("copyActiveScopeSubtreeDescriptors: render node has no matching descriptor");
+                        stream.appendTextNode(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.value);
+                    },
+                    .signal_text => {
+                        const desc = findSignalTextNodeDesc(previous, node.elem_id) orelse @panic("copyActiveScopeSubtreeDescriptors: render node has no matching descriptor");
+                        const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+                        stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read);
+                        stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+                    },
+                }
+            }
+
+            for (previous.static_text_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                stream.appendStaticTextAttr(allocator, desc.elem_id, desc.field, desc.value);
+            }
+            for (previous.signal_text_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
+                stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
+            for (previous.static_bool_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                stream.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
+            }
+            for (previous.signal_bool_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
+                stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
+            for (previous.on_changes.items) |desc| {
+                if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
+                const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
+                stream.on_changes.items[stream.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
+            for (previous.cleanups.items) |desc| {
+                if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
+                stream.appendCleanup(allocator, desc.scope_id, desc.name);
+            }
+            for (previous.events.items, 0..) |desc, event_index| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index) catch @panic("active event table is missing a retained payload drop");
+                const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index) catch @panic("active event table is missing a retained transform");
+                const payload_tag: HostValueTypeTag = if (desc.owns_payload_tag) desc.payload_tag else @ptrCast(self.activeEventPayloadTagByIndex(event_index) catch @panic("active event table is missing a retained payload tag"));
+                stream.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
+            }
+
+            for (previous.scope_sites.items) |desc| {
+                if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
+                const render_insert_index = if (previous_render_base) |render_base| blk: {
+                    if (desc.render_insert_index < render_base) @panic("copied scope site insertion point precedes its scope subtree");
+                    break :blk next_render_base + (desc.render_insert_index - render_base);
+                } else next_render_base;
+                stream.appendScopeSiteAt(allocator, desc.node_id, desc.scope_id, desc.ordinal, desc.parent_elem_id, render_insert_index, desc.kind, desc.binder_bindings);
+            }
+            for (previous.states.items) |desc| {
+                if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+                stream.appendState(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, desc.initial, desc.eq, desc.drop);
+            }
+            for (previous.whens.items) |desc| {
+                if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+                const condition = desc.condition.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, condition, desc.read, desc.when_false, desc.when_true);
+                stream.whens.items[stream.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
+            for (previous.eaches.items) |desc| {
+                if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
+                const items = desc.items.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendEach(allocator, roc_host, &self.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.key_hash, desc.key_of, desc.key_eq, desc.key_drop, desc.item_eq, desc.item_drop, desc.row);
+                stream.eaches.items[stream.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
         }
 
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {

@@ -2687,14 +2687,7 @@ const HostEnv = struct {
     }
 
     fn lastRenderEndIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-        var end_index: ?usize = null;
-        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
-        for (stream.render_nodes.items, 0..) |node, index| {
-            if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) {
-                end_index = index + 1;
-            }
-        }
-        return end_index;
+        return self.engine.lastRenderEndIndexInScopeSubtree(stream, root_scope_id);
     }
 
     fn renderInsertIndexForEachRow(self: *HostEnv, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64, row_index: usize) usize {
@@ -2728,13 +2721,9 @@ const HostEnv = struct {
         };
     }
 
-    fn renderNodeScopeId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
-        return switch (node.kind) {
-            .element => (findElementDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeScopeId", node)).scope_id,
-            .text => (findTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeScopeId", node)).scope_id,
-            .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeScopeId", node)).scope_id,
-        };
-    }
+    // renderNodeScopeId now lives in the shared engine; this struct-level alias
+    // keeps `HostEnv.renderNodeScopeId(...)` call sites resolving.
+    const renderNodeScopeId = engine.renderNodeScopeId;
 
     fn elemScopeId(stream: *const HostNodeDescriptorStream, elem_id: u64) ?u64 {
         const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
@@ -2760,31 +2749,15 @@ const HostEnv = struct {
     }
 
     fn streamNodeIdInScopeSubtree(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
-        self.engine.recordStreamNodesScanned(previous.scope_sites.items.len);
-        for (previous.scope_sites.items) |site| {
-            if (site.node_id == node_id and self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id)) return true;
-        }
-        return false;
+        return self.engine.streamNodeIdInScopeSubtree(previous, node_id, root_scope_id);
     }
 
     fn scopeSubtreeHasDirtyStructuralSource(self: *HostEnv, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
-        if (dirty_source_node_ids.len == 0) return false;
-
-        self.engine.recordStreamNodesScanned(previous.whens.items.len);
-        for (previous.whens.items) |desc| {
-            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            if (sourceNodeIdsIntersect(desc.condition.source_node_ids, dirty_source_node_ids)) return true;
-        }
-        self.engine.recordStreamNodesScanned(previous.eaches.items.len);
-        for (previous.eaches.items) |desc| {
-            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            if (sourceNodeIdsIntersect(desc.items.source_node_ids, dirty_source_node_ids)) return true;
-        }
-        return false;
+        return self.engine.scopeSubtreeHasDirtyStructuralSource(previous, root_scope_id, dirty_source_node_ids);
     }
 
     fn cloneHostSignalCacheSlot(self: *HostEnv, slot: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
-        return slot.cloneRetained(self, metrics);
+        return self.engine.cloneHostSignalCacheSlot(self, slot, metrics);
     }
 
     fn activeEventTransformByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
@@ -2819,7 +2792,7 @@ const HostEnv = struct {
     }
 
     fn renderNodeInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, node: HostRenderNode, root_scope_id: u64) bool {
-        return self.scopeIsDescendantOrSelf(HostEnv.renderNodeScopeId(stream, node), root_scope_id);
+        return self.engine.renderNodeInScopeSubtree(stream, node, root_scope_id);
     }
 
     fn renderNodeInReplacementTarget(self: *HostEnv, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {
@@ -2855,11 +2828,7 @@ const HostEnv = struct {
     }
 
     fn firstRenderIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
-        for (stream.render_nodes.items, 0..) |node, index| {
-            if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) return index;
-        }
-        return null;
+        return self.engine.firstRenderIndexInScopeSubtree(stream, root_scope_id);
     }
 
     fn streamNodeIdInReplacementTarget(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, target: HostStructuralReplacementTarget) bool {
@@ -3680,98 +3649,7 @@ const HostEnv = struct {
     }
 
     fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
-        const allocator = self.gpa.allocator();
-        const previous = &self.engine.active_stream;
-        const previous_render_base = self.firstRenderIndexInScopeSubtree(previous, root_scope_id);
-        const next_render_base = stream.render_nodes.items.len;
-        var copied_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
-        defer copied_elem_ids.deinit(allocator);
-
-        for (previous.render_nodes.items) |node| {
-            const node_scope_id = HostEnv.renderNodeScopeId(previous, node);
-            if (!self.scopeIsDescendantOrSelf(node_scope_id, root_scope_id)) continue;
-
-            copied_elem_ids.append(allocator, node.elem_id) catch std.process.exit(1);
-            switch (node.kind) {
-                .element => {
-                    const desc = findElementDesc(previous, node.elem_id) orelse failMissingRenderDescriptor("copyActiveScopeSubtreeDescriptors", node);
-                    _ = stream.appendElement(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.tag);
-                },
-                .text => {
-                    const desc = findTextNodeDesc(previous, node.elem_id) orelse failMissingRenderDescriptor("copyActiveScopeSubtreeDescriptors", node);
-                    stream.appendTextNode(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.value);
-                },
-                .signal_text => {
-                    const desc = findSignalTextNodeDesc(previous, node.elem_id) orelse failMissingRenderDescriptor("copyActiveScopeSubtreeDescriptors", node);
-                    const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-                    stream.appendSignalTextNode(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read);
-                    stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-                },
-            }
-        }
-
-        for (previous.static_text_attrs.items) |desc| {
-            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            stream.appendStaticTextAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (previous.signal_text_attrs.items) |desc| {
-            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            stream.appendSignalTextAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.static_bool_attrs.items) |desc| {
-            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            stream.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (previous.signal_bool_attrs.items) |desc| {
-            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            stream.appendSignalBoolAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.on_changes.items) |desc| {
-            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            stream.appendOnChange(allocator, roc_host, &self.engine.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
-            stream.on_changes.items[stream.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.cleanups.items) |desc| {
-            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
-            stream.appendCleanup(allocator, desc.scope_id, desc.name);
-        }
-        for (previous.events.items, 0..) |desc, event_index| {
-            if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-            const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
-            const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
-            const payload_tag = if (desc.owns_payload_tag) desc.payload_tag else self.activeEventPayloadTagByIndex(event_index);
-            stream.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
-        }
-
-        for (previous.scope_sites.items) |desc| {
-            if (!self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id)) continue;
-            const render_insert_index = if (previous_render_base) |render_base| blk: {
-                if (desc.render_insert_index < render_base) failHost("copied scope site insertion point precedes its scope subtree");
-                break :blk next_render_base + (desc.render_insert_index - render_base);
-            } else next_render_base;
-            stream.appendScopeSiteAt(allocator, desc.node_id, desc.scope_id, desc.ordinal, desc.parent_elem_id, render_insert_index, desc.kind, desc.binder_bindings);
-        }
-        for (previous.states.items) |desc| {
-            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            stream.appendState(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, desc.initial, desc.eq, desc.drop);
-        }
-        for (previous.whens.items) |desc| {
-            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            const condition = desc.condition.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            stream.appendWhen(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, condition, desc.read, desc.when_false, desc.when_true);
-            stream.whens.items[stream.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.eaches.items) |desc| {
-            if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
-            const items = desc.items.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            stream.appendEach(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.key_hash, desc.key_of, desc.key_eq, desc.key_drop, desc.item_eq, desc.item_drop, desc.row);
-            stream.eaches.items[stream.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
+        self.engine.copyActiveScopeSubtreeDescriptors(self, roc_host, stream, root_scope_id);
     }
 
     fn collectActiveElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
@@ -4840,15 +4718,6 @@ fn evalDirtyOnChange(host: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnCh
     const cmd = callErasedHostValueToStartTaskCmd(roc_host, desc.to_cmd, result.value);
     defer abi.decref__AnonStruct76(cmd, roc_host);
     return startTaskCommand(host, roc_host, desc.scope_id, cmd);
-}
-
-fn sourceNodeIdsIntersect(left: []const u64, right: []const u64) bool {
-    for (left) |left_id| {
-        for (right) |right_id| {
-            if (left_id == right_id) return true;
-        }
-    }
-    return false;
 }
 
 fn collectDirtyStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) []HostDirtyStructuralSignal {
