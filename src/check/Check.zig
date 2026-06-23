@@ -3714,100 +3714,63 @@ fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) Modu
 
 fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
     const literal = self.recordedNumeralLiteralForExpr(expr_idx);
-    const text = try numeralLiteralDecimalText(self.gpa, self.cir, literal);
-    defer self.gpa.free(text);
-    const fits_dec = builtins.dec.RocDec.fromNonemptySlice(text) != null;
+    const fits_dec = numeralLiteralFitsDec(self.cir, literal);
     const is_fractional = literal.after_decimal_digit_count != 0 or literal.hadDecimalPoint();
     return types_mod.NumeralInfo.fromExact(literal.isNegative(), is_fractional, fits_dec, region);
 }
 
-fn numeralLiteralDecimalText(
-    allocator: Allocator,
+fn numeralLiteralFitsDec(
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,
-) Allocator.Error![]const u8 {
-    const before = try base256DecimalText(allocator, module_env.numeralDigitsBefore(literal), 1);
-    defer allocator.free(before);
+) bool {
+    const decimal_places = builtins.dec.RocDec.decimal_places;
+    const after_count = literal.after_decimal_digit_count;
+    if (after_count > decimal_places) return false;
 
-    const after_min_digits: usize = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
-        @panic("recorded numeral literal decimal digit count exceeded host usize");
-    };
-    const after = if (after_min_digits == 0)
-        try allocator.alloc(u8, 0)
-    else
-        try base256DecimalText(allocator, module_env.numeralDigitsAfter(literal), after_min_digits);
-    defer allocator.free(after);
+    const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return false;
+    const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return false;
 
-    const sign_len: usize = @intFromBool(literal.isNegative());
-    const dot_len: usize = @intFromBool(after_min_digits > 0);
-    const total_len = sign_len + before.len + dot_len + after.len;
-    const text = try allocator.alloc(u8, total_len);
-    var offset: usize = 0;
-    if (literal.isNegative()) {
-        text[offset] = '-';
-        offset += 1;
-    }
-    @memcpy(text[offset..][0..before.len], before);
-    offset += before.len;
-    if (after_min_digits > 0) {
-        text[offset] = '.';
-        offset += 1;
-        @memcpy(text[offset..][0..after.len], after);
-    }
-    return text;
+    const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return false;
+    const after_scale = pow10U128(decimal_places - after_count);
+    const after_scaled = checkedMulU128(after, after_scale) orelse return false;
+    const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return false;
+
+    const max_positive: u128 = @intCast(std.math.maxInt(i128));
+    const limit = if (literal.isNegative()) max_positive + 1 else max_positive;
+    return magnitude <= limit;
 }
 
-fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: usize) Allocator.Error![]const u8 {
-    var first_nonzero: usize = 0;
-    while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
-
-    if (first_nonzero == bytes_be.len) {
-        const len = @max(min_digits, 1);
-        const out = try allocator.alloc(u8, len);
-        @memset(out, '0');
-        return out;
+fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+    var value: u128 = 0;
+    for (bytes_be) |byte| {
+        const shifted = @mulWithOverflow(value, 256);
+        if (shifted[1] != 0) return null;
+        const added = @addWithOverflow(shifted[0], byte);
+        if (added[1] != 0) return null;
+        value = added[0];
     }
+    return value;
+}
 
-    var current_buf = try allocator.dupe(u8, bytes_be[first_nonzero..]);
-    defer allocator.free(current_buf);
-    var current_len = current_buf.len;
-    var digits_rev = std.ArrayList(u8).empty;
-    defer digits_rev.deinit(allocator);
+fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+    const multiplied = @mulWithOverflow(lhs, rhs);
+    if (multiplied[1] != 0) return null;
+    return multiplied[0];
+}
 
-    while (current_len > 0) {
-        const current = current_buf[0..current_len];
-        var quotient = try allocator.alloc(u8, current.len);
-        var quotient_len: usize = 0;
-        var remainder: u16 = 0;
-        for (current) |byte| {
-            const value = remainder * 256 + byte;
-            const digit: u8 = @intCast(value / 10);
-            remainder = value % 10;
-            if (digit != 0 or quotient_len != 0) {
-                quotient[quotient_len] = digit;
-                quotient_len += 1;
-            }
-        }
-        // Free the freshly-allocated quotient if recording the digit fails,
-        // since it has not yet been adopted into current_buf.
-        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
-            allocator.free(quotient);
-            return err;
-        };
-        allocator.free(current_buf);
-        current_buf = quotient;
-        current_len = quotient_len;
+fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+    const added = @addWithOverflow(lhs, rhs);
+    if (added[1] != 0) return null;
+    return added[0];
+}
+
+fn pow10U128(exponent: u32) u128 {
+    var value: u128 = 1;
+    var remaining = exponent;
+    while (remaining > 0) : (remaining -= 1) {
+        value *= 10;
     }
-
-    const digit_count = digits_rev.items.len;
-    const total_len = @max(digit_count, min_digits);
-    const out = try allocator.alloc(u8, total_len);
-    const pad = total_len - digit_count;
-    @memset(out[0..pad], '0');
-    for (digits_rev.items, 0..) |digit, i| {
-        out[pad + digit_count - 1 - i] = digit;
-    }
-    return out;
+    return value;
 }
 
 /// Create a nominal Box type with the given element type

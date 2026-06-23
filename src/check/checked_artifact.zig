@@ -9456,75 +9456,161 @@ const CheckedBodyPayloadCopier = struct {
         has_suffix: bool,
     ) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, has_suffix) orelse .{ .num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, has_suffix)) orelse .{ .num_from_numeral = null };
     }
 
     fn copyTypedNumFromNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, true) orelse .{ .typed_num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, true)) orelse .{ .typed_num_from_numeral = null };
     }
 
-    fn exactNumeralDecimalText(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
-        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+    fn exactNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
+        return self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked exact numeral literal had no parser-owned numeral facts", .{});
         };
-        return numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
     }
 
     fn exactNumeralForBuiltin(
-        text: []const u8,
+        allocator: Allocator,
+        module_env: *const ModuleEnv,
+        literal: ModuleEnv.NumeralLiteral,
         builtin_nominal: CheckedBuiltinNominal,
         has_suffix: bool,
-    ) ?CheckedExprData {
+    ) Allocator.Error!?CheckedExprData {
         return switch (builtin_nominal) {
-            .u8 => exactUnsignedIntLiteral(u8, text, .u8),
-            .u16 => exactUnsignedIntLiteral(u16, text, .u16),
-            .u32 => exactUnsignedIntLiteral(u32, text, .u32),
-            .u64 => exactUnsignedIntLiteral(u64, text, .u64),
-            .u128 => exactUnsignedIntLiteral(u128, text, .u128),
-            .i8 => exactSignedIntLiteral(i8, text, .i8),
-            .i16 => exactSignedIntLiteral(i16, text, .i16),
-            .i32 => exactSignedIntLiteral(i32, text, .i32),
-            .i64 => exactSignedIntLiteral(i64, text, .i64),
-            .i128 => exactSignedIntLiteral(i128, text, .i128),
-            .f32 => if (std.fmt.parseFloat(f32, text)) |value|
-                .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .f64 => if (std.fmt.parseFloat(f64, text)) |value|
-                .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
+            .u8 => exactUnsignedIntLiteral(u8, module_env, literal, .u8),
+            .u16 => exactUnsignedIntLiteral(u16, module_env, literal, .u16),
+            .u32 => exactUnsignedIntLiteral(u32, module_env, literal, .u32),
+            .u64 => exactUnsignedIntLiteral(u64, module_env, literal, .u64),
+            .u128 => exactUnsignedIntLiteral(u128, module_env, literal, .u128),
+            .i8 => exactSignedIntLiteral(i8, module_env, literal, .i8),
+            .i16 => exactSignedIntLiteral(i16, module_env, literal, .i16),
+            .i32 => exactSignedIntLiteral(i32, module_env, literal, .i32),
+            .i64 => exactSignedIntLiteral(i64, module_env, literal, .i64),
+            .i128 => exactSignedIntLiteral(i128, module_env, literal, .i128),
+            .f32 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f32, text)) |value|
+                    .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .f64 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f64, text)) |value|
+                    .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .dec => if (exactDecLiteral(module_env, literal)) |value|
                 .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
             else if (!has_suffix)
-                .{ .dec = .{ .value = if (text.len > 0 and text[0] == '-') builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
+                .{ .dec = .{ .value = if (literal.isNegative()) builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
             else
                 null,
             else => null,
         };
     }
 
-    fn exactUnsignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactUnsignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        if (literal.isNegative() and magnitude != 0) return null;
+        if (magnitude > @as(u128, @intCast(std.math.maxInt(T)))) return null;
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(parsed))),
+            .bytes = @bitCast(magnitude),
             .kind = .u128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
     }
 
-    fn exactSignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactSignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        const max_positive: u128 = @intCast(std.math.maxInt(T));
+        const max_negative = max_positive + 1;
+        const parsed: i128 = if (literal.isNegative()) blk: {
+            if (magnitude > max_negative) return null;
+            break :blk if (magnitude == max_negative)
+                @as(i128, std.math.minInt(T))
+            else
+                -@as(i128, @intCast(magnitude));
+        } else blk: {
+            if (magnitude > max_positive) return null;
+            break :blk @intCast(magnitude);
+        };
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(i128, @intCast(parsed))),
+            .bytes = @bitCast(parsed),
             .kind = .i128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn exactIntegerMagnitude(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?u128 {
+        if (literal.after_decimal_digit_count != 0) return null;
+        return base256BytesToU128(module_env.numeralDigitsBefore(literal));
+    }
+
+    fn exactDecLiteral(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?builtins.dec.RocDec {
+        const decimal_places = builtins.dec.RocDec.decimal_places;
+        const after_count = literal.after_decimal_digit_count;
+        if (after_count > decimal_places) return null;
+
+        const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return null;
+        const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return null;
+
+        const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return null;
+        const after_scale = pow10U128(decimal_places - after_count);
+        const after_scaled = checkedMulU128(after, after_scale) orelse return null;
+        const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return null;
+
+        const max_positive: u128 = @intCast(std.math.maxInt(i128));
+        const max_negative = max_positive + 1;
+        if (literal.isNegative()) {
+            if (magnitude > max_negative) return null;
+            return .{ .num = if (magnitude == max_negative)
+                std.math.minInt(i128)
+            else
+                -@as(i128, @intCast(magnitude)) };
+        }
+
+        if (magnitude > max_positive) return null;
+        return .{ .num = @intCast(magnitude) };
+    }
+
+    fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+        var value: u128 = 0;
+        for (bytes_be) |byte| {
+            const shifted = @mulWithOverflow(value, 256);
+            if (shifted[1] != 0) return null;
+            const added = @addWithOverflow(shifted[0], byte);
+            if (added[1] != 0) return null;
+            value = added[0];
+        }
+        return value;
+    }
+
+    fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+        const multiplied = @mulWithOverflow(lhs, rhs);
+        if (multiplied[1] != 0) return null;
+        return multiplied[0];
+    }
+
+    fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+        const added = @addWithOverflow(lhs, rhs);
+        if (added[1] != 0) return null;
+        return added[0];
+    }
+
+    fn pow10U128(exponent: u32) u128 {
+        var value: u128 = 1;
+        var remaining = exponent;
+        while (remaining > 0) : (remaining -= 1) {
+            value *= 10;
+        }
+        return value;
     }
 
     fn copyTypedIntLiteral(
