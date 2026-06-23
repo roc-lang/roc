@@ -6,8 +6,7 @@
 //! value constructors. The pieces that genuinely differ per host — which
 //! allocator/registry/`roc_host` to use, and the native-only test-kind
 //! bookkeeping — are supplied by the caller through an explicit `roc_host` and a
-//! small duck-typed `ctx`. See `BROWSER_RUNTIME_DESIGN.md` O9 / `NEXT_STEPS.md`
-//! G-B0.
+//! small duck-typed `ctx`. See `DESIGN.md` (one engine, two thin hosts).
 
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");

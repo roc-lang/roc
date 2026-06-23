@@ -1,14 +1,60 @@
 # Signals UI Platform — Target Design
 
-This document is the authoritative design for the Signals UI platform. It
-describes the architecture we are building toward.
+This document is the single authoritative design for the Signals UI platform. It
+describes the architecture we are building toward and the invariants every part
+of it must hold. It is forward-looking and enduring: it describes the system as
+it is meant to be, not the current state of the work queue. Live work tracking
+lives in `NEXT_STEPS.md`.
 
-The host for this design is a **test-runner host** that simulates a real DOM and
-applies render patches against an in-memory element tree. The simulated host
-lets us benchmark and characterize the framework before a browser
-implementation exists. The Roc-facing API and the host boundary are designed so
-that the test-runner host and a future browser host implement the *same*
-contract.
+## Purpose and Dual-Host Architecture
+
+The product is a **host-agnostic reactive engine**: a mutable node table,
+topological-rank scheduler, dirty set, `is_eq` value pruning, scope forest,
+keyed-row diff, identity tables, and structural splice/collect/apply. The engine
+owns all reactive and structural logic. It is the single source of truth for how
+a Signals app behaves.
+
+The engine is driven by **two thin hosts** that implement one contract — a
+`Ctx` (host capabilities the engine calls) plus a `sink()` (where the engine
+writes render commands). The hosts differ only in their boundary, never in their
+reactive behaviour:
+
+- **Native host** — the spec/telemetry/debug host. It backs the engine with a
+  simulated DOM (a flat `DomElement` array), a semantic-locator spec runner, an
+  allocation ledger, and fine-grained work counters. It compiles to a native
+  binary, so ordinary tooling (`lldb`, allocation tracing) can inspect crashes
+  and memory behaviour directly. Its job is **low-level observability and
+  semantic assertion** — the things a real browser cannot show us.
+
+- **Wasm host** — the browser-boundary host. It backs the engine with a
+  command-buffer sink serialized into linear memory, plus the JS↔WASM boundary:
+  UTF-8 marshalling, event-payload codec, `memory.grow` view coordination, and
+  timer/`fetch` bridges. Its job is **the JS↔WASM contract only**. It contains
+  no reactive or structural logic; that all lives in the engine.
+
+The same Roc apps compile against both hosts. The native spec runner asserts
+semantics and work budgets; the browser runs the apps for real. The JS runtime
+is a thin executor of the engine's already-computed command stream — it never
+reconstructs meaning, holds reactive state, or re-decides patches.
+
+```text
+                          ┌──────────────────────────────┐
+                          │   Engine (host-agnostic)     │
+   App (Roc)              │   node table, scheduler,      │
+   build : {} -> Elem     │   dirty set, is_eq pruning,   │
+   pure descriptor   ───▶ │   scope forest, keyed diff,   │
+   (roc_ui_init, once)    │   structural splice/apply     │
+                          └───────────────┬──────────────┘
+                                          │ Ctx + sink()
+                       ┌──────────────────┴───────────────────┐
+                       ▼                                       ▼
+        Native host (Zig binary)                 Wasm host (Zig → wasm32)
+        ─────────────────────────                ─────────────────────────
+        simulated DOM (DomElement[])             command buffer in linear mem
+        spec runner + work counters       ──▶    JS executor applies ops to DOM
+        allocation ledger, lldb-debuggable       payload codec, memory.grow,
+                                                  timers / fetch bridge
+```
 
 ## Non-Negotiable Constraints
 
@@ -34,12 +80,17 @@ Every part of this design must respect them.
    *Complexity Discipline* below for the precise budget every code path owes.
 4. **Mutation lives only in the host.** Roc is pure and value-oriented. The
    reactive runtime — the dirty set, the scheduler, the in-place node table — is
-   intrinsically mutable, so it lives in the Zig host, which is the one place
-   mutation is legal.
+   intrinsically mutable, so it lives in the Zig engine/host, which is the one
+   place mutation is legal.
 5. **Type-mismatch crashes are structurally impossible.** A typed `Signal(a)`
    stays typed end to end. Erasure is confined to one generated thunk per edge,
    pinned to that edge's monomorphized types. There is no second, independently
    typed read site that can disagree with the writer.
+6. **One engine, two thin hosts.** All reactive and structural logic lives in the
+   shared engine. A host file contains only its boundary (sink, marshalling,
+   spec runner / JS bridge) and its `Ctx` implementation. Reactive or structural
+   logic appearing in a host file is a defect: it lets the two hosts diverge,
+   which this architecture exists to prevent.
 
 ## First Principles, Not Imitation
 
@@ -93,35 +144,6 @@ value-dependent set of inputs) is the same scope mechanism that powers `Ui.each`
 (see Identity and Dynamic Structure): a sub-graph that is rebuilt when its shape
 changes, not a static edge that is always live. Dynamic-cardinality reactivity
 and dynamic list structure must therefore share one mechanism, never two.
-
-## Architecture Overview
-
-```text
-   App (Roc)                Platform (Roc)              Host (Zig)
-   ---------                --------------              ----------
-   build : {} -> Elem       Ui.* / Signal.* / Html.*    node table (mutable)
-   pure description    ───▶  retained descriptor tree ─▶ mint ids, adjacency,
-   (built once)              with boxed typed thunks      dirty set, scheduler
-                            (roc_ui_init, once)           simulated DOM
-
-   DOM listener fires ─────────────────────────────────▶ route event id -> source
-                                                          call retained reducer thunk
-   retained closures   ◀── host calls them in-process ── propagate in dep order,
-   (transforms/eq/      ──▶ pure value out ─────────────▶ invoke only changed
-    reducers)                                             derived closures,
-                                                          emit minimal patches
-```
-
-The Roc side is built **once** per app lifetime into a descriptor tree that the
-host ingests through a single `roc_ui_init` entrypoint. The descriptor tree
-carries retained, boxed, monomorphized closures (transforms, equality, reducers)
-at every typed edge. After ingestion the host drives all subsequent events
-**in-process**: it owns the mutable node table and calls the retained Roc
-closures directly through the ABI's `RocErasedCallable` machinery. There is no
-per-event FFI round-trip back into a Roc entrypoint — the only Roc entrypoint is
-`roc_ui_init`. This is a deliberate choice (see Entry points): it removes
-per-event call-boundary overhead entirely, which is a stronger answer to the
-retained-closure cost risk than batching calls would have been.
 
 ## Core Concepts
 
@@ -235,7 +257,9 @@ Two rules keep this invariant honest:
 
 The app sees `Signal(a)`, typed keys, `Elem`, `Cmd(a)`, `Sub(a)`, and a small
 set of polymorphic functions. It never sees ids, string keys, `NodeValue`,
-lifecycle tokens, or subscription internals.
+lifecycle tokens, or subscription internals. The API is identical regardless of
+which host runs the app — apps are written once and run under both the native
+spec runner and the browser.
 
 ### Module surface
 
@@ -270,7 +294,7 @@ Signal.from_task : Task(a, err) -> Signal([Loading, Done(a), Failed(err)])
 Signal.fold_task : Task(a, err), b, (a -> b), (err -> b) -> Signal(b)
 Signal.start_str : Task(a, err), Str -> Cmd
 Signal.cleanup : Str -> Cleanup
-Signal.interval : U64 -> Signal(U64)  # test host: period ms -> tick count
+Signal.interval : U64 -> Signal(U64)  # period ms -> tick count
 Ui.on_change : Signal(a), (a -> Cmd) -> Elem  # sink: fires a Cmd when value changes
 Ui.on_cleanup : Cleanup -> Elem               # runs at scope disposal
 
@@ -457,7 +481,7 @@ and drives every event in-process, calling retained Roc closures directly. There
 is deliberately no per-event Roc entrypoint and no `ui_recompute` round-trip.
 
 ```roc
-# platform/main.roc (current and target shape)
+# platform/main.roc
 roc_ui_init : {} -> Box(Elem)
 ```
 
@@ -534,40 +558,13 @@ to the exact builder for that exact construction site.
 The platform holds **exactly one refcount** per retained closure on the host's
 behalf; the host drops it via `decrefErasedCallable` when a scope is disposed.
 
-## What Crosses the Host Boundary
+## The Engine: Host-Agnostic Reactive Core
 
-Per phase, precisely:
-
-**Ingestion (once, `roc_ui_init`):**
-- Roc -> host: a boxed `Elem` descriptor tree (signal edges with inputs and boxed
-  thunks, sinks, structure, scope boundaries, opaque `HostValue` cells).
-- host -> Roc: nothing; the host mints ids, interns tokens, and builds adjacency
-  and ranks from the descriptor.
-
-**Initial render (once):**
-- host computes initial node values by calling the retained transform thunks
-  directly in dependency order, then emits a patch list for the simulated DOM.
-
-**Per user event (no Roc entrypoint crossing):**
-- host -> Roc: a direct call to the source's retained reducer thunk with the
-  typed payload. Returns the new source value (opaque `HostValue`).
-- host marks the source dirty, walks the dirty derived set in topological-rank
-  order, and calls each changed node's retained transform thunk directly with
-  input values already in the table.
-- host prunes propagation where an output is `is_eq` to its cached value, then
-  emits minimal DOM patches for sinks whose value changed.
-
-**Per effect result / timer tick (target):**
-- Same as a user event: the host sets the effect's source node and runs the same
-  propagation. Async results re-enter through one scheduler and one path.
-
-The opaque `HostValue` payloads and thunks never have their bytes interpreted by
-the host except through the generated `is_eq`/`encode`/`decode` thunks for that
-exact edge.
-
-## The Host's Responsibilities
-
-The host is the mutable reactive runtime plus the (simulated) DOM.
+The engine is the mutable reactive runtime, factored as `Engine(comptime Ctx)`.
+It owns identity, ownership, dirtiness, scopes, the keyed diff, and the
+structural splice/collect/apply algorithms. It calls the host through the `Ctx`
+contract and writes all output through `sink()`. It never knows whether it is
+running under the simulated DOM or the browser.
 
 ### Node table and graph
 
@@ -653,8 +650,8 @@ On a source update:
    table.
 3. If the new value is `is_eq` to the cached value, **stop** — do not dirty its
    dependents. Otherwise update the cache and enqueue its dependents.
-4. For sink nodes whose value changed, emit the minimal DOM patch (`SetText`,
-   `SetValue`, `SetChecked`, `SetDisabled`, attribute set).
+4. For sink nodes whose value changed, emit the minimal render command (`SetText`,
+   `SetValue`, `SetChecked`, `SetDisabled`, attribute set) through `sink()`.
 
 Rank ordering guarantees a diamond (`a->b`, `a->c`, `(b,c)->d`) recomputes `d`
 exactly once after both `b` and `c` settle — glitch freedom at runtime with no
@@ -663,9 +660,10 @@ re-sort. Value pruning is the second half of linear-with-changes scaling.
 ### Event routing
 
 The host maintains a dense `event_id -> source_node_id` table built from
-`BindClick`/`BindInput`/`BindCheck` sinks in the descriptor. When a simulated DOM
-listener fires, it looks up the source node in O(1) and calls that source's
-retained reducer thunk directly. No scan, no string lookup.
+`BindClick`/`BindInput`/`BindCheck` sinks in the descriptor. When a DOM listener
+fires (a simulated one on the native host, a real one in the browser), it looks
+up the source node in O(1) and calls that source's retained reducer thunk
+directly. No scan, no string lookup.
 
 ### Scopes and lifecycle
 
@@ -677,8 +675,8 @@ change:
   the sub-desc Roc returns for it),
 - dispose scopes for removed branches/keys: remove their ids from the table and
   adjacency, call `decrefErasedCallable` on each retained closure (Roc reclaims
-  captured environments), run any `Ui.on_cleanup` task, and detach the DOM
-  subtree,
+  captured environments), run any `Ui.on_cleanup` task, and detach the rendered
+  subtree through `sink()`,
 - reorder list rows by moving DOM nodes, never rebuilding surviving rows.
 
 `keep_alive` is an explicit per-scope flag, never a heuristic.
@@ -688,24 +686,22 @@ closure/value and zero for disposed ones. The graph is a DAG; the host's
 back-references are not Roc-visible, so there are no refcount cycles.
 Reclamation is deterministic, no GC.
 
-### Simulated DOM (test-runner specifics)
+### The render-command sink
 
-The host keeps the existing simulated DOM shape from `host.zig`: a flat array of
-`DomElement` records (tag, role, label, test_id, text, value, checked, disabled,
-parent, children, bound events, per-field update counters) and the
-semantic-locator test spec parser (`role:`, `label:`, `text:`, `test_id:`, and
-`expect_*` / `click` / `fill` / `check`). This is retained because it is what
-lets us assert UI behavior in user-facing terms and benchmark update counts.
-
-The host applies render patches to this array exactly as a browser host would
-apply them to a real DOM, and dispatches spec actions (`click`, `fill`, `check`)
-by firing the bound event id into the source node's retained reducer thunk.
-
-The patch command set is the typed, host-independent set already present:
+The engine never touches a DOM directly. It writes to a `sink()` the host
+supplies. The command set is the typed, host-independent vocabulary:
 `ResetDom`, `CreateElement`, `CreateText`, `AppendChild`, `RemoveNode`,
 `MoveBefore`, `SetText`, `SetValue`, `SetChecked`, `SetDisabled`, `SetRole`,
-`SetLabel`, `SetTestId`, `BindClick`, `BindInput`, `BindCheck`. A browser host
-implements the same commands against the real DOM.
+`SetLabel`, `SetTestId`, `BindClick`, `BindInput`, `BindCheck`. The shared
+command vocabulary, command counters, metrics accumulator, and fixed-width
+command record live in `src/render_commands.zig`. Each host implements the sink:
+
+- the **native host** applies each command to its `DomElement` array;
+- the **wasm host** serializes each command into a fixed-width record in linear
+  memory for the JS executor to apply.
+
+Because the command set is shared, a spec on the native host asserts exactly the
+same command sequence the browser will execute.
 
 ### Metrics
 
@@ -764,8 +760,8 @@ Telemetry placement is deliberate:
 `retained_alloc_delta` measures the allocation residue of a single init-and-replay
 cycle, not growth across a long session. Proving "retained memory over a long
 session is flat" requires a distinct experiment that reuses one `HostEnv` across
-many events and watches the live `allocs − deallocs` gauge over time (see Success
-Metrics); per-iteration deltas cannot establish it.
+many events and watches the live `allocs − deallocs` gauge over time (see Measures
+of Effectiveness); per-iteration deltas cannot establish it.
 
 ## Glitch Freedom, Ordering, and Async
 
@@ -781,86 +777,191 @@ Metrics); per-iteration deltas cannot establish it.
   states are ordinary signal values the app folds and renders. There is no
   effect-inside-signal-evaluation; effects are sources.
 
-## Implementation Plan
+## Native Host Specifics
 
-This records the order the platform was built. The steps below are implemented
-on the simulated host; `NEXT_STEPS.md` is reserved for newly discovered gaps.
+The native host is the engine plus a simulated DOM, a spec runner, and
+telemetry. It is the place where we prove semantics and characterize work,
+because it can observe things a real browser structurally cannot.
 
-1. Build the simulated DOM, spec parser, and ABI box/refcount helpers in the
-   host. **(done)**
-2. Implement the `roc_ui_init` ingestion of the descriptor tree, in-host event
-   driving over `RocErasedCallable`, and shutdown reclamation. **(done)**
-3. Implement the Roc descriptor builder (`Signal`, `Html`, `Ui`) and the
-   retained-thunk trampolines, with confined erasure via opaque `HostValue`
-   cells. **(done)**
-4. Build the representative apps (`ops_dashboard`, `checkout_wizard`,
-   `kanban_board`, plus the `identity_stress` fixture) and run their specs.
-   **(done)**
-5. Make `Ui.each` structural updates scope-local — no active descriptor-stream
-   rebuild. **(done)**
-6. Add `Ui.component` named scopes for local state across helper functions.
-   **(done)**
-7. Add debug-only carrier type-tag assertions on the erasure boundary.
-   **(done)**
-8. Implement effects/subscriptions as sources (`Signal.from_task`,
-   `Signal.interval`, `Ui.on_change`, `Ui.on_cleanup`). **(done)**
+- **Simulated DOM.** A flat array of `DomElement` records (tag, role, label,
+  test_id, text, value, checked, disabled, parent, children, bound events,
+  per-field update counters). The native sink applies render commands to this
+  array exactly as a browser host applies them to a real DOM.
+- **Spec runner.** A semantic-locator spec parser (`role:`, `label:`, `text:`,
+  `test_id:`, and `expect_*` / `click` / `fill` / `check`) that lets a spec
+  assert UI behavior in user-facing terms and assert the exact work an event
+  caused via `expect_metric_delta`. Spec actions (`click`, `fill`, `check`) fire
+  the bound event id into the source node's retained reducer thunk.
+- **Allocation ledger and telemetry.** The O(1) allocation ledger and the
+  work counters above. This is the observability surface; it does not exist in
+  the browser host.
 
-## Definition of Done
+These are native-specific and are **not** part of the browser host.
 
-"Done" for this platform is **demonstrating the features a real UI framework
-requires, with the scaling properties signals promise, on the simulated host.**
-It is not a browser implementation and not exhaustive component coverage. We
-declare the signals platform demonstrated when **all** of the following hold,
-each proven by a spec or host test that fails if the property regresses:
+## Wasm Host and Browser Boundary
 
-1. **Linear-with-change scaling holds for every dynamic construct, including
-   `Ui.each`.** A spec drives an event into a large list and asserts via
-   `expect_metric_delta` that `nodes_recomputed`, `patches_emitted`, and
-   `rows_reused`/`rows_created`/`rows_removed` track the *changed* rows, not the
-   list size — with no active descriptor-stream rebuild (Plan step 5).
-2. **`Ui.component` composes local state across helper functions** without
-   identity leaks, proven by an app where reusable UI carrying its own state is
-   instantiated more than once and exercised through reorder/disposal.
-3. **The confined-erasure invariant is checked, not just argued.** Debug builds
-   carry carrier type tags and assert them in every thunk trampoline; the full
-   spec suite runs clean in a safe build, and the tags compile out of release
-   builds (Plan step 7).
-4. **Effects and subscriptions work as sources through the one propagation
-   path.** An app issues an async request (via the test host's fake-result
-   injection), folds `[Loading, Done, Failed]` into the UI, and a scope disposal
-   cancels in-flight work and runs `Ui.on_cleanup` — all asserted by spec.
-5. **The success metrics below are all green** across the representative apps and
-   the capability apps, and **the same spec produces the same patch sequence
-   every run.**
-6. **The Complexity Discipline budget holds, proven not argued.** Every operation
-   in the budget table meets its bound, verified by:
-   - a generated large-N `Ui.each` app (N a build parameter, generated
-     systematically — never a handwritten catalog) whose single-row item change
-     asserts `expect_metric_delta active_graph_records_rebuilt 0`,
-     `stream_nodes_scanned <= O(changed)`, bounded `patches_emitted`, and flat
-     per-event allocations across N ∈ {small, large};
-   - a reorder step on that app asserting only displaced rows produce DOM moves
-     and `active_graph_records_rebuilt` stays bounded by moved rows;
-   - the keyed diff backed by a `key.hash` index, with `each_key_compares`
-     tracking L (not L²) under churn;
-   - an O(1) allocation free path, proven by a long-session experiment that
-     reuses one `HostEnv` and shows the live `allocs − deallocs` gauge flat after
-     warmup;
-   - the benchmark gate (`run-signals-bench`) including the structural/reorder/
-     async apps with explicit regression thresholds, not just the scalar apps.
+The wasm host is the engine plus the JS↔WASM boundary. The framing is **host
+owns logical identity; JS owns DOM identity; they stay in lockstep by integer
+ids**. The JS runtime is a thin executor of the engine's command stream — it
+holds no reactive state, runs no diff, and never reconstructs meaning.
 
-Explicitly **out of scope** for "done": a real-browser host, uncontrolled native
-state reconciliation (focus/IME/selection/scroll), animation/high-frequency
-paths, and persistence/wire serialization. These are tracked as future stages,
-not gates — see Open Questions. The single highest external risk (a browser host
-surfacing controlled-input/focus problems the simulated DOM cannot show) is a
-deliberate *next* stage, gated behind this Definition of Done, not part of it.
+```
+  Roc app (wasm)         Engine (Zig, in wasm)              JS runtime (browser)
+  --------------         ---------------------              --------------------
+  main : {} -> Elem      node table (mutable)               nodes[]   : Node[]
+  pure descriptor   ──▶  scheduler / dirty set / scopes ──▶ listeners[]: Fn[]
+  (roc_ui_init, once)    reducer + transform thunks         applyCmd(op, args...)
+                         keyed each diff, ranks              forward event(id,payload)
+  retained closures ◀──  host calls them in-process
+  (no per-event FFI)     emits patch ops ─────────────────▶ exactly one DOM call per op
+```
+
+### Boundary contract
+
+- **WASM exports a tiny integer-only control surface; JS never calls
+  `roc_ui_init` directly.** JS asks the host to init; the Zig host calls
+  `roc_ui_init` inside WASM, exactly as the native host does.
+- **WASM owns logical identity; JS owns DOM identity, kept in lockstep by integer
+  ids.** JS holds `nodes: (Node|null)[]`; the host holds dense node ids. DOM
+  nodes never cross the boundary.
+- **The crossing is a patch-op stream (host→JS) plus an event call (JS→host).**
+  Not a serialized tree, not a pull-based inspection API, not a JS-side diff.
+
+### Host C-ABI exports
+
+```
+roc_ui_mount() -> void          // host runs roc_ui_init, ingests, emits initial patch stream
+roc_ui_event(event_id, payload_ptr, payload_len) -> u32  // returns packed preventDefault/stopPropagation flags
+roc_ui_timer(token) -> void                 // drive interval/timer source
+roc_ui_resolve(request_id, ptr, len, ok) -> void   // async result
+roc_ui_unmount() -> void        // dispose all scopes, drop descriptor, free retained closures
+
+roc_alloc / roc_dealloc / roc_realloc        // marshalling
+memory                                       // exported linear memory
+```
+
+The host drives the engine entirely inside WASM. `roc_ui_event` enters the Zig
+host, routes the event id to its source node, and calls the retained reducer
+thunk via `RocErasedCallable` in-process. There is no per-event Roc entrypoint
+crossing — this is the reason the boundary is cheap.
+
+### Command-buffer wire format
+
+The host appends fixed-width command records (op-code + integer operands +
+optional `(ptr, len)` for strings) to a buffer in linear memory, then signals JS
+to drain. JS reads the buffer through typed-array views and dispatches a `switch`
+over op-codes — one DOM operation per record. This minimizes both the *number* of
+crossings (one drain per host call, not one call per patch) and the *cost* of
+each crossing (in-place integer reads; `encodeInto`/`TextDecoder` only for the
+few strings).
+
+`tag_ref` and `accessor_ref` operands are integer enum indices into a JS
+string/array table, not transcoded strings. Free-form strings (text content,
+input values) cross as `(ptr, len)` UTF-8 slices the host materializes; JS never
+decodes a `RocStr` header, tag union, or list layout to infer meaning.
+
+### Marshalling and memory discipline
+
+Any `roc_alloc` during a host call can grow linear memory and detach JS
+typed-array views. The rule is **rebuild cached views after every allocating
+host call, before reading any command buffer or string/payload bytes** — JS
+compares `memory.buffer` identity and rebuilds `Uint8Array`/`Int32Array`/
+`DataView` only when it changed. No host-bumped memory-generation export is
+required.
+
+### Controlled inputs
+
+`SetValue` is a guarded op, not a blind assignment. Equal values are no-ops;
+differing values are deferred while the target input is focused or composing
+(IME); the latest deferred value is applied after blur unless a later input echo
+already matched it. Focused masking/validation and selection-preserving
+normalization are a known future input-reconciliation concern (see Open
+Questions), kept out of the thin executor.
+
+### Refcount ownership split
+
+- The host holds exactly one refcount per live retained closure/value (the Leak
+  invariant above). JS never owns Roc refcounts; JS holds DOM nodes and integer
+  ids only. On `RemoveNode`, JS detaches the DOM node and clears `nodes[id]`; the
+  refcount drop happens inside the host's scope-dispose path.
+- String buffers JS receives are borrowed for the drain; the host owns and frees
+  them. Buffers JS produces for event payloads are `roc_alloc`'d by JS and
+  ownership transfers to the host on `roc_ui_event`.
+
+### Async in the browser
+
+Effects are sources. Timers/`Signal.interval` are ingested at init; JS runs the
+real `setInterval(period_ms)` keyed by `token` and calls `roc_ui_timer(token)`
+each tick. Tasks/`fetch` declare a request; the host assigns a `request_id`, JS
+performs the `fetch`, and on settle calls `roc_ui_resolve(request_id, ptr, len,
+ok)`, which the host folds into `[Loading, Done, Failed]`. Disposing a scope
+cancels in-flight requests (host-emitted cancel → JS `AbortController` /
+`clearInterval`) and runs `Ui.on_cleanup`. All of it enters the one propagation
+queue; JS scheduling stays a single synchronous path.
+
+### What is worth testing on the JS side
+
+The JS runtime is a thin executor, so engine semantics and work budgets are
+proven by the native spec runner, **never re-tested through JS**. The only
+JS-side behavior worth an automated guard is the **JS↔WASM contract** itself:
+the cmd/patch codec, event-payload marshalling, and the `memory.grow`
+view-refresh discipline. A JS test that re-asserts "clicking changes the count"
+or "one patch per event" is duplicating the engine's own coverage across the
+boundary and pulls no additional weight.
+
+## Measures of Effectiveness
+
+These are the outcomes by which we judge whether the platform meets its intended
+goals. Each is a property we can observe and that should hold for the life of the
+platform; each is backed by a spec, host test, or measurement that fails if the
+property regresses.
+
+1. **One engine, two thin hosts.** All reactive and structural logic lives in the
+   shared engine. Neither host file contains reactive or structural logic; each
+   is a `Ctx` + `sink()` implementation plus its boundary. *We know this holds
+   when:* the hosts cannot drift apart, because there is only one implementation
+   of behaviour to drift from, and the same engine instantiates under both the
+   native build and `wasm32`.
+
+2. **Same apps, both environments.** The app suite is written once in Roc and runs
+   under the native spec runner and in the browser. *We know this holds when:*
+   every app in the suite builds and runs in both, with `serve.py` able to build
+   and serve any app, not just one.
+
+3. **Semantics proven where we can observe them.** The native spec runner asserts
+   behaviour and work budgets — the observability a real browser structurally
+   cannot give us. The JS runtime is thin enough that the only automated JS test
+   is the JS↔WASM codec contract. *We know this holds when:* engine semantics are
+   covered by native specs only, and JS coverage is the codec/boundary contract
+   only.
+
+4. **Work scales with change, not tree size.** Per event, nodes recomputed,
+   patches emitted, and rows touched track the *changed* set — including under
+   list churn — never graph or tree size, with no full-tree re-walk, no full
+   graph rebuild, and no scan-to-rediscover-identity. *We know this holds when:*
+   `expect_metric_delta` assertions over `nodes_recomputed`, `patches_emitted`,
+   `active_graph_records_rebuilt`, `stream_nodes_scanned`, `each_key_compares`,
+   and the row counters bound work to the changed set, and per-event allocations
+   are flat across input size.
+
+5. **No leaks; reclamation is deterministic.** The host holds exactly one
+   refcount per live retained closure/value and zero for disposed ones. *We know
+   this holds when:* `closure_retains == closure_releases` after teardown, the
+   live `allocs − deallocs` gauge is flat after warmup across a long session, and
+   carrier type-tag assertions never fire across the full safe-build spec suite.
+
+6. **Determinism.** The same spec produces the same command sequence every run.
+
+7. **Confined erasure cannot crash.** A typed `Signal(a)` stays typed end to end;
+   the displaced wiring invariant is checked by debug/safe-build carrier tags that
+   compile out of release. *We know this holds when:* the safe-build spec suite
+   runs clean with tags asserted, and the tags are absent from release builds.
 
 ## Proving Breadth and Depth: the App Suite
 
 The representative apps are not demos; each exists to make one capability fail
 loudly if it regresses. The bar for adding an app is **"it exercises an
-otherwise-unproven capability,"** never size or visual richness. Today's suite:
+otherwise-unproven capability,"** never size or visual richness. The suite:
 
 - `ops_dashboard` — scalar chains, fanout, conditional branch, keyed alert rows,
   input state.
@@ -869,31 +970,25 @@ otherwise-unproven capability,"** never size or visual richness. Today's suite:
 - `kanban_board` — keyed reorder/archive/reset, per-card state, `map2` filtering.
 - `identity_stress` — `when -> each -> when` row-local state through
   reorder/insert/filter/disposal.
-
-Additional capability fixtures and host tests close the Definition-of-Done
-coverage:
-
-- `identity_stress` proves nested structural churn, row reuse, row creation and
-  row disposal with metric assertions over `Ui.when`/`Ui.each`.
-- `component_composition` proves reusable stateful `Ui.component` instances keep
-  local state across keyed row movement and dispose with the owning row scope.
-- `async_effects` proves fake task result injection, `[Loading, Done, Failed]`
+- `component_composition` — reusable stateful `Ui.component` instances keep local
+  state across keyed row movement and dispose with the owning row scope.
+- `async_effects` — fake task result injection, `[Loading, Done, Failed]`
   rendering through a fold, `Ui.on_change` request issuance, pending-request
   cancellation, deterministic interval ticks, interval cancellation, and cleanup
   execution.
-- Host tests cover topological rank ordering, diamond deduplication, confined
-  erasure through carrier tags, retained closure lifecycle accounting, dirty
-  cache pruning, and local structural splicing.
 
-Keep each new app minimal: the smallest structure that exercises the capability
-and the tightest `expect_metric_delta` assertions that prove the scaling
-property. Avoid catalog-style fixtures and avoid re-proving already-green
-identity behavior.
+Host tests cover topological rank ordering, diamond deduplication, confined
+erasure through carrier tags, retained closure lifecycle accounting, dirty cache
+pruning, and local structural splicing.
+
+Keep each app minimal: the smallest structure that exercises the capability and
+the tightest `expect_metric_delta` assertions that prove the scaling property.
+Avoid catalog-style fixtures and avoid re-proving already-green identity
+behavior.
 
 **Foundation coverage the suite must carry.** Proving behavior is not enough; the
 suite must also assert *work*, so a regression to O(N) work fails the build rather
-than passing silently. The required proofs, each the smallest that establishes its
-property:
+than passing silently:
 
 - A **generated large-N `Ui.each` app** (the scaling fixture). N is a build
   parameter; the rows are generated programmatically, not handwritten. It is the
@@ -901,66 +996,36 @@ property:
   than a catalog. Its specs assert the budget for single-row update, append,
   remove, filter, and reorder — including the `active_graph_records_rebuilt`,
   `stream_nodes_scanned`, `each_key_compares`, and per-event allocation counters.
-- **Work assertions on the structural apps.** `kanban_board` reorder and filter
-  steps, and the `async_effects` cancel cycle, carry `mark_metrics` /
-  `expect_metric_delta` blocks that bound work and prove no retained-closure or
-  allocation leak across the async open/close cycle.
-- **Real-event fanout assertions in `ops_dashboard`.** Beyond any synthetic
-  "no-op fanout" probe, the real fanout events bound `nodes_recomputed` /
-  `derived_calls_into_roc` so diamond/shared-signal amplification is pinned on the
-  live path.
+- **Work assertions on the structural apps.** `kanban_board` reorder/filter
+  steps and the `async_effects` cancel cycle carry `expect_metric_delta` blocks
+  that bound work and prove no retained-closure or allocation leak across the
+  async open/close cycle.
+- **Real-event fanout assertions in `ops_dashboard`** bounding `nodes_recomputed`
+  / `derived_calls_into_roc` so diamond/shared-signal amplification is pinned on
+  the live path.
 - **A reorder host test at large N** that fails if reorder degrades from
   moves-only to whole-site re-collect.
 
-These are tight, assertion-first additions, not new UI surface.
-
-## Retired Risks
-
-The original gating risks are green on the simulated host: retained closures are
-in-process and refcount-correct, construction-site identity survives dynamic
-shape changes, debug/safe builds assert carrier type tags at the erasure
-boundary, and effects/timers enter the same propagation path as user events.
-
-The Complexity Discipline budget and its telemetry are part of the Definition of
-Done (criterion 6), not a separate risk register: a path that exceeds its budget,
-or a counter that would let O(N) work pass unnoticed, is a defect to fix, held to
-the same bar as a wrong output.
-
-The remaining *external* risks are future-stage questions, not gates on the
-simulated-host Definition of Done; see Open Questions.
-
-## Success Metrics
-
-- **Update amplification:** nodes recomputed and patches emitted per event track
-  the number of *changed* nodes, not graph or tree size — including under list
-  churn, where it must track changed rows. This is the headline metric.
-- **Per-event boundary crossings:** zero Roc entrypoint crossings per event; only
-  direct retained-closure invocations, their count bounded by the changed set and
-  independent of tree size.
-- **Allocations per event and under list churn:** flat; surviving rows reused.
-- **Retained memory over a long session:** flat (`retained_alloc_delta` near
-  zero after warmup).
-- **Row reuse correctness:** `rows_reused` reflects actual subtree reuse across
-  reorder/filter, and per-row state survives.
-- **Determinism:** the same spec produces the same patch sequence every run.
-
 ## Open Questions
 
-These are future-stage questions, not gates on the Definition of Done.
+These are genuine unknowns that require inspecting compiler behavior, generated
+ABI, layout rules, or browser constraints.
 
-- **Real-browser host (highest future risk).** The simulated DOM is structurally
-  blind to controlled-`<input>` cursor/selection/IME behavior, event arrival
-  during propagation, and layout-driven reads (`getBoundingClientRect`). The G-B1
-  spike in `BROWSER_RUNTIME_DESIGN.md` found that `SetValue` must not be a blind
-  DOM assignment: equal values are no-ops, and differing values are deferred
-  while the input is focused or composing. Full focused-input normalization and
-  browser/IME matrix validation remain future-stage work, and may still require
-  a first-class input-reconciliation primitive rather than an escape hatch.
+- **Controlled inputs / focus / IME / selection.** The guarded `SetValue` rule
+  (equal = no-op, differing deferred while focused/composing) is enough for apps
+  without focused text editing, but full focused masking, validation, and
+  selection-preserving normalization may require a first-class
+  input-reconciliation primitive rather than an executor rule.
 - **Animation / high-frequency continuous values.** A push graph driven by
   discrete updates may need a dedicated `interval`-driven path for smooth
-  animation; revisit after benchmarks.
-- **Uncontrolled native state** (focus, IME composition, selection, scroll) is
-  not in the signal graph; the browser host will need a reconciliation story that
-  the simulated host can stub.
+  animation; whether a rAF-coalescing layer buys anything is a measurement.
+- **Event payload accessor format.** Generalizing from the typed click/input/check
+  payloads to an explicit accessor descriptor carried in the descriptor tree, so
+  JS serializes only the requested leaves and never reconstructs the payload.
+- **Multiple instances per page.** Host state is module-global; two mounts on one
+  page need either two WASM instances or an explicit per-mount handle.
 - **Recompute granularity.** Whether any future batching of in-host recompute
   buys anything is a measurement, not a fixed decision.
+- **Native vs. browser render-surface parity.** Whether the native spec runner
+  should consume the same command-buffer wire format the browser does, to keep a
+  single render surface rather than two emit paths behind one command enum.

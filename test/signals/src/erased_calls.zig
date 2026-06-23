@@ -4,7 +4,7 @@
 //! closures through `abi.RocErasedCallable`. The calling convention — build a
 //! packed args struct on the stack, hand the callable a result pointer plus its
 //! capture pointer — is pure ABI with no host state, so it lives here once and
-//! both hosts alias it. See `BROWSER_RUNTIME_DESIGN.md` O9 / `NEXT_STEPS.md` G-B0.
+//! both hosts alias it. See `DESIGN.md` (one engine, two thin hosts).
 
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
