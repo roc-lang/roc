@@ -44,6 +44,7 @@
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/Process.h>
 #include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/Timer.h>
@@ -671,6 +672,7 @@ bool ZigLLVMWriteArchiveFlattened(const char *archive_name, const char **file_na
                 consumeError(member.takeError());
                 return true;
             }
+            member->MemberName = sys::path::filename(file_names[i]);
             new_members.push_back(std::move(*member));
         }
     }
