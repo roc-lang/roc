@@ -3599,6 +3599,94 @@ itself is the only holder of the buffer (the runtime count of 1 proved
 there were no other counted handles, and a live borrow of the list would
 have forced the copy path through an owned capture's incref).
 
+### Destination-Passing Results and Allocation Reuse
+
+Large result values should be lowered by destination demand rather than by
+building a temporary value and then copying it into its final storage. A
+destination demand is explicit LIR producer input, not backend policy. It
+describes where a result should be written and which existing allocation, if
+any, may be reused when ARC proves or checks uniqueness. Backends, the
+interpreter, and LirImage consume the resulting LIR mechanically.
+
+The direct LIR builder may create a small bounded set of result variants for a
+proc:
+
+- `return_slot(T)`: write a by-memory result into caller-provided `ptr(T)`.
+- `reuse_box(T)`: consume `Box(T)` and use its payload storage as the result
+  destination when uniqueness permits.
+- `reuse_erased_callable`: consume an erased callable allocation and overwrite
+  its function pointer, drop callback, and capture bytes when uniqueness and
+  payload layout permit.
+- `append_into(Str)` / `append_into(List(T))`: build a returned string or list
+  by appending into a caller-provided unique accumulator.
+
+These variants are keyed by proc id, result demand, and committed layouts.
+Identical keys share one variant. Root procs and ABI-pinned procs keep their
+ordinary signature; wrappers may call an internal destination variant, but the
+ABI-facing signature is not changed by this optimization.
+
+`return_slot(T)` is selected by layout representation, not by source syntax.
+Scalar, pointer, and zero-sized result layouts keep ordinary returns.
+By-memory result layouts may be emitted as `proc(out: ptr(T), args...) -> {}`
+inside the LIR program. Existing ABI lowering remains responsible for adapting
+that internal shape to whatever a target ABI requires at roots and host
+boundaries.
+
+`reuse_box(T)` models the common shape:
+
+```roc
+Box.box(f(Box.unbox(boxed)))
+```
+
+as an allocation-reuse operation over one consumed `Box(T)`. The operation's
+RC metadata consumes the box argument, may runtime-check its uniqueness, and
+returns the same outer allocation on the reuse path. ARC may set the statement's
+`unique_args` bit when the runtime check is proven redundant by the existing
+born-unique and no-live-borrow rules. When the check is not redundant, the
+runtime check remains. If the box is not unique at runtime, the operation takes
+the defined copy path and returns a fresh box. The payload move, replacement,
+and old-payload release are all explicit in LIR or in the low-level operation's
+documented RC effect; no backend may infer them from `Box` names or pointer
+shapes.
+
+`reuse_erased_callable` is the erased-callable counterpart. Erased callables are
+not ordinary `Box(T)` payloads; their allocation stores a callable entry, an
+optional drop callback, and inline capture bytes. Reuse is allowed only when:
+
+- the old erased callable is consumed and unique, or its runtime uniqueness
+  check succeeds
+- the new callable payload has the same committed payload size and alignment
+  class as the old allocation, in the initial design
+- the old capture payload is released by the old drop callback before the
+  allocation is overwritten
+- the new callable entry, new drop callback, and new capture bytes are written
+  before the result is returned
+
+The first implementation should require same-size/same-alignment erased
+callable payloads. Broader reuse across different capture layouts requires an
+explicit capacity or size input; it must not be guessed from the erased function
+type alone, because an arbitrary `Box(a -> b)` value does not identify the
+stored capture layout.
+
+Destination-aware aggregate construction is required for the full benefit of
+box reuse. A record update or tag construction whose result is demanded in a
+slot should write fields and discriminants into that slot rather than first
+forming a whole temporary aggregate. If the destination aliases a consumed
+input, lowering must preserve read-before-overwrite order: fields needed later
+are moved or copied to temporaries before their slots are overwritten, and every
+refcounted field is moved, retained, or released exactly once. This ordering is
+part of LIR construction and ARC emission, not backend cleanup.
+
+Append destinations are result demands for producer functions that return
+`Str` or `List(T)`. Under `append_into(Str)`, string literals, string slices,
+string concatenations, and direct calls to append-capable producers write into
+the supplied unique string accumulator. Any expression that cannot append
+directly is first lowered to an ordinary result and then appended as an
+explicit step. `append_into(List(T))` follows the same rule for list builders.
+These variants are created only for realized demands and are keyed by result
+kind and element layout, so specialization is bounded by the distinct demands
+the program actually uses.
+
 Each stage fully replaces the previous behavior when it lands; there are no
 parallel insertion paths at any point:
 
