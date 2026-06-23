@@ -9603,7 +9603,7 @@ const WatchCommand = union(enum) {
     build: cli_args.BuildArgs,
 };
 
-const WatchPathError = Allocator.Error || std.Io.Dir.RealPathFileAllocError;
+const WatchPathError = std.process.CurrentPathAllocError;
 const WatchCollectPathsError = WatchPathError;
 const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
@@ -9774,7 +9774,7 @@ fn absolutePathFromCwd(ctx: *CliCtx, path: []const u8) WatchPathError![]const u8
         return std.fs.path.resolve(ctx.gpa, &.{path});
     }
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.process.currentPathAlloc(ctx.io.std_io, ctx.gpa);
     defer ctx.gpa.free(cwd);
     return std.fs.path.resolve(ctx.gpa, &.{ cwd, path });
 }
@@ -10210,32 +10210,9 @@ fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_path
             error.WatchInputsMissing => try ctx.io.stderr().print("Error: watch child did not write source input state to {s}.\n", .{file_path}),
             error.WatchInputsReadFailed => try ctx.io.stderr().print("Error: failed to read watch input state from {s}.\n", .{file_path}),
             error.WatchInputsMalformed => try ctx.io.stderr().print("Error: watch child wrote malformed source input state to {s}.\n", .{file_path}),
-            error.PermissionDenied,
-            error.SystemResources,
             error.Unexpected,
-            error.FileTooBig,
-            error.InputOutput,
-            error.NoSpaceLeft,
-            error.DeviceBusy,
-            error.AccessDenied,
-            error.NoDevice,
-            error.FileBusy,
             error.Canceled,
-            error.IsDir,
-            error.ProcessFdQuotaExceeded,
-            error.SystemFdQuotaExceeded,
-            error.PathAlreadyExists,
-            error.SymLinkLoop,
-            error.FileNotFound,
-            error.NotDir,
-            error.NetworkNotFound,
-            error.NameTooLong,
-            error.BadPathName,
-            error.PipeBusy,
-            error.AntivirusInterference,
-            error.OperationUnsupported,
-            error.FileSystem,
-            error.UnrecognizedVolume,
+            error.CurrentDirUnlinked,
             => try ctx.io.stderr().print("Error: failed to resolve an explicit watch path while reading source input state from {s}: {}\n", .{ file_path, err }),
         }
         ctx.io.flush();
