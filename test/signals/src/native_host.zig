@@ -4790,136 +4790,20 @@ fn appendDomNode(host: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const
     parent.children.append(allocator, child.id) catch std.process.exit(1);
 }
 
-fn findElementDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostElementDesc {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
-    const index = descriptor_index.element orelse return null;
-    if (index >= stream.elements.items.len) failHost("element descriptor index exceeded descriptor table");
-    const desc = stream.elements.items[index];
-    if (desc.elem_id != elem_id) failHost("element descriptor index pointed at the wrong elem id");
-    return desc;
-}
-
-fn findTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostNodeTextNodeDesc {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
-    const index = descriptor_index.text_node orelse return null;
-    if (index >= stream.text_nodes.items.len) failHost("text node descriptor index exceeded descriptor table");
-    const desc = stream.text_nodes.items[index];
-    if (desc.elem_id != elem_id) failHost("text node descriptor index pointed at the wrong elem id");
-    return desc;
-}
-
-fn findSignalTextNodeDesc(stream: *const HostNodeDescriptorStream, elem_id: u64) ?HostNodeSignalTextNodeDesc {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
-    const index = descriptor_index.signal_text_node orelse return null;
-    if (index >= stream.signal_text_nodes.items.len) failHost("signal text node descriptor index exceeded descriptor table");
-    const desc = stream.signal_text_nodes.items[index];
-    if (desc.elem_id != elem_id) failHost("signal text node descriptor index pointed at the wrong elem id");
-    return desc;
-}
-
-fn findSignalTextNodeDescMutable(stream: *HostNodeDescriptorStream, elem_id: u64) ?*HostNodeSignalTextNodeDesc {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
-    const index = descriptor_index.signal_text_node orelse return null;
-    if (index >= stream.signal_text_nodes.items.len) failHost("signal text node descriptor index exceeded descriptor table");
-    const desc = &stream.signal_text_nodes.items[index];
-    if (desc.elem_id != elem_id) failHost("signal text node descriptor index pointed at the wrong elem id");
-    return desc;
-}
-
-fn streamHasTextField(stream: *const HostNodeDescriptorStream, elem_id: u64, field: RenderTextField) bool {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return false;
-    if (field == .text and descriptor_index.text_node != null) return true;
-    if (field == .text and descriptor_index.signal_text_node != null) return true;
-
-    if (descriptor_index.static_text_attrs.get(field)) |attr_index| {
-        if (attr_index >= stream.static_text_attrs.items.len) failHost("static text attr descriptor index exceeded descriptor table");
-        const desc = stream.static_text_attrs.items[attr_index];
-        if (desc.elem_id != elem_id or desc.field != field) failHost("static text attr descriptor index pointed at the wrong field");
-        return true;
-    }
-    if (descriptor_index.signal_text_attrs.get(field)) |attr_index| {
-        if (attr_index >= stream.signal_text_attrs.items.len) failHost("signal text attr descriptor index exceeded descriptor table");
-        const desc = stream.signal_text_attrs.items[attr_index];
-        if (desc.elem_id != elem_id or desc.field != field) failHost("signal text attr descriptor index pointed at the wrong field");
-        return true;
-    }
-    return false;
-}
-
-fn streamHasBoolField(stream: *const HostNodeDescriptorStream, elem_id: u64, field: RenderBoolField) bool {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return false;
-    if (descriptor_index.static_bool_attrs.get(field)) |attr_index| {
-        if (attr_index >= stream.static_bool_attrs.items.len) failHost("static bool attr descriptor index exceeded descriptor table");
-        const desc = stream.static_bool_attrs.items[attr_index];
-        if (desc.elem_id != elem_id or desc.field != field) failHost("static bool attr descriptor index pointed at the wrong field");
-        return true;
-    }
-    if (descriptor_index.signal_bool_attrs.get(field)) |attr_index| {
-        if (attr_index >= stream.signal_bool_attrs.items.len) failHost("signal bool attr descriptor index exceeded descriptor table");
-        const desc = stream.signal_bool_attrs.items[attr_index];
-        if (desc.elem_id != elem_id or desc.field != field) failHost("signal bool attr descriptor index pointed at the wrong field");
-        return true;
-    }
-    return false;
-}
-
-fn maxRenderElemId(stream: *const HostNodeDescriptorStream) u64 {
-    var max_elem_id: u64 = 0;
-    for (stream.render_nodes.items) |node| {
-        max_elem_id = @max(max_elem_id, node.elem_id);
-    }
-    return max_elem_id;
-}
-
-fn renderNodeTag(stream: *const HostNodeDescriptorStream, node: HostRenderNode) []const u8 {
-    return switch (node.kind) {
-        .element => (findElementDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeTag", node)).tag,
-        .text, .signal_text => "text",
-    };
-}
-
-fn streamElemTag(stream: *const HostNodeDescriptorStream, elem_id: u64) []const u8 {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse failHost("elem id had no descriptor index");
-    if (descriptor_index.element) |index| {
-        if (index >= stream.elements.items.len) failHost("element descriptor index exceeded descriptor table");
-        const desc = stream.elements.items[index];
-        if (desc.elem_id != elem_id) failHost("element descriptor index pointed at the wrong elem id");
-        return desc.tag;
-    }
-    if (descriptor_index.text_node != null or descriptor_index.signal_text_node != null) return "text";
-    failHost("elem id had no render descriptor");
-}
-
-fn renderNodeParentElemId(stream: *const HostNodeDescriptorStream, node: HostRenderNode) u64 {
-    return switch (node.kind) {
-        .element => (findElementDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
-        .text => (findTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
-        .signal_text => (findSignalTextNodeDesc(stream, node.elem_id) orelse failMissingRenderDescriptor("renderNodeParentElemId", node)).parent_elem_id,
-    };
-}
-
-fn streamElemParentElemId(stream: *const HostNodeDescriptorStream, elem_id: u64) u64 {
-    const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse failHost("elem id had no descriptor index");
-    if (descriptor_index.element) |index| {
-        if (index >= stream.elements.items.len) failHost("element descriptor index exceeded descriptor table");
-        const desc = stream.elements.items[index];
-        if (desc.elem_id != elem_id) failHost("element descriptor index pointed at the wrong elem id");
-        return desc.parent_elem_id;
-    }
-    if (descriptor_index.text_node) |index| {
-        if (index >= stream.text_nodes.items.len) failHost("text node descriptor index exceeded descriptor table");
-        const desc = stream.text_nodes.items[index];
-        if (desc.elem_id != elem_id) failHost("text node descriptor index pointed at the wrong elem id");
-        return desc.parent_elem_id;
-    }
-    if (descriptor_index.signal_text_node) |index| {
-        if (index >= stream.signal_text_nodes.items.len) failHost("signal text node descriptor index exceeded descriptor table");
-        const desc = stream.signal_text_nodes.items[index];
-        if (desc.elem_id != elem_id) failHost("signal text node descriptor index pointed at the wrong elem id");
-        return desc.parent_elem_id;
-    }
-    failHost("elem id had no render descriptor");
-}
+// Pure descriptor-stream readers now live in the shared engine; re-exported here
+// so existing native call sites and the structural collection/apply helpers keep
+// their unqualified names.
+const findElementDesc = engine.findElementDesc;
+const findTextNodeDesc = engine.findTextNodeDesc;
+const findSignalTextNodeDesc = engine.findSignalTextNodeDesc;
+const findSignalTextNodeDescMutable = engine.findSignalTextNodeDescMutable;
+const streamHasTextField = engine.streamHasTextField;
+const streamHasBoolField = engine.streamHasBoolField;
+const maxRenderElemId = engine.maxRenderElemId;
+const renderNodeTag = engine.renderNodeTag;
+const streamElemTag = engine.streamElemTag;
+const renderNodeParentElemId = engine.renderNodeParentElemId;
+const streamElemParentElemId = engine.streamElemParentElemId;
 
 fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {
     for (elem.children.items, 0..) |id, index| {
@@ -5358,18 +5242,7 @@ fn appendUniqueU64(allocator: std.mem.Allocator, values: *std.ArrayListUnmanaged
     values.append(allocator, value) catch std.process.exit(1);
 }
 
-fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNodeDescriptorStream, parent_elem_id: u64) []u64 {
-    var children: std.ArrayListUnmanaged(u64) = .empty;
-    errdefer children.deinit(allocator);
-
-    for (stream.render_nodes.items) |node| {
-        if (renderNodeParentElemId(stream, node) == parent_elem_id) {
-            children.append(allocator, node.elem_id) catch std.process.exit(1);
-        }
-    }
-
-    return children.toOwnedSlice(allocator) catch std.process.exit(1);
-}
+const streamDirectChildren = engine.streamDirectChildren;
 
 fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
     replaceDomChildrenForStructuralParent(host, parent_elem_id, next_child_ids);
