@@ -986,7 +986,7 @@ pub const Diagnostic = union(enum) {
         var report = try Report.init(allocator, "Type Redeclared", "", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
         try report.headline.addReflowingText("The type ");
-        try report.headline.addType(owned_type_name);
+        try report.headline.addInlineCode(owned_type_name);
         try report.headline.addReflowingText(" is being redeclared.");
 
         // Show where the redeclaration is
@@ -1040,16 +1040,14 @@ pub const Diagnostic = union(enum) {
 
         if (has_dots) {
             try report.headline.addReflowingText("Cannot resolve qualified type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(".");
         } else {
             try report.headline.addReflowingText("The type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
         }
 
-        try report.document.addReflowingText("This type is referenced here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -1074,15 +1072,13 @@ pub const Diagnostic = union(enum) {
         var report = try Report.init(allocator, "Undeclared Type Variable", "", .runtime_error);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         try report.headline.addReflowingText("The type variable ");
-        try report.headline.addType(owned_type_var_name);
+        try report.headline.addInlineCode(owned_type_var_name);
         try report.headline.addReflowingText(" is not declared in this scope.");
 
         try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addReflowingText("This type variable is referenced here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -1108,7 +1104,7 @@ pub const Diagnostic = union(enum) {
         var report = try Report.init(allocator, "Type Alias Redeclared", "", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
         try report.headline.addReflowingText("The type alias ");
-        try report.headline.addType(owned_type_name);
+        try report.headline.addInlineCode(owned_type_name);
         try report.headline.addReflowingText(" is being redeclared.");
         try report.document.addReflowingText("Type aliases can only be declared once in the same scope.");
         try report.document.addLineBreak();
@@ -1599,11 +1595,11 @@ pub const Diagnostic = union(enum) {
         if (is_same_name) {
             // Special message for Try.Try, Color.Color, etc.
             try report.headline.addReflowingText("There is no ");
-            try report.headline.addType(owned_qualified);
+            try report.headline.addInlineCode(owned_qualified);
             try report.headline.addReflowingText(" type.");
         } else {
             // Standard message for other cases (e.g., Color.RGB where Color is a nominal type)
-            try report.headline.addType(owned_qualified);
+            try report.headline.addInlineCode(owned_qualified);
             try report.headline.addReflowingText(" does not exist.");
         }
 
@@ -1720,7 +1716,7 @@ pub const Diagnostic = union(enum) {
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
 
         try report.headline.addReflowingText("The type variable ");
-        try report.headline.addType(owned_type_var_name);
+        try report.headline.addInlineCode(owned_type_var_name);
         try report.headline.addReflowingText(" appears only once in this type annotation.");
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1755,7 +1751,7 @@ pub const Diagnostic = union(enum) {
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
         try report.headline.addReflowingText("The type variable ");
-        try report.headline.addType(owned_type_var_name);
+        try report.headline.addInlineCode(owned_type_var_name);
         try report.headline.addReflowingText(" starts with an underscore but appears multiple times in this type annotation.");
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1790,7 +1786,7 @@ pub const Diagnostic = union(enum) {
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
         try report.headline.addReflowingText("The type variable ");
-        try report.headline.addType(owned_type_var_name);
+        try report.headline.addInlineCode(owned_type_var_name);
         try report.headline.addReflowingText(" ends with an underscore.");
 
         const owned_filename = try report.addOwnedString(filename);

@@ -1310,10 +1310,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Undeclared Type", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             try report.headline.addReflowingText("The type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
-            try report.document.addReflowingText("This type is referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1332,10 +1330,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Expected Nominal Type", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             try report.headline.addReflowingText("You are using the type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" like a nominal type, but it is an alias.");
-            try report.document.addReflowingText("This type is referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1362,7 +1358,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Type Redeclared", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             try report.headline.addReflowingText("The type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
             // Show where the redeclaration is
@@ -1400,7 +1396,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Type Alias Redeclared", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             try report.headline.addReflowingText("The type alias ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
             try report.document.addReflowingText("The redeclaration is here:");
@@ -1437,7 +1433,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Nominal Type Redeclared", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             try report.headline.addReflowingText("The nominal type ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
             try report.document.addReflowingText("The redeclaration is here:");
@@ -1631,14 +1627,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Undeclared Type Variable", "", .runtime_error);
             const owned_type_var_name = try report.addOwnedString(type_var_name);
             try report.headline.addReflowingText("The type variable ");
-            try report.headline.addType(owned_type_var_name);
+            try report.headline.addInlineCode(owned_type_var_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
             try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("This type variable is referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1918,8 +1912,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(".");
 
-            try report.document.addReflowingText("You're attempting to use this type here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1941,11 +1933,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const exposed_type = try report.addOwnedString(exposed_type_bytes);
             const private_type = try report.addOwnedString(private_type_bytes);
             try report.headline.addReflowingText("The exposed type ");
-            try report.headline.addType(exposed_type);
+            try report.headline.addInlineCode(exposed_type);
             try report.headline.addReflowingText(" refers to ");
-            try report.headline.addType(private_type);
+            try report.headline.addInlineCode(private_type);
             try report.headline.addReflowingText(", but ");
-            try report.headline.addType(private_type);
+            try report.headline.addInlineCode(private_type);
             try report.headline.addReflowingText(" is private to this module.");
 
             try report.document.addReflowingText("Other modules can see ");
@@ -1954,8 +1946,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("It's referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1992,11 +1982,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("The ");
             try report.headline.addUnqualifiedSymbol(field_name);
             try report.headline.addReflowingText(" field of ");
-            try report.headline.addType(exposed_type);
+            try report.headline.addInlineCode(exposed_type);
             try report.headline.addReflowingText(" refers to ");
-            try report.headline.addType(private_type);
+            try report.headline.addInlineCode(private_type);
             try report.headline.addReflowingText(", but ");
-            try report.headline.addType(private_type);
+            try report.headline.addInlineCode(private_type);
             try report.headline.addReflowingText(" is private to this module.");
 
             try report.document.addReflowingText("Other modules can see this field because ");
@@ -2005,8 +1995,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("It's referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2038,14 +2026,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Module Not Found", "", .runtime_error);
             const type_name = try report.addOwnedString(type_name_bytes);
             const module_name = try report.addOwnedString(module_name_bytes);
-            try report.headline.addText("The type ");
+            try report.headline.addText("This ");
             try report.headline.addInlineCode(type_name);
-            try report.headline.addReflowingText(" is qualified by the module ");
+            try report.headline.addReflowingText(" type is declared to be in ");
             try report.headline.addInlineCode(module_name);
-            try report.headline.addReflowingText(", but that module was not found in this Roc project.");
+            try report.headline.addReflowingText(", which does not exist.");
 
-            try report.document.addReflowingText("You're attempting to use this type here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2067,8 +2053,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(self.getIdent(data.module_name));
             try report.headline.addReflowingText(".");
 
-            try report.document.addReflowingText("You're attempting to use this value here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2127,8 +2111,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" was not found in this Roc project.");
 
-            try report.document.addReflowingText("You're attempting to use this module here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2151,8 +2133,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" imported into this Roc file.");
 
-            try report.document.addReflowingText("You're attempting to use this module here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2189,8 +2169,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(nested_name);
             try report.headline.addReflowingText(".");
 
-            try report.document.addReflowingText("It's referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2228,8 +2206,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("It's referenced here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2839,9 +2815,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
             try report.headline.addReflowingText("The type alias ");
-            try report.headline.addType(owned_type_name);
+            try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" and ");
-            try report.headline.addType(owned_other_name);
+            try report.headline.addInlineCode(owned_other_name);
             try report.headline.addReflowingText(" form a recursive cycle.");
 
             try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
