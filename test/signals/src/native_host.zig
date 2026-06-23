@@ -1952,19 +1952,7 @@ const HostEnv = struct {
     }
 
     fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
-        if (self.engine.stateIndexByNodeId(desc.node_id) != null) return;
-
-        const initial = callValueInitThunk(roc_host, desc.initial);
-        var cell = HostValueCell.initRetained(initial, desc.eq, desc.drop, &self.engine.pending_roc_metrics);
-        self.engine.states.append(self.gpa.allocator(), .{
-            .state_id = desc.node_id,
-            .cell = cell,
-            .version = 0,
-            .active = true,
-        }) catch {
-            cell.deinit(roc_host, &self.engine.pending_roc_metrics);
-            std.process.exit(1);
-        };
+        self.engine.ensureStateFromDesc(self, roc_host, desc);
     }
 
     fn syncStatesFromNodeStream(self: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) void {
@@ -2260,179 +2248,12 @@ const HostEnv = struct {
         return branch_scope_id;
     }
 
-    fn resolveNodeBinderRef(binder_stack: []const HostBinderBinding, token: HostBinderToken) u64 {
-        var index = binder_stack.len;
-        while (index > 0) {
-            index -= 1;
-            const binding = binder_stack[index];
-            if (binding.token == token) return binding.node_id;
-        }
-        failHost("Node.BinderRef referenced a state binder outside the active scope");
-    }
-
-    fn validateExistingSignalRecord(record: *HostSignalRecord, expected_tag: std.meta.Tag(HostSignalRecordPayload)) void {
-        if (std.meta.activeTag(record.payload) != expected_tag) {
-            failHost("signal token was reused for a different signal expression kind");
-        }
-    }
-
-    fn bindNodeSignalExpr(self: *HostEnv, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *HostSignalRecord {
-        return switch (expr.tag) {
-            .Ref => blk: {
-                const node_id = HostEnv.resolveNodeBinderRef(binder_stack, expr.payload.ref);
-                break :blk HostSignalRecord.init(allocator, .{ .ref = node_id });
-            },
-            .ConstValue => blk: {
-                const token = expr.payload.const_value._0;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .const_value);
-                    break :blk record.retain();
-                }
-
-                const record = HostSignalRecord.init(allocator, .{ .const_value = .{
-                    .token = retainHostSignalToken(token),
-                    .init = retainHostCallable(expr.payload.const_value._1, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(expr.payload.const_value._2, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(expr.payload.const_value._3, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-            .Map => blk: {
-                const token = expr.payload.map._0;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .map);
-                    break :blk record.retain();
-                }
-
-                const input = self.bindNodeSignalExpr(allocator, stream, expr.payload.map._1.*, binder_stack);
-                const record = HostSignalRecord.init(allocator, .{ .map = .{
-                    .token = retainHostSignalToken(token),
-                    .input = input,
-                    .transform = retainHostCallable(expr.payload.map._2, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(expr.payload.map._3, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(expr.payload.map._4, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-            .Map2 => blk: {
-                const token = expr.payload.map2._0;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .map2);
-                    break :blk record.retain();
-                }
-
-                const left = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._1.*, binder_stack);
-                const right = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._2.*, binder_stack);
-                const record = HostSignalRecord.init(allocator, .{ .map2 = .{
-                    .token = retainHostSignalToken(token),
-                    .left = left,
-                    .right = right,
-                    .transform = retainHostCallable(expr.payload.map2._3, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(expr.payload.map2._4, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(expr.payload.map2._5, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-            .Combine => blk: {
-                const token = expr.payload.combine._0;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .combine);
-                    break :blk record.retain();
-                }
-
-                const source_children = expr.payload.combine._1.items();
-                const children = allocator.alloc(*HostSignalRecord, source_children.len) catch std.process.exit(1);
-                for (source_children, children) |child, *dest| {
-                    dest.* = self.bindNodeSignalExpr(allocator, stream, child, binder_stack);
-                }
-                const record = HostSignalRecord.init(allocator, .{ .combine = .{
-                    .token = retainHostSignalToken(token),
-                    .children = children,
-                    .transform = retainHostCallable(expr.payload.combine._2, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(expr.payload.combine._3, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(expr.payload.combine._4, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-            .TaskSource => blk: {
-                const payload = expr.payload.task_source;
-                const token = payload.token;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .task_source);
-                    break :blk record.retain();
-                }
-
-                abi.increfBox(@ptrCast(payload.payload_tag), 1);
-                const record = HostSignalRecord.init(allocator, .{ .task_source = .{
-                    .token = retainHostSignalToken(token),
-                    .name = allocator.dupe(u8, payload.name.asSlice()) catch std.process.exit(1),
-                    .payload_tag = @ptrCast(payload.payload_tag),
-                    .payload_drop = retainHostCallable(payload.payload_drop, &self.engine.pending_roc_metrics),
-                    .initial = retainHostCallable(payload.initial, &self.engine.pending_roc_metrics),
-                    .done = retainHostCallable(payload.done, &self.engine.pending_roc_metrics),
-                    .failed = retainHostCallable(payload.failed, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(payload.eq, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(payload.drop, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-            .IntervalSource => blk: {
-                const payload = expr.payload.interval_source;
-                const token = payload.token;
-                if (stream.signalRecordByToken(token)) |record| {
-                    HostEnv.validateExistingSignalRecord(record, .interval_source);
-                    break :blk record.retain();
-                }
-
-                const record = HostSignalRecord.init(allocator, .{ .interval_source = .{
-                    .token = retainHostSignalToken(token),
-                    .period_ms = payload.period_ms,
-                    .initial = retainHostCallable(payload.initial, &self.engine.pending_roc_metrics),
-                    .tick = retainHostCallable(payload.tick, &self.engine.pending_roc_metrics),
-                    .eq = retainHostCallable(payload.eq, &self.engine.pending_roc_metrics),
-                    .drop = retainHostCallable(payload.drop, &self.engine.pending_roc_metrics),
-                } });
-                stream.rememberSignalRecord(allocator, record);
-                break :blk record;
-            },
-        };
-    }
-
-    fn appendSignalRecordSourceNodeIds(allocator: std.mem.Allocator, source_node_ids: *std.ArrayListUnmanaged(u64), record: *HostSignalRecord) void {
-        switch (record.payload) {
-            .ref => |node_id| {
-                if (!u64SliceContains(source_node_ids.items, node_id)) {
-                    source_node_ids.append(allocator, node_id) catch std.process.exit(1);
-                }
-            },
-            .const_value => {},
-            .map => |payload| HostEnv.appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.input),
-            .map2 => |payload| {
-                HostEnv.appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.left);
-                HostEnv.appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.right);
-            },
-            .combine => |payload| {
-                for (payload.children) |child| {
-                    HostEnv.appendSignalRecordSourceNodeIds(allocator, source_node_ids, child);
-                }
-            },
-            .task_source, .interval_source => {},
-        }
-    }
+    // resolveNodeBinderRef now lives in the shared engine; this struct-level alias
+    // keeps `HostEnv.resolveNodeBinderRef(...)` call sites resolving.
+    const resolveNodeBinderRef = engine.resolveNodeBinderRef;
 
     fn bindNodeSignal(self: *HostEnv, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
-        const record = self.bindNodeSignalExpr(allocator, stream, expr, binder_stack);
-        var source_node_ids: std.ArrayListUnmanaged(u64) = .empty;
-        HostEnv.appendSignalRecordSourceNodeIds(allocator, &source_node_ids, record);
-        return .{
-            .record = record,
-            .source_node_ids = source_node_ids.toOwnedSlice(allocator) catch std.process.exit(1),
-        };
+        return self.engine.bindNodeSignal(allocator, stream, expr, binder_stack);
     }
 
     fn collectNodeAttrDescriptor(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {

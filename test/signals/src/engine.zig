@@ -1775,6 +1775,46 @@ pub fn streamDirectChildren(allocator: std.mem.Allocator, stream: *const HostNod
     return children.toOwnedSlice(allocator) catch @panic("out of memory");
 }
 
+// Host-agnostic signal-record construction helpers (shared by both hosts).
+
+pub fn resolveNodeBinderRef(binder_stack: []const HostBinderBinding, token: HostBinderToken) u64 {
+    var index = binder_stack.len;
+    while (index > 0) {
+        index -= 1;
+        const binding = binder_stack[index];
+        if (binding.token == token) return binding.node_id;
+    }
+    @panic("Node.BinderRef referenced a state binder outside the active scope");
+}
+
+pub fn validateExistingSignalRecord(record: *HostSignalRecord, expected_tag: std.meta.Tag(HostSignalRecordPayload)) void {
+    if (std.meta.activeTag(record.payload) != expected_tag) {
+        @panic("signal token was reused for a different signal expression kind");
+    }
+}
+
+pub fn appendSignalRecordSourceNodeIds(allocator: std.mem.Allocator, source_node_ids: *std.ArrayListUnmanaged(u64), record: *HostSignalRecord) void {
+    switch (record.payload) {
+        .ref => |node_id| {
+            if (!u64SliceContains(source_node_ids.items, node_id)) {
+                source_node_ids.append(allocator, node_id) catch @panic("out of memory");
+            }
+        },
+        .const_value => {},
+        .map => |payload| appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.input),
+        .map2 => |payload| {
+            appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.left);
+            appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.right);
+        },
+        .combine => |payload| {
+            for (payload.children) |child| {
+                appendSignalRecordSourceNodeIds(allocator, source_node_ids, child);
+            }
+        },
+        .task_source, .interval_source => {},
+    }
+}
+
 pub fn Engine(comptime Ctx: type) type {
     verifyCtx(Ctx);
 
@@ -2566,6 +2606,159 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn dropHostSignalRecordValue(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
             erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalRecordDropCallable(ctx, record), value);
+        }
+
+        pub fn ensureStateFromDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
+            if (self.stateIndexByNodeId(desc.node_id) != null) return;
+
+            const initial = erased_calls.callValueInitThunk(roc_host, desc.initial);
+            var cell = HostValueCell.initRetained(initial, desc.eq, desc.drop, &self.pending_roc_metrics);
+            self.states.append(Ctx.allocator(ctx), .{
+                .state_id = desc.node_id,
+                .cell = cell,
+                .version = 0,
+                .active = true,
+            }) catch {
+                cell.deinit(roc_host, &self.pending_roc_metrics);
+                @panic("out of memory");
+            };
+        }
+
+        pub fn bindNodeSignalExpr(self: *Self, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *HostSignalRecord {
+            return switch (expr.tag) {
+                .Ref => blk: {
+                    const node_id = resolveNodeBinderRef(binder_stack, expr.payload.ref);
+                    break :blk HostSignalRecord.init(allocator, .{ .ref = node_id });
+                },
+                .ConstValue => blk: {
+                    const token = expr.payload.const_value._0;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .const_value);
+                        break :blk record.retain();
+                    }
+
+                    const record = HostSignalRecord.init(allocator, .{ .const_value = .{
+                        .token = retainHostSignalToken(token),
+                        .init = retainHostCallable(expr.payload.const_value._1, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(expr.payload.const_value._2, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(expr.payload.const_value._3, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+                .Map => blk: {
+                    const token = expr.payload.map._0;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .map);
+                        break :blk record.retain();
+                    }
+
+                    const input = self.bindNodeSignalExpr(allocator, stream, expr.payload.map._1.*, binder_stack);
+                    const record = HostSignalRecord.init(allocator, .{ .map = .{
+                        .token = retainHostSignalToken(token),
+                        .input = input,
+                        .transform = retainHostCallable(expr.payload.map._2, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(expr.payload.map._3, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(expr.payload.map._4, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+                .Map2 => blk: {
+                    const token = expr.payload.map2._0;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .map2);
+                        break :blk record.retain();
+                    }
+
+                    const left = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._1.*, binder_stack);
+                    const right = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._2.*, binder_stack);
+                    const record = HostSignalRecord.init(allocator, .{ .map2 = .{
+                        .token = retainHostSignalToken(token),
+                        .left = left,
+                        .right = right,
+                        .transform = retainHostCallable(expr.payload.map2._3, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(expr.payload.map2._4, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(expr.payload.map2._5, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+                .Combine => blk: {
+                    const token = expr.payload.combine._0;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .combine);
+                        break :blk record.retain();
+                    }
+
+                    const source_children = expr.payload.combine._1.items();
+                    const children = allocator.alloc(*HostSignalRecord, source_children.len) catch @panic("out of memory");
+                    for (source_children, children) |child, *dest| {
+                        dest.* = self.bindNodeSignalExpr(allocator, stream, child, binder_stack);
+                    }
+                    const record = HostSignalRecord.init(allocator, .{ .combine = .{
+                        .token = retainHostSignalToken(token),
+                        .children = children,
+                        .transform = retainHostCallable(expr.payload.combine._2, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(expr.payload.combine._3, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(expr.payload.combine._4, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+                .TaskSource => blk: {
+                    const payload = expr.payload.task_source;
+                    const token = payload.token;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .task_source);
+                        break :blk record.retain();
+                    }
+
+                    abi.increfBox(@ptrCast(payload.payload_tag), 1);
+                    const record = HostSignalRecord.init(allocator, .{ .task_source = .{
+                        .token = retainHostSignalToken(token),
+                        .name = allocator.dupe(u8, payload.name.asSlice()) catch @panic("out of memory"),
+                        .payload_tag = @ptrCast(payload.payload_tag),
+                        .payload_drop = retainHostCallable(payload.payload_drop, &self.pending_roc_metrics),
+                        .initial = retainHostCallable(payload.initial, &self.pending_roc_metrics),
+                        .done = retainHostCallable(payload.done, &self.pending_roc_metrics),
+                        .failed = retainHostCallable(payload.failed, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload.eq, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload.drop, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+                .IntervalSource => blk: {
+                    const payload = expr.payload.interval_source;
+                    const token = payload.token;
+                    if (stream.signalRecordByToken(token)) |record| {
+                        validateExistingSignalRecord(record, .interval_source);
+                        break :blk record.retain();
+                    }
+
+                    const record = HostSignalRecord.init(allocator, .{ .interval_source = .{
+                        .token = retainHostSignalToken(token),
+                        .period_ms = payload.period_ms,
+                        .initial = retainHostCallable(payload.initial, &self.pending_roc_metrics),
+                        .tick = retainHostCallable(payload.tick, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload.eq, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload.drop, &self.pending_roc_metrics),
+                    } });
+                    stream.rememberSignalRecord(allocator, record);
+                    break :blk record;
+                },
+            };
+        }
+
+        pub fn bindNodeSignal(self: *Self, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
+            const record = self.bindNodeSignalExpr(allocator, stream, expr, binder_stack);
+            var source_node_ids: std.ArrayListUnmanaged(u64) = .empty;
+            appendSignalRecordSourceNodeIds(allocator, &source_node_ids, record);
+            return .{
+                .record = record,
+                .source_node_ids = source_node_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
+            };
         }
 
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
