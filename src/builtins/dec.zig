@@ -49,7 +49,11 @@ fn printI128Decimal(buf: []u8, val: i128) usize {
     return pos;
 }
 
-/// TODO: Document the RocDec struct.
+/// Roc's fixed-point decimal runtime representation.
+///
+/// `num` stores the decimal value scaled by 10^18, so `1.0` is represented as
+/// `1_000_000_000_000_000_000`. The extern layout is part of the C ABI used by
+/// generated code and builtin exports.
 pub const RocDec = extern struct {
     num: i128,
 
@@ -63,20 +67,23 @@ pub const RocDec = extern struct {
 
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
+    pub const neg_one_point_zero: RocDec = .{ .num = -one_point_zero_i128 };
+    pub const e: RocDec = fromComptimeFloat(math.e);
+    pub const pi: RocDec = fromComptimeFloat(math.pi);
+    pub const tau: RocDec = fromComptimeFloat(math.tau);
+    pub const half_pi: RocDec = fromComptimeFloat(math.pi / 2.0);
+    pub const ln2: RocDec = fromComptimeFloat(math.ln2);
 
-    pub const two_point_zero: RocDec = RocDec.add(
-        RocDec.one_point_zero,
-        RocDec.one_point_zero,
-        undefined,
-    );
-    pub const zero_point_five: RocDec = RocDec.div(
-        RocDec.one_point_zero,
-        RocDec.two_point_zero,
-        undefined,
-    );
+    pub const two_point_zero: RocDec = .{ .num = one_point_zero_i128 * 2 };
+    pub const zero_point_five: RocDec = .{ .num = one_point_zero_i128 / 2 };
 
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = i128h.mul_i128(@as(i128, num), one_point_zero_i128) };
+    }
+
+    fn fromComptimeFloat(comptime num: comptime_float) RocDec {
+        const scale: comptime_float = @floatFromInt(one_point_zero_i128);
+        return .{ .num = @intFromFloat(num * scale) };
     }
 
     /// Convert a fraction represented as numerator / 10^denominator_power to RocDec.
@@ -110,8 +117,8 @@ pub const RocDec = extern struct {
         return i128h.i128_to_f64(dec.num) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
     }
 
-    // TODO: If Str.toDec eventually supports more error types, return errors here.
-    // For now, just return null which will give the default error.
+    // All parse failures currently map to null; the Roc wrapper reports that as
+    // BadNumStr.
     pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
@@ -148,17 +155,17 @@ pub const RocDec = extern struct {
         // though -2^127 is itself representable.
         var before_str_length = length;
         var after_val_i128: ?i128 = null;
-        if (point_index) |pi| {
-            before_str_length = pi;
+        if (point_index) |point_idx| {
+            before_str_length = point_idx;
 
-            const after_str_len = (length - 1) - pi;
+            const after_str_len = (length - 1) - point_idx;
             if (after_str_len > decimal_places) {
-                // TODO: runtime exception for too many decimal places!
+                // More than 18 fractional digits cannot be represented exactly.
                 return null;
             }
             const diff_decimal_places = decimal_places - after_str_len;
 
-            const after_str = roc_str_slice[pi + 1 .. length];
+            const after_str = roc_str_slice[point_idx + 1 .. length];
             const after_u64 = @import("num.zig").parseUnsignedDecimal(u64, after_str);
             if (after_u64) |f| {
                 const unsigned = i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places)));
@@ -173,7 +180,7 @@ pub const RocDec = extern struct {
             const signed_before: i128 = if (is_negative) -before else before;
             const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
             if (mul_ans.has_overflowed) {
-                // TODO: runtime exception for overflow!
+                // The whole-number part is outside Dec's scaled i128 range.
                 return null;
             }
             before_val_i128 = mul_ans.value;
@@ -183,7 +190,7 @@ pub const RocDec = extern struct {
             if (after_val_i128) |after| {
                 const answer = @addWithOverflow(before, after);
                 if (answer[1] == 1) {
-                    // TODO: runtime exception for overflow!
+                    // Combining whole and fractional parts exceeded Dec's range.
                     return null;
                 }
                 return .{ .num = answer[0] };
@@ -558,8 +565,13 @@ pub const RocDec = extern struct {
                 i128h.divTrunc_i128(exponent.num, RocDec.one_point_zero_i128),
                 roc_ops,
             );
+        } else if (base.num <= 0) {
+            roc_ops.crash("Decimal power is undefined for non-positive base and fractional exponent!");
+            unreachable;
         } else {
-            return fromF64(std.math.pow(f64, base.toF64(), exponent.toF64())).?;
+            const log_base = decLnPositive(base, roc_ops);
+            const scaled_exponent = RocDec.mul(log_base, exponent, roc_ops);
+            return decExp(scaled_exponent, roc_ops);
         }
     }
 
@@ -569,10 +581,11 @@ pub const RocDec = extern struct {
     ) RocDec {
         // sqrt(-n) is an error
         if (self.num < 0) {
-            roc_ops.crash("Square root by 0!");
+            roc_ops.crash("Decimal square root of a negative number!");
+            unreachable;
         }
 
-        return fromF64(std.math.sqrt(self.toF64())).?;
+        return decSqrtNonNegative(self);
     }
 
     pub fn mul(
@@ -677,70 +690,51 @@ pub const RocDec = extern struct {
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
     }
 
-    fn mod2pi(self: RocDec) RocDec {
-        // This is made to be used before calling trig functions that work on the range 0 to 2*pi.
-        // It should be reasonable fast (much faster than calling @mod) and much more accurate as well.
-        // b is 2*pi as a dec. which is 6.2831853071795864769252867665590057684
-        // as dec is times 10^18 so 6283185307179586476.9252867665590057684
-        const b0: u64 = 6283185307179586476;
-        // Fraction that represents 64 bits of precision past what dec normally supports.
-        // 0.9252867665590057684 as binary to 64 places.
-        const b1: u64 = 0b1110110011011111100101111111000111001010111000100101011111110111;
-
-        // This is dec/(b0+1), but as a multiplication.
-        // So dec * (1/(b0+1)). This is way faster.
-        const dec = self.num;
-        const tmp = @as(i128, @intCast(i128h.shr(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi, 62)));
-        const q0 = if (dec < 0) -tmp else tmp;
-
-        const upper = i128h.mul_i128(q0, @as(i128, b0));
-        const mul_result = @import("num.zig").mulWithOverflow(i128, q0, @as(i128, b1));
-        const lower = mul_result.value;
-        const overflowed: u1 = @intFromBool(mul_result.has_overflowed);
-        // TODO: maybe write this out branchlessly.
-        // Currently is is probably cmovs, but could be just math?
-        const q0_sign: i128 =
-            if (q0 > 0) 1 else -1;
-        const overflowed_val: i128 = if (overflowed == 1) @as(i128, @bitCast(i128h.shl(@as(u128, @bitCast(q0_sign)), 64))) else 0;
-        const full = upper + i128h.shr_i128(lower, 64) + overflowed_val;
-
-        var out = dec - full;
-        if (out < 0) {
-            out += b0;
-        }
-
-        return RocDec{ .num = out };
+    pub fn log(self: RocDec, roc_ops: *RocOps) RocDec {
+        return decLnPositive(self, roc_ops);
     }
 
-    pub fn log(self: RocDec) RocDec {
-        return fromF64(@log(self.toF64())).?;
-    }
-
-    // I believe the output of the trig functions is always in range of Dec.
-    // If not, we probably should just make it saturate the Dec.
-    // I don't think this should crash or return errors.
     pub fn sin(self: RocDec) RocDec {
-        return fromF64(math.sin(self.mod2pi().toF64())).?;
+        return decSinCos(self).sin;
     }
 
     pub fn cos(self: RocDec) RocDec {
-        return fromF64(math.cos(self.mod2pi().toF64())).?;
+        return decSinCos(self).cos;
     }
 
-    pub fn tan(self: RocDec) RocDec {
-        return fromF64(math.tan(self.mod2pi().toF64())).?;
+    pub fn tan(self: RocDec, roc_ops: *RocOps) RocDec {
+        const pair = decSinCos(self);
+        return RocDec.div(pair.sin, pair.cos, roc_ops);
     }
 
-    pub fn asin(self: RocDec) RocDec {
-        return fromF64(math.asin(self.toF64())).?;
+    pub fn asin(self: RocDec, roc_ops: *RocOps) RocDec {
+        if (self.num > RocDec.one_point_zero.num or self.num < RocDec.neg_one_point_zero.num) {
+            roc_ops.crash("Decimal asin input is outside [-1, 1]!");
+            unreachable;
+        }
+        if (self.num == RocDec.one_point_zero.num) return RocDec.half_pi;
+        if (self.num == RocDec.neg_one_point_zero.num) return RocDec{ .num = -RocDec.half_pi.num };
+
+        const squared = RocDec.mul(self, self, roc_ops);
+        const complement = RocDec.sub(RocDec.one_point_zero, squared, roc_ops);
+        const denominator = RocDec.sqrt(complement, roc_ops);
+        return RocDec.atan(RocDec.div(self, denominator, roc_ops), roc_ops);
     }
 
-    pub fn acos(self: RocDec) RocDec {
-        return fromF64(math.acos(self.toF64())).?;
+    pub fn acos(self: RocDec, roc_ops: *RocOps) RocDec {
+        return RocDec.sub(RocDec.half_pi, RocDec.asin(self, roc_ops), roc_ops);
     }
 
-    pub fn atan(self: RocDec) RocDec {
-        return fromF64(math.atan(self.toF64())).?;
+    pub fn atan(self: RocDec, roc_ops: *RocOps) RocDec {
+        if (self.num > RocDec.one_point_zero.num) {
+            const reciprocal = RocDec.div(RocDec.one_point_zero, self, roc_ops);
+            return RocDec.sub(RocDec.half_pi, decAtanReduced(reciprocal), roc_ops);
+        }
+        if (self.num < RocDec.neg_one_point_zero.num) {
+            const reciprocal = RocDec.div(RocDec.one_point_zero, self, roc_ops);
+            return RocDec.sub(RocDec{ .num = -RocDec.half_pi.num }, decAtanReduced(reciprocal), roc_ops);
+        }
+        return decAtanReduced(self);
     }
 
     pub fn rem(
@@ -757,6 +751,273 @@ pub const RocDec = extern struct {
         return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
     }
 };
+
+const dec_cordic_k = RocDec{ .num = 607252935008881256 };
+
+const dec_cordic_atan = [_]i128{
+    785398163397448309,
+    463647609000806116,
+    244978663126864154,
+    124354994546761435,
+    62418809995957348,
+    31239833430268276,
+    15623728620476830,
+    7812341060101111,
+    3906230131966971,
+    1953122516478818,
+    976562189559319,
+    488281211194898,
+    244140620149361,
+    122070311893670,
+    61035156174208,
+    30517578115526,
+    15258789061315,
+    7629394531101,
+    3814697265606,
+    1907348632810,
+    953674316405,
+    476837158203,
+    238418579101,
+    119209289550,
+    59604644775,
+    29802322387,
+    14901161193,
+    7450580596,
+    3725290298,
+    1862645149,
+    931322574,
+    465661287,
+    232830643,
+    116415321,
+    58207660,
+    29103830,
+    14551915,
+    7275957,
+    3637978,
+    1818989,
+    909494,
+    454747,
+    227373,
+    113686,
+    56843,
+    28421,
+    14210,
+    7105,
+    3552,
+    1776,
+    888,
+    444,
+    222,
+    111,
+    55,
+    27,
+    13,
+    6,
+    3,
+    1,
+    0,
+    0,
+    0,
+    0,
+};
+
+const DecSinCos = struct {
+    sin: RocDec,
+    cos: RocDec,
+};
+
+fn decSqrtNonNegative(value: RocDec) RocDec {
+    const raw: u128 = @intCast(value.num);
+    const scaled = mul_u128(raw, @as(u128, @intCast(RocDec.one_point_zero_i128)));
+    const root = intSqrtU256(scaled);
+    return RocDec{ .num = @intCast(root) };
+}
+
+fn intSqrtU256(value: U256) u128 {
+    var low: u128 = 0;
+    var high: u128 = @intCast(math.maxInt(i128));
+    var answer: u128 = 0;
+
+    while (low <= high) {
+        const mid = low + i128h.shr(high - low, 1);
+        const square = mul_u128(mid, mid);
+
+        if (u256Le(square, value)) {
+            answer = mid;
+            low = mid + 1;
+        } else if (mid == 0) {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    return answer;
+}
+
+fn u256Le(lhs: U256, rhs: U256) bool {
+    return lhs.hi < rhs.hi or (lhs.hi == rhs.hi and lhs.lo <= rhs.lo);
+}
+
+fn decRemKnownNonZero(self: RocDec, other: RocDec) RocDec {
+    std.debug.assert(other.num != 0);
+    return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
+}
+
+fn decLnPositive(value: RocDec, roc_ops: *RocOps) RocDec {
+    if (value.num <= 0) {
+        roc_ops.crash("Decimal log is undefined for non-positive input!");
+        unreachable;
+    }
+
+    var reduced = value;
+    var power_of_two: i128 = 0;
+    while (reduced.num >= RocDec.two_point_zero.num) {
+        reduced = RocDec.div(reduced, RocDec.two_point_zero, roc_ops);
+        power_of_two += 1;
+    }
+    while (reduced.num < RocDec.one_point_zero.num) {
+        reduced = RocDec.mul(reduced, RocDec.two_point_zero, roc_ops);
+        power_of_two -= 1;
+    }
+
+    const numerator = RocDec.sub(reduced, RocDec.one_point_zero, roc_ops);
+    const denominator = RocDec.add(reduced, RocDec.one_point_zero, roc_ops);
+    const z = RocDec.div(numerator, denominator, roc_ops);
+    const z_squared = RocDec.mul(z, z, roc_ops);
+
+    var term = z;
+    var sum = RocDec{ .num = 0 };
+    var divisor: i128 = 1;
+    while (term.num != 0) {
+        const divisor_dec = RocDec.fromWholeInt(divisor).?;
+        const next = RocDec.div(term, divisor_dec, roc_ops);
+        if (next.num == 0) break;
+        sum = RocDec.add(sum, next, roc_ops);
+        term = RocDec.mul(term, z_squared, roc_ops);
+        divisor += 2;
+    }
+
+    var result = RocDec.mul(RocDec.two_point_zero, sum, roc_ops);
+    if (power_of_two != 0) {
+        const power_dec = RocDec.fromWholeInt(power_of_two).?;
+        const correction = RocDec.mul(power_dec, RocDec.ln2, roc_ops);
+        result = RocDec.add(result, correction, roc_ops);
+    }
+    return result;
+}
+
+fn decExp(value: RocDec, roc_ops: *RocOps) RocDec {
+    const quotient = RocDec.div(value, RocDec.ln2, roc_ops);
+    const whole_quotient = RocDec.trunc(quotient, roc_ops);
+    const exponent = whole_quotient.toWholeInt();
+    const reduced = RocDec.sub(value, RocDec.mul(whole_quotient, RocDec.ln2, roc_ops), roc_ops);
+    return decScaleByPowerOfTwo(decExpReduced(reduced, roc_ops), exponent, roc_ops);
+}
+
+fn decExpReduced(value: RocDec, roc_ops: *RocOps) RocDec {
+    var sum = RocDec.one_point_zero;
+    var term = RocDec.one_point_zero;
+    var divisor: i128 = 1;
+
+    while (true) {
+        const divisor_dec = RocDec.fromWholeInt(divisor).?;
+        const next = RocDec.div(RocDec.mul(term, value, roc_ops), divisor_dec, roc_ops);
+        if (next.num == 0) break;
+        sum = RocDec.add(sum, next, roc_ops);
+        term = next;
+        divisor += 1;
+    }
+
+    return sum;
+}
+
+fn decScaleByPowerOfTwo(value: RocDec, exponent: i128, roc_ops: *RocOps) RocDec {
+    var result = value;
+    var remaining = exponent;
+    while (remaining > 0) {
+        result = RocDec.mul(result, RocDec.two_point_zero, roc_ops);
+        remaining -= 1;
+    }
+    while (remaining < 0 and result.num != 0) {
+        result = RocDec.div(result, RocDec.two_point_zero, roc_ops);
+        remaining += 1;
+    }
+    return result;
+}
+
+fn decSinCos(value: RocDec) DecSinCos {
+    var angle = decRemKnownNonZero(value, RocDec.tau);
+    if (angle.num > RocDec.pi.num) {
+        angle = RocDec{ .num = angle.num - RocDec.tau.num };
+    } else if (angle.num < -RocDec.pi.num) {
+        angle = RocDec{ .num = angle.num + RocDec.tau.num };
+    }
+
+    var cos_sign: i128 = 1;
+    if (angle.num > RocDec.half_pi.num) {
+        angle = RocDec{ .num = RocDec.pi.num - angle.num };
+        cos_sign = -1;
+    } else if (angle.num < -RocDec.half_pi.num) {
+        angle = RocDec{ .num = -RocDec.pi.num - angle.num };
+        cos_sign = -1;
+    }
+
+    var pair = decCordicSinCos(angle);
+    pair.cos.num *= cos_sign;
+    return pair;
+}
+
+fn decCordicSinCos(angle: RocDec) DecSinCos {
+    var x = dec_cordic_k.num;
+    var y: i128 = 0;
+    var z = angle.num;
+
+    for (dec_cordic_atan, 0..) |atan_step, i| {
+        const shift: u7 = @intCast(i);
+        const x_shift = i128h.shr_i128(x, shift);
+        const y_shift = i128h.shr_i128(y, shift);
+        if (z >= 0) {
+            x -= y_shift;
+            y += x_shift;
+            z -= atan_step;
+        } else {
+            x += y_shift;
+            y -= x_shift;
+            z += atan_step;
+        }
+    }
+
+    return .{
+        .sin = RocDec{ .num = y },
+        .cos = RocDec{ .num = x },
+    };
+}
+
+fn decAtanReduced(value: RocDec) RocDec {
+    var x = RocDec.one_point_zero.num;
+    var y = value.num;
+    var z: i128 = 0;
+
+    for (dec_cordic_atan, 0..) |atan_step, i| {
+        if (y == 0) break;
+
+        const shift: u7 = @intCast(i);
+        const x_shift = i128h.shr_i128(x, shift);
+        const y_shift = i128h.shr_i128(y, shift);
+        if (y > 0) {
+            x += y_shift;
+            y -= x_shift;
+            z += atan_step;
+        } else {
+            x -= y_shift;
+            y += x_shift;
+            z -= atan_step;
+        }
+    }
+
+    return RocDec{ .num = z };
+}
 
 fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     const answer_u256 = mul_u128(a, b);
@@ -1070,7 +1331,8 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 
 // exports
 
-/// TODO: Document fromStr.
+/// C ABI parse wrapper. Returns errorcode 0 with the scaled i128 on success, or
+/// errorcode 1 with value 0 for any invalid or out-of-range decimal string.
 pub fn fromStr(arg: RocStr) callconv(.c) NumParseResult(i128) {
     if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
@@ -1079,7 +1341,7 @@ pub fn fromStr(arg: RocStr) callconv(.c) NumParseResult(i128) {
     }
 }
 
-/// TODO: Document to_str.
+/// C ABI allocator-backed string wrapper for Dec formatting.
 pub fn to_str(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1087,7 +1349,8 @@ pub fn to_str(
     return @call(.always_inline, RocDec.to_str, .{ arg, roc_ops });
 }
 
-/// TODO: Document fromF64C.
+/// C ABI conversion wrapper from f64 to Dec. Crashes through RocOps if the
+/// scaled value is outside Dec's i128 range.
 pub fn fromF64C(
     arg: f64,
     roc_ops: *RocOps,
@@ -1100,7 +1363,8 @@ pub fn fromF64C(
     }
 }
 
-/// TODO: Document fromF32C.
+/// C ABI conversion wrapper from f32 to Dec. Crashes through RocOps if the
+/// scaled value is outside Dec's i128 range.
 pub fn fromF32C(
     arg_f32: f32,
     roc_ops: *RocOps,
@@ -1114,7 +1378,7 @@ pub fn fromF32C(
     }
 }
 
-/// TODO: Document toF64.
+/// C ABI conversion wrapper from Dec to f64.
 pub fn toF64(arg: RocDec) callconv(.c) f64 {
     return @call(.always_inline, RocDec.toF64, .{arg});
 }
@@ -1161,7 +1425,8 @@ pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     return @intCast(whole_part);
 }
 
-/// TODO: Document exportFromInt.
+/// Export an integer-to-Dec conversion wrapper for type T. The generated
+/// function scales the integer by 10^18 and crashes through RocOps on overflow.
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1181,32 +1446,33 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document fromU64C.
+/// C ABI conversion wrapper from u64 to Dec. Every u64 value fits in Dec.
 pub fn fromU64C(arg: u64) callconv(.c) i128 {
     return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
 }
 
-/// TODO: Document toI128.
+/// C ABI wrapper that returns the raw scaled i128 backing a Dec.
 pub fn toI128(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
 }
 
-/// TODO: Document fromI128.
+/// C ABI wrapper that builds a Dec from an already scaled i128.
 pub fn fromI128(arg: i128) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.fromI128, .{arg});
 }
 
-/// TODO: Document eqC.
+/// C ABI equality comparison wrapper.
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
-/// TODO: Document neqC.
+/// C ABI inequality comparison wrapper.
 pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
-/// TODO: Document negateC.
+/// C ABI negation wrapper. Crashes through RocOps when negating Dec.lowest
+/// would overflow.
 pub fn negateC(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1217,7 +1483,8 @@ pub fn negateC(
     };
 }
 
-/// TODO: Document absC.
+/// C ABI absolute-value wrapper. Crashes through RocOps when abs(Dec.lowest)
+/// would overflow.
 pub fn absC(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1229,22 +1496,25 @@ pub fn absC(
     return result.num;
 }
 
-/// TODO: Document addC.
+/// C ABI checked-add wrapper. Returns a result value plus an overflow flag.
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document subC.
+/// C ABI checked-subtract wrapper. Returns a result value plus an overflow
+/// flag.
 pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document mulC.
+/// C ABI checked-multiply wrapper. Returns a result value plus an overflow
+/// flag.
 pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document divC.
+/// C ABI division wrapper. Crashes through RocOps on division by zero or
+/// overflow and otherwise returns the scaled i128 result.
 pub fn divC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1263,12 +1533,14 @@ pub fn divTruncC(
     return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
 }
 
-/// TODO: Document logC.
-pub fn logC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.log, .{arg}).num;
+/// C ABI natural-log wrapper. The caller must provide a positive Dec; arithmetic
+/// failures crash through RocOps.
+pub fn logC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.log, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document powC.
+/// C ABI power wrapper. Domain errors, division by zero, and overflow crash
+/// through RocOps.
 pub fn powC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1277,37 +1549,49 @@ pub fn powC(
     return @call(.always_inline, RocDec.pow, .{ arg1, arg2, roc_ops }).num;
 }
 
-/// TODO: Document sinC.
-pub fn sinC(arg: RocDec) callconv(.c) i128 {
+/// C ABI square-root wrapper. Negative inputs and overflow crash through
+/// RocOps.
+pub fn sqrtC(
+    arg: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.sqrt, .{ arg, roc_ops }).num;
+}
+
+/// C ABI sine wrapper returning the scaled i128 result.
+pub fn sinC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
-/// TODO: Document cosC.
-pub fn cosC(arg: RocDec) callconv(.c) i128 {
+/// C ABI cosine wrapper returning the scaled i128 result.
+pub fn cosC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
-/// TODO: Document tanC.
-pub fn tanC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.tan, .{arg}).num;
+/// C ABI tangent wrapper. Division by zero or overflow crashes through RocOps.
+pub fn tanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.tan, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document asinC.
-pub fn asinC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.asin, .{arg}).num;
+/// C ABI arcsine wrapper. Inputs outside [-1, 1] and arithmetic failures crash
+/// through RocOps.
+pub fn asinC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.asin, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document acosC.
-pub fn acosC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.acos, .{arg}).num;
+/// C ABI arccosine wrapper. Inputs outside [-1, 1] and arithmetic failures
+/// crash through RocOps.
+pub fn acosC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.acos, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document atanC.
-pub fn atanC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.atan, .{arg}).num;
+/// C ABI arctangent wrapper returning the scaled i128 result. Arithmetic
+/// failures crash through RocOps.
+pub fn atanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.atan, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document addOrPanicC.
+/// C ABI addition wrapper that crashes through RocOps on overflow.
 pub fn addOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1316,12 +1600,12 @@ pub fn addOrPanicC(
     return @call(.always_inline, RocDec.add, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document addSaturatedC.
+/// C ABI saturated-add wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document subOrPanicC.
+/// C ABI subtraction wrapper that crashes through RocOps on overflow.
 pub fn subOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1330,12 +1614,12 @@ pub fn subOrPanicC(
     return @call(.always_inline, RocDec.sub, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document subSaturatedC.
+/// C ABI saturated-subtract wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document mulOrPanicC.
+/// C ABI multiplication wrapper that crashes through RocOps on overflow.
 pub fn mulOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1344,12 +1628,13 @@ pub fn mulOrPanicC(
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document mulSaturatedC.
+/// C ABI saturated-multiply wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document exportRound.
+/// Export a Dec rounding wrapper for integer return type T. The generated
+/// function rounds away from zero on half values and returns the whole part.
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1362,7 +1647,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportFloor.
+/// Export a Dec floor wrapper for integer return type T.
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1375,7 +1660,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportCeiling.
+/// Export a Dec ceiling wrapper for integer return type T.
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1386,6 +1671,27 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
+fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) error{ InvalidExpectedDecimal, TestExpectedEqual }!void {
+    const expected = RocDec.fromNonemptySlice(expected_text) orelse return error.InvalidExpectedDecimal;
+    try std.testing.expectEqual(expected, actual);
+
+    var buf: [RocDec.max_str_length]u8 = undefined;
+    try std.testing.expectEqualStrings(expected_text, actual.format_to_buf(&buf));
+}
+
+test "math constants use fixed-point std.math values" {
+    try expectRocDecConstant(RocDec.e, "2.718281828459045235");
+    try expectRocDecConstant(RocDec.pi, "3.141592653589793238");
+    try expectRocDecConstant(RocDec.tau, "6.283185307179586476");
+    try expectRocDecConstant(RocDec.half_pi, "1.570796326794896619");
+    try expectRocDecConstant(RocDec.ln2, "0.693147180559945309");
+}
+
+test "math constants preserve exact fixed-point relationships" {
+    try std.testing.expectEqual(RocDec.pi.num * 2, RocDec.tau.num);
+    try std.testing.expectEqual(@divTrunc(RocDec.pi.num, 2), RocDec.half_pi.num);
 }
 
 test "fromU64" {
@@ -1905,7 +2211,10 @@ test "div: 500 / 1000" {
 }
 
 test "log: 1" {
-    try std.testing.expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try std.testing.expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1), test_env.getOps()));
 }
 
 test "fract: 0" {
@@ -2159,4 +2468,445 @@ test "sqrt: 1.44" {
     const expected = RocDec.fromStr(roc_str_expected).?;
 
     try std.testing.expectEqual(expected, dec.sqrt(test_env.getOps()));
+}
+
+fn expectApproxDec(expected: RocDec, actual: RocDec, tolerance: u128) error{TestUnexpectedResult}!void {
+    const diff: u128 = @abs(expected.num - actual.num);
+    try std.testing.expect(diff <= tolerance);
+}
+
+fn decFromText(text: []const u8) error{InvalidExpectedDecimal}!RocDec {
+    return RocDec.fromNonemptySlice(text) orelse error.InvalidExpectedDecimal;
+}
+
+fn comptimeDecFromText(comptime text: []const u8) RocDec {
+    @setEvalBranchQuota(100_000);
+    return RocDec.fromNonemptySlice(text) orelse @compileError("invalid Dec fixture: " ++ text);
+}
+
+const DecExactUnaryCase = struct {
+    input: RocDec,
+    expected: RocDec,
+};
+
+const DecOracleUnaryOp = enum {
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+    log,
+};
+
+const DecOracleUnaryCase = struct {
+    input: RocDec,
+    expected: RocDec,
+    max_error_raw: u128,
+};
+
+const DecOracleBinaryOp = enum {
+    pow,
+};
+
+const DecOracleBinaryCase = struct {
+    lhs: RocDec,
+    rhs: RocDec,
+    expected: RocDec,
+    max_error_raw: u128,
+};
+
+fn comptimeDecToF128(comptime dec: RocDec) f128 {
+    return @as(f128, @floatFromInt(dec.num)) / @as(f128, @floatFromInt(RocDec.one_point_zero_i128));
+}
+
+fn comptimeDecFromF128Trunc(comptime value: f128) RocDec {
+    const scaled = value * @as(f128, @floatFromInt(RocDec.one_point_zero_i128));
+    if (scaled > @as(f128, @floatFromInt(math.maxInt(i128)))) {
+        @compileError("Dec oracle fixture overflowed above max Dec");
+    }
+    if (scaled < @as(f128, @floatFromInt(math.minInt(i128)))) {
+        @compileError("Dec oracle fixture overflowed below min Dec");
+    }
+    return RocDec{ .num = @intFromFloat(scaled) };
+}
+
+fn comptimeSqrtExpected(comptime input: RocDec) RocDec {
+    @setEvalBranchQuota(20_000);
+    if (input.num < 0) @compileError("sqrt fixture input must be non-negative");
+
+    const scaled = mul_u128(@as(u128, @intCast(input.num)), @as(u128, @intCast(RocDec.one_point_zero_i128)));
+    var low: u128 = 0;
+    var high: u128 = @intCast(math.maxInt(i128));
+    var answer: u128 = 0;
+
+    while (low <= high) {
+        const mid = low + ((high - low) / 2);
+        const square = mul_u128(mid, mid);
+        if (u256Le(square, scaled)) {
+            answer = mid;
+            low = mid + 1;
+        } else if (mid == 0) {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    return RocDec{ .num = @intCast(answer) };
+}
+
+fn buildSqrtSpecCases(comptime input_texts: []const []const u8) [input_texts.len]DecExactUnaryCase {
+    var cases: [input_texts.len]DecExactUnaryCase = undefined;
+    inline for (input_texts, 0..) |text, i| {
+        const input = comptimeDecFromText(text);
+        cases[i] = .{
+            .input = input,
+            .expected = comptimeSqrtExpected(input),
+        };
+    }
+    return cases;
+}
+
+fn decUnaryOracle(comptime op: DecOracleUnaryOp, comptime input: RocDec) RocDec {
+    const x = comptimeDecToF128(input);
+    const expected = switch (op) {
+        .sin => @sin(x),
+        .cos => @cos(x),
+        .tan => @tan(x),
+        .asin => math.asin(x),
+        .acos => math.acos(x),
+        .atan => math.atan(x),
+        .log => @log(x),
+    };
+    return comptimeDecFromF128Trunc(expected);
+}
+
+fn buildUnaryOracleCases(
+    comptime op: DecOracleUnaryOp,
+    comptime input_texts: []const []const u8,
+    comptime max_error_raw: u128,
+) [input_texts.len]DecOracleUnaryCase {
+    var cases: [input_texts.len]DecOracleUnaryCase = undefined;
+    inline for (input_texts, 0..) |text, i| {
+        const input = comptimeDecFromText(text);
+        cases[i] = .{
+            .input = input,
+            .expected = decUnaryOracle(op, input),
+            .max_error_raw = max_error_raw,
+        };
+    }
+    return cases;
+}
+
+fn decBinaryOracle(comptime op: DecOracleBinaryOp, comptime lhs: RocDec, comptime rhs: RocDec) RocDec {
+    const x = comptimeDecToF128(lhs);
+    const y = comptimeDecToF128(rhs);
+    const expected = switch (op) {
+        .pow => @exp(@log(x) * y),
+    };
+    return comptimeDecFromF128Trunc(expected);
+}
+
+fn buildBinaryOracleCases(
+    comptime op: DecOracleBinaryOp,
+    comptime input_texts: []const [2][]const u8,
+    comptime max_error_raw: u128,
+) [input_texts.len]DecOracleBinaryCase {
+    var cases: [input_texts.len]DecOracleBinaryCase = undefined;
+    inline for (input_texts, 0..) |pair, i| {
+        const lhs = comptimeDecFromText(pair[0]);
+        const rhs = comptimeDecFromText(pair[1]);
+        cases[i] = .{
+            .lhs = lhs,
+            .rhs = rhs,
+            .expected = decBinaryOracle(op, lhs, rhs),
+            .max_error_raw = max_error_raw,
+        };
+    }
+    return cases;
+}
+
+fn expectDecWithin(expected: RocDec, actual: RocDec, max_error_raw: u128) error{TestUnexpectedResult}!void {
+    const diff: u128 = @abs(expected.num - actual.num);
+    if (diff > max_error_raw) {
+        std.debug.print(
+            "expected Dec raw {d}, actual raw {d}, max error {d}, actual error {d}\n",
+            .{ expected.num, actual.num, max_error_raw, diff },
+        );
+        return error.TestUnexpectedResult;
+    }
+}
+
+const dec_sqrt_spec_cases = buildSqrtSpecCases(&.{
+    "0.0",
+    "0.000000000000000001",
+    "0.25",
+    "1.0",
+    "1.44",
+    "2.0",
+    "9.0",
+    "12321.0",
+});
+
+const dec_sin_oracle_cases = buildUnaryOracleCases(.sin, &.{
+    "-6.283185307179586476",
+    "-3.141592653589793238",
+    "-1.570796326794896619",
+    "-0.785398163397448309",
+    "-0.5",
+    "0.0",
+    "0.5",
+    "0.785398163397448309",
+    "1.570796326794896619",
+    "3.141592653589793238",
+    "6.283185307179586476",
+}, 50_000);
+
+const dec_cos_oracle_cases = buildUnaryOracleCases(.cos, &.{
+    "-6.283185307179586476",
+    "-3.141592653589793238",
+    "-1.570796326794896619",
+    "-0.785398163397448309",
+    "-0.5",
+    "0.0",
+    "0.5",
+    "0.785398163397448309",
+    "1.570796326794896619",
+    "3.141592653589793238",
+    "6.283185307179586476",
+}, 50_000);
+
+const dec_tan_oracle_cases = buildUnaryOracleCases(.tan, &.{
+    "-1.0",
+    "-0.785398163397448309",
+    "-0.5",
+    "-0.1",
+    "0.0",
+    "0.1",
+    "0.5",
+    "0.785398163397448309",
+    "1.0",
+}, 150_000);
+
+const dec_asin_oracle_cases = buildUnaryOracleCases(.asin, &.{
+    "-1.0",
+    "-0.5",
+    "-0.1",
+    "0.0",
+    "0.1",
+    "0.5",
+    "1.0",
+}, 75_000);
+
+const dec_acos_oracle_cases = buildUnaryOracleCases(.acos, &.{
+    "-1.0",
+    "-0.5",
+    "-0.1",
+    "0.0",
+    "0.1",
+    "0.5",
+    "1.0",
+}, 75_000);
+
+const dec_atan_oracle_cases = buildUnaryOracleCases(.atan, &.{
+    "-10.0",
+    "-1.0",
+    "-0.5",
+    "-0.1",
+    "0.0",
+    "0.1",
+    "0.5",
+    "1.0",
+    "10.0",
+}, 75_000);
+
+const dec_log_oracle_cases = buildUnaryOracleCases(.log, &.{
+    "0.1",
+    "0.5",
+    "1.0",
+    "2.0",
+    "10.0",
+    "100.0",
+}, 100_000);
+
+const dec_pow_oracle_cases = buildBinaryOracleCases(.pow, &.{
+    .{ "0.25", "0.5" },
+    .{ "1.5", "2.25" },
+    .{ "2.0", "0.5" },
+    .{ "4.0", "0.5" },
+    .{ "9.0", "0.5" },
+    .{ "10.0", "0.5" },
+}, 150_000);
+
+test "sqrt: 2.0 truncates to fixed-point precision" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const two = RocDec.two_point_zero;
+    const expected = RocDec{ .num = 1414213562373095048 };
+
+    try std.testing.expectEqual(expected, two.sqrt(test_env.getOps()));
+}
+
+test "sqrt: small fixed-point values stay deterministic" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try expectRocDecConstant((try decFromText("0.000000000000000001")).sqrt(test_env.getOps()), "0.000000001");
+    try expectRocDecConstant((try decFromText("12321.0")).sqrt(test_env.getOps()), "111.0");
+}
+
+test "sqrt fixtures match exact fixed-point spec" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (dec_sqrt_spec_cases) |case| {
+        try std.testing.expectEqual(case.expected, case.input.sqrt(test_env.getOps()));
+    }
+}
+
+test "known-nonzero Dec remainder matches checked remainder" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for ([_]RocDec{
+        RocDec{ .num = -RocDec.tau.num * 2 - 1 },
+        RocDec{ .num = -RocDec.pi.num },
+        RocDec{ .num = 0 },
+        RocDec.pi,
+        RocDec{ .num = RocDec.tau.num * 2 + 1 },
+    }) |input| {
+        try std.testing.expectEqual(
+            RocDec.rem(input, RocDec.tau, test_env.getOps()),
+            decRemKnownNonZero(input, RocDec.tau),
+        );
+    }
+}
+
+test "Dec trig matches f128 oracle envelope" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (dec_sin_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.sin(), case.max_error_raw);
+    }
+    inline for (dec_cos_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.cos(), case.max_error_raw);
+    }
+    inline for (dec_tan_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.tan(test_env.getOps()), case.max_error_raw);
+    }
+}
+
+test "Dec inverse trig matches f128 oracle envelope" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (dec_asin_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.asin(test_env.getOps()), case.max_error_raw);
+    }
+    inline for (dec_acos_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.acos(test_env.getOps()), case.max_error_raw);
+    }
+    inline for (dec_atan_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.atan(test_env.getOps()), case.max_error_raw);
+    }
+}
+
+test "Dec log and fractional pow match f128 oracle envelope" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (dec_log_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.input.log(test_env.getOps()), case.max_error_raw);
+    }
+    inline for (dec_pow_oracle_cases) |case| {
+        try expectDecWithin(case.expected, case.lhs.pow(case.rhs, test_env.getOps()), case.max_error_raw);
+    }
+}
+
+test "cordic trig identities" {
+    const tolerance: u128 = 10_000;
+
+    try expectApproxDec(RocDec{ .num = 0 }, (RocDec{ .num = 0 }).sin(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, (RocDec{ .num = 0 }).cos(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, RocDec.half_pi.sin(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.half_pi.cos(), tolerance);
+}
+
+test "cordic trig range reduction and quadrant signs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 20_000;
+    const quarter_pi = RocDec{ .num = @divTrunc(RocDec.pi.num, 4) };
+    const neg_half_pi = RocDec{ .num = -RocDec.half_pi.num };
+
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.pi.sin(), tolerance);
+    try expectApproxDec(RocDec.neg_one_point_zero, RocDec.pi.cos(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.tau.sin(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, RocDec.tau.cos(), tolerance);
+    try expectApproxDec(RocDec.neg_one_point_zero, neg_half_pi.sin(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, neg_half_pi.cos(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, quarter_pi.tan(test_env.getOps()), tolerance);
+}
+
+test "cordic atan and inverse trig identities" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 10_000;
+
+    try expectApproxDec(RocDec{ .num = 785398163397448309 }, RocDec.one_point_zero.atan(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.half_pi, RocDec.one_point_zero.asin(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.one_point_zero.acos(test_env.getOps()), tolerance);
+}
+
+test "cordic atan handles negative values and reciprocal reduction" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 20_000;
+    const ten = RocDec.fromU64(10);
+    const tenth = RocDec.div(RocDec.one_point_zero, ten, test_env.getOps());
+    const atan_ten = ten.atan(test_env.getOps());
+    const atan_tenth = tenth.atan(test_env.getOps());
+
+    try expectApproxDec(RocDec{ .num = -785398163397448309 }, RocDec.neg_one_point_zero.atan(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.half_pi, RocDec.add(atan_ten, atan_tenth, test_env.getOps()), tolerance);
+}
+
+test "inverse trig maps back through trig functions" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 50_000;
+    const half = RocDec.zero_point_five;
+
+    try expectApproxDec(half, half.asin(test_env.getOps()).sin(), tolerance);
+    try expectApproxDec(half, half.acos(test_env.getOps()).cos(), tolerance);
+    try expectApproxDec(RocDec{ .num = -RocDec.half_pi.num }, RocDec.neg_one_point_zero.asin(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.pi, RocDec.neg_one_point_zero.acos(test_env.getOps()), tolerance);
+}
+
+test "fractional pow uses deterministic fixed-point exp ln path" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const four = RocDec.fromU64(4);
+    const half = RocDec.zero_point_five;
+
+    try expectApproxDec(RocDec.two_point_zero, four.pow(half, test_env.getOps()), 10_000);
+}
+
+test "pow covers integer negative and fractional exponents" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const three = RocDec.fromU64(3);
+    const nine = RocDec.fromU64(9);
+    const quarter = try decFromText("0.25");
+    const neg_three = try decFromText("-3.0");
+
+    try expectRocDecConstant(RocDec.two_point_zero.pow(try decFromText("10.0"), test_env.getOps()), "1024.0");
+    try expectRocDecConstant(RocDec.two_point_zero.pow(neg_three, test_env.getOps()), "0.125");
+    try expectApproxDec(three, nine.pow(RocDec.zero_point_five, test_env.getOps()), 10_000);
+    try expectApproxDec(RocDec.zero_point_five, quarter.pow(RocDec.zero_point_five, test_env.getOps()), 10_000);
 }

@@ -101,7 +101,7 @@ result = f(3)?
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 112)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 115)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -129,7 +129,7 @@ result = f(3)?
 		(e-match
 			(match
 				(cond
-					(e-call (constraint-fn-var 239)
+					(e-call (constraint-fn-var 243)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-num (value "3"))))

@@ -5368,7 +5368,7 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        wasm_module,
+        &wasm_module,
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -5544,7 +5544,7 @@ fn rocBuildWasmSurgical(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        wasm_module,
+        &wasm_module,
     );
     defer codegen.deinit();
     loaded_module = false;

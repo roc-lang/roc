@@ -8765,7 +8765,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 654)
+		(e-dispatch-call (method "plus") (constraint-fn-var 675)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

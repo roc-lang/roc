@@ -1398,6 +1398,60 @@ pub const Coordinator = struct {
         return try views.toOwnedSlice(allocator);
     }
 
+    fn appendTypecheckAvailablePublicApiClosure(
+        self: *Coordinator,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_view: check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error!void {
+        var pending = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer pending.deinit(allocator);
+
+        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+        defer seen.deinit();
+
+        for (views.items) |view| {
+            try seen.put(view.key, {});
+        }
+        try pending.append(allocator, root_view);
+
+        while (pending.pop()) |view| {
+            const entry = try seen.getOrPut(view.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            try views.append(allocator, view);
+
+            for (view.direct_import_artifact_keys) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing public API dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+        }
+    }
+
     fn rootRelationContainsArtifact(
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         key: check.CheckedArtifact.CheckedModuleArtifactKey,
@@ -1944,12 +1998,11 @@ pub const Coordinator = struct {
             return;
         };
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to finalize; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
         const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
@@ -2022,12 +2075,11 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to validate; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
         const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
@@ -2649,6 +2701,25 @@ pub const Coordinator = struct {
             publication_with_availability.hoisted_roots = republish_hoisted_roots;
         }
 
+        var platform_requirement_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
+        var platform_requirement_available_artifacts_owned = false;
+        defer if (platform_requirement_available_artifacts_owned) self.gpa.free(platform_requirement_available_artifacts);
+
+        var base_available_artifacts = available_artifacts;
+        if (publication.platform_requirement_artifact) |platform_requirement_artifact| {
+            var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(self.gpa);
+            try extended_available.appendSlice(self.gpa, available_artifacts);
+            try self.appendTypecheckAvailablePublicApiClosure(
+                &extended_available,
+                self.gpa,
+                platform_requirement_artifact,
+            );
+            platform_requirement_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
+            platform_requirement_available_artifacts_owned = true;
+            base_available_artifacts = platform_requirement_available_artifacts;
+        }
+
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
         defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
@@ -2656,7 +2727,7 @@ pub const Coordinator = struct {
         if (publication.platform_app_relation) |relation| {
             var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
             errdefer extended_available.deinit(self.gpa);
-            try extended_available.appendSlice(self.gpa, available_artifacts);
+            try extended_available.appendSlice(self.gpa, base_available_artifacts);
 
             const root_key = if (mod.checkedArtifact()) |current| current.key else CheckedArtifact.CheckedModuleArtifactKey{};
             for (publication.relation_artifacts) |relation_artifact| {
@@ -2687,7 +2758,7 @@ pub const Coordinator = struct {
             relation_available_artifacts_owned = true;
             publication_with_availability.available_artifacts = relation_available_artifacts;
         } else {
-            publication_with_availability.available_artifacts = available_artifacts;
+            publication_with_availability.available_artifacts = base_available_artifacts;
         }
 
         var artifact = try compile_package.PackageEnv.publishFromPrebuiltModules(

@@ -9459,75 +9459,161 @@ const CheckedBodyPayloadCopier = struct {
         has_suffix: bool,
     ) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, has_suffix) orelse .{ .num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, has_suffix)) orelse .{ .num_from_numeral = null };
     }
 
     fn copyTypedNumFromNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, true) orelse .{ .typed_num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, true)) orelse .{ .typed_num_from_numeral = null };
     }
 
-    fn exactNumeralDecimalText(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
-        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+    fn exactNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
+        return self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked exact numeral literal had no parser-owned numeral facts", .{});
         };
-        return numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
     }
 
     fn exactNumeralForBuiltin(
-        text: []const u8,
+        allocator: Allocator,
+        module_env: *const ModuleEnv,
+        literal: ModuleEnv.NumeralLiteral,
         builtin_nominal: CheckedBuiltinNominal,
         has_suffix: bool,
-    ) ?CheckedExprData {
+    ) Allocator.Error!?CheckedExprData {
         return switch (builtin_nominal) {
-            .u8 => exactUnsignedIntLiteral(u8, text, .u8),
-            .u16 => exactUnsignedIntLiteral(u16, text, .u16),
-            .u32 => exactUnsignedIntLiteral(u32, text, .u32),
-            .u64 => exactUnsignedIntLiteral(u64, text, .u64),
-            .u128 => exactUnsignedIntLiteral(u128, text, .u128),
-            .i8 => exactSignedIntLiteral(i8, text, .i8),
-            .i16 => exactSignedIntLiteral(i16, text, .i16),
-            .i32 => exactSignedIntLiteral(i32, text, .i32),
-            .i64 => exactSignedIntLiteral(i64, text, .i64),
-            .i128 => exactSignedIntLiteral(i128, text, .i128),
-            .f32 => if (std.fmt.parseFloat(f32, text)) |value|
-                .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .f64 => if (std.fmt.parseFloat(f64, text)) |value|
-                .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
+            .u8 => exactUnsignedIntLiteral(u8, module_env, literal, .u8),
+            .u16 => exactUnsignedIntLiteral(u16, module_env, literal, .u16),
+            .u32 => exactUnsignedIntLiteral(u32, module_env, literal, .u32),
+            .u64 => exactUnsignedIntLiteral(u64, module_env, literal, .u64),
+            .u128 => exactUnsignedIntLiteral(u128, module_env, literal, .u128),
+            .i8 => exactSignedIntLiteral(i8, module_env, literal, .i8),
+            .i16 => exactSignedIntLiteral(i16, module_env, literal, .i16),
+            .i32 => exactSignedIntLiteral(i32, module_env, literal, .i32),
+            .i64 => exactSignedIntLiteral(i64, module_env, literal, .i64),
+            .i128 => exactSignedIntLiteral(i128, module_env, literal, .i128),
+            .f32 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f32, text)) |value|
+                    .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .f64 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f64, text)) |value|
+                    .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .dec => if (exactDecLiteral(module_env, literal)) |value|
                 .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
             else if (!has_suffix)
-                .{ .dec = .{ .value = if (text.len > 0 and text[0] == '-') builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
+                .{ .dec = .{ .value = if (literal.isNegative()) builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
             else
                 null,
             else => null,
         };
     }
 
-    fn exactUnsignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactUnsignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        if (literal.isNegative() and magnitude != 0) return null;
+        if (magnitude > @as(u128, @intCast(std.math.maxInt(T)))) return null;
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(parsed))),
+            .bytes = @bitCast(magnitude),
             .kind = .u128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
     }
 
-    fn exactSignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactSignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        const max_positive: u128 = @intCast(std.math.maxInt(T));
+        const max_negative = max_positive + 1;
+        const parsed: i128 = if (literal.isNegative()) blk: {
+            if (magnitude > max_negative) return null;
+            break :blk if (magnitude == max_negative)
+                @as(i128, std.math.minInt(T))
+            else
+                -@as(i128, @intCast(magnitude));
+        } else blk: {
+            if (magnitude > max_positive) return null;
+            break :blk @intCast(magnitude);
+        };
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(i128, @intCast(parsed))),
+            .bytes = @bitCast(parsed),
             .kind = .i128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn exactIntegerMagnitude(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?u128 {
+        if (literal.after_decimal_digit_count != 0) return null;
+        return base256BytesToU128(module_env.numeralDigitsBefore(literal));
+    }
+
+    fn exactDecLiteral(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?builtins.dec.RocDec {
+        const decimal_places = builtins.dec.RocDec.decimal_places;
+        const after_count = literal.after_decimal_digit_count;
+        if (after_count > decimal_places) return null;
+
+        const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return null;
+        const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return null;
+
+        const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return null;
+        const after_scale = pow10U128(decimal_places - after_count);
+        const after_scaled = checkedMulU128(after, after_scale) orelse return null;
+        const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return null;
+
+        const max_positive: u128 = @intCast(std.math.maxInt(i128));
+        const max_negative = max_positive + 1;
+        if (literal.isNegative()) {
+            if (magnitude > max_negative) return null;
+            return .{ .num = if (magnitude == max_negative)
+                std.math.minInt(i128)
+            else
+                -@as(i128, @intCast(magnitude)) };
+        }
+
+        if (magnitude > max_positive) return null;
+        return .{ .num = @intCast(magnitude) };
+    }
+
+    fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+        var value: u128 = 0;
+        for (bytes_be) |byte| {
+            const shifted = @mulWithOverflow(value, 256);
+            if (shifted[1] != 0) return null;
+            const added = @addWithOverflow(shifted[0], byte);
+            if (added[1] != 0) return null;
+            value = added[0];
+        }
+        return value;
+    }
+
+    fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+        const multiplied = @mulWithOverflow(lhs, rhs);
+        if (multiplied[1] != 0) return null;
+        return multiplied[0];
+    }
+
+    fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+        const added = @addWithOverflow(lhs, rhs);
+        if (added[1] != 0) return null;
+        return added[0];
+    }
+
+    fn pow10U128(exponent: u32) u128 {
+        var value: u128 = 1;
+        var remaining = exponent;
+        while (remaining > 0) : (remaining -= 1) {
+            value *= 10;
+        }
+        return value;
     }
 
     fn copyTypedIntLiteral(
@@ -14036,8 +14122,8 @@ fn applyPlatformRequiredSignatureSubstitutions(
     defer active.deinit();
 
     for (platform.platform_required_declarations.declarations) |declaration| {
-        const required_name = platform.canonical_names.exportNameText(declaration.platform_name);
-        const app_def = appDefByRequiredName(module, required_name) orelse continue;
+        const required_name = try names.internExportName(platform.canonical_names.exportNameText(declaration.platform_name));
+        const app_def = appDefByRequiredName(module, names, required_name) orelse continue;
         const app_root = checked_types.rootForSourceVar(module, module.defType(app_def)) orelse {
             checkedArtifactInvariant("platform requirement substitution missing app def checked root", .{});
         };
@@ -14102,13 +14188,14 @@ fn applyPlatformRequiredSignatureSubstitutions(
 
 fn appDefByRequiredName(
     module: TypedCIR.Module,
-    required_name: []const u8,
+    names: *const canonical.CanonicalNameStore,
+    required_name: canonical.ExportNameId,
 ) ?CIR.Def.Idx {
     const module_env = module.moduleEnvConst();
     for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
         const def = module.def(def_idx);
         const name = def.patternName() orelse continue;
-        if (Ident.textEql(module.identStoreConst().getText(name), required_name)) return def_idx;
+        if (names.lookupExportIdent(module.identStoreConst(), name) == required_name) return def_idx;
     }
     return null;
 }
@@ -14137,6 +14224,12 @@ fn collectPlatformRequiredSignatureSubstitutions(
     const actual_payload = store.payload(actual);
 
     if (checkedTypePayloadIsIdentity(actual_payload)) {
+        if (checkedTypePayloadIsIdentity(expected_payload)) return;
+        if (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and
+            checkedTypePayloadIsStructuralAggregate(expected_payload))
+        {
+            return;
+        }
         try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, actual, expected);
         return;
     }
@@ -14439,10 +14532,10 @@ fn applyPlatformForClauseSubstitutions(
                 checkedArtifactInvariant("platform for-clause substitution missing platform alias checked root", .{});
             };
             const alias_name = module_env.getIdent(alias.alias_name);
-            const app_alias = (try appAliasCheckedRootForName(allocator, app_view, alias_name)) orelse {
-                checkedArtifactInvariant("platform for-clause substitution missing matching app alias", .{});
+            const app_type = (try appTypeDeclCheckedRootForName(allocator, app_view, alias_name)) orelse {
+                checkedArtifactInvariant("platform for-clause substitution missing matching app type declaration", .{});
             };
-            const actual = try projector.project(app_alias);
+            const actual = try projector.project(app_type);
             try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal, actual);
         }
     }
@@ -14493,7 +14586,7 @@ fn relationArtifactByKey(
     return null;
 }
 
-fn appAliasCheckedRootForName(
+fn appTypeDeclCheckedRootForName(
     allocator: Allocator,
     app_view: ImportedModuleView,
     alias_name: []const u8,
@@ -14501,11 +14594,15 @@ fn appAliasCheckedRootForName(
     const app_env = app_view.module_env;
     for (app_env.store.sliceStatements(app_env.all_statements)) |statement_idx| {
         const statement = app_env.store.getStatement(statement_idx);
-        const alias = switch (statement) {
-            .s_alias_decl => |alias| alias,
+        // A platform for-clause type (`[Model : model]`) may be satisfied by either a plain
+        // alias (`Model : {}`) or a nominal declaration (`Model := {}`); both publish a checked
+        // root keyed on the statement's var, so resolve the header from either form.
+        const header_idx = switch (statement) {
+            .s_alias_decl => |decl| decl.header,
+            .s_nominal_decl => |decl| decl.header,
             else => continue,
         };
-        const header = app_env.store.getTypeHeader(alias.header);
+        const header = app_env.store.getTypeHeader(header_idx);
         if (!Ident.textEql(app_env.getIdent(header.relative_name), alias_name)) continue;
 
         const key = try canonical_type_keys.fromVar(
@@ -14517,7 +14614,7 @@ fn appAliasCheckedRootForName(
         for (app_view.checked_types.roots) |root| {
             if (canonicalTypeKeyEql(root.key, key)) return root.id;
         }
-        checkedArtifactInvariant("platform for-clause substitution app alias was not published in app checked types", .{});
+        checkedArtifactInvariant("platform for-clause substitution app type was not published in app checked types", .{});
     }
     return null;
 }
@@ -15280,6 +15377,22 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
 
         const expected_payload = self.payload(expected);
         const actual_payload = self.payload(actual);
+
+        // A variable pinned to a literal default (a number literal/expression that
+        // defaults to `Dec`, or a string literal that defaults to `Str`) can never be
+        // a structural aggregate (tag union, record, tuple). Treating it as a free
+        // wildcard would let a literal silently satisfy such a requirement — e.g.
+        // `Err(a1 + a2)` / `Err(1)` satisfying a platform's `[Exit(I8), ..]` error
+        // row, which then reaches monotype lowering as an ownerless dispatcher (issues
+        // 9734, 9735). Reject it so the normal TYPE MISMATCH is reported. This stays
+        // narrow: a literal-default var still matches a concrete scalar requirement
+        // (e.g. `Exit(1)` vs `Exit(I8)`), because a scalar type is not an aggregate.
+        if ((checkedTypePayloadIsLiteralDefaultPinnedVar(expected_payload) and checkedTypePayloadIsStructuralAggregate(actual_payload)) or
+            (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and checkedTypePayloadIsStructuralAggregate(expected_payload)))
+        {
+            return false;
+        }
+
         if (checkedTypePayloadIsIdentity(expected_payload) or checkedTypePayloadIsIdentity(actual_payload)) {
             return true;
         }
@@ -18062,6 +18175,26 @@ pub fn checkedTypeRootIsIdentity(
     root: CheckedTypeId,
 ) bool {
     return checkedTypePayloadIsIdentity(artifact.checked_types.payload(root));
+}
+
+/// A structural aggregate type: a tag union, record, or tuple. A value pinned to a
+/// numeric default can never have one of these shapes.
+fn checkedTypePayloadIsStructuralAggregate(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .empty_record, .record, .record_unbound, .tuple, .empty_tag_union, .tag_union => true,
+        else => false,
+    };
+}
+
+/// A flex/rigid variable pinned to a literal default — a number literal/expression
+/// that defaults to `Dec`, or a string literal that defaults to `Str`. Such a
+/// variable can unify with the corresponding concrete scalar type, but never with a
+/// structural aggregate.
+fn checkedTypePayloadIsLiteralDefaultPinnedVar(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid => |v| v.numeric_default_phase != null,
+        else => false,
+    };
 }
 
 /// Public `formatCheckedTypeAlloc` function.
@@ -25236,11 +25369,21 @@ const CheckedTypeStoreImportProjector = struct {
                 .declaration = declaration,
             } },
             .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
-            .local_box_payload_capability => |capability| .{ .imported_box_payload_capability = .{
-                .artifact = self.imported.key,
-                .capability = capability.capability,
-                .opaque_atomic_proof = capability.opaque_atomic_proof,
-            } },
+            .local_box_payload_capability => |capability| blk: {
+                // Project the capability's backing-type root into the target store so
+                // its key is registered there. Lowering resolves an imported
+                // box-payload capability's backing via `checkedTypeInCurrentView` (a
+                // key lookup); without this projection that lookup fails for a
+                // for-clause-substituted nominal app type whose declaration backing
+                // root is distinct from the projected nominal usage backing (issue
+                // 9731). The returned id is unused — the registration is the point.
+                _ = try self.project(self.imported.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty);
+                break :blk .{ .imported_box_payload_capability = .{
+                    .artifact = self.imported.key,
+                    .capability = capability.capability,
+                    .opaque_atomic_proof = capability.opaque_atomic_proof,
+                } };
+            },
             .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
             .opaque_without_backing => .opaque_without_backing,
         };
@@ -27311,8 +27454,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6D, 0x7A, 0x70, 0x53, 0x91, 0x3B, 0x43, 0x69, 0xDC, 0x6B, 0x28, 0x11, 0xB6, 0x7E, 0x46, 0x96,
-        0x94, 0x94, 0xDD, 0xBA, 0x6D, 0xD1, 0xB6, 0xEB, 0x60, 0xE1, 0xC6, 0x9E, 0x85, 0x41, 0x21, 0x9D,
+        0xED, 0xBD, 0xE3, 0x9E, 0xCC, 0x7F, 0xEC, 0x25, 0xD2, 0xF5, 0xE6, 0x14, 0x8F, 0x19, 0x08, 0xC1,
+        0xD7, 0xFB, 0x10, 0xAC, 0xB5, 0xEB, 0x70, 0x3A, 0xB3, 0xD6, 0x41, 0x80, 0x31, 0x28, 0x0B, 0xA8,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

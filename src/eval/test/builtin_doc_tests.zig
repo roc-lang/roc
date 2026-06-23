@@ -57,6 +57,16 @@ const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
 const roc_binary = "./zig-out/bin/roc";
 
+test "numeric try API has no legacy suffix" {
+    const allocator = base.defaultGpa();
+    const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
+    const builtin_source = try ctx.readFile(builtin_roc_path, allocator);
+    defer allocator.free(builtin_source);
+
+    const legacy_suffix = "_" ++ "checked";
+    try testing.expectEqual(null, std.mem.find(u8, builtin_source, legacy_suffix));
+}
+
 const BlockKind = enum {
     /// All top-level statements are `expect` — runs via `roc test` logic.
     expects_only,

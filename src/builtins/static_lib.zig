@@ -133,6 +133,14 @@ comptime {
     @export(&dw.roc_builtins_dec_mul_saturated, .{ .name = "roc_builtins_dec_mul_saturated" });
     @export(&dw.roc_builtins_dec_div, .{ .name = "roc_builtins_dec_div" });
     @export(&dw.roc_builtins_dec_div_trunc, .{ .name = "roc_builtins_dec_div_trunc" });
+    @export(&dw.roc_builtins_dec_pow, .{ .name = "roc_builtins_dec_pow" });
+    @export(&dw.roc_builtins_dec_sqrt, .{ .name = "roc_builtins_dec_sqrt" });
+    @export(&dw.roc_builtins_dec_sin, .{ .name = "roc_builtins_dec_sin" });
+    @export(&dw.roc_builtins_dec_cos, .{ .name = "roc_builtins_dec_cos" });
+    @export(&dw.roc_builtins_dec_tan, .{ .name = "roc_builtins_dec_tan" });
+    @export(&dw.roc_builtins_dec_asin, .{ .name = "roc_builtins_dec_asin" });
+    @export(&dw.roc_builtins_dec_acos, .{ .name = "roc_builtins_dec_acos" });
+    @export(&dw.roc_builtins_dec_atan, .{ .name = "roc_builtins_dec_atan" });
     // i128 div/rem wrappers
     @export(&dw.roc_builtins_num_div_trunc_u128, .{ .name = "roc_builtins_num_div_trunc_u128" });
     @export(&dw.roc_builtins_num_div_trunc_i128, .{ .name = "roc_builtins_num_div_trunc_i128" });
@@ -141,6 +149,13 @@ comptime {
     // Numeric-to-string wrappers
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
+    @export(&dw.roc_builtins_float_pow, .{ .name = "roc_builtins_float_pow" });
+    @export(&dw.roc_builtins_float_sin, .{ .name = "roc_builtins_float_sin" });
+    @export(&dw.roc_builtins_float_cos, .{ .name = "roc_builtins_float_cos" });
+    @export(&dw.roc_builtins_float_tan, .{ .name = "roc_builtins_float_tan" });
+    @export(&dw.roc_builtins_float_asin, .{ .name = "roc_builtins_float_asin" });
+    @export(&dw.roc_builtins_float_acos, .{ .name = "roc_builtins_float_acos" });
+    @export(&dw.roc_builtins_float_atan, .{ .name = "roc_builtins_float_atan" });
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });

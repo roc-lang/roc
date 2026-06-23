@@ -4721,6 +4721,26 @@ pub const Interpreter = struct {
                 const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
+            .f32_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u32, @bitCast(args[0].read(f32)));
+                break :blk val;
+            },
+            .f32_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f32, @bitCast(args[0].read(u32)));
+                break :blk val;
+            },
+            .f64_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, @bitCast(args[0].read(f64)));
+                break :blk val;
+            },
+            .f64_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f64, @bitCast(args[0].read(u64)));
+                break :blk val;
+            },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
                 const size = self.helper.sizeOf(arg_layout);
@@ -5206,6 +5226,12 @@ pub const Interpreter = struct {
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
+            .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
+            .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
+            .num_tan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .tan),
+            .num_asin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .asin),
+            .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
+            .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
             .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
@@ -5992,7 +6018,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Returns 0=LT, 1=EQ, 2=GT
+        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -6102,9 +6128,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @sqrt(dec.toF64());
-                val.write(i128, (RocDec{ .num = builtins.dec.fromF64C(f, &self.roc_ops) }).num);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.sqrtC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @sqrt(a.read(f32))),
@@ -6122,7 +6150,13 @@ pub const Interpreter = struct {
     fn evalNumLog(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) })),
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
+            },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @log(a.read(f32))),
                 64 => val.write(f64, @log(a.read(f64))),
@@ -6136,17 +6170,68 @@ pub const Interpreter = struct {
         return val;
     }
 
+    const FloatUnaryMathOp = enum {
+        sin,
+        cos,
+        tan,
+        asin,
+        acos,
+        atan,
+    };
+
+    fn floatUnaryMath(comptime F: type, value: F, comptime op: FloatUnaryMathOp) F {
+        return switch (op) {
+            .sin => std.math.sin(value),
+            .cos => std.math.cos(value),
+            .tan => std.math.tan(value),
+            .asin => std.math.asin(value),
+            .acos => std.math.acos(value),
+            .atan => std.math.atan(value),
+        };
+    }
+
+    fn evalNumFloatUnaryMath(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, comptime op: FloatUnaryMathOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, floatUnaryMath(f32, a.read(f32), op)),
+                64 => val.write(f64, floatUnaryMath(f64, a.read(f64), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float {s} width {d}", .{ @tagName(op), bits }),
+            },
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const dec = RocDec{ .num = a.read(i128) };
+                const result = switch (op) {
+                    .sin => builtins.dec.sinC(dec, &self.roc_ops),
+                    .cos => builtins.dec.cosC(dec, &self.roc_ops),
+                    .tan => builtins.dec.tanC(dec, &self.roc_ops),
+                    .asin => builtins.dec.asinC(dec, &self.roc_ops),
+                    .acos => builtins.dec.acosC(dec, &self.roc_ops),
+                    .atan => builtins.dec.atanC(dec, &self.roc_ops),
+                };
+                val.write(i128, result);
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
+                .{ @tagName(op), @intFromEnum(arg_layout) },
+            ),
+        }
+        return val;
+    }
+
     fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
                 const dec = RocDec{ .num = a.read(i128) };
-                const f = @round(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
+                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
             },
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@round(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@round(a.read(f64))))),
+                32 => val.write(f32, @round(a.read(f32))),
+                64 => val.write(f64, @round(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -6160,14 +6245,13 @@ pub const Interpreter = struct {
     fn evalNumFloor(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @floor(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_floor survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@floor(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@floor(a.read(f64))))),
+                32 => val.write(f32, @floor(a.read(f32))),
+                64 => val.write(f64, @floor(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float floor width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -6181,14 +6265,13 @@ pub const Interpreter = struct {
     fn evalNumCeiling(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @ceil(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_ceiling survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@ceil(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@ceil(a.read(f64))))),
+                32 => val.write(f32, @ceil(a.read(f32))),
+                64 => val.write(f64, @ceil(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float ceiling width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -7211,9 +7294,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av < bv) return 0; // LT
-        if (av == bv) return 1; // EQ
-        return 2; // GT
+        if (av == bv) return 0; // EQ
+        if (av > bv) return 1; // GT
+        return 2; // LT
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
