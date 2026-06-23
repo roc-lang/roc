@@ -13,6 +13,7 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
+const ReturnSlot = @import("return_slot.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
@@ -252,6 +253,7 @@ pub fn lowerCheckedModulesToLir(
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }

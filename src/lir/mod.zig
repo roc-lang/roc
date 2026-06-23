@@ -19,6 +19,8 @@ pub const Program = core.Program;
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
+/// Internal aggregate return-slot variants before ARC.
+pub const ReturnSlot = @import("return_slot.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
@@ -87,6 +89,7 @@ test "lir tests" {
     std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(BoxReuse);
+    std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(Arc);

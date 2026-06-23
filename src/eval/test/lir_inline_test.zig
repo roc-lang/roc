@@ -862,6 +862,45 @@ fn reachableProcShape(
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
 }
 
+fn reachableReturnSlotProcCount(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror!usize {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    var count: usize = 0;
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        const proc = lowered.lir_result.store.getProcSpec(proc_id);
+        const args = lowered.lir_result.store.getLocalSpan(proc.args);
+        if (proc.ret_layout == .zst and args.len != 0) candidate: {
+            const first_arg_layout = lowered.lir_result.layouts.getLayout(
+                lowered.lir_result.store.getLocal(args[0]).layout_idx,
+            );
+            if (first_arg_layout.tag != .ptr) break :candidate;
+            const result_layout = lowered.lir_result.layouts.getLayout(first_arg_layout.getIdx());
+            switch (result_layout.tag) {
+                .struct_, .tag_union => {},
+                else => break :candidate,
+            }
+            const shape = try collectProcShape(allocator, lowered, proc_id);
+            if (shape.ptr_store_count != 0) count += 1;
+        }
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return count;
+}
+
 fn markReachableLiftedExpr(
     program: *const postcheck.MonotypeLifted.Ast.Program,
     expr_id: postcheck.MonotypeLifted.Ast.ExprId,
@@ -1275,7 +1314,7 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     try std.testing.expect(shape.tag_assign_count >= 2);
 }
 
-test "destination phase 1: direct boxed update wrapper prepares and stores into the box" {
+test "destination phase 3: direct boxed update wrapper calls a return-slot variant" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\module [main]
@@ -1286,7 +1325,10 @@ test "destination phase 1: direct boxed update wrapper prepares and stores into 
         \\}
         \\
         \\update : Model -> Model
-        \\update = |model| { ..model, tick: model.tick + 1 }
+        \\update = |model| {
+        \\    tick = model.tick + 1
+        \\    { ..model, tick }
+        \\}
         \\
         \\step : Box(Model) -> Box(Model)
         \\step = |boxed| Box.box(update(Box.unbox(boxed)))
@@ -1296,12 +1338,16 @@ test "destination phase 1: direct boxed update wrapper prepares and stores into 
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
+    const root_shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
+    try std.testing.expectEqual(@as(usize, 0), root_shape.ptr_store_count);
+    try std.testing.expectEqual(@as(usize, 1), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
 }
 
 test "destination baseline: boxed lambda is packed then boxed" {
