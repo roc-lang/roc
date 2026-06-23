@@ -54,6 +54,7 @@ pub const CompileConfig = struct {
     host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
+    lower_memory_intrinsics_to_loops: bool = false,
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -126,6 +127,7 @@ const ZigLLVMEmitOptions = extern struct {
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
     no_target_libcalls: bool,
+    lower_memory_intrinsics_to_loops: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -697,6 +699,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .bitcode_filename = null,
         .coverage = coverage_options,
         .no_target_libcalls = config.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(

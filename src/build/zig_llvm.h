@@ -86,6 +86,7 @@ struct ZigLLVMEmitOptions {
     const char *bitcode_filename;
     ZigLLVMCoverageOptions coverage;
     bool no_target_libcalls;
+    bool lower_memory_intrinsics_to_loops;
 };
 
 // synchronize with llvm/include/Object/Archive.h::Object::Archive::Kind

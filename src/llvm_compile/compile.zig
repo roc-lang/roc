@@ -118,9 +118,11 @@ pub const CompileOptions = struct {
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
     /// Treat the target as freestanding for LLVM object emission: optimization
-    /// cannot assume target library functions, and memory intrinsics are lowered
-    /// to explicit loops before codegen.
+    /// cannot assume target library functions.
     no_target_libcalls: bool = false,
+    /// Lower LLVM memory intrinsics to explicit loops before codegen. Callers set
+    /// this for targets that cannot use libcalls or native memory operations.
+    lower_memory_intrinsics_to_loops: bool = false,
 };
 
 fn valueName(value: *bindings.Value) []const u8 {
@@ -567,6 +569,7 @@ fn emitMergedBitcodeToObjectFile(
         .bitcode_filename = null,
         .coverage = default_coverage,
         .no_target_libcalls = options.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
     // Emit merged module to object file
@@ -628,6 +631,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
         .macos, .windows => false,
         else => true,
     };
+    pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
     try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 

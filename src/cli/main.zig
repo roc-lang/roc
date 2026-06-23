@@ -1140,6 +1140,7 @@ fn generatePlatformHostShimFromLirData(
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .lower_memory_intrinsics_to_loops = lowerMemoryIntrinsicsToLoopsForLlvmBuild(target),
     };
 
     if (builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config)) |success| {
@@ -5740,6 +5741,17 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     };
 }
 
+fn llvmTargetHasNativeMemoryOps(target: RocTarget) bool {
+    return switch (target) {
+        .wasm32 => true,
+        else => false,
+    };
+}
+
+fn lowerMemoryIntrinsicsToLoopsForLlvmBuild(target: RocTarget) bool {
+    return noTargetLibcallsForLlvmBuild(target) and !llvmTargetHasNativeMemoryOps(target);
+}
+
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative() and target.toOsTag() != .macos) return builtin.target;
 
@@ -5863,6 +5875,7 @@ fn compileLlvmAppObject(
         // through extern symbols, never through a RocOps parameter.
         .host_call_extern = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .lower_memory_intrinsics_to_loops = lowerMemoryIntrinsicsToLoopsForLlvmBuild(target),
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
