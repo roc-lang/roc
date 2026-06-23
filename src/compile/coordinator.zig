@@ -1847,12 +1847,11 @@ pub const Coordinator = struct {
             return;
         };
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to finalize; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
         if (app_root.mod.checkedArtifact() == null) return;
@@ -1915,12 +1914,11 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to validate; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
         if (app_root.mod.checkedArtifact() == null) return;
