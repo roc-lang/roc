@@ -61,12 +61,9 @@ a {
   color: var(--violet);
 }
 
-table tr th {
-  border: 1px solid var(--gray);
-}
-
 table tr th,
 table tr td {
+  border: 1px solid var(--gray);
   padding: 6px 13px;
 }
 
@@ -676,6 +673,18 @@ code {
 
 p code {
   padding: 0 4px;
+}
+
+/* Inline code in headings should blend in with the heading, not look like a
+   highlighted code chip. */
+h1 code,
+h2 code,
+h3 code,
+h4 code,
+h5 code,
+h6 code {
+  background-color: transparent;
+  padding: 0;
 }
 
 code a,
