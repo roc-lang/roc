@@ -2245,6 +2245,7 @@ pub const Coordinator = struct {
 
         try self.appendPlatformRequiredInvalidNumericExpressionReport(
             app_mod,
+            expr,
             builtin_nominal,
         );
         return true;
@@ -2281,6 +2282,7 @@ pub const Coordinator = struct {
 
                 try self.appendPlatformRequiredInvalidNumericExpressionReport(
                     app_mod,
+                    expr,
                     expectation.expected_builtin,
                 );
                 break;
@@ -2355,12 +2357,25 @@ pub const Coordinator = struct {
     fn appendPlatformRequiredInvalidNumericExpressionReport(
         self: *Coordinator,
         app_mod: *ModuleState,
+        expr: check.CheckedArtifact.CheckedExpr,
         expected_builtin: check.CheckedArtifact.CheckedBuiltinNominal,
     ) Allocator.Error!void {
+        const module_env = app_mod.moduleEnv() orelse {
+            coordinatorInvariant("platform-required invalid numeric report missing module env", .{});
+        };
         var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This numeric literal does not fit in the type required by the platform.");
+        try report.document.addLineBreak();
+        const region_info = module_env.calcRegionInfo(expr.source_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            app_mod.path,
+            module_env.common.source,
+            module_env.getLineStarts(),
+        );
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addText("The platform-required signature expects:");
