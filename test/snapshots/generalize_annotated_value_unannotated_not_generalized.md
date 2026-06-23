@@ -32,7 +32,7 @@ It has the type:
 
     List(U64)
 
-But the annotation say it should be:
+But the annotation says it should be:
 
     List(Str)
 
