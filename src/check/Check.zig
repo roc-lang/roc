@@ -48,6 +48,12 @@ const InterpolationConstraintId = enum(u32) { _ };
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
+    /// The interpolated-part expression vars (the even-indexed entries of the
+    /// `e_interpolation` `parts`). Captured here, and remapped through the
+    /// instantiation var-map in `copyConstraintMetadata`, so that per-instantiation
+    /// re-checking unifies the dispatch item type against the *instantiated* part
+    /// vars rather than the shared original CIR vars. Owned; freed in `deinit`.
+    interpolated_vars: []Var,
     checked_parts: bool = false,
 };
 
@@ -288,6 +294,13 @@ has_can_diagnostics: bool,
 /// non-literal/non-`is_eq` dispatch constraint, and does not resolve into the
 /// pinnable set can never be pinned, so its dispatch is reported as ambiguous.
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
+/// The expression currently being checked (`checkExpr` sets this on entry and
+/// restores it on exit). When `instantiateVarHelp` records an
+/// `InstantiationDispatcher`, it stamps this expression onto it, so the
+/// end-of-check ambiguity sweep can point a body-forced where-clause error at
+/// the exact expression whose instantiation created the unsatisfiable
+/// obligation — without scanning the module to rediscover it.
+instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -348,6 +361,11 @@ const InstantiationDispatcher = struct {
     dispatcher_var: Var,
     /// The static-dispatch constraints copied from the generalized scheme.
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// The expression whose checking instantiated this dispatcher (the lookup of
+    /// the constrained scheme). A body-required where-clause whose receiver is
+    /// left unpinnable is reported and marked a runtime error at exactly this
+    /// expression. Null only if the dispatcher was created outside `checkExpr`.
+    instantiation_expr: ?CIR.Expr.Idx,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -1186,6 +1204,9 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
+    for (self.interpolation_constraint_metadata.items) |meta| {
+        self.gpa.free(meta.interpolated_vars);
+    }
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
@@ -2841,6 +2862,7 @@ fn instantiateVarHelp(
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
+                            .instantiation_expr = self.instantiation_source_expr,
                         });
                     }
                 }
@@ -5595,12 +5617,25 @@ fn recordInterpolationConstraintMetadata(
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
 ) std.mem.Allocator.Error!void {
+    // Capture the interpolated-part vars now so per-instantiation re-checking can unify the
+    // item type against the instantiated copies of these vars (see `copyConstraintMetadata`).
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    const interpolated_vars = try self.gpa.alloc(Var, parts.len / 2);
+    errdefer self.gpa.free(interpolated_vars);
+    var part_i: usize = 0;
+    while (part_i < parts.len) : (part_i += 2) {
+        interpolated_vars[part_i / 2] = ModuleEnv.varFrom(parts[part_i]);
+    }
+
     const id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
+    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
     try self.interpolation_constraint_metadata.append(self.gpa, .{
         .expr_idx = expr_idx,
         .item_var = item_var,
+        .interpolated_vars = interpolated_vars,
     });
-    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
 }
 
 fn linkConstraintMetadata(
@@ -5680,15 +5715,25 @@ fn copyConstraintMetadata(
 
     if (maybe_interpolation_id) |old_id| {
         const old_metadata = self.interpolation_constraint_metadata.items[@intFromEnum(old_id)];
+        // Remap each interpolated-part var through the instantiation var-map, exactly as
+        // `item_var` is remapped, so the re-check unifies instantiated item type against
+        // instantiated part vars (the original CIR part vars belong to the generalized copy).
+        const new_interpolated_vars = try self.gpa.alloc(Var, old_metadata.interpolated_vars.len);
+        errdefer self.gpa.free(new_interpolated_vars);
+        for (old_metadata.interpolated_vars, 0..) |old_part_var, i| {
+            new_interpolated_vars[i] = self.instantiatedMetadataVar(old_part_var);
+        }
+        const new_item_var = self.instantiatedMetadataVar(old_metadata.item_var);
         const new_id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
-        try self.interpolation_constraint_metadata.append(self.gpa, .{
-            .expr_idx = old_metadata.expr_idx,
-            .item_var = self.instantiatedMetadataVar(old_metadata.item_var),
-        });
         try self.recordInterpolationConstraintIdForFnVar(fresh_var, new_id);
         if (resolved_fresh != fresh_var) {
             try self.recordInterpolationConstraintIdForFnVar(resolved_fresh, new_id);
         }
+        try self.interpolation_constraint_metadata.append(self.gpa, .{
+            .expr_idx = old_metadata.expr_idx,
+            .item_var = new_item_var,
+            .interpolated_vars = new_interpolated_vars,
+        });
     }
 }
 
@@ -5752,6 +5797,35 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         if (constraints_range.len() == 0) continue;
         if (reported.contains(resolved.var_)) continue;
 
+        // A GENERALIZED dispatcher whose constraints are ALL `where`-clause
+        // contracts is a valid polymorphic obligation, not a dead end: it is a
+        // type parameter of an exposed generic function (e.g. `a` in
+        // `wrap : a -> a where [a.go : a -> a]`), and any caller that pins the
+        // receiver to a concrete type is responsible for — and separately
+        // checked for — satisfying the contract when the receiver grounds to a
+        // non-generalized concrete var. Reporting it here wrongly rejects a
+        // helper that is merely dispatched through nested generalized let-defs
+        // (the recorded receiver is a stale scheme var promoted by an enclosing
+        // generalization; its real call-site uses are recorded separately).
+        //
+        // We still report a generalized dispatcher that ALSO carries a
+        // concrete-use dispatch (a non-`where`-clause origin such as `plus` from
+        // `n + 1`): that use forces the receiver toward a grounding the contract
+        // cannot satisfy (issue 9657 — `plus` forces a numeric type that lacks
+        // `decode`). And a NON-generalized dispatcher is a concrete per-call hole
+        // whose instantiation never supplied the owner (issue 9644), so it is not
+        // skipped here either.
+        if (resolved.desc.rank == .generalized) {
+            var all_where_clause = true;
+            for (self.types.sliceStaticDispatchConstraints(constraints_range)) |c| {
+                if (c.origin != .where_clause) {
+                    all_where_clause = false;
+                    break;
+                }
+            }
+            if (all_where_clause) continue;
+        }
+
         // Pick the constraint to report. Instantiated where-clause contracts get
         // priority because they are explicit obligations copied from a signature:
         // once the signature has been instantiated, the current call must either
@@ -5802,13 +5876,18 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         };
         if (has_literal_constraint) continue;
         const is_instantiated_where_clause = constraint.origin == .where_clause;
+        // A body-forced where-clause (the originating scheme's body provably
+        // dispatches this method) is reportable even with no in-module dispatch
+        // use: an unpinnable instantiated receiver can never gain the owner the
+        // contract requires, so its dispatch is a genuine dead end. A phantom
+        // where-clause (the body never dispatches it) still needs an in-module
+        // dispatch use to be a dead end; without one it is not reported.
+        const body_forced = is_instantiated_where_clause and constraint.origin.where_clause.body_required;
         const where_dispatch_use = if (is_instantiated_where_clause)
             try self.findStaticDispatchUseForConstraint(constraint.fn_name, constraint.fn_var)
         else
             null;
-        if (is_instantiated_where_clause) {
-            if (where_dispatch_use == null) continue;
-        }
+        if (is_instantiated_where_clause and where_dispatch_use == null and !body_forced) continue;
 
         // If the receiver resolves INTO the pinnable set, some caller — at this
         // call's level or an enclosing one — can pin it, so it is not a dead end.
@@ -5816,11 +5895,19 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
         // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
         // is a fresh instantiated var that unifies with nothing concrete, so it is
-        // absent from the set and reported. Instantiated where-clause contracts
-        // are stricter: lambda parameters inside the already-instantiated call do
-        // not count, because that call is exactly what must satisfy the copied
-        // contract. Only external function arguments can still pin it later.
-        const active_pinnable = if (is_instantiated_where_clause) external_pinnable else pinnable;
+        // absent from the pinnable set and reported.
+        //
+        // A where-clause with an IN-MODULE dispatch use is stricter
+        // (`external_pinnable`): the method is dispatched on this receiver here, so
+        // this call must satisfy the copied contract now — lambda parameters inside
+        // the already-instantiated call do not count, only external arguments can
+        // still pin it. This catches a receiver pinned to a type that lacks the
+        // method (issue 9657). A where-clause with NO in-module use (the body-forced
+        // hole, issue 9644) uses the broader `pinnable` set: its dispatch lives in
+        // another body, so a still-generalizable helper whose receiver is an (even
+        // nested) lambda parameter an enclosing caller can pin is not a dead end —
+        // only a receiver in neither set (a genuine hole) is reported.
+        const active_pinnable = if (is_instantiated_where_clause and where_dispatch_use != null) external_pinnable else pinnable;
         if (active_pinnable.contains(resolved.var_)) continue;
 
         // Locate the call site that left this receiver undetermined. Instantiated
@@ -5840,7 +5927,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
-        if (is_instantiated_where_clause) {
+        if (is_instantiated_where_clause and where_dispatch_use != null) {
             const dispatch_use = where_dispatch_use.?;
             primary = dispatch_use.region;
 
@@ -5849,6 +5936,28 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     .region = dispatch_use.region,
                 } });
                 self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+            }
+        } else if (body_forced) {
+            // A body-forced where-clause with no in-module dispatch use (the
+            // unpinned receiver lives only in the instantiating call's result
+            // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
+            // dispatcher recorded the exact expression whose instantiation created
+            // the obligation, so report there and mark it a runtime error — codegen
+            // then emits a crash instead of reaching the ownerless dispatch.
+            if (dispatcher.instantiation_expr) |inst_expr| {
+                primary = self.cir.store.getExprRegion(inst_expr);
+                if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
+                    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                        .region = primary.?,
+                    } });
+                    self.cir.store.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
+                }
+            } else {
+                // A dispatcher created outside `checkExpr` has no recorded source
+                // expression to mark. Reporting still suffices: `unresolved_dispatcher`
+                // is `runtime_error` severity, so `hasUserErrors` blocks all lowering —
+                // the ownerless dispatch is never reached even without a per-expr mark.
+                primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
             var raw_node_idx: u32 = 0;
@@ -5886,23 +5995,10 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             }
         }
 
-        // No call passes the receiver in the relevant position. For ordinary
-        // hidden dispatch this means it is a polymorphic function value's own
-        // parameter (or otherwise not a real dispatch dead end). For a copied
-        // where-clause contract, report at the instantiation region because the
-        // unresolved obligation itself is the error.
-        if (primary == null) {
-            if (!is_instantiated_where_clause) continue;
-            const dispatch_use = where_dispatch_use.?;
-            primary = dispatch_use.region;
-
-            if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
-                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                    .region = dispatch_use.region,
-                } });
-                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
-            }
-        }
+        // No expression passes the receiver in the relevant position: an ordinary
+        // hidden dispatch whose receiver is a polymorphic function value's own
+        // parameter, which a future call can still pin — not a dead end.
+        if (primary == null) continue;
 
         try reported.put(resolved.var_, {});
 
@@ -7326,7 +7422,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 .constraint = StaticDispatchConstraint{
                     .fn_name = method.method_name,
                     .fn_var = func_var,
-                    .origin = .where_clause,
+                    .origin = .{ .where_clause = .{} },
                 },
             });
         },
@@ -8923,6 +9019,13 @@ fn unifyMatchAltPatternBindings(
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // Attribute any dispatcher instantiated while checking this expression to it,
+    // so the ambiguity sweep can pinpoint the source of an unsatisfiable
+    // body-forced where-clause. Restored on exit to track the innermost expr.
+    const prev_instantiation_source = self.instantiation_source_expr;
+    self.instantiation_source_expr = expr_idx;
+    defer self.instantiation_source_expr = prev_instantiation_source;
 
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
@@ -15205,6 +15308,24 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         } else {
                             try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
                             try self.reportEffectfulDispatchInExpect(constraint);
+
+                            // The body provably forces this where-clause method: a
+                            // body dispatch matched it and unified successfully. Mark
+                            // the rigid scheme's matching where-clause `body_required`
+                            // so a later unpinnable instantiation of this scheme is
+                            // reported as ambiguous rather than silently lowering to an
+                            // ownerless dispatch. Re-fetch the backing slice: the unify
+                            // above may have appended to (and reallocated) the
+                            // constraint store, but it only grows it, so the rigid
+                            // range indices stay valid.
+                            const rc_start: usize = @intFromEnum(rigid.constraints.start);
+                            const rc_len: usize = rigid.constraints.len();
+                            const backing = self.types.static_dispatch_constraints.items.items;
+                            for (rc_start..rc_start + rc_len) |i| {
+                                if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
+                                    backing[i].origin.where_clause.body_required = true;
+                                }
+                            }
                         }
                     } else {
                         try self.reportConstraintError(
@@ -15920,16 +16041,13 @@ fn ensureCustomInterpolationPartsChecked(
     if (self.interpolation_constraint_metadata.items[metadata_index].checked_parts) return;
     self.interpolation_constraint_metadata.items[metadata_index].checked_parts = true;
 
-    const expr_idx = self.interpolation_constraint_metadata.items[metadata_index].expr_idx;
     const item_var = self.interpolation_constraint_metadata.items[metadata_index].item_var;
-    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
-    const parts = self.cir.store.sliceExpr(interpolation.parts);
-    std.debug.assert(parts.len % 2 == 0);
+    // Use the captured part vars (remapped per instantiation), not the original CIR `parts`,
+    // so an instantiated call site unifies the item type against its instantiated arguments.
+    const interpolated_vars = self.interpolation_constraint_metadata.items[metadata_index].interpolated_vars;
 
     var did_err = false;
-    var part_i: usize = 0;
-    while (part_i < parts.len) : (part_i += 2) {
-        const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
+    for (interpolated_vars) |interpolated_var| {
         const result = try self.unify(item_var, interpolated_var, env);
         did_err = did_err or result.isProblem() or self.types.resolveVar(interpolated_var).desc.content == .err;
     }

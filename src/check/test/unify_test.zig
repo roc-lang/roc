@@ -1712,7 +1712,7 @@ test "unify - flex with no constraints unifies with flex with constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
         .fn_var = sort_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
 
     const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -1743,7 +1743,7 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -1773,7 +1773,7 @@ test "unify - empty constraints unify with any" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -1806,7 +1806,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1841,7 +1841,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1891,7 +1891,7 @@ test "unify - flex vs nominal type captures constraint" {
     const ord_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
         .fn_var = ord_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
 
