@@ -170,7 +170,8 @@ pub const LinkConfig = struct {
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
 
-    /// Function exports derived from explicit platform host object exports.
+    /// Function exports from the platform host object that are part of the
+    /// final wasm module's host-visible ABI.
     wasm_exports: []const []const u8 = &.{},
 
     /// Platform files directory (absolute path). Used to find platform-bundled sysroots.

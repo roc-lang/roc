@@ -5201,8 +5201,14 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
+fn removeWasmInternalFunctionExports(module: *backend.wasm.WasmModule, hosted_symbols: []const []const u8) void {
+    module.removeFunctionExports(&host_symbols.runtime_symbols);
+    module.removeFunctionExports(hosted_symbols);
+}
+
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule, hosted_symbols: []const []const u8) anyerror!void {
     try module.exportGlobalSymbols();
+    removeWasmInternalFunctionExports(module, hosted_symbols);
 }
 
 fn addWasmObject(
@@ -5281,11 +5287,13 @@ fn appendWasmObjectExportNames(
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     var module = try preloadWasmObject(ctx, path, member_name, bytes);
     defer module.deinit();
 
     try module.exportGlobalSymbols();
+    removeWasmInternalFunctionExports(&module, hosted_symbols);
     for (module.exports.items) |exp| {
         if (exp.kind == .func) {
             try appendUniqueWasmExportName(exports, exp.name);
@@ -5298,11 +5306,12 @@ fn appendWasmInputExportNames(
     exports: *std.array_list.Managed([]const u8),
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
-        try appendWasmObjectExportNames(ctx, exports, path, null, bytes);
+        try appendWasmObjectExportNames(ctx, exports, path, null, bytes, hosted_symbols);
         return;
     }
 
@@ -5324,7 +5333,7 @@ fn appendWasmInputExportNames(
         };
         const member = maybe_member orelse break;
         member_count += 1;
-        try appendWasmObjectExportNames(ctx, exports, path, member.name, member.bytes);
+        try appendWasmObjectExportNames(ctx, exports, path, member.name, member.bytes, hosted_symbols);
     }
 
     if (member_count == 0) {
@@ -5337,14 +5346,15 @@ fn collectWasmPlatformExports(
     ctx: *CliCtx,
     link_inputs: PlatformLinkInputs,
     owned_inputs: *std.ArrayList([]u8),
+    hosted_symbols: []const []const u8,
 ) anyerror![]const []const u8 {
     var exports = std.array_list.Managed([]const u8).init(ctx.arena);
 
     for (link_inputs.platform_files_pre) |path| {
-        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path, hosted_symbols);
     }
     for (link_inputs.platform_files_post) |path| {
-        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path, hosted_symbols);
     }
 
     return exports.items;
@@ -5449,6 +5459,7 @@ fn rocBuildWasmSurgical(
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -5479,7 +5490,7 @@ fn rocBuildWasmSurgical(
         const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = obj_path;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs, hosted_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = .wasm,
@@ -5531,7 +5542,7 @@ fn rocBuildWasmSurgical(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module);
+    try exportConfiguredWasmEntrypoints(&wasm_module, hosted_symbols);
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
@@ -5945,6 +5956,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -5977,7 +5989,7 @@ fn rocBuildWasmLlvm(
         const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = combined_obj;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs, hosted_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = .wasm,
@@ -6029,7 +6041,7 @@ fn rocBuildWasmLlvm(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module);
+    try exportConfiguredWasmEntrypoints(&wasm_module, hosted_symbols);
     wasm_module.removeMemoryAndTableImports();
 
     const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
@@ -6263,6 +6275,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     if (target == .wasm32) {
+        const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
         reporter.begin("Code Generation");
         try rocBuildWasmLlvm(
             ctx,
@@ -6274,6 +6287,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             &lowered,
             entrypoints,
             static_data_exports,
+            hosted_table.symbols,
         );
         reporter.end();
     } else {
@@ -6579,6 +6593,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     defer ctx.gpa.free(entrypoints);
 
     if (target_arch == .wasm32) {
+        const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
         reporter.begin("Code Generation");
         try rocBuildWasmSurgical(
             ctx,
@@ -6591,6 +6606,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             resolved_targets_config,
             &lowered,
             entrypoints,
+            hosted_table.symbols,
         );
         reporter.end();
 

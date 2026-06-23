@@ -884,6 +884,27 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
     });
 }
 
+/// Remove function exports whose names are link-time plumbing rather than
+/// part of the final wasm module's host-visible ABI.
+pub fn removeFunctionExports(self: *Self, names: []const []const u8) void {
+    var write_idx: usize = 0;
+    for (self.exports.items) |exp| {
+        if (exp.kind == .func and stringInSlice(exp.name, names)) {
+            continue;
+        }
+        self.exports.items[write_idx] = exp;
+        write_idx += 1;
+    }
+    self.exports.items.len = write_idx;
+}
+
+fn stringInSlice(needle: []const u8, haystack: []const []const u8) bool {
+    for (haystack) |candidate| {
+        if (std.mem.eql(u8, needle, candidate)) return true;
+    }
+    return false;
+}
+
 /// Enable memory section with the given minimum page count.
 pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
@@ -4386,6 +4407,24 @@ test "preload — parses export section" {
     try std.testing.expectEqualStrings("_start", module.exports.items[0].name);
     try std.testing.expectEqual(ExportKind.func, module.exports.items[0].kind);
     try std.testing.expectEqual(@as(u32, 1), module.exports.items[0].idx);
+}
+
+test "removeFunctionExports — removes only named function exports" {
+    const allocator = std.testing.allocator;
+    var module = init(allocator);
+    defer module.deinit();
+
+    try module.addExport("start", .func, 0);
+    try module.addExport("host_unused", .func, 1);
+    try module.addExport("memory", .memory, 0);
+
+    module.removeFunctionExports(&.{"host_unused"});
+
+    try std.testing.expectEqual(@as(usize, 2), module.exports.items.len);
+    try std.testing.expectEqualStrings("start", module.exports.items[0].name);
+    try std.testing.expectEqual(ExportKind.func, module.exports.items[0].kind);
+    try std.testing.expectEqualStrings("memory", module.exports.items[1].name);
+    try std.testing.expectEqual(ExportKind.memory, module.exports.items[1].kind);
 }
 
 test "preload — parses memory section" {
