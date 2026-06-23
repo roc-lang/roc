@@ -144,7 +144,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 127)
+								(e-call (constraint-fn-var 133)
 									(e-lookup-local
 										(p-assign (ident "ok_or")))
 									(e-tag (name "Err")
@@ -181,7 +181,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 265)
+		(e-call (constraint-fn-var 271)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~
