@@ -474,6 +474,7 @@ pub const Watcher = struct {
     /// Stop watching for file changes
     pub fn stop(self: *Watcher) void {
         self.should_stop.store(true, .seq_cst);
+        self.signalWindowsStopEvent();
 
         if (self.thread) |thread| {
             // Stop the run loop on macOS
@@ -509,10 +510,6 @@ pub const Watcher = struct {
             },
             .windows => {
                 if (self.impl.stop_event) |stop_event| {
-                    const SetEvent = struct {
-                        extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
-                    }.SetEvent;
-                    _ = SetEvent(stop_event);
                     _ = std.os.windows.CloseHandle(stop_event);
                     self.impl.stop_event = null;
                 }
@@ -543,6 +540,17 @@ pub const Watcher = struct {
             .linux => self.watchLoopLinux(),
             .windows => self.watchLoopWindows(),
             else => unreachable,
+        }
+    }
+
+    fn signalWindowsStopEvent(self: *Watcher) void {
+        if (comptime builtin.os.tag == .windows) {
+            if (self.impl.stop_event) |stop_event| {
+                const SetEvent = struct {
+                    extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+                }.SetEvent;
+                _ = SetEvent(stop_event);
+            }
         }
     }
 
@@ -903,63 +911,80 @@ pub const Watcher = struct {
             return;
         }
 
-        // Main event loop
-        const max_handles = self.impl.overlapped_data.items.len + 1; // +1 for stop event
-        if (max_handles == 1) {
-            self.markStartupFailed();
-            return;
-        }
-
-        var handles = self.allocator.alloc(std.os.windows.HANDLE, max_handles) catch {
-            std.log.warn("Failed to allocate handles array", .{});
+        const watched_count = self.impl.overlapped_data.items.len;
+        const shard_count = std.math.divCeil(usize, watched_count, windows_max_watched_handles_per_thread) catch {
             self.markStartupFailed();
             return;
         };
-        defer self.allocator.free(handles);
+        var shard_threads = self.allocator.alloc(std.Thread, shard_count) catch {
+            std.log.warn("Failed to allocate Windows watcher thread list", .{});
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(shard_threads);
 
-        // Signal that we're ready to receive events
+        var spawned: usize = 0;
+        while (spawned < shard_count) : (spawned += 1) {
+            const start_index = spawned * windows_max_watched_handles_per_thread;
+            const end_index = @min(watched_count, start_index + windows_max_watched_handles_per_thread);
+            shard_threads[spawned] = std.Thread.spawn(.{}, watchLoopWindowsShard, .{ self, start_index, end_index }) catch |err| {
+                std.log.warn("Failed to spawn Windows watcher shard: {}", .{err});
+                self.markStartupFailed();
+                self.should_stop.store(true, .seq_cst);
+                self.signalWindowsStopEvent();
+                for (shard_threads[0..spawned]) |thread| thread.join();
+                return;
+            };
+        }
+
         self.markReady();
+        for (shard_threads) |thread| thread.join();
+    }
 
-        // Copy OVERLAPPED event handles (not directory handles!)
-        for (self.impl.overlapped_data.items, 0..) |data, i| {
+    const windows_max_wait_handles = 64;
+    const windows_max_watched_handles_per_thread = windows_max_wait_handles - 1;
+    const windows_wait_timeout = 258; // WAIT_TIMEOUT, 0x102
+    const windows_wait_failed = 0xFFFFFFFF; // WAIT_FAILED
+
+    fn watchLoopWindowsShard(self: *Watcher, start_index: usize, end_index: usize) void {
+        if (end_index <= start_index) return;
+
+        const WaitForMultipleObjects = struct {
+            extern "kernel32" fn WaitForMultipleObjects(
+                nCount: std.os.windows.DWORD,
+                lpHandles: [*]const std.os.windows.HANDLE,
+                bWaitAll: std.os.windows.BOOL,
+                dwMilliseconds: std.os.windows.DWORD,
+            ) callconv(.winapi) std.os.windows.DWORD;
+        }.WaitForMultipleObjects;
+
+        var handles: [windows_max_wait_handles]std.os.windows.HANDLE = undefined;
+        for (self.impl.overlapped_data.items[start_index..end_index], 0..) |data, i| {
             handles[i] = data.overlapped.hEvent.?;
         }
-        // Add stop event as last handle
-        handles[handles.len - 1] = self.impl.stop_event.?;
+        const stop_index = end_index - start_index;
+        handles[stop_index] = self.impl.stop_event.?;
+        const handle_count = stop_index + 1;
 
         while (!self.should_stop.load(.seq_cst)) {
-            const WaitForMultipleObjects = struct {
-                extern "kernel32" fn WaitForMultipleObjects(
-                    nCount: std.os.windows.DWORD,
-                    lpHandles: [*]const std.os.windows.HANDLE,
-                    bWaitAll: std.os.windows.BOOL,
-                    dwMilliseconds: std.os.windows.DWORD,
-                ) callconv(.winapi) std.os.windows.DWORD;
-            }.WaitForMultipleObjects;
-
             const result = WaitForMultipleObjects(
-                @intCast(handles.len),
-                handles.ptr,
+                @intCast(handle_count),
+                handles[0..handle_count].ptr,
                 .FALSE,
-                100, // 100ms timeout
+                100,
             );
 
-            // Check if stop event was signaled or timeout occurred
-            const WAIT_TIMEOUT = 258; // 0x102
-            if (result == WAIT_TIMEOUT or result == handles.len - 1) {
+            if (result == windows_wait_timeout or result == stop_index) {
                 continue;
             }
-
-            // Check for errors
-            const WAIT_FAILED = 0xFFFFFFFF;
-            if (result == WAIT_FAILED) {
+            if (result == windows_wait_failed) {
                 std.log.err("WaitForMultipleObjects failed", .{});
-                break;
+                self.should_stop.store(true, .seq_cst);
+                self.signalWindowsStopEvent();
+                return;
             }
-
-            // Process the signaled handle
-            const handle_index = result;
-            if (handle_index < self.impl.overlapped_data.items.len) {
+            if (result < stop_index) {
+                const handle_index = start_index + result;
                 self.processWindowsEvents(handle_index) catch |err| {
                     std.log.err("Failed to process Windows events: {}", .{err});
                 };

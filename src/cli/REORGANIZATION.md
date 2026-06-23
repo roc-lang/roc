@@ -24,7 +24,7 @@ src/cli/
 ├── CliProblem.zig                # Runtime error types (DONE)
 ├── cli_args.zig                  # Argument parsing (ArgProblem renamed, DONE)
 │
-├── cli_roc_run.zig               # rocRun command implementation
+├── cli_roc_default.zig           # default `roc <file>` execution implementation
 ├── cli_roc_build.zig             # rocBuild command implementation
 ├── cli_roc_check.zig             # rocCheck command implementation
 ├── cli_roc_test.zig              # rocTest command implementation
@@ -52,7 +52,6 @@ src/cli/
 ├── util_posix.zig                # POSIX shm wrappers
 ├── util_timing.zig               # formatElapsedTime
 │
-├── bench.zig                     # Benchmarking utility (existing)
 ├── targets/                      # Pre-compiled shim libraries (keep)
 └── test/                         # Test files (keep)
 ```
@@ -80,7 +79,7 @@ src/cli/
 5. `cli_roc_check.zig`
 6. `cli_roc_docs.zig`
 7. `cli_roc_build.zig`
-8. `cli_roc_run.zig` (most complex)
+8. `cli_roc_default.zig` (most complex)
 
 ### Phase 5: Slim main.zig
 Reduce main.zig to ~300 lines containing only:
