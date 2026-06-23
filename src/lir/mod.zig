@@ -21,6 +21,8 @@ pub const CheckedPipeline = @import("checked_pipeline.zig");
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
 pub const ReturnSlot = @import("return_slot.zig");
+/// Internal append-into-string variants before ARC.
+pub const StrAppend = @import("str_append.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
@@ -90,6 +92,7 @@ test "lir tests" {
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(BoxReuse);
     std.testing.refAllDecls(ReturnSlot);
+    std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(Arc);

@@ -1425,23 +1425,49 @@ test "destination baseline: large record return feeds a record update" {
     try std.testing.expect(shape.struct_assign_count >= 1);
 }
 
-test "destination baseline: string producer is concatenated again by caller" {
+test "destination phase 6: string concat caller uses append variant" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\module [main]
         \\
         \\suffix : Str -> Str
-        \\suffix = |input| Str.concat(input, "!")
+        \\suffix = |input| {
+        \\    middle = input
+        \\    Str.concat(middle, "!")
+        \\}
         \\
         \\build : Str -> Str
-        \\build = |input| Str.concat("pre", suffix(input))
+        \\build = |input| {
+        \\    prefix = "pre"
+        \\    result = suffix(input)
+        \\    Str.concat(prefix, result)
+        \\}
         \\
         \\main : Str -> Str
-        \\main = |input| build(input)
+        \\main = |input| {
+        \\    held = input
+        \\    build(held)
+        \\}
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
-    try std.testing.expect((try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "str_concat_count")) >= 2);
+    const build_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const build_shape = try collectProcShape(allocator, &lowered_source.lowered, build_proc);
+
+    try std.testing.expectEqual(@as(usize, 1), build_shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 0), build_shape.str_concat_count);
+
+    const build_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, build_proc);
+    defer allocator.free(build_calls);
+
+    try std.testing.expectEqual(@as(usize, 1), build_calls.len);
+
+    const append_shape = try collectProcShape(allocator, &lowered_source.lowered, build_calls[0]);
+
+    try std.testing.expectEqual(@as(usize, 2), append_shape.arg_count);
+    try std.testing.expectEqual(@as(usize, 0), append_shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 2), append_shape.str_concat_count);
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "str_concat_count"));
 }
 
 test "block wrapper with statements is not inlined" {
