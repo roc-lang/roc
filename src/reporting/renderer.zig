@@ -202,6 +202,24 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
 /// record the terminal color of each appended byte so the box's top edge can
 /// keep inline code, symbols, etc. colored. `colors` ends up the same length as
 /// `plain`. In a no-color palette every color is "" and this is just plain text.
+/// Whether an annotation marks a code span (identifier, keyword, operator,
+/// type, …) — the spans the markdown renderer wraps in backticks. The box
+/// renderers wrap these in backticks too, but only when there's no color to
+/// distinguish them (see `wantsBacktick`).
+fn isCodeAnnotation(a: Annotation) bool {
+    return switch (a) {
+        .keyword, .inline_code, .symbol, .symbol_qualified, .symbol_unqualified, .record_field, .tag_name, .binary_operator => true,
+        else => false,
+    };
+}
+
+/// In a no-color palette, code spans get backticks (since color can't set them
+/// apart); with color, the color does the distinguishing and backticks would be
+/// redundant noise. A palette is "no color" when its reset sequence is empty.
+fn wantsBacktick(palette: ColorPalette, a: Annotation) bool {
+    return palette.reset.len == 0 and isCodeAnnotation(a);
+}
+
 fn collectStyledText(
     elements: []const DocumentElement,
     palette: ColorPalette,
@@ -216,8 +234,17 @@ fn collectStyledText(
             },
             .annotated => |a| {
                 const c = palette.colorForAnnotation(a.annotation);
+                const tick = wantsBacktick(palette, a.annotation);
+                if (tick) {
+                    try plain.append('`');
+                    try colors.append(c);
+                }
                 for (a.content) |b| {
                     try plain.append(b);
+                    try colors.append(c);
+                }
+                if (tick) {
+                    try plain.append('`');
                     try colors.append(c);
                 }
             },
@@ -364,11 +391,16 @@ fn windowSourceLine(line: []const u8, focus: usize, avail: usize) CodeWindow {
 /// Render the report as a box around its source snippet.
 pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
+    // Each report is framed by a blank line above and below, so consecutive
+    // reports are separated by two blank lines, and the first/last report keeps
+    // exactly one blank line at the top/bottom of the run.
+    try writer.writeByte('\n');
     const gpa = report.document.allocator;
     const elements = report.document.elements.items;
 
     const region = findBoxedRegion(elements) orelse {
         try renderReportPlainFallback(report, writer, palette, config);
+        try writer.writeByte('\n');
         return;
     };
 
@@ -668,7 +700,8 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     }
 
     // Detailed explanation below the box, indented 4 spaces.
-    try renderBelowContent(writer, palette, config, elements, below_start, region.index, gpa);
+    try renderBelowContent(writer, palette, config, elements, below_start, region.index, rw, gpa);
+    try writer.writeByte('\n');
 }
 
 /// Render the elements after the summary's first line (excluding the region),
@@ -680,33 +713,199 @@ fn renderBelowContent(
     elements: []const DocumentElement,
     below_start: usize,
     region_idx: usize,
+    rw: usize,
     gpa: Allocator,
 ) (Allocator.Error || error{WriteFailed})!void {
+    const width: usize = config.getMaxLineWidth();
     var buf = std.Io.Writer.Allocating.init(gpa);
     defer buf.deinit();
     var ann = std.array_list.Managed(Annotation).init(gpa);
     defer ann.deinit();
 
-    const mid_start = @min(below_start, region_idx);
-    if (mid_start < region_idx) {
-        for (elements[mid_start..region_idx]) |el| try renderElementToTerminal(el, &buf.writer, palette, &ann, config);
+    // Walk the below-the-box elements (everything except the main box's region).
+    // Prose accumulates in `buf` and is flushed — word-wrapped and indented —
+    // whenever we reach a source region, which renders as its own embedded box.
+    // `started` tracks whether the one leading blank line (which separates the
+    // below-content from the box) has been emitted yet.
+    var started = false;
+    var idx = @min(below_start, region_idx);
+    while (idx < elements.len) : (idx += 1) {
+        if (idx == region_idx) continue;
+        switch (elements[idx]) {
+            .source_code_region => |r| {
+                try flushBelowText(writer, &buf, width, &started);
+                if (!started) {
+                    try writer.writeByte('\n');
+                    started = true;
+                }
+                try renderEmbeddedBox(writer, palette, rw, r.region_annotation, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, gpa);
+            },
+            .source_code_with_underlines => |d| {
+                try flushBelowText(writer, &buf, width, &started);
+                if (!started) {
+                    try writer.writeByte('\n');
+                    started = true;
+                }
+                const dr = d.display_region;
+                var sc = dr.start_column;
+                var ec = dr.end_column;
+                if (d.underline_regions.len > 0) {
+                    sc = d.underline_regions[0].start_column;
+                    ec = d.underline_regions[0].end_column;
+                }
+                try renderEmbeddedBox(writer, palette, rw, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text, gpa);
+            },
+            else => try renderElementToTerminal(elements[idx], &buf.writer, palette, &ann, config),
+        }
     }
-    if (region_idx + 1 < elements.len) {
-        for (elements[region_idx + 1 ..]) |el| try renderElementToTerminal(el, &buf.writer, palette, &ann, config);
-    }
+    try flushBelowText(writer, &buf, width, &started);
+    if (!started) try writer.writeByte('\n');
+}
 
+/// Flush accumulated below-the-box prose (`buf`) as word-wrapped, indented text,
+/// emitting the one-time leading blank line first. Clears `buf`.
+fn flushBelowText(
+    writer: *std.Io.Writer,
+    buf: *std.Io.Writer.Allocating,
+    width: usize,
+    started: *bool,
+) error{WriteFailed}!void {
     const trimmed = std.mem.trim(u8, buf.written(), "\n");
     if (trimmed.len == 0) {
-        try writer.writeByte('\n');
+        buf.clearRetainingCapacity();
         return;
     }
-
-    try writer.writeByte('\n');
-    const width: usize = config.getMaxLineWidth();
-    var it = std.mem.splitScalar(u8, trimmed, '\n');
-    while (it.next()) |ln| {
-        try wrapAndEmitBelowLine(writer, ln, 4, width);
+    if (!started.*) {
+        try writer.writeByte('\n');
+        started.* = true;
     }
+    var it = std.mem.splitScalar(u8, trimmed, '\n');
+    while (it.next()) |ln| try wrapAndEmitBelowLine(writer, ln, 4, width);
+    buf.clearRetainingCapacity();
+}
+
+/// Render a secondary source region (e.g. the original definition pointed at by
+/// "…was already defined here:") as a box mirroring the main report box — full
+/// border with the location tucked into the bottom-right corner — but with the
+/// line number rendered in a gutter to the LEFT of the box, outside it.
+fn renderEmbeddedBox(
+    writer: *std.Io.Writer,
+    palette: ColorPalette,
+    rw: usize,
+    annotation: Annotation,
+    filename: ?[]const u8,
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    line_text: []const u8,
+    gpa: Allocator,
+) (Allocator.Error || error{WriteFailed})!void {
+    const sec = palette.secondary;
+    const rst = palette.reset;
+    const indent: usize = 4;
+    const lnw: usize = source_region.calculateLineNumberWidth(end_line);
+    const wall = indent + lnw + 2; // 1-based column of the box's left wall
+    const code_avail = rw -| wall -| 3;
+
+    // Top edge (the gutter to its left is blank).
+    try writer.splatByteAll(' ', wall -| 1);
+    try writer.writeAll(sec);
+    try writer.writeAll("┌");
+    try writer.splatBytesAll("─", (rw -| wall) -| 1);
+    try writer.writeAll("┐");
+    try writer.writeAll(rst);
+    try writer.writeByte('\n');
+
+    var line_no = start_line;
+    var it = std.mem.splitScalar(u8, line_text, '\n');
+    while (it.next()) |code_line| {
+        const is_underline_line = start_line == end_line and line_no == start_line;
+        const start_byte = @min(@as(usize, start_column -| 1), code_line.len);
+        const end_byte = @max(@min(@as(usize, end_column -| 1), code_line.len), start_byte);
+        const win = windowSourceLine(code_line, if (is_underline_line) start_byte else 0, code_avail);
+        const shown = code_line[win.start_byte..win.end_byte];
+
+        // Code row: the line number sits in the gutter, then the boxed code.
+        var col: usize = 0;
+        try writer.splatByteAll(' ', indent);
+        col += indent;
+        try writer.writeAll(sec);
+        try source_region.formatLineNumber(writer, line_no, @intCast(lnw));
+        col += lnw;
+        try writer.writeByte(' ');
+        col += 1;
+        try writer.writeAll("│");
+        try writer.writeAll(rst);
+        col += 1;
+        try writer.writeAll("  ");
+        col += 2;
+        if (win.left_ellipsis) {
+            try writer.writeAll("…");
+            col += 1;
+        }
+        for (shown) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+        col += source_region.displayWidth(shown);
+        if (win.right_ellipsis) {
+            try writer.writeAll("…");
+            col += 1;
+        }
+        try writer.splatByteAll(' ', (rw -| 1) -| col);
+        try writer.writeAll(sec);
+        try writer.writeAll("│");
+        try writer.writeAll(rst);
+        try writer.writeByte('\n');
+
+        if (is_underline_line) {
+            var ucol: usize = 0;
+            try writer.splatByteAll(' ', wall -| 1);
+            ucol += wall -| 1;
+            try writer.writeAll(sec);
+            try writer.writeAll("│");
+            try writer.writeAll(rst);
+            ucol += 1;
+            try writer.writeAll("  ");
+            ucol += 2;
+            const vs = @max(start_byte, win.start_byte);
+            const ve = @min(end_byte, win.end_byte);
+            const lead = @as(usize, if (win.left_ellipsis) 1 else 0) +
+                source_region.displayWidth(code_line[win.start_byte..vs]);
+            try writer.splatByteAll(' ', lead);
+            ucol += lead;
+            const span_width = if (ve > vs) source_region.displayWidth(code_line[vs..ve]) else 0;
+            const ulen = if (span_width > 0) span_width else 1;
+            try writer.writeAll(getAnnotationColor(annotation, palette));
+            try writer.splatBytesAll(box_underline, ulen);
+            try writer.writeAll(rst);
+            ucol += ulen;
+            try writer.splatByteAll(' ', (rw -| 1) -| ucol);
+            try writer.writeAll(sec);
+            try writer.writeAll("│");
+            try writer.writeAll(rst);
+            try writer.writeByte('\n');
+        }
+        line_no += 1;
+    }
+
+    // Bottom edge with the location tucked into the bottom-right corner.
+    const fname = if (filename) |f| sanitisePathForSnapshots(f) else "<source>";
+    const loc = try std.fmt.allocPrint(gpa, "{s}:{}:{}", .{ fname, start_line, start_column });
+    defer gpa.free(loc);
+    const loc_w = source_region.displayWidth(loc);
+    try writer.splatByteAll(' ', wall -| 1);
+    try writer.writeAll(sec);
+    try writer.writeAll("└");
+    if (loc_w + 4 <= rw -| wall) {
+        try writer.splatBytesAll("─", ((rw -| wall) -| loc_w) -| 3);
+        try writer.writeByte(' ');
+        try writer.writeAll(loc);
+        try writer.writeAll(" ┘");
+    } else {
+        try writer.splatBytesAll("─", (rw -| wall) -| 1);
+        try writer.writeAll("┘");
+    }
+    try writer.writeAll(rst);
+    try writer.writeByte('\n');
 }
 
 /// Length of the ANSI escape sequence starting at `bytes[i]`, or 0 if there
@@ -918,8 +1117,11 @@ fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, pal
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
             const color = getAnnotationColor(annotated.annotation, palette);
+            const tick = wantsBacktick(palette, annotated.annotation);
             try writer.writeAll(color);
+            if (tick) try writer.writeByte('`');
             try writer.writeAll(annotated.content);
+            if (tick) try writer.writeByte('`');
             try writer.writeAll(palette.reset);
         },
         .line_break => try writer.writeAll("\n"),

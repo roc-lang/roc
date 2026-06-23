@@ -945,11 +945,9 @@ pub const Diagnostic = union(enum) {
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("The name ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is being redeclared in this scope.");
+        try report.headline.addReflowingText(" is being redeclared here.");
 
-        // Show where the new declaration is
-        try report.document.addReflowingText("The redeclaration is here:");
-        try report.document.addLineBreak();
+        // The main box shows the new declaration; point below it at the original.
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
@@ -960,7 +958,7 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("But ");
+        try report.document.addReflowingText("In this scope, ");
         try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addReflowingText(" was already defined here:");
         try report.document.addLineBreak();

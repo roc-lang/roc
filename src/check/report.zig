@@ -1972,7 +1972,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This"),
-            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.ident(data.method_name).withAnnotation(.inline_code),
             D.bytes("method is being called on a value whose type doesn't have that method."),
         }, self, &report, &report.headline);
 
@@ -1993,7 +1993,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
-            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.ident(data.method_name).withAnnotation(.inline_code).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -2040,15 +2040,15 @@ pub const ReportBuilder = struct {
         if (is_from_binop and mb_operator != null) {
             try D.renderSliceInto(&.{
                 D.bytes("The value before this"),
-                D.bytes(mb_operator.?).withAnnotation(.emphasized),
+                D.bytes(mb_operator.?).withAnnotation(.binary_operator),
                 D.bytes("operator has a type that doesn't have a"),
-                D.ident(data.method_name).withAnnotation(.emphasized),
+                D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("method."),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
-                D.ident(data.method_name).withAnnotation(.emphasized),
+                D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("method is being called on a value whose type doesn't have that method."),
             }, self, &report, &report.headline);
         }
@@ -2070,7 +2070,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
-            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.ident(data.method_name).withAnnotation(.inline_code).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -2085,7 +2085,7 @@ pub const ReportBuilder = struct {
             try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
                 D.bytes("This numeric literal was given the type"),
-                D.bytes("Dec").withAnnotation(.emphasized),
+                D.bytes("Dec").withAnnotation(.inline_code),
                 D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
             }, self, &report);
         }
@@ -2099,16 +2099,16 @@ pub const ReportBuilder = struct {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("The"),
-                            D.bytes(operator).withAnnotation(.emphasized),
+                            D.bytes(operator).withAnnotation(.binary_operator),
                             D.bytes("operator calls a method named"),
-                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.ident(data.method_name).withAnnotation(.inline_code),
                             D.bytes("on the value preceding it, passing the value after the operator as the one argument."),
                         }, self, &report);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("For this to work, the type would need to have a method named"),
-                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.ident(data.method_name).withAnnotation(.inline_code),
                             D.bytes("associated with it in the type's declaration."),
                         }, self, &report);
                     }
@@ -2116,7 +2116,7 @@ pub const ReportBuilder = struct {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
                         D.bytes("For this to work, the type would need to have a method named"),
-                        D.ident(data.method_name).withAnnotation(.emphasized),
+                        D.ident(data.method_name).withAnnotation(.inline_code),
                         D.bytes("associated with it in the type's declaration."),
                     }, self, &report);
                 }
@@ -2127,16 +2127,16 @@ pub const ReportBuilder = struct {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("The"),
-                            D.bytes(operator).withAnnotation(.emphasized),
+                            D.bytes(operator).withAnnotation(.binary_operator),
                             D.bytes("operator requires the type to have a"),
-                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.ident(data.method_name).withAnnotation(.inline_code),
                             D.bytes("method. Did you forget to specify it in the type annotation?"),
                         }, self, &report);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("Did you forget to specify"),
-                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.ident(data.method_name).withAnnotation(.inline_code),
                             D.bytes("in the type annotation?"),
                         }, self, &report);
                     }
@@ -2144,7 +2144,7 @@ pub const ReportBuilder = struct {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
                         D.bytes("Did you forget to specify"),
-                        D.ident(data.method_name).withAnnotation(.emphasized),
+                        D.ident(data.method_name).withAnnotation(.inline_code),
                         D.bytes("in the type annotation?"),
                     }, self, &report);
                 }
@@ -2247,7 +2247,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("This"),
-            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.ident(data.method_name).withAnnotation(.inline_code),
             D.bytes("dispatch would have to call itself to satisfy its own type."),
         }, self, &report, &report.headline);
 
@@ -2277,7 +2277,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("Use a more specific result type, or add an associated function whose"),
-            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.ident(data.method_name).withAnnotation(.inline_code),
             D.bytes("implementation does not require the same dispatch on the same type."),
         }, self, &report);
 
@@ -2422,7 +2422,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes(intro),
-            D.bytes(self.getFormattedString(data.default_snapshot)).withAnnotation(.emphasized),
+            D.bytes(self.getFormattedString(data.default_snapshot)).withAnnotation(.inline_code),
             D.bytes("instead."),
         }, self, &report, &report.headline);
 
@@ -2857,7 +2857,7 @@ pub const ReportBuilder = struct {
             D.ident(data.nominal_type_name).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but it's an"),
-            D.bytes("opaque").withAnnotation(.emphasized),
+            D.bytes("opaque").withAnnotation(.keyword),
             D.bytes("type."),
         }, self, &report, &report.headline);
 
@@ -2876,9 +2876,9 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("To create an instance of this type outside the module it's defined in, you have to define it with"),
-            D.bytes(":=").withAnnotation(.emphasized),
+            D.bytes(":=").withAnnotation(.binary_operator),
             D.bytes("instead of"),
-            D.bytes("::").withAnnotation(.emphasized),
+            D.bytes("::").withAnnotation(.binary_operator),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
 

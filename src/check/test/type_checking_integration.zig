@@ -1720,14 +1720,14 @@ test "check type - nominal - local record value - fail" {
         source,
         .fail_with,
         \\**Missing Method**
-        \\This **encode_str** method is being called on a value whose type doesn't have that method.
+        \\This `encode_str` method is being called on a value whose type doesn't have that method.
         \\**test:9:3:9:13:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
         \\  ^^^^^^^^^^
         \\
-        \\The value's type, which does not have a method named **encode_str**, is:
+        \\The value's type, which does not have a method named `encode_str`, is:
         \\
         \\    {}
         \\
@@ -2039,14 +2039,14 @@ test "check type - match - diff cond types 1" {
         source,
         .fail_with,
         \\**Missing Method**
-        \\This **from_quote** method is being called on a value whose type doesn't have that method.
+        \\This `from_quote` method is being called on a value whose type doesn't have that method.
         \\**test:2:9:2:16:**
         \\```roc
         \\  match "hello" {
         \\```
         \\        ^^^^^^^
         \\
-        \\The value's type, which does not have a method named **from_quote**, is:
+        \\The value's type, which does not have a method named `from_quote`, is:
         \\
         \\    [True, ..]
         \\
