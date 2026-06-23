@@ -98,13 +98,13 @@ NO CHANGE
 				(args))))
 	(d-let
 		(p-assign (ident "direct"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 75)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 78)
 			(receiver
 				(e-typed-int (value "5") (type "U8")))
 			(args)))
 	(d-let
 		(p-assign (ident "through_helper"))
-		(e-call (constraint-fn-var 127)
+		(e-call (constraint-fn-var 133)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -130,7 +130,7 @@ NO CHANGE
 				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "poly_no_dispatch"))
-		(e-call (constraint-fn-var 231)
+		(e-call (constraint-fn-var 246)
 			(e-lookup-local
 				(p-assign (ident "id")))
 			(e-string

@@ -96,6 +96,7 @@ pub const Error = error{
     CompilationFailed,
     TempFileError,
     LinkFailed,
+    WindowsSDKNotFound,
 };
 
 /// Options for controlling LLVM compilation behavior.
@@ -676,6 +677,12 @@ fn linkSharedLibrary(
         allocator.free(path);
     };
 
+    var compiler_rt_path: ?[:0]const u8 = null;
+    defer if (compiler_rt_path) |path| {
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(path, 0)) catch {};
+        allocator.free(path);
+    };
+
     switch (builtin.os.tag) {
         .macos => {
             try args.append(allocator, "ld64.lld");
@@ -739,6 +746,56 @@ fn linkSharedLibrary(
                 }) catch return Error.TempFileError;
                 try args.append(allocator, std.mem.sliceTo(probe_path, 0));
             }
+
+            // Native codegen lowers the merged module's 128-bit divide/remainder
+            // and 128-bit<->float operations to compiler-rt libcalls (__divti3,
+            // __fixdfti, ...) that the image itself does not define. The Unix
+            // loaders bind these at load time (the in-process eval_loader via
+            // native_runtime_libcalls.resolve, or the OS dynamic loader), but
+            // Windows' LoadLibrary needs a fully linked DLL, so link in the
+            // object that exports them. See eval_compiler_rt_libcalls.zig.
+            const compiler_rt_obj = llvm_embedded.eval_compiler_rt_libcalls_obj;
+            const compiler_rt_obj_path = createTempPath(allocator, io, ".obj") catch return Error.TempFileError;
+            compiler_rt_path = compiler_rt_obj_path;
+            std.Io.Dir.cwd().writeFile(io, .{
+                .sub_path = std.mem.sliceTo(compiler_rt_obj_path, 0),
+                .data = compiler_rt_obj,
+            }) catch return Error.TempFileError;
+            try args.append(allocator, std.mem.sliceTo(compiler_rt_obj_path, 0));
+
+            // Tell lld-link where to find the CRT and Windows SDK import
+            // libraries. Without these /libpath entries lld-link can only locate
+            // kernel32.lib/ntdll.lib/msvcrt.lib via the LIB environment variable,
+            // so linking fails in shells where LIB is unset (e.g. outside a
+            // Developer Command Prompt). The roc CLI linker resolves these the
+            // same way; this is a native compile, so target the host arch.
+            const query = std.Target.Query{
+                .cpu_arch = builtin.cpu.arch,
+                .os_tag = .windows,
+                .abi = .msvc,
+                .ofmt = .coff,
+            };
+            const target = std.zig.system.resolveTargetQuery(io, query) catch return Error.WindowsSDKNotFound;
+
+            var environ_map = std.process.Environ.empty.createMap(arena) catch return Error.OutOfMemory;
+            defer environ_map.deinit();
+            const native_libc = std.zig.LibCInstallation.findNative(arena, io, .{
+                .target = &target,
+                .environ_map = &environ_map,
+            }) catch return Error.WindowsSDKNotFound;
+
+            if (native_libc.crt_dir) |lib_dir| {
+                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
+            } else return Error.WindowsSDKNotFound;
+
+            if (native_libc.msvc_lib_dir) |lib_dir| {
+                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
+            } else return Error.WindowsSDKNotFound;
+
+            if (native_libc.kernel32_lib_dir) |lib_dir| {
+                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
+            } else return Error.WindowsSDKNotFound;
+
             try args.append(allocator, "/defaultlib:kernel32");
             try args.append(allocator, "/defaultlib:ntdll");
             try args.append(allocator, "/defaultlib:msvcrt");

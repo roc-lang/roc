@@ -48,11 +48,11 @@ r = 1..<n + 1
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 233)
+		(e-call (constraint-fn-var 242)
 			(e-lookup-external
 				(builtin))
 			(e-num (value "1"))
-			(e-dispatch-call (method "plus") (constraint-fn-var 231)
+			(e-dispatch-call (method "plus") (constraint-fn-var 240)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "n"))))

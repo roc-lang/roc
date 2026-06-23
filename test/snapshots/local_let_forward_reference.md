@@ -91,13 +91,13 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 58)
+				(e-dispatch-call (method "plus") (constraint-fn-var 61)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
 					(args
 						(e-num (value "1"))))))
-		(e-call (constraint-fn-var 93)
+		(e-call (constraint-fn-var 99)
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-num (value "1")))))

@@ -9900,7 +9900,7 @@ const BodyContext = struct {
     /// Fold a `from_numeral` conversion into a constant at its concrete target
     /// type. Compile-time finalization only registers a constant for literals
     /// whose type is already concrete at Check time; a literal inside a generic
-    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_checked(1)`) is
+    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_try(1)`) is
     /// typed by the abstract `num` var and only gains a concrete type here, after
     /// monomorphization. Rather than emit a runtime `num_from_numeral` low-level
     /// op — which the compiled backends deliberately reject — we evaluate the

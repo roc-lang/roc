@@ -16,6 +16,7 @@ const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
 const eval_loader = @import("vendor_eval_loader");
+const native_runtime_libcalls = builtins.native_runtime_libcalls;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -67,6 +68,7 @@ pub const TestHelperError = Allocator.Error || std.DynLib.Error || std.Io.File.O
     MprotectFailed,
     VirtualProtectFailed,
     InvalidHandle,
+    WindowsSDKNotFound,
     CompilationFailed,
     BitcodeParseError,
     ModuleLinkFailed,
@@ -114,7 +116,14 @@ const EvalDynLib = switch (builtin.target.os.tag) {
         inner: Inner,
 
         fn open(_: Allocator, path: [:0]const u8) TestHelperError!@This() {
-            return .{ .inner = try Inner.open(path) };
+            // The vendored loader has no dynamic linker behind it, so it needs a
+            // resolver to bind the compiler-rt libcalls native codegen emits.
+            // `std.DynLib` defers to the OS loader, which resolves them itself.
+            if (comptime eval_loader.active) {
+                return .{ .inner = try Inner.open(path, &native_runtime_libcalls.resolve) };
+            } else {
+                return .{ .inner = try Inner.open(path) };
+            }
         }
 
         fn close(self: *@This()) void {
