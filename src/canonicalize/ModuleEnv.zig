@@ -2924,6 +2924,20 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_shadowed_warning => |data| blk: {
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk try CIR.Diagnostic.buildTypeShadowedWarningReport(
+                allocator,
+                self.getIdent(data.name),
+                new_region_info,
+                original_region_info,
+                data.cross_scope,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }

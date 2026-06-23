@@ -32,12 +32,15 @@ fn codepointWidth(cp: u21) usize {
     // variation selectors.
     if ((cp >= 0x0300 and cp <= 0x036F) or
         (cp >= 0x0483 and cp <= 0x0489) or
-        (cp >= 0x200B and cp <= 0x200F) or
+        (cp >= 0x1160 and cp <= 0x11FF) or // Hangul Jungseong/Jongseong (conjoining)
         (cp >= 0x1AB0 and cp <= 0x1AFF) or
         (cp >= 0x1DC0 and cp <= 0x1DFF) or
+        (cp >= 0x200B and cp <= 0x200F) or
+        (cp >= 0x2060 and cp <= 0x206F) or // word joiner / invisible operators / format chars
         (cp >= 0x20D0 and cp <= 0x20FF) or
         (cp >= 0xFE00 and cp <= 0xFE0F) or
-        (cp >= 0xFE20 and cp <= 0xFE2F))
+        (cp >= 0xFE20 and cp <= 0xFE2F) or
+        cp == 0xFEFF) // zero-width no-break space (BOM)
     {
         return 0;
     }
@@ -54,6 +57,7 @@ fn codepointWidth(cp: u21) usize {
         (cp >= 0xFE30 and cp <= 0xFE6F) or
         (cp >= 0xFF00 and cp <= 0xFF60) or
         (cp >= 0xFFE0 and cp <= 0xFFE6) or
+        (cp >= 0x1F1E6 and cp <= 0x1F1FF) or // regional indicator symbols (flags)
         (cp >= 0x1F300 and cp <= 0x1FAFF) or
         (cp >= 0x20000 and cp <= 0x3FFFD))
     {

@@ -1142,53 +1142,6 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
-    /// Build a report for "nominal type redeclared" diagnostic
-    pub fn buildNominalTypeRedeclaredReport(
-        allocator: Allocator,
-        type_name: []const u8,
-        original_region_info: base.RegionInfo,
-        redeclared_region_info: base.RegionInfo,
-        filename: []const u8,
-        source: []const u8,
-        line_starts: []const u32,
-    ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Custom Type Redeclared", "", .runtime_error);
-        const owned_type_name = try report.addOwnedString(type_name);
-        try report.headline.addReflowingText("The nominal type ");
-        try report.headline.addType(owned_type_name);
-        try report.headline.addReflowingText(" is being redeclared.");
-        try report.document.addReflowingText("Custom types can only be declared once in the same scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        // Show where the redeclaration is
-        try report.document.addReflowingText("The redeclaration is here:");
-        try report.document.addLineBreak();
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            redeclared_region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
-
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("But ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" was already declared here:");
-        try report.document.addLineBreak();
-        try report.document.addSourceRegion(
-            original_region_info,
-            .dimmed,
-            owned_filename,
-            source,
-            line_starts,
-        );
-
-        return report;
-    }
-
     /// Build a report for "type shadowed warning" diagnostic
     pub fn buildTypeShadowedWarningReport(
         allocator: Allocator,
@@ -1762,6 +1715,7 @@ pub const Diagnostic = union(enum) {
         var report = try Report.init(allocator, "Unused Type Variable Name", "", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
+        defer allocator.free(suggested_with_underscore);
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
 
         try report.headline.addReflowingText("The type variable ");
@@ -1854,40 +1808,6 @@ pub const Diagnostic = union(enum) {
         try report.document.addKeyword("var");
         try report.document.addReflowingText(", they should never end with an underscore. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText(" instead.");
-
-        return report;
-    }
-
-    /// Build a report for "underscore in type declaration" diagnostic
-    pub fn buildUnderscoreInTypeDeclarationReport(
-        allocator: Allocator,
-        is_alias: bool,
-        region_info: base.RegionInfo,
-        filename: []const u8,
-        source: []const u8,
-        line_starts: []const u32,
-    ) Allocator.Error!Report {
-        const title = if (is_alias) "Underscore In Type Alias" else "Underscore In Nominal Type";
-
-        const declaration_type = if (is_alias) "type alias" else "nominal type";
-        const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in {s} declarations.", .{declaration_type});
-        defer allocator.free(headline);
-        var report = try Report.init(allocator, title, headline, .runtime_error);
-
-        const owned_filename = try report.addOwnedString(filename);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            owned_filename,
-            source,
-            line_starts,
-        );
-
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
-        try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
-        try report.document.addInlineCode("a");
         try report.document.addReflowingText(" instead.");
 
         return report;
