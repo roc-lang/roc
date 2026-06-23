@@ -782,6 +782,14 @@ pub const HostKeyedRowDiffResult = struct {
     }
 };
 
+/// The retained key/item pair read back out of an `Ui.each` row scope. Named so
+/// the native forwarder and the engine method share one type instead of each
+/// declaring a distinct anonymous struct.
+pub const EachRowValues = struct {
+    key: HostValue,
+    item: HostValue,
+};
+
 pub const HostEachRowRenderSegment = struct {
     scope_id: u64,
     start: usize,
@@ -2994,6 +3002,140 @@ pub fn Engine(comptime Ctx: type) type {
             var metrics = self.pending_roc_metrics;
             metrics.bump(.scopes_disposed, 1);
             self.pending_roc_metrics = metrics;
+        }
+
+        pub fn createEachRowScope(self: *Self, ctx: anytype, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
+            self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
+
+            const key_cell = HostValueCell.initRetained(key, key_eq, key_drop, &self.pending_roc_metrics);
+            const item_cell = HostValueCell.initRetained(item, item_eq, item_drop, &self.pending_roc_metrics);
+            const result = scope_tree.appendEachRow(HostEachRowScopeStep, Ctx.allocator(ctx), &self.scopes, parent_scope_id, .{
+                .site_ordinal = site_ordinal,
+                .key = key_cell,
+                .item = item_cell,
+            }) catch @panic("scope id has no host scope descriptor");
+            self.recordScopeCreated();
+            return result.scope_id;
+        }
+
+        pub fn eachRowScopeItemEquals(self: *Self, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            return switch (scope.step) {
+                .each_row => |*row| row.item.valueEquals(roc_host, item),
+                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+            };
+        }
+
+        pub fn replaceEachRowScopeItem(self: *Self, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) void {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            switch (scope.step) {
+                .each_row => {},
+                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+            }
+
+            scope.step.each_row.item.replaceValue(roc_host, item);
+        }
+
+        pub fn eachRowScopeValues(self: *Self, scope_id: u64) EachRowValues {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            return switch (scope.step) {
+                .each_row => |row| .{ .key = row.key.value, .item = row.item.value },
+                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+            };
+        }
+
+        pub fn syncEachRowScopes(self: *Self, ctx: anytype, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
+            self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
+            if (keys.len != items.len) @panic("Ui.each keyed scope received mismatched key and item lists");
+
+            const allocator = Ctx.allocator(ctx);
+            const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
+            defer allocator.free(existing_scope_ids);
+
+            const match_plan = self.buildEachRowMatchPlan(allocator, roc_host, existing_scope_ids, keys, key_hash, key_eq) catch @panic("keyed row diff operation failed");
+            defer allocator.free(match_plan.rows);
+            errdefer allocator.free(match_plan.removed_scope_ids);
+
+            var next_scope_ids = allocator.alloc(u64, keys.len) catch @panic("out of memory");
+            errdefer allocator.free(next_scope_ids);
+            var row_items_changed = allocator.alloc(bool, keys.len) catch @panic("out of memory");
+            errdefer allocator.free(row_items_changed);
+
+            var row_items_unchanged: u64 = 0;
+            var row_items_updated: u64 = 0;
+
+            for (match_plan.rows, keys, items, 0..) |row_plan, key, item, key_index| {
+                switch (row_plan) {
+                    .reuse => |reuse| {
+                        const scope_id = reuse.scope_id;
+                        next_scope_ids[key_index] = scope_id;
+                        erased_calls.callErasedHostValueToUnit(roc_host, key_drop, key);
+                        if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
+                            erased_calls.callErasedHostValueToUnit(roc_host, item_drop, item);
+                            row_items_changed[key_index] = false;
+                            row_items_unchanged += 1;
+                        } else {
+                            self.replaceEachRowScopeItem(roc_host, scope_id, item);
+                            row_items_changed[key_index] = true;
+                            row_items_updated += 1;
+                        }
+                    },
+                    .create => {
+                        next_scope_ids[key_index] = self.createEachRowScope(ctx, parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
+                        row_items_changed[key_index] = true;
+                    },
+                }
+            }
+
+            for (match_plan.removed_scope_ids) |scope_id| {
+                self.disposeScopeSubtree(ctx, roc_host, scope_id);
+            }
+
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.rows_reused, match_plan.rows_reused);
+            metrics.bump(.rows_created, match_plan.rows_created);
+            metrics.bump(.rows_removed, match_plan.rows_removed);
+            self.pending_roc_metrics = metrics;
+
+            return .{
+                .scope_ids = next_scope_ids,
+                .row_items_changed = row_items_changed,
+                .removed_scope_ids = match_plan.removed_scope_ids,
+                .rows_reused = match_plan.rows_reused,
+                .rows_created = match_plan.rows_created,
+                .rows_removed = match_plan.rows_removed,
+                .row_items_unchanged = row_items_unchanged,
+                .row_items_updated = row_items_updated,
+            };
+        }
+
+        pub fn syncActiveEachRowScopes(self: *Self, ctx: anytype, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
+            if (site.kind != .each) {
+                @panic("active row sync requires an each scope site");
+            }
+            if (site.node_id != each.node_id) {
+                @panic("active row sync received mismatched each descriptors");
+            }
+
+            const allocator = Ctx.allocator(ctx);
+            const items_value = self.cloneCachedSignalValue(ctx, &each.cached_value);
+            defer erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, &each.items), items_value);
+
+            const items = erased_calls.callErasedHostValueToHostValueList(roc_host, each.items_to_values, items_value);
+            defer items.decref(roc_host);
+            const item_values = items.items();
+
+            const keys = allocator.alloc(HostValue, item_values.len) catch @panic("out of memory");
+            defer allocator.free(keys);
+
+            for (item_values, 0..) |item, index| {
+                keys[index] = erased_calls.callErasedHostValueToHostValue(roc_host, each.key_of, item);
+            }
+
+            return self.syncEachRowScopes(ctx, roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_hash, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
         }
 
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {

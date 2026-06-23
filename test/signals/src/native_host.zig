@@ -1989,19 +1989,7 @@ const HostEnv = struct {
     }
 
     fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
-        self.validateScopeId(parent_scope_id);
-
-        const key_cell = HostValueCell.initRetained(key, key_eq, key_drop, &self.engine.pending_roc_metrics);
-        const item_cell = HostValueCell.initRetained(item, item_eq, item_drop, &self.engine.pending_roc_metrics);
-        const result = scope_tree.appendEachRow(HostEachRowScopeStep, self.gpa.allocator(), &self.engine.scopes, parent_scope_id, .{
-            .site_ordinal = site_ordinal,
-            .key = key_cell,
-            .item = item_cell,
-        }) catch |err| {
-            failScopeTreeError(err, "scope id has no host scope descriptor");
-        };
-        self.engine.recordScopeCreated();
-        return result.scope_id;
+        return self.engine.createEachRowScope(self, parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
     }
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
@@ -2042,100 +2030,12 @@ const HostEnv = struct {
         return self.engine.eachKeysEqual(roc_host, key_eq, left, right);
     }
 
-    fn eachRowScopeItemEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
-        self.validateScopeId(scope_id);
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        return switch (scope.step) {
-            .each_row => |*row| row.item.valueEquals(roc_host, item),
-            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
-    }
-
-    fn replaceEachRowScopeItem(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) void {
-        self.validateScopeId(scope_id);
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        switch (scope.step) {
-            .each_row => {},
-            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
-        }
-
-        scope.step.each_row.item.replaceValue(roc_host, item);
-    }
-
-    fn eachRowScopeValues(self: *HostEnv, scope_id: u64) struct { key: HostValue, item: HostValue } {
-        self.validateScopeId(scope_id);
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        return switch (scope.step) {
-            .each_row => |row| .{ .key = row.key.value, .item = row.item.value },
-            .root, .component, .when_branch => failHost("scope id does not reference an each-row scope"),
-        };
+    fn eachRowScopeValues(self: *HostEnv, scope_id: u64) engine.EachRowValues {
+        return self.engine.eachRowScopeValues(scope_id);
     }
 
     fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
-        self.validateScopeId(parent_scope_id);
-        if (keys.len != items.len) failHost("Ui.each keyed scope received mismatched key and item lists");
-
-        const allocator = self.gpa.allocator();
-        const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal);
-        defer allocator.free(existing_scope_ids);
-
-        const match_plan = self.engine.buildEachRowMatchPlan(allocator, roc_host, existing_scope_ids, keys, key_hash, key_eq) catch |err| {
-            failKeyedRowsError(err);
-        };
-        defer allocator.free(match_plan.rows);
-        errdefer allocator.free(match_plan.removed_scope_ids);
-
-        var next_scope_ids = allocator.alloc(u64, keys.len) catch std.process.exit(1);
-        errdefer allocator.free(next_scope_ids);
-        var row_items_changed = allocator.alloc(bool, keys.len) catch std.process.exit(1);
-        errdefer allocator.free(row_items_changed);
-
-        var row_items_unchanged: u64 = 0;
-        var row_items_updated: u64 = 0;
-
-        for (match_plan.rows, keys, items, 0..) |row_plan, key, item, key_index| {
-            switch (row_plan) {
-                .reuse => |reuse| {
-                    const scope_id = reuse.scope_id;
-                    next_scope_ids[key_index] = scope_id;
-                    callErasedHostValueToUnit(roc_host, key_drop, key);
-                    if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
-                        callErasedHostValueToUnit(roc_host, item_drop, item);
-                        row_items_changed[key_index] = false;
-                        row_items_unchanged += 1;
-                    } else {
-                        self.replaceEachRowScopeItem(roc_host, scope_id, item);
-                        row_items_changed[key_index] = true;
-                        row_items_updated += 1;
-                    }
-                },
-                .create => {
-                    next_scope_ids[key_index] = self.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
-                    row_items_changed[key_index] = true;
-                },
-            }
-        }
-
-        for (match_plan.removed_scope_ids) |scope_id| {
-            self.disposeScopeSubtree(roc_host, scope_id);
-        }
-
-        var metrics = self.engine.pending_roc_metrics;
-        metrics.bump(.rows_reused, match_plan.rows_reused);
-        metrics.bump(.rows_created, match_plan.rows_created);
-        metrics.bump(.rows_removed, match_plan.rows_removed);
-        self.engine.pending_roc_metrics = metrics;
-
-        return .{
-            .scope_ids = next_scope_ids,
-            .row_items_changed = row_items_changed,
-            .removed_scope_ids = match_plan.removed_scope_ids,
-            .rows_reused = match_plan.rows_reused,
-            .rows_created = match_plan.rows_created,
-            .rows_removed = match_plan.rows_removed,
-            .row_items_unchanged = row_items_unchanged,
-            .row_items_updated = row_items_updated,
-        };
+        return self.engine.syncEachRowScopes(self, roc_host, parent_scope_id, site_ordinal, keys, items, key_hash, key_eq, key_drop, item_eq, item_drop);
     }
 
     fn walkElemIdentitySites(self: *HostEnv, elem: abi.Elem, scope_id: u64, ordinal: *u64) void {
@@ -2434,29 +2334,7 @@ const HostEnv = struct {
     }
 
     fn syncActiveEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
-        if (site.kind != .each) {
-            failHost("active row sync requires an each scope site");
-        }
-        if (site.node_id != each.node_id) {
-            failHost("active row sync received mismatched each descriptors");
-        }
-
-        const allocator = self.gpa.allocator();
-        const items_value = cloneCachedSignalValue(self, &each.cached_value);
-        defer callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(self, &each.items), items_value);
-
-        const items = callErasedHostValueToHostValueList(roc_host, each.items_to_values, items_value);
-        defer items.decref(roc_host);
-        const item_values = items.items();
-
-        const keys = allocator.alloc(HostValue, item_values.len) catch std.process.exit(1);
-        defer allocator.free(keys);
-
-        for (item_values, 0..) |item, index| {
-            keys[index] = callErasedHostValueToHostValue(roc_host, each.key_of, item);
-        }
-
-        return self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_hash, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
+        return self.engine.syncActiveEachRowScopes(self, roc_host, site, each);
     }
 
     fn collectActiveEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
