@@ -5652,6 +5652,7 @@ pub const Interpreter = struct {
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
             .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
+            .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
             .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
             .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
@@ -7634,6 +7635,57 @@ pub const Interpreter = struct {
         }
 
         return result;
+    }
+
+    fn evalBoxPrepareUpdate(self: *LirInterpreter, boxed: Value, ret_layout: layout_mod.Idx, unique_args: u64) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        switch (ret_layout_val.tag) {
+            .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
+            .box => {
+                const box_info = self.boxAllocInfo(ret_layout_val);
+                const data_ptr = self.readBoxedDataPointer(boxed) orelse {
+                    const result = try self.alloc(ret_layout);
+                    self.writeBoxedDataPointer(result, null);
+                    return result;
+                };
+
+                if (box_info.elem_size == 0 or (unique_args & 1) != 0 or builtins.utils.isUnique(data_ptr, &self.roc_ops)) {
+                    const result = try self.alloc(ret_layout);
+                    self.writeBoxedDataPointer(result, data_ptr);
+                    return result;
+                }
+
+                const fresh = try self.allocRocDataWithRc(
+                    box_info.elem_size,
+                    box_info.elem_alignment,
+                    box_info.contains_rc,
+                );
+                @memcpy(fresh[0..box_info.elem_size], data_ptr[0..box_info.elem_size]);
+
+                if (box_info.contains_rc) {
+                    self.performBuiltinInternalRc(
+                        "interpreter.box_prepare_update.payload_incref",
+                        .incref,
+                        .{ .ptr = fresh },
+                        box_info.elem_layout,
+                        1,
+                    );
+                }
+
+                self.performBuiltinInternalRc(
+                    "interpreter.box_prepare_update.input_decref",
+                    .decref,
+                    boxed,
+                    ret_layout,
+                    1,
+                );
+
+                const result = try self.alloc(ret_layout);
+                self.writeBoxedDataPointer(result, fresh);
+                return result;
+            },
+            else => return error.RuntimeError,
+        }
     }
 
     fn evalErasedCaptureLoad(self: *LirInterpreter, capture_ptr: Value, ret_layout: layout_mod.Idx) Error!Value {

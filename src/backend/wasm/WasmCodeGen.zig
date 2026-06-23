@@ -11223,6 +11223,90 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
         },
+        .box_prepare_update => {
+            // box_prepare_update(box_ptr) -> box_ptr
+            // Return a unique payload allocation, copying and retaining nested
+            // payload children when the consumed box was shared or static.
+            const box_expr = args[0];
+            const ls = self.getLayoutStore();
+            const ret_layout = ls.getLayout(ll.ret_layout);
+
+            if (ret_layout.tag == .box_of_zst) {
+                _ = try self.emitProcLocal(box_expr);
+                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                try self.emitI32Const(0);
+            } else {
+                const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                const elem_size = box_abi.elem_size;
+                if (elem_size == 0) {
+                    _ = try self.emitProcLocal(box_expr);
+                    self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                    try self.emitI32Const(0);
+                } else {
+                    try self.emitProcLocal(box_expr);
+                    const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(box_ptr);
+
+                    if ((ll.unique_args & 1) != 0) {
+                        try self.emitLocalGet(box_ptr);
+                    } else {
+                        const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+                        try self.emitLocalGet(box_ptr);
+                        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+                        try self.emitI32Const(0);
+                        try self.emitLocalSet(result_ptr);
+                        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+                        const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitLocalGet(box_ptr);
+                        try self.emitI32Const(-4);
+                        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                        try self.emitLocalSet(masked_ptr);
+                        try self.emitLocalGet(masked_ptr);
+                        try self.emitI32Const(-4);
+                        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                        try self.emitLocalSet(rc_ptr);
+                        try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
+
+                        try self.emitLocalGet(rc_val);
+                        try self.emitI32Const(1);
+                        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+                        try self.emitLocalGet(box_ptr);
+                        try self.emitLocalSet(result_ptr);
+                        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+                        try self.emitHeapAllocWithRefcountConst(elem_size, box_abi.elem_alignment, box_abi.contains_refcounted);
+                        const fresh_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitLocalSet(fresh_ptr);
+                        try self.emitMemCopy(fresh_ptr, 0, box_ptr, elem_size);
+
+                        if (box_abi.contains_refcounted) {
+                            if (box_abi.elem_layout_idx) |elem_layout_idx| {
+                                const helper_key = RcHelperKey{ .op = .incref, .layout_idx = elem_layout_idx };
+                                if (ls.rcHelperPlan(helper_key) != .noop) {
+                                    try self.emitExplicitRcHelperCallForValuePtr(helper_key, .atomic, fresh_ptr, 1);
+                                }
+                            }
+                        }
+
+                        try self.emitDataPtrDecref(box_ptr, box_abi.elem_alignment, box_abi.contains_refcounted);
+                        try self.emitLocalGet(fresh_ptr);
+                        try self.emitLocalSet(result_ptr);
+
+                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                        try self.emitLocalGet(result_ptr);
+                    }
+                }
+            }
+        },
         .erased_capture_load => {
             const capture_ptr_expr = args[0];
             const result_size = try self.layoutByteSize(ll.ret_layout);

@@ -441,6 +441,11 @@ pub const LowLevel = enum {
     // Box operations
     box_box,
     box_unbox,
+    /// Box(T) -> Box(T): consume a box and return a unique box containing the
+    /// same payload. Reuses the allocation when uniqueness is known or the
+    /// runtime check succeeds; otherwise copies the payload into a fresh box,
+    /// retains nested payload children, and releases the consumed input.
+    box_prepare_update,
     erased_capture_load,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
@@ -727,6 +732,8 @@ pub const LowLevel = enum {
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
             .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+
+            .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             // The capture environment is read through the executing frame's
             // closure, not through an explicit refcounted argument, so the

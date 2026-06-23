@@ -878,6 +878,7 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_list_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with_single_thread) },
         .{ .name = "roc_builtins_list_free_flat_list", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_flat_list) },
         .{ .name = "roc_builtins_list_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_with) },
+        .{ .name = "roc_builtins_box_prepare_update", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_prepare_update) },
         .{ .name = "roc_builtins_box_decref_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with) },
         .{ .name = "roc_builtins_box_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with_single_thread) },
         .{ .name = "roc_builtins_box_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_free_with) },

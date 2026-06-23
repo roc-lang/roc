@@ -2639,6 +2639,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_to_str => try self.emitNumToStr(target, arg_locals[0]),
             .box_box => try self.emitBoxBox(target, arg_locals[0]),
             .box_unbox => try self.emitBoxUnbox(target, arg_locals[0]),
+            .box_prepare_update => try self.emitBoxPrepareUpdate(target, arg_locals[0], unique_args),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, arg_locals[0]),
             .ptr_alloca => try self.emitPtrAlloca(target),
             .box_alloc_zeroed => try self.emitBoxAllocZeroed(target),
@@ -6124,6 +6125,48 @@ pub const MonoLlvmCodeGen = struct {
     fn emitBoxUnbox(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const ptr = try self.loadPointer(self.slot(arg).ptr);
         if (self.slot(target).size > 0) try self.copyBytes(self.slot(target).ptr, ptr, self.slot(target).size, self.slot(target).alignment);
+    }
+
+    fn emitBoxPrepareUpdate(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const target_layout = self.localLayout(target);
+        switch (self.layoutValue(target_layout).tag) {
+            .box_of_zst => {
+                try self.storePointer(self.slot(target).ptr, builder.nullValue(ptr_ty) catch return error.OutOfMemory);
+            },
+            .box => {
+                const abi = self.layouts().builtinBoxAbi(target_layout);
+                const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+                const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
+                const payload_incref = if (enabled)
+                    (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                else
+                    null;
+                const payload_decref = if (enabled)
+                    (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                else
+                    null;
+                const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+                const result = try self.callBuiltin(
+                    "roc_builtins_box_prepare_update",
+                    ptr_ty,
+                    &.{ ptr_ty, self.ptrSizedIntType(), .i32, .i1, ptr_ty, ptr_ty, .i8, ptr_ty },
+                    &.{
+                        try self.loadPointer(self.slot(arg).ptr),
+                        builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory,
+                        builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
+                        builder.intValue(.i1, @intFromBool(enabled)) catch return error.OutOfMemory,
+                        if (payload_incref) |func| func.toValue(builder) else null_ptr,
+                        if (payload_decref) |func| func.toValue(builder) else null_ptr,
+                        builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory,
+                        self.rocOps(),
+                    },
+                );
+                try self.storePointer(self.slot(target).ptr, result);
+            },
+            else => return error.CompilationFailed,
+        }
     }
 
     fn emitErasedCaptureLoad(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {

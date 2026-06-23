@@ -241,6 +241,7 @@ pub const BuiltinFn = enum {
     list_decref_flat_list,
     list_free_with,
     list_free_flat_list,
+    box_prepare_update,
     box_decref_with,
     box_decref_with_single_thread,
     box_free_with,
@@ -378,6 +379,7 @@ pub const BuiltinFn = enum {
             .list_decref_flat_list => "roc_builtins_list_decref_flat_list",
             .list_free_with => "roc_builtins_list_free_with",
             .list_free_flat_list => "roc_builtins_list_free_flat_list",
+            .box_prepare_update => "roc_builtins_box_prepare_update",
             .box_decref_with => "roc_builtins_box_decref_with",
             .box_decref_with_single_thread => "roc_builtins_box_decref_with_single_thread",
             .box_free_with => "roc_builtins_box_free_with",
@@ -4285,6 +4287,59 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else {
                         return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
                     }
+                },
+                .box_prepare_update => {
+                    // box_prepare_update(box) -> Box(value): consume one box
+                    // reference and return a unique box payload for mutation.
+                    const ls = self.layout_store;
+                    const ret_layout_data = ls.getLayout(ll.ret_layout);
+
+                    if (ret_layout_data.tag == .box_of_zst) {
+                        _ = try self.emitValueLocal(args[0]);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, 0);
+                        return .{ .general_reg = reg };
+                    }
+
+                    const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                    const elem_size: u32 = box_abi.elem_size;
+                    if (elem_size == 0) {
+                        _ = try self.emitValueLocal(args[0]);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, 0);
+                        return .{ .general_reg = reg };
+                    }
+
+                    const box_loc = try self.emitValueLocal(args[0]);
+                    const box_reg = try self.ensureInGeneralReg(box_loc);
+                    defer self.codegen.freeGeneral(box_reg);
+
+                    const elem_incref_reg = if (box_abi.contains_refcounted)
+                        if (box_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null
+                    else
+                        null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+
+                    const elem_decref_reg = if (box_abi.contains_refcounted)
+                        if (box_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null
+                    else
+                        null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(box_reg);
+                    try builder.addImmArg(@intCast(elem_size));
+                    try builder.addImmArg(@intCast(box_abi.elem_alignment));
+                    try builder.addImmArg(if (elem_incref_reg != null) 1 else 0);
+                    if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                    if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                    try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_box_prepare_update), .box_prepare_update);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg_0);
+                    return .{ .general_reg = result_reg };
                 },
                 .erased_capture_load => {
                     const elem_layout_idx = ll.ret_layout;

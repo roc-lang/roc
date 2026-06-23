@@ -1047,6 +1047,45 @@ pub fn roc_builtins_list_free_with(
     }
 }
 
+/// Prepare a boxed payload allocation for replacement.
+///
+/// The returned pointer is unique for the caller. It is either the original
+/// payload pointer or a fresh payload copy whose nested refcounted children have
+/// been retained.
+pub fn roc_builtins_box_prepare_update(
+    payload_ptr: ?[*]u8,
+    payload_size: usize,
+    payload_alignment: u32,
+    payload_has_refcounted_children: bool,
+    payload_incref: ?RcIncFn,
+    payload_decref: ?RcDropFn,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) ?[*]u8 {
+    if (payload_size == 0 or payload_ptr == null) {
+        return payload_ptr;
+    }
+
+    if (update_mode == .InPlace or utils.isUnique(payload_ptr, roc_ops)) {
+        return payload_ptr;
+    }
+
+    const fresh = allocateWithRefcountC(
+        payload_size,
+        payload_alignment,
+        payload_has_refcounted_children,
+        roc_ops,
+    );
+    @memcpy(fresh[0..payload_size], payload_ptr.?[0..payload_size]);
+
+    if (payload_has_refcounted_children) {
+        (payload_incref orelse unreachable)(fresh, 1, roc_ops);
+    }
+
+    roc_builtins_box_decref_with(payload_ptr, payload_alignment, payload_decref, roc_ops);
+    return fresh;
+}
+
 /// Decref a boxed payload and optionally run payload teardown when unique.
 pub fn roc_builtins_box_decref_with(
     payload_ptr: ?[*]u8,

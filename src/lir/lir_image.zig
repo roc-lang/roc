@@ -25,7 +25,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v7: string-pattern match sets add grouped arm storage.
 /// v8: LIR statements carry explicit checked source regions for diagnostics.
 /// v9: LIR store carries static-data symbol names.
-pub const FORMAT_VERSION: u32 = 9;
+/// v10: added the box_prepare_update LowLevel op.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

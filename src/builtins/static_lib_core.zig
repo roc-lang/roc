@@ -95,6 +95,7 @@ comptime {
     @export(&dw.roc_builtins_list_list_eq, .{ .name = "roc_builtins_list_list_eq" });
     @export(&dw.roc_builtins_list_reverse, .{ .name = "roc_builtins_list_reverse" });
 
+    @export(&dw.roc_builtins_box_prepare_update, .{ .name = "roc_builtins_box_prepare_update" });
     @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
     @export(&dw.roc_builtins_box_decref_with_single_thread, .{ .name = "roc_builtins_box_decref_with_single_thread" });
     @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
