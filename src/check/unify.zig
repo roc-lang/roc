@@ -2237,6 +2237,25 @@ const Unifier = struct {
                     constraint.origin = .{ .from_literal = .{ .numeral = merged } };
                 }
             }
+            // Preserve a body-forced where-clause across unification. The bit only
+            // exists on a `where_clause` origin, so it survives only by keeping that
+            // origin — or by promoting a payload-less `method_call` to it (the gap the
+            // sweep would otherwise miss when a same-named direct call wins the merge).
+            // A `from_literal`/operator origin is left intact: its payload (numeral
+            // info, binop negation) is load-bearing for defaulting and reporting, and
+            // such a receiver is pinned by defaulting rather than flagged by the sweep,
+            // so dropping the bit there is correct (overwriting it breaks e.g. ranges).
+            {
+                const a_forced = two_constraints.a.origin == .where_clause and two_constraints.a.origin.where_clause.body_required;
+                const b_forced = two_constraints.b.origin == .where_clause and two_constraints.b.origin.where_clause.body_required;
+                if (a_forced or b_forced) {
+                    switch (constraint.origin) {
+                        .where_clause => constraint.origin.where_clause.body_required = true,
+                        .method_call => constraint.origin = .{ .where_clause = .{ .body_required = true } },
+                        .from_literal, .desugared_binop, .desugared_unaryop => {},
+                    }
+                }
+            }
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {

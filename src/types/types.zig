@@ -958,7 +958,14 @@ pub const StaticDispatchConstraint = struct {
         desugared_binop: struct { negated: bool },
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
         method_call, // From .method() syntax
-        where_clause, // From where clause in type annotation
+        /// From a where clause in a type annotation. `body_required` is true when
+        /// the originating scheme's body provably forces this method: during the
+        /// scheme's own check a body dispatch of this method matched and unified
+        /// against this where-clause. It distinguishes a contract the
+        /// implementation actually dispatches (so an unpinnable instantiated
+        /// receiver is a genuine ambiguity) from a phantom contract the body never
+        /// uses (which stays a valid polymorphic signature).
+        where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
 
         /// The numeral payload, if this origin is a numeric literal conversion;

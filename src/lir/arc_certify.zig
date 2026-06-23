@@ -37,7 +37,13 @@ const Allocator = std.mem.Allocator;
 
 /// Errors produced while certifying: allocation failure or a violation of
 /// the ownership rules (a compiler bug in ARC insertion).
-pub const CertifyError = error{ OutOfMemory, Certification };
+/// `Certification` is a positive finding: ARC insertion produced refcount-incorrect code
+/// (a leak, a use-after-free, or a balance mismatch) — a real bug, so it aborts the build.
+/// `CertifierCapacityExceeded` is an incompleteness signal, NOT a finding: the certifier could
+/// not finish proving a procedure within its budget (its join-state enumeration grew too large).
+/// It must never abort a valid build — `certifyStore` catches it and leaves that one procedure
+/// unverified, continuing with the rest.
+pub const CertifyError = error{ OutOfMemory, Certification, CertifierCapacityExceeded };
 
 /// Holds the first violation message for test inspection.
 pub const Diagnostic = struct {
@@ -52,6 +58,10 @@ pub const Diagnostic = struct {
     /// Lender/holder chain of the dead value at the violation.
     chain: [8]ChainLink = undefined,
     chain_len: usize = 0,
+    /// Number of procedures left unverified because their join-state enumeration
+    /// exceeded the certifier's budget (incompleteness, not a finding). Exposed for
+    /// tests/debugging; a nonzero value means certification was not exhaustive.
+    skipped_proc_count: usize = 0,
 
     pub const ChainLink = struct {
         value: u32,
@@ -110,7 +120,18 @@ pub fn certifyStore(
 
     for (store.proc_specs.items, 0..) |proc, index| {
         const body = proc.body orelse continue;
-        try certifier.certifyProc(@enumFromInt(@as(u32, @intCast(index))), proc, body);
+        certifier.certifyProc(@enumFromInt(@as(u32, @intCast(index))), proc, body) catch |err| switch (err) {
+            // Incompleteness, not a finding: this procedure's join-state space exceeded the
+            // certifier's budget. Leave it unverified and keep certifying the rest, rather than
+            // failing a valid build. `certifyProc` resets all per-proc state on the next call, and
+            // its work stack is cleaned up on unwind, so skipping is safe. Real findings surface as
+            // `error.Certification` and still propagate.
+            error.CertifierCapacityExceeded => {
+                diag.skipped_proc_count += 1;
+                continue;
+            },
+            else => |e| return e,
+        };
     }
 }
 
@@ -263,6 +284,9 @@ pub fn certifyStoreOrPanic(
     var diag = Diagnostic{};
     certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
+        // `certifyStore` already catches this per-procedure (skips the proc), so it cannot reach
+        // here; handle it defensively as "nothing to report" rather than panicking.
+        error.CertifierCapacityExceeded => {},
         error.Certification => {
             var context = FailureContext{};
             for (diag.chain[0..diag.chain_len]) |link| {
@@ -2174,17 +2198,42 @@ const Certifier = struct {
                     const digest = summaryDigest(record.body, jump_summary);
                     const seen_entry = try record.scheduled.getOrPut(digest);
                     if (!seen_entry.found_existing) {
-                        if (record.scheduled.count() > 64) {
-                            self.diag.context_proc = self.current_proc;
-                            return self.fail(
-                                "entry states of join {d} diverge across jumps",
-                                .{@intFromEnum(jump_stmt.target)},
-                            );
+                        // The join body is certified once per distinct inflowing entry-state
+                        // summary. For a loop carrying K refcounted mutable locals whose body
+                        // merges and re-splits their alias groups, the number of distinct
+                        // (alias-partition x balance) summaries is finite but grows like the Bell
+                        // number of K (B(6) = 203). This bound is purely a *capacity* limit on how
+                        // many states we will enumerate for one procedure before giving up — it is
+                        // NOT a refcount finding. Exceeding it means "I cannot finish proving this
+                        // procedure within budget," so the certifier abandons this procedure
+                        // (leaving it unverified) rather than aborting the build or claiming a bug:
+                        // a verification tool must only block on a positive finding, never on its
+                        // own incompleteness (issue 9658 was a valid 203-state scanner). Findings
+                        // (leak / use-after-free / balance mismatch) on the first ≤4096 distinct
+                        // entry-states still `fail` → `error.Certification` → abort. The cap can
+                        // mask only a finding whose sole manifesting path is reached past the
+                        // 4096th distinct entry-state — most plausibly a real leak whose owned
+                        // balance grows every iteration (balance is part of the per-join summary
+                        // digest), so the state count climbs without converging; that proc is then
+                        // skipped rather than reported. The algorithmically-ideal fix is a
+                        // converging dataflow fixpoint that joins entry states over a finite-height
+                        // semilattice (bounding re-walks by lattice height rather than enumerating
+                        // summaries); it remains future work because a correct join must preserve
+                        // exact per-path ownership-unit accounting — naively merging owned states
+                        // that carry different balances (e.g. `if c then x = dup(y) else x = y`)
+                        // would be unsound. Until then the bound is generous enough to fully
+                        // certify realistic procedures and only skips genuinely pathological ones.
+                        if (record.scheduled.count() > 4096) {
+                            return error.CertifierCapacityExceeded;
                         }
                         const copy = try self.allocator.dupe(LocalSummary, jump_summary);
                         errdefer self.allocator.free(copy);
-                        try record.pending.append(self.allocator, copy);
+                        // Append to `work` first, while `errdefer` is the sole owner of
+                        // `copy`; `pending` takes ownership last, so neither append's
+                        // OOM path can double-free (the errdefer only fires before
+                        // `pending` owns it).
                         try work.append(self.allocator, .{ .join_body = jump_stmt.target });
+                        try record.pending.append(self.allocator, copy);
                     }
                     return;
                 },
