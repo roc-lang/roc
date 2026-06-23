@@ -4350,6 +4350,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
 
+    try self.reportNonExhaustiveLambdaParams(&env);
+
     try self.pruneSelectedHoistedRootsAfterSolving();
 }
 
@@ -11503,6 +11505,75 @@ fn checkDestructureExhaustiveness(
             .missing_patterns = missing_patterns_range,
         } });
     }
+}
+
+/// Run exhaustiveness analysis on every recorded lambda/function parameter
+/// pattern. A parameter pattern position is irrefutable: there is no alternate
+/// branch, so a refutable pattern there (e.g. `|[_, ..]|` or `|Ok(x)|`) that
+/// does not cover every value of its type is a runtime `pattern match failed`
+/// waiting to happen. Match expressions already get this analysis via
+/// `checkMatchExpr`; this closes the same gap for parameter patterns, which were
+/// previously type-checked but never checked for exhaustiveness.
+fn reportNonExhaustiveLambdaParams(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.checked_lambda_params.items) |arg_span| {
+        for (self.cir.store.slicePatterns(arg_span)) |pattern_idx| {
+            try self.checkParamPatternExhaustiveness(pattern_idx, env);
+        }
+    }
+}
+
+/// Exhaustiveness check for a single function/lambda parameter pattern. Unlike
+/// `checkDestructureExhaustiveness`, a parameter has no value expression, so the
+/// pattern's own type var is the scrutinee and there is no known-empty-payload
+/// information to collect (passed conservatively as empty / not-known).
+fn checkParamPatternExhaustiveness(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
+
+    const value_var = ModuleEnv.varFrom(pattern_idx);
+    const result = exhaustive.checkDestructure(
+        self.cir.gpa,
+        self.types,
+        &self.cir.store,
+        self.exhaustiveBuiltinIdents(),
+        pattern_idx,
+        value_var,
+        &.{},
+        false,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TypeError => return,
+    };
+    defer result.deinit(self.cir.gpa);
+
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
+    try self.closeExhaustiveVars(result, env, region);
+
+    if (result.is_exhaustive) return;
+
+    const value_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, value_var);
+    const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+    for (result.missing_patterns) |pattern| {
+        const idx = try exhaustive.formatPattern(
+            &self.problems.extra_strings_backing,
+            &self.cir.common.idents,
+            &self.cir.common.strings,
+            pattern,
+        );
+        try self.problems.missing_patterns_backing.append(idx);
+    }
+    const missing_patterns_range = problem.MissingPatternsRange{
+        .start = missing_patterns_start,
+        .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+    };
+    try self.problems.appendPendingStaticExhaustiveness(self.gpa, .destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, region, .{ .non_exhaustive_destructure = .{
+        .pattern = pattern_idx,
+        .value_snapshot = value_snapshot,
+        .missing_patterns = missing_patterns_range,
+    } });
 }
 
 // stmts //
