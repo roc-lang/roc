@@ -2925,6 +2925,77 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
+        pub fn deinitPendingTask(self: *Self, ctx: anytype, task: *HostPendingTask) void {
+            const allocator = Ctx.allocator(ctx);
+            abi.decrefBox(@ptrCast(task.task_token), self.roc_host.?);
+            allocator.free(task.task_name);
+            allocator.free(task.request);
+            task.* = undefined;
+        }
+
+        pub fn cancelPendingTasksInScopeSubtree(self: *Self, ctx: anytype, scope_id: u64) void {
+            var write_index: usize = 0;
+            for (self.pending_tasks.items) |*task| {
+                if (self.scopeIsDescendantOrSelf(task.owner_scope_id, scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) {
+                    self.deinitPendingTask(ctx, task);
+                    continue;
+                }
+                self.pending_tasks.items[write_index] = task.*;
+                write_index += 1;
+            }
+            self.pending_tasks.items.len = write_index;
+        }
+
+        pub fn appendCleanupEvent(self: *Self, ctx: anytype, name: []const u8) void {
+            const allocator = Ctx.allocator(ctx);
+            const copy = allocator.dupe(u8, name) catch @panic("out of memory");
+            self.cleanup_events.append(allocator, copy) catch {
+                allocator.free(copy);
+                @panic("out of memory");
+            };
+        }
+
+        pub fn disposeScopeSubtree(self: *Self, ctx: anytype, roc_host: *abi.RocHost, scope_id: u64) void {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+
+            var child_index: usize = 0;
+            while (child_index < self.scopes.items.len) : (child_index += 1) {
+                const child = self.scopes.items[child_index];
+                if (!child.active) continue;
+                if (child.parent_scope_id == scope_id) {
+                    self.disposeScopeSubtree(ctx, roc_host, child.scope_id);
+                }
+            }
+
+            for (self.node_identities.items) |*identity| {
+                if (identity.active and identity.scope_id == scope_id) {
+                    self.deactivateState(roc_host, identity.node_id);
+                    identity.active = false;
+                }
+            }
+
+            for (self.active_stream.cleanups.items) |cleanup| {
+                if (cleanup.scope_id == scope_id) {
+                    self.appendCleanupEvent(ctx, cleanup.name);
+                }
+            }
+
+            self.cancelPendingTasksInScopeSubtree(ctx, scope_id);
+
+            for (self.dom_identities.items) |*identity| {
+                if (identity.active and identity.scope_id == scope_id) {
+                    identity.active = false;
+                }
+            }
+
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            deinitHostScopeStep(&scope.step, roc_host, &self.pending_roc_metrics);
+            scope.active = false;
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.scopes_disposed, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
             cache_slot.replace(roc_host, &self.pending_roc_metrics, value, eq, drop);
             return self.cloneCachedSignalValue(ctx, cache_slot);

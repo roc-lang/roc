@@ -1825,11 +1825,7 @@ const HostEnv = struct {
     }
 
     fn deinitPendingTask(self: *HostEnv, task: *HostPendingTask) void {
-        const allocator = self.gpa.allocator();
-        abi.decrefBox(@ptrCast(task.task_token), self.engine.roc_host.?);
-        allocator.free(task.task_name);
-        allocator.free(task.request);
-        task.* = undefined;
+        return self.engine.deinitPendingTask(self, task);
     }
 
     fn clearPendingTasks(self: *HostEnv) void {
@@ -1837,28 +1833,6 @@ const HostEnv = struct {
             self.deinitPendingTask(task);
         }
         self.engine.pending_tasks.items.len = 0;
-    }
-
-    fn cancelPendingTasksInScopeSubtree(self: *HostEnv, scope_id: u64) void {
-        var write_index: usize = 0;
-        for (self.engine.pending_tasks.items) |*task| {
-            if (self.scopeIsDescendantOrSelf(task.owner_scope_id, scope_id)) {
-                self.deinitPendingTask(task);
-                continue;
-            }
-            self.engine.pending_tasks.items[write_index] = task.*;
-            write_index += 1;
-        }
-        self.engine.pending_tasks.items.len = write_index;
-    }
-
-    fn appendCleanupEvent(self: *HostEnv, name: []const u8) void {
-        const allocator = self.gpa.allocator();
-        const copy = allocator.dupe(u8, name) catch std.process.exit(1);
-        self.engine.cleanup_events.append(allocator, copy) catch {
-            allocator.free(copy);
-            std.process.exit(1);
-        };
     }
 
     fn activeTaskRecordByName(self: *HostEnv, name: []const u8) ?*HostSignalRecord {
@@ -2043,44 +2017,7 @@ const HostEnv = struct {
     }
 
     fn disposeScopeSubtree(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64) void {
-        self.validateScopeId(scope_id);
-
-        var child_index: usize = 0;
-        while (child_index < self.engine.scopes.items.len) : (child_index += 1) {
-            const child = self.engine.scopes.items[child_index];
-            if (!child.active) continue;
-            if (child.parent_scope_id == scope_id) {
-                self.disposeScopeSubtree(roc_host, child.scope_id);
-            }
-        }
-
-        for (self.engine.node_identities.items) |*identity| {
-            if (identity.active and identity.scope_id == scope_id) {
-                self.deactivateState(roc_host, identity.node_id);
-                identity.active = false;
-            }
-        }
-
-        for (self.engine.active_stream.cleanups.items) |cleanup| {
-            if (cleanup.scope_id == scope_id) {
-                self.appendCleanupEvent(cleanup.name);
-            }
-        }
-
-        self.cancelPendingTasksInScopeSubtree(scope_id);
-
-        for (self.engine.dom_identities.items) |*identity| {
-            if (identity.active and identity.scope_id == scope_id) {
-                identity.active = false;
-            }
-        }
-
-        const scope = &self.engine.scopes.items[@intCast(scope_id)];
-        deinitHostScopeStep(&scope.step, roc_host, &self.engine.pending_roc_metrics);
-        scope.active = false;
-        var metrics = self.engine.pending_roc_metrics;
-        metrics.bump(.scopes_disposed, 1);
-        self.engine.pending_roc_metrics = metrics;
+        self.engine.disposeScopeSubtree(self, roc_host, scope_id);
     }
 
     fn activeEachRowScopes(self: *HostEnv, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) []u64 {
