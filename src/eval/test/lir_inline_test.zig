@@ -602,8 +602,12 @@ const ProcShape = struct {
     arg_count: usize,
     direct_call_count: usize = 0,
     erased_call_count: usize = 0,
+    packed_erased_fn_count: usize = 0,
     low_level_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
+    str_concat_count: usize = 0,
+    box_box_count: usize = 0,
+    box_unbox_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
     str_match_set_count: usize = 0,
@@ -650,10 +654,19 @@ fn collectProcShape(
                 shape.erased_call_count += 1;
                 try work.append(allocator, stmt.next);
             },
-            .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
+            .assign_packed_erased_fn => |stmt| {
+                shape.packed_erased_fn_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .assign_low_level => |stmt| {
                 shape.low_level_count += 1;
-                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
+                switch (stmt.op) {
+                    .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
+                    .str_concat => shape.str_concat_count += 1,
+                    .box_box => shape.box_box_count += 1,
+                    .box_unbox => shape.box_unbox_count += 1,
+                    else => {},
+                }
                 try work.append(allocator, stmt.next);
             },
             .assign_list => |stmt| try work.append(allocator, stmt.next),
@@ -804,6 +817,33 @@ fn reachableProcShapeCount(
         for (calls) |call| try work.append(allocator, call);
     }
     return count;
+}
+
+fn reachableProcShapeFieldTotal(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+) anyerror!usize {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    var total: usize = 0;
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        const shape = try collectProcShape(allocator, lowered, proc_id);
+        total += @field(shape, field_name);
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return total;
 }
 
 fn reachableProcShape(
@@ -1176,6 +1216,136 @@ test "low level wrapper is inlined when inline mode is enabled" {
     const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
     try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
     try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
+}
+
+test "destination baseline: boxed record update reboxes a list and string payload" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Plant : {
+        \\    x : I32,
+        \\    label : Str,
+        \\}
+        \\
+        \\Model : {
+        \\    tick : U64,
+        \\    label : Str,
+        \\    plants : List(Plant),
+        \\}
+        \\
+        \\State : [Running(Model), Done(Str)]
+        \\
+        \\step : Box(State) -> Box(State)
+        \\step = |boxed| {
+        \\    state = Box.unbox(boxed)
+        \\
+        \\    next =
+        \\        match state {
+        \\            Running(model) => {
+        \\                plants = List.append(model.plants, { x: 160, label: model.label })
+        \\                Running({ ..model, tick: model.tick + 1, plants })
+        \\            }
+        \\
+        \\            Done(msg) => Done(Str.concat(msg, "!"))
+        \\        }
+        \\
+        \\    Box.box(next)
+        \\}
+        \\
+        \\main : Box(State) -> Box(State)
+        \\main = |boxed| step(boxed)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const step_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, step_proc);
+
+    try std.testing.expectEqual(@as(usize, 1), shape.box_unbox_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.box_box_count);
+    try std.testing.expect(shape.struct_assign_count >= 2);
+    try std.testing.expect(shape.tag_assign_count >= 2);
+}
+
+test "destination baseline: boxed lambda is packed then boxed" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Formatter : U64 -> Str
+        \\
+        \\make : Str -> Box(Formatter)
+        \\make = |prefix| Box.box(|n| Str.concat(prefix, U64.to_str(n)))
+        \\
+        \\main : Str -> Box(Formatter)
+        \\main = |prefix| make(prefix)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const make_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, make_proc);
+
+    try std.testing.expectEqual(@as(usize, 1), shape.packed_erased_fn_count);
+}
+
+test "destination baseline: large record return feeds a record update" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Big : {
+        \\    label : Str,
+        \\    items : List(U64),
+        \\    a : U64,
+        \\    b : U64,
+        \\    c : U64,
+        \\    d : U64,
+        \\    e : U64,
+        \\}
+        \\
+        \\make_big : Str, U64 -> Big
+        \\make_big = |label, n| {
+        \\    label,
+        \\    items: [n, n + 1],
+        \\    a: n,
+        \\    b: n + 1,
+        \\    c: n + 2,
+        \\    d: n + 3,
+        \\    e: n + 4,
+        \\}
+        \\
+        \\change_big : Str, U64 -> Big
+        \\change_big = |label, n| { ..make_big(label, n), e: n + 5 }
+        \\
+        \\main : Str, U64 -> Big
+        \\main = |label, n| change_big(label, n)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const change_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, change_proc);
+
+    try std.testing.expect(shape.direct_call_count >= 1);
+    try std.testing.expect(shape.struct_assign_count >= 1);
+}
+
+test "destination baseline: string producer is concatenated again by caller" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\suffix : Str -> Str
+        \\suffix = |input| Str.concat(input, "!")
+        \\
+        \\build : Str -> Str
+        \\build = |input| Str.concat("pre", suffix(input))
+        \\
+        \\main : Str -> Str
+        \\main = |input| build(input)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expect((try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "str_concat_count")) >= 2);
 }
 
 test "block wrapper with statements is not inlined" {
