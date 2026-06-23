@@ -40,9 +40,11 @@ pub const BuiltinModules = struct {
         // Load the builtin indices
         const indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
-        // Load the single Builtin module (env + buffer); the artifact's module_env
-        // storage takes ownership of these.
-        var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+        // Relocate the single Builtin module (env + buffer) directly against the
+        // embedded blob: the relocated sub-stores only ever read through it, so we
+        // alias the read-only @embedFile'd bytes instead of copying them into a heap
+        // buffer on every startup. The artifact's module_env storage references these.
+        var builtin_module = try builtin_loading.loadCompiledModuleBorrowed(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
 
         // Prepare the env exactly as the build-time compiler did before it published
@@ -60,26 +62,32 @@ pub const BuiltinModules = struct {
         // shaped struct.
         const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(compiled_builtins.builtin_artifact_bin);
 
-        // Copy the serialized region into a freshly-allocated 16-byte-aligned buffer
-        // so the relocated sub-stores can alias it for the life of the artifact.
-        const artifact_buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, serialized_bytes.len);
-        errdefer allocator.free(artifact_buffer);
-        @memcpy(artifact_buffer, serialized_bytes);
+        // Relocate the artifact directly against the embedded blob. Its sub-stores
+        // only ever read through this backing, so aliasing the 16-byte-aligned
+        // read-only bytes (the serialized region starts at offset 0) avoids a
+        // per-startup alloc + memcpy. `@constCast` satisfies the shared mutable-typed
+        // signature; nothing writes through it.
+        const artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+            @alignCast(@constCast(serialized_bytes));
 
         const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
         // L-10: bounds-check every relocatable marker against the buffer before any
         // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
         try serialized.validate(artifact_buffer.len);
-        // `deserialize` records `artifact_buffer` in the artifact's `serialized_backing`,
-        // so the artifact owns it; `errdefer` above hands ownership over on success.
-        const checked_artifact = serialized.deserialize(
+        // Both backings (this artifact buffer and the env's Builtin.bin buffer) alias
+        // embedded read-only blobs, so mark them not-owned: the single
+        // `checked_artifact.deinit` then tears down only the heap-allocated bits and
+        // never frees into rodata.
+        var checked_artifact = serialized.deserialize(
             artifact_buffer,
             allocator,
             .{ .compiled_buffer = .{
                 .env = builtin_module.env,
                 .buffer = builtin_module.buffer,
+                .owns_buffer = false,
             } },
         );
+        checked_artifact.owns_serialized_backing = false;
 
         return BuiltinModules{
             .allocator = allocator,

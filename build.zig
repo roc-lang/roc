@@ -2465,12 +2465,23 @@ pub fn build(b: *std.Build) void {
         "Builtin.artifact.bin",
     );
 
-    // Generate compiled_builtins.zig with hardcoded Builtin module
+    // Generate compiled_builtins.zig with hardcoded Builtin module.
+    //
+    // `Builtin.bin` and `Builtin.artifact.bin` are relocated against their own base
+    // address at load time and only ever read through afterward, so the loader can
+    // alias these embedded blobs in place instead of copying them into a heap buffer
+    // on every compiler startup (see eval/builtin_loading.zig and
+    // eval/BuiltinModules.zig). That aliasing requires the 16-byte
+    // CompactWriter.SERIALIZATION_ALIGNMENT the relocated sub-stores expect, but
+    // @embedFile is only byte-aligned, so bake each blob into a 16-byte-aligned
+    // global and expose an aligned slice over it.
     const builtins_source_str =
-        \\pub const builtin_bin = @embedFile("Builtin.bin");
+        \\const builtin_bin_storage: [@embedFile("Builtin.bin").len:0]u8 align(16) = @embedFile("Builtin.bin").*;
+        \\pub const builtin_bin: []align(16) const u8 = &builtin_bin_storage;
         \\pub const builtin_source = @embedFile("Builtin.roc");
         \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
-        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin");
+        \\const builtin_artifact_storage: [@embedFile("Builtin.artifact.bin").len:0]u8 align(16) = @embedFile("Builtin.artifact.bin").*;
+        \\pub const builtin_artifact_bin: []align(16) const u8 = &builtin_artifact_storage;
         \\
     ;
 

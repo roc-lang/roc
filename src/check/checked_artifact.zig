@@ -44,6 +44,10 @@ pub const ModuleEnvStorage = union(enum) {
     compiled_buffer: struct {
         env: *ModuleEnv,
         buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        /// False when `buffer` aliases a statically-allocated read-only blob (e.g. the
+        /// @embedFile'd builtin bytes) rather than a heap allocation; deinit then skips
+        /// freeing it. Defaults to owned to match every heap-backed construction site.
+        owns_buffer: bool = true,
     },
     cached_buffer: struct {
         env: *ModuleEnv,
@@ -77,7 +81,7 @@ pub const ModuleEnvStorage = union(enum) {
                 compiled.env.common.idents.interner.deinit(env_alloc);
                 compiled.env.imports.deinitMapOnly(env_alloc);
                 env_alloc.destroy(compiled.env);
-                env_alloc.free(compiled.buffer);
+                if (compiled.owns_buffer) env_alloc.free(compiled.buffer);
             },
             .cached_buffer => |cached| {
                 const env_alloc = cached.env.gpa;
@@ -22333,6 +22337,11 @@ pub const CheckedModuleArtifact = struct {
     /// double-free). `null` for freshly published artifacts, which own their
     /// sub-store allocations individually.
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
+    /// False when `serialized_backing` aliases a statically-allocated read-only blob
+    /// (the @embedFile'd builtin artifact) instead of a heap allocation; deinit then
+    /// relocates/reads from it but never frees it. Defaults to owned so every
+    /// disk-cache load — which heap-allocates its backing — tears down unchanged.
+    owns_serialized_backing: bool = true,
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -22687,14 +22696,16 @@ pub const CheckedModuleArtifact = struct {
             } else {
                 self.module_env = undefined;
             }
-            // `deserialize` allocated `backing` with the same gpa it recorded in
-            // `canonical_names.allocator`, and every teardown site passes that
-            // allocator back here. Assert the coupling so a caller freeing the
-            // frozen buffer with a different allocator trips in Debug rather than
-            // corrupting an unrelated heap.
-            std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
-                allocator.vtable == self.canonical_names.allocator.vtable);
-            allocator.free(backing);
+            if (self.owns_serialized_backing) {
+                // `deserialize` allocated `backing` with the same gpa it recorded in
+                // `canonical_names.allocator`, and every teardown site passes that
+                // allocator back here. Assert the coupling so a caller freeing the
+                // frozen buffer with a different allocator trips in Debug rather than
+                // corrupting an unrelated heap.
+                std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
+                    allocator.vtable == self.canonical_names.allocator.vtable);
+                allocator.free(backing);
+            }
             self.* = undefined;
             return;
         }
