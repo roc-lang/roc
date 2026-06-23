@@ -133,7 +133,7 @@ initGame! = |prev| {
     plants = prev.plants
 
     # Seed the randomness with number of frames since the start of the game.
-    # This makes the game feel like it is truely randomly seeded cause players won't always start on the same frame.
+    # This makes the game feel like it is truly randomly seeded cause players won't always start on the same frame.
     saveRandToDisk!(frameCount)
     W4.seed_rand!(frameCount)
     W4.tone!(flapTone)
