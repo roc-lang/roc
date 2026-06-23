@@ -608,6 +608,10 @@ const ProcShape = struct {
     str_concat_count: usize = 0,
     box_box_count: usize = 0,
     box_unbox_count: usize = 0,
+    box_prepare_update_count: usize = 0,
+    ptr_cast_count: usize = 0,
+    ptr_load_count: usize = 0,
+    ptr_store_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
     str_match_set_count: usize = 0,
@@ -665,6 +669,10 @@ fn collectProcShape(
                     .str_concat => shape.str_concat_count += 1,
                     .box_box => shape.box_box_count += 1,
                     .box_unbox => shape.box_unbox_count += 1,
+                    .box_prepare_update => shape.box_prepare_update_count += 1,
+                    .ptr_cast => shape.ptr_cast_count += 1,
+                    .ptr_load => shape.ptr_load_count += 1,
+                    .ptr_store => shape.ptr_store_count += 1,
                     else => {},
                 }
                 try work.append(allocator, stmt.next);
@@ -1265,6 +1273,35 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     try std.testing.expectEqual(@as(usize, 1), shape.box_box_count);
     try std.testing.expect(shape.struct_assign_count >= 2);
     try std.testing.expect(shape.tag_assign_count >= 2);
+}
+
+test "destination phase 1: direct boxed update wrapper prepares and stores into the box" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Model : {
+        \\    tick : U64,
+        \\    label : Str,
+        \\}
+        \\
+        \\update : Model -> Model
+        \\update = |model| { ..model, tick: model.tick + 1 }
+        \\
+        \\step : Box(Model) -> Box(Model)
+        \\step = |boxed| Box.box(update(Box.unbox(boxed)))
+        \\
+        \\main : Box(Model) -> Box(Model)
+        \\main = |boxed| step(boxed)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
 }
 
 test "destination baseline: boxed lambda is packed then boxed" {
