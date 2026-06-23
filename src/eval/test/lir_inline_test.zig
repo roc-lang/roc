@@ -622,6 +622,8 @@ const ProcShape = struct {
     jump_count: usize = 0,
     struct_assign_count: usize = 0,
     tag_assign_count: usize = 0,
+    store_struct_count: usize = 0,
+    store_tag_count: usize = 0,
 };
 
 fn collectProcShape(
@@ -688,8 +690,14 @@ fn collectProcShape(
                 shape.tag_assign_count += 1;
                 try work.append(allocator, stmt.next);
             },
-            .store_struct => |stmt| try work.append(allocator, stmt.next),
-            .store_tag => |stmt| try work.append(allocator, stmt.next),
+            .store_struct => |stmt| {
+                shape.store_struct_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .store_tag => |stmt| {
+                shape.store_tag_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
@@ -895,7 +903,7 @@ fn reachableReturnSlotProcCount(
                 else => break :candidate,
             }
             const shape = try collectProcShape(allocator, lowered, proc_id);
-            if (shape.ptr_store_count != 0) count += 1;
+            if (shape.ptr_store_count != 0 or shape.store_struct_count != 0 or shape.store_tag_count != 0) count += 1;
         }
 
         const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
@@ -1349,7 +1357,8 @@ test "destination phase 3: direct boxed update wrapper calls a return-slot varia
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
     try std.testing.expectEqual(@as(usize, 0), root_shape.ptr_store_count);
     try std.testing.expectEqual(@as(usize, 1), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
 }

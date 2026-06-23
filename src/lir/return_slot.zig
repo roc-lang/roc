@@ -17,10 +17,10 @@
 //! call_slot(out: ptr(T), args...) -> {}
 //! ```
 //!
-//! Its initial body uses the base rule from design.md: call the original proc
-//! normally, then store that temporary into `out`. Later destination-aware
-//! expression lowering can replace the temporary inside the variant without
-//! changing call sites or backend policy.
+//! Its body uses the base rule from design.md for general returns: materialize
+//! the return value, then store it into `out`. When the original body ends in a
+//! direct struct or tag construction, the variant writes that aggregate into
+//! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -391,18 +391,24 @@ const BodyCloner = struct {
                 .elems = try self.mapLocalSpan(s.elems),
                 .next = try self.cloneStmt(s.next),
             } }),
-            .assign_struct => |s| try self.store.addCFStmt(.{ .assign_struct = .{
-                .target = try self.mapLocal(s.target),
-                .fields = try self.mapLocalSpan(s.fields),
-                .next = try self.cloneStmt(s.next),
-            } }),
-            .assign_tag => |s| try self.store.addCFStmt(.{ .assign_tag = .{
-                .target = try self.mapLocal(s.target),
-                .variant_index = s.variant_index,
-                .discriminant = s.discriminant,
-                .payload = try self.mapMaybeLocal(s.payload),
-                .next = try self.cloneStmt(s.next),
-            } }),
+            .assign_struct => |s| if (self.directReturnOf(s.next, s.target))
+                try self.cloneStructReturn(s)
+            else
+                try self.store.addCFStmt(.{ .assign_struct = .{
+                    .target = try self.mapLocal(s.target),
+                    .fields = try self.mapLocalSpan(s.fields),
+                    .next = try self.cloneStmt(s.next),
+                } }),
+            .assign_tag => |s| if (self.directReturnOf(s.next, s.target))
+                try self.cloneTagReturn(s)
+            else
+                try self.store.addCFStmt(.{ .assign_tag = .{
+                    .target = try self.mapLocal(s.target),
+                    .variant_index = s.variant_index,
+                    .discriminant = s.discriminant,
+                    .payload = try self.mapMaybeLocal(s.payload),
+                    .next = try self.cloneStmt(s.next),
+                } }),
             .store_struct => |s| try self.store.addCFStmt(.{ .store_struct = .{
                 .dest = try self.mapLocal(s.dest),
                 .struct_layout = s.struct_layout,
@@ -516,6 +522,35 @@ const BodyCloner = struct {
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ self.out_ptr, try self.mapLocal(value) }),
+            .next = ret_stmt,
+        } });
+    }
+
+    fn directReturnOf(self: *const BodyCloner, next: CFStmtId, value: LocalId) bool {
+        return switch (self.store.getCFStmt(next)) {
+            .ret => |ret_stmt| ret_stmt.value == value,
+            else => false,
+        };
+    }
+
+    fn cloneStructReturn(self: *BodyCloner, s: anytype) ResourceError!CFStmtId {
+        const ret_stmt = try self.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } });
+        return try self.store.addCFStmt(.{ .store_struct = .{
+            .dest = self.out_ptr,
+            .struct_layout = self.store.getLocal(s.target).layout_idx,
+            .fields = try self.mapLocalSpan(s.fields),
+            .next = ret_stmt,
+        } });
+    }
+
+    fn cloneTagReturn(self: *BodyCloner, s: anytype) ResourceError!CFStmtId {
+        const ret_stmt = try self.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } });
+        return try self.store.addCFStmt(.{ .store_tag = .{
+            .dest = self.out_ptr,
+            .tag_layout = self.store.getLocal(s.target).layout_idx,
+            .variant_index = s.variant_index,
+            .discriminant = s.discriminant,
+            .payload = try self.mapMaybeLocal(s.payload),
             .next = ret_stmt,
         } });
     }
@@ -671,6 +706,30 @@ fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) !LIR.Lir
     });
 }
 
+fn testTagLayout(layouts: *layout_mod.Store) !layout_mod.Idx {
+    return try layouts.putTagUnion(&.{.u64});
+}
+
+fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+    const arg = try testLocal(store, .u64);
+    const result = try testLocal(store, result_layout);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const assign = try store.addCFStmt(.{ .assign_tag = .{
+        .target = result,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = arg,
+        .next = ret,
+    } });
+    return try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{arg}),
+        .frame_locals = try store.addLocalSpan(&.{ arg, result }),
+        .body = assign,
+        .ret_layout = result_layout,
+    });
+}
+
 test "return slot creates an explicit ptr-result variant for aggregate call stores" {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
@@ -724,15 +783,62 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     try std.testing.expectEqual(aggregate_ptr, store.getLocal(variant_args[0]).layout_idx);
     try std.testing.expectEqual(layout_mod.Idx.u64, store.getLocal(variant_args[1]).layout_idx);
 
-    const variant_build = store.getCFStmt(variant.body.?).assign_struct;
-    const variant_fields = store.getLocalSpan(variant_build.fields);
-    try std.testing.expectEqualSlices(LocalId, &.{ variant_args[1], variant_args[1] }, variant_fields);
-    const variant_store = store.getCFStmt(variant_build.next).assign_low_level;
-    try std.testing.expectEqual(LowLevelOp.ptr_store, variant_store.op);
-    try std.testing.expectEqualSlices(LocalId, &.{ variant_args[0], variant_build.target }, store.getLocalSpan(variant_store.args));
+    const variant_store = store.getCFStmt(variant.body.?).store_struct;
+    try std.testing.expectEqual(variant_args[0], variant_store.dest);
+    try std.testing.expectEqual(aggregate, variant_store.struct_layout);
+    try std.testing.expectEqualSlices(LocalId, &.{ variant_args[1], variant_args[1] }, store.getLocalSpan(variant_store.fields));
+    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
 
     const caller_proc = store.getProcSpec(caller);
     try std.testing.expectEqual(call, caller_proc.body.?);
+}
+
+test "return slot lowers direct tag return into destination store" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+
+    const aggregate = try testTagLayout(&layouts);
+    const aggregate_ptr = try layouts.insertPtr(aggregate);
+    const callee = try testTagCallee(&store, aggregate);
+
+    const destination = try testLocal(&store, aggregate_ptr);
+    const arg = try testLocal(&store, .u64);
+    const temporary = try testLocal(&store, aggregate);
+    const store_unit = try testLocal(&store, .zst);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit } });
+    const ptr_store = try testLowLevel(&store, store_unit, .ptr_store, &.{ destination, temporary }, ret);
+    const call = try store.addCFStmt(.{ .assign_call = .{
+        .target = temporary,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{arg}),
+        .next = ptr_store,
+    } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{ destination, arg }),
+        .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, store_unit }),
+        .body = call,
+        .ret_layout = .zst,
+    });
+
+    try run(&store, &layouts);
+
+    const rewritten = store.getCFStmt(call).assign_call;
+    try std.testing.expect(rewritten.proc != callee);
+    const variant = store.getProcSpec(rewritten.proc);
+    const variant_args = store.getLocalSpan(variant.args);
+
+    const variant_store = store.getCFStmt(variant.body.?).store_tag;
+    try std.testing.expectEqual(variant_args[0], variant_store.dest);
+    try std.testing.expectEqual(aggregate, variant_store.tag_layout);
+    try std.testing.expectEqual(@as(u16, 0), variant_store.variant_index);
+    try std.testing.expectEqual(@as(u16, 0), variant_store.discriminant);
+    try std.testing.expectEqual(variant_args[1], variant_store.payload.?);
+    try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
 }
 
 test "return slot shares one variant for identical proc and layout demands" {
